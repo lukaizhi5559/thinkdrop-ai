@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showChatMessages: () => ipcRenderer.invoke('show-chat-messages'),
   hideChatMessages: () => ipcRenderer.invoke('hide-chat-messages'),
   
+  // Insight window controls
+  showInsight: () => ipcRenderer.invoke('show-insight'),
+  hideInsight: () => ipcRenderer.invoke('hide-insight'),
+  onInsightUpdate: (callback) => ipcRenderer.on('insight-update', callback),
+  
   // Chat messaging system
   sendChatMessage: (message) => ipcRenderer.invoke('send-chat-message', message),
   onChatMessage: (callback) => ipcRenderer.on('chat-message', callback),

@@ -6,8 +6,10 @@ require('dotenv').config(); // Load .env variables
 let overlayWindow = null;
 let chatWindow = null;
 let chatMessagesWindow = null;
+let insightWindow = null;
 let isOverlayVisible = true;
 let isChatVisible = false;
+let isInsightVisible = false;
 let isGloballyVisible = true; // Global visibility state for all windows
 
 function createOverlayWindow() {
@@ -186,6 +188,76 @@ function createChatMessagesWindow() {
   return chatMessagesWindow;
 }
 
+// Create insight window (floating window for displaying contextual insights)
+function createInsightWindow() {
+  if (insightWindow) {
+    insightWindow.show();
+    insightWindow.focus();
+    isInsightVisible = true;
+    return;
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+  
+  insightWindow = new BrowserWindow({
+    width: 420, // Fixed width as specified in the UI plan
+    height: Math.min(height - 100, 600), // Max height 600px with margin
+    x: width - 440, // Position on the right side with margin
+    y: 50, // Position from top
+    frame: false, // Remove window frame completely
+    transparent: true, // Transparent background
+    alwaysOnTop: true, // Always stay on top
+    skipTaskbar: true, // Don't show in taskbar
+    resizable: true, // Allow resizing as specified in UI plan
+    movable: true, // Allow dragging
+    minimizable: false,
+    maximizable: false,
+    closable: false, // Prevent close button
+    focusable: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      enableRemoteModule: false,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  });
+
+  // Set window level to float above all apps
+  insightWindow.setAlwaysOnTop(true, 'floating', 1);
+  insightWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  
+  // Load the insight window with mode parameter
+  const insightUrl = process.env.NODE_ENV === 'development'
+    ? 'http://localhost:5173?mode=insight'
+    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=insight`;
+  
+  insightWindow.loadURL(insightUrl);
+  
+  // Hide window instead of closing
+  insightWindow.on('close', (event) => {
+    if (insightWindow && !app.isQuiting) {
+      event.preventDefault();
+      insightWindow.hide();
+      isInsightVisible = false;
+    }
+  });
+  
+  // Clean up window reference when destroyed
+  insightWindow.on('closed', () => {
+    insightWindow = null;
+  });
+  
+  // Development: Open DevTools
+  if (process.env.NODE_ENV === 'development') {
+    insightWindow.webContents.openDevTools({ mode: 'detach' });
+  }
+  
+  isInsightVisible = true;
+  return insightWindow;
+}
+
 function toggleOverlay() {
   if (!overlayWindow) return;
   
@@ -198,8 +270,12 @@ function toggleOverlay() {
     if (chatMessagesWindow) {
       chatMessagesWindow.hide();
     }
+    if (insightWindow) {
+      insightWindow.hide();
+    }
     isOverlayVisible = false;
     isChatVisible = false;
+    isInsightVisible = false;
     isGloballyVisible = false;
   } else {
     // Show overlay window (chat windows will be shown when needed)
@@ -401,6 +477,24 @@ ipcMain.handle('hide-chat', () => {
   if (chatWindow) {
     chatWindow.hide();
     isChatVisible = false;
+  }
+});
+
+// IPC handlers for insight window control
+ipcMain.handle('show-insight', () => {
+  if (!insightWindow) {
+    createInsightWindow();
+  } else {
+    insightWindow.show();
+    insightWindow.focus();
+    isInsightVisible = true;
+  }
+});
+
+ipcMain.handle('hide-insight', () => {
+  if (insightWindow) {
+    insightWindow.hide();
+    isInsightVisible = false;
   }
 });
 

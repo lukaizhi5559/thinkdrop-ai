@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import ChatWindow from './ChatWindow';
 import ChatMessages from './ChatMessages';
+import InsightWindow from './InsightWindow';
 
 // Declare global for TypeScript
 declare global {
@@ -28,6 +29,11 @@ declare global {
       sendChatMessage: (message: any) => Promise<void>;
       onChatMessage: (callback: (event: any, message: any) => void) => void;
       adjustChatMessagesHeight: (height: number) => Promise<void>;
+      
+      // Insight window methods
+      showInsight: () => Promise<void>;
+      hideInsight: () => Promise<void>;
+      onInsightUpdate: (callback: (event: any, data: any) => void) => void;
       
       // Focus management between chat windows
       focusChatInput: () => Promise<void>;
@@ -55,6 +61,11 @@ function App() {
   // If in messages mode, render the chat messages window
   if (mode === 'messages') {
     return <ChatMessages />;
+  }
+  
+  // If in insight mode, render the insight window
+  if (mode === 'insight') {
+    return <InsightWindow />;
   }
   
   // Otherwise render the main overlay
@@ -128,13 +139,12 @@ function App() {
     setIsGatheringInsight(true);
     // Simulate gathering contextual information
     setTimeout(async () => {
-      // Open chat window with insight information
-      if (window.electronAPI?.showChat) {
-        await window.electronAPI.showChat();
-        // In a real implementation, you would send the insight data to the chat window
-        console.log('Insight gathered: Screenshot captured, Audio active, Agent functions available');
+      // Open the insight window
+      if (window.electronAPI?.showInsight) {
+        await window.electronAPI.showInsight();
       } else {
-        console.log(' Screenshot captured\n Audio status: Active\n Agent functions: Available');
+        // Fallback for development/web mode
+        console.log('Insight window requested - Electron API not available');
       }
       setIsGatheringInsight(false);
     }, 2000);
