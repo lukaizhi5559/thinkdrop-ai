@@ -71,11 +71,12 @@ function App() {
   // Otherwise render the main overlay
   const [isListening, setIsListening] = useState(false);
   const [showResponse, setShowResponse] = useState(false);
-
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-
-
   const [isGatheringInsight, setIsGatheringInsight] = useState(false);
+  
+  // Toggle states for windows
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [isInsightOpen, setIsInsightOpen] = useState(false);
 
 
 
@@ -120,34 +121,55 @@ function App() {
 
 
 
-  const handleOpenChat = async () => {
-    // Open both chat input and chat messages windows via Electron IPC
-    if (window.electronAPI?.showChat) {
-      await window.electronAPI.showChat();
-      
-      // Also show the chat messages window (even if empty)
-      if (window.electronAPI?.showChatMessages) {
-        await window.electronAPI.showChatMessages();
+  const handleToggleChat = async () => {
+    if (isChatOpen) {
+      // Close chat windows
+      if (window.electronAPI?.hideChat) {
+        await window.electronAPI.hideChat();
       }
+      if (window.electronAPI?.hideChatMessages) {
+        await window.electronAPI.hideChatMessages();
+      }
+      setIsChatOpen(false);
     } else {
-      // Fallback for development/web mode - could show a modal or redirect
-      console.log('Chat window requested - Electron API not available');
+      // Open chat windows
+      if (window.electronAPI?.showChat) {
+        await window.electronAPI.showChat();
+        
+        // Also show the chat messages window (even if empty)
+        if (window.electronAPI?.showChatMessages) {
+          await window.electronAPI.showChatMessages();
+        }
+      } else {
+        // Fallback for development/web mode
+        console.log('Chat window requested - Electron API not available');
+      }
+      setIsChatOpen(true);
     }
   };
 
-  const handleInsightGather = async () => {
-    setIsGatheringInsight(true);
-    // Simulate gathering contextual information
-    setTimeout(async () => {
-      // Open the insight window
-      if (window.electronAPI?.showInsight) {
-        await window.electronAPI.showInsight();
-      } else {
-        // Fallback for development/web mode
-        console.log('Insight window requested - Electron API not available');
+  const handleToggleInsight = async () => {
+    if (isInsightOpen) {
+      // Close insight window
+      if (window.electronAPI?.hideInsight) {
+        await window.electronAPI.hideInsight();
       }
-      setIsGatheringInsight(false);
-    }, 2000);
+      setIsInsightOpen(false);
+    } else {
+      // Open insight window with gathering animation
+      setIsGatheringInsight(true);
+      // Simulate gathering contextual information
+      setTimeout(async () => {
+        if (window.electronAPI?.showInsight) {
+          await window.electronAPI.showInsight();
+        } else {
+          // Fallback for development/web mode
+          console.log('Insight window requested - Electron API not available');
+        }
+        setIsGatheringInsight(false);
+        setIsInsightOpen(true);
+      }, 2000);
+    }
   };
 
   const handleHideAll = async () => {
@@ -176,15 +198,21 @@ function App() {
             <Button
                 variant="ghost"
                 size="lg"
-                className="text-white/80 hover:text-white hover:bg-white/10 rounded-xl p-2 transition-all duration-200"
+                className={`text-white/80 hover:text-white hover:bg-white/10 rounded-xl p-2 transition-all duration-200 ${
+                  isChatOpen ? 'bg-white/10 text-white' : ''
+                }`}
                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                onClick={handleOpenChat}
+                onClick={handleToggleChat}
               >
                 <div className="flex items-center space-x-3">
-                  <div className="w-8 h-8 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center">
+                  <div className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center ${
+                    isChatOpen ? 'from-teal-300 to-blue-400' : 'from-teal-400 to-blue-500'
+                  }`}>
                     <Droplet className="w-4 h-4 text-white" />
                   </div>
-                  <span className="text-white/90 text-base font-medium">Ask?</span>
+                  <span className="text-white/90 text-base font-medium">
+                    {isChatOpen ? 'Ask?' : 'Ask?'}
+                  </span>
                 </div>
               </Button>
             
@@ -219,10 +247,13 @@ function App() {
                 size="sm"
                 className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
                   isGatheringInsight ? 'animate-pulse bg-yellow-500/20 text-yellow-400' : ''
+                } ${
+                  isInsightOpen ? 'bg-yellow-500/20 text-yellow-400' : ''
                 }`}
-                onClick={handleInsightGather}
+                onClick={handleToggleInsight}
                 disabled={isGatheringInsight}
                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+                title={isInsightOpen ? 'Close Insight' : 'Open Insight'}
               >
                 <Lightbulb className="w-5 h-5" />
               </Button>
