@@ -1,43 +1,53 @@
 /**
  * Core Engine - Handles audio capture, clipboard monitoring, and screen capture
  */
+const screenshot = require('screenshot-desktop');
+const Tesseract = require('tesseract.js');
+const { mouse, keyboard, Key, screen } = require('@nut-tree-fork/nut-js');
+const fs = require('fs');
+const path = require('path');
+const sharp = require('sharp');
 const { EventEmitter } = require('events');
 const record = require('node-record-lpcm16');
 const clipboard = require('electron').clipboard;
-const screenshot = require('screenshot-desktop');
-const Tesseract = require('tesseract.js');
+const { uiIndexerDaemon } = require('./uiIndexerDaemon');
+const { desktopAutomationService } = require('./desktopAutomationService');
 
 class CoreEngine extends EventEmitter {
   constructor() {
     super();
     this.isRecording = false;
-    this.clipboardWatcher = null;
+    this.recording = null;
+    this.ocrWorker = null;
     this.lastClipboardContent = '';
     this.screenshotInterval = null;
+    this.uiIndexer = uiIndexerDaemon;
+    this.isUIIndexerRunning = false;
+    this.desktopAutomation = desktopAutomationService;
+    this.isDesktopAutomationReady = false;
   }
 
   // Audio capture and STT
   startAudioCapture() {
     if (this.isRecording) return;
     
-    console.log('🎤 Starting audio capture...');
+    console.log('[AUDIO] Starting audio capture...');
     this.isRecording = true;
 
     const recording = record.record({
       sampleRateHertz: 16000,
       threshold: 0,
       verbose: false,
-      recordProgram: 'rec', // or 'sox' on some systems
+      recordProgram: 'rec',
       silence: '1.0',
     });
 
     recording.stream()
       .on('data', (chunk) => {
-        // Emit audio data for STT processing
         this.emit('audioData', chunk);
       })
       .on('error', (err) => {
-        console.error('❌ Audio recording error:', err);
+        console.error('[ERROR] Audio recording error:', err);
         this.emit('audioError', err);
       });
 
@@ -47,7 +57,7 @@ class CoreEngine extends EventEmitter {
   stopAudioCapture() {
     if (!this.isRecording) return;
     
-    console.log('🔇 Stopping audio capture...');
+    console.log('[AUDIO] Stopping audio capture...');
     this.isRecording = false;
     
     if (this.recording) {
@@ -56,116 +66,216 @@ class CoreEngine extends EventEmitter {
     }
   }
 
-  // Clipboard monitoring
-  startClipboardMonitoring() {
-    console.log('📋 Starting clipboard monitoring...');
-    
-    this.clipboardWatcher = setInterval(() => {
-      const currentContent = clipboard.readText();
-      
-      if (currentContent && currentContent !== this.lastClipboardContent) {
-        console.log('📋 Clipboard content changed');
-        this.lastClipboardContent = currentContent;
-        this.emit('clipboardChange', currentContent);
-      }
-    }, 500); // Check every 500ms
-  }
-
-  stopClipboardMonitoring() {
-    if (this.clipboardWatcher) {
-      console.log('📋 Stopping clipboard monitoring...');
-      clearInterval(this.clipboardWatcher);
-      this.clipboardWatcher = null;
-    }
-  }
-
-  // Screen capture and OCR
-  async captureScreen(displayId = 0) {
-    try {
-      console.log('📸 Capturing screen...');
-      const imgPath = await screenshot({ 
-        format: 'png',
-        screen: displayId 
-      });
-      
-      return imgPath;
-    } catch (error) {
-      console.error('❌ Screen capture error:', error);
-      throw error;
-    }
-  }
-
-  async performOCR(imagePath) {
-    try {
-      console.log('🔍 Performing OCR on captured screen...');
-      
-      const { data: { text, confidence } } = await Tesseract.recognize(
-        imagePath,
-        'eng',
-        {
-          logger: m => {
-            if (m.status === 'recognizing text') {
-              console.log(`OCR Progress: ${Math.round(m.progress * 100)}%`);
-            }
-          }
-        }
-      );
-
-      const confidenceThreshold = parseFloat(process.env.OCR_CONFIDENCE_THRESHOLD) || 0.7;
-      
-      if (confidence >= confidenceThreshold) {
-        console.log('✅ OCR completed successfully');
-        return { text: text.trim(), confidence };
-      } else {
-        console.warn('⚠️ OCR confidence below threshold:', confidence);
-        return { text: '', confidence };
-      }
-    } catch (error) {
-      console.error('❌ OCR error:', error);
-      throw error;
-    }
-  }
-
-  // Automated screen monitoring
-  startScreenMonitoring() {
-    const interval = parseInt(process.env.SCREENSHOT_INTERVAL) || 5000;
-    
-    console.log(`📸 Starting screen monitoring (${interval}ms intervals)...`);
-    
-    this.screenshotInterval = setInterval(async () => {
-      try {
-        const imagePath = await this.captureScreen();
-        const ocrResult = await this.performOCR(imagePath);
-        
-        if (ocrResult.text) {
-          this.emit('screenTextDetected', ocrResult);
-        }
-      } catch (error) {
-        console.error('❌ Screen monitoring error:', error);
-      }
-    }, interval);
-  }
-
-  stopScreenMonitoring() {
-    if (this.screenshotInterval) {
-      console.log('📸 Stopping screen monitoring...');
-      clearInterval(this.screenshotInterval);
-      this.screenshotInterval = null;
-    }
-  }
-
   // Start all monitoring services
   startAll() {
     this.startAudioCapture();
-    this.startClipboardMonitoring();
-    this.startScreenMonitoring();
   }
 
   // Stop all monitoring services
   stopAll() {
     this.stopAudioCapture();
-    this.stopClipboardMonitoring();
-    this.stopScreenMonitoring();
+  }
+
+  /**
+   * Enhanced stopAll method with UI Indexer
+   */
+  async stopAllWithVisualAutomation() {
+    try {
+      console.log('[AUDIO] Stopping all services with visual automation...');
+      
+      // Stop traditional services
+      this.stopAll();
+      
+      // Stop UI Indexer
+      await this.stopUIIndexer();
+      
+      console.log('✅ All services with visual automation stopped');
+      
+    } catch (error) {
+      console.error('❌ Failed to stop all services with visual automation:', error);
+      throw error;
+    }
+  }
+
+  // ===== HIGH-LEVEL DESKTOP AUTOMATION =====
+
+  /**
+   * Initialize desktop automation service
+   */
+  async initializeDesktopAutomation() {
+    try {
+      console.log('🚀 Initializing desktop automation service...');
+      
+      // Check if service is ready
+      this.isDesktopAutomationReady = this.desktopAutomation.isReady();
+      
+      if (this.isDesktopAutomationReady) {
+        console.log('✅ Desktop automation service ready');
+      } else {
+        console.warn('⚠️ Desktop automation service not ready');
+      }
+      
+      return this.isDesktopAutomationReady;
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize desktop automation:', error);
+      this.isDesktopAutomationReady = false;
+      throw error;
+    }
+  }
+
+  /**
+   * Execute high-level task using natural language description
+   */
+  async executeHighLevelTask(taskDescription, options = {}) {
+    try {
+      console.log(`🎯 Executing high-level task: "${taskDescription}"`);
+      
+      // Step 1: Ensure all services are running
+      if (!this.isUIIndexerRunning) {
+        await this.startUIIndexer(options.backendUrl, options.apiKey);
+      }
+      
+      if (!this.isDesktopAutomationReady) {
+        await this.initializeDesktopAutomation();
+      }
+      
+      // Step 2: Get current application context
+      const currentApp = await this.getCurrentApp();
+      console.log(`📱 Current app: ${currentApp.name} - ${currentApp.windowTitle}`);
+      
+      // Step 3: Scan UI elements
+      const uiScanResult = await this.scanCurrentApp();
+      const uiElements = uiScanResult ? uiScanResult.elements : [];
+      
+      console.log(`📊 Found ${uiElements.length} UI elements for task planning`);
+      
+      // Step 4: Execute task using desktop automation service
+      const executionResult = await this.desktopAutomation.executeTask(
+        taskDescription,
+        uiElements,
+        currentApp,
+        {
+          timeout: options.timeout || 30000,
+          screenshotOnError: options.screenshotOnError !== false,
+          screenshotOnSuccess: options.screenshotOnSuccess || false,
+          retryFailedActions: options.retryFailedActions !== false,
+          maxRetries: options.maxRetries || 2,
+          maxActions: options.maxActions || 10,
+          allowFallback: options.allowFallback !== false
+        }
+      );
+      
+      console.log(`🎯 Task execution completed:`, {
+        success: executionResult.success,
+        executedActions: executionResult.executedActions,
+        totalActions: executionResult.totalActions,
+        duration: `${executionResult.duration.toFixed(2)}ms`
+      });
+      
+      // Emit result for frontend
+      this.emit('task-completed', executionResult);
+      
+      return executionResult;
+      
+    } catch (error) {
+      console.error('❌ High-level task execution failed:', error);
+      const errorResult = {
+        success: false,
+        executedActions: 0,
+        totalActions: 0,
+        error: error.message,
+        duration: 0,
+        timestamp: new Date().toISOString()
+      };
+      
+      this.emit('task-failed', errorResult);
+      return errorResult;
+    }
+  }
+
+  /**
+   * Validate if a task can be completed with current UI state
+   */
+  async validateTaskFeasibility(taskDescription) {
+    try {
+      console.log(`🔍 Validating task feasibility: "${taskDescription}"`);
+      
+      // Ensure UI Indexer is running
+      if (!this.isUIIndexerRunning) {
+        console.warn('⚠️ UI Indexer not running, starting for validation...');
+        await this.startUIIndexer();
+      }
+      
+      // Get current UI elements
+      const uiScanResult = await this.scanCurrentApp();
+      const uiElements = uiScanResult ? uiScanResult.elements : [];
+      
+      // Validate with desktop automation service
+      const feasibilityResult = await this.desktopAutomation.validateTaskFeasibility(
+        taskDescription,
+        uiElements
+      );
+      
+      console.log(`📋 Task feasibility result:`, {
+        feasible: feasibilityResult.feasible,
+        confidence: feasibilityResult.confidence,
+        elementCount: uiElements.length
+      });
+      
+      return feasibilityResult;
+      
+    } catch (error) {
+      console.error('❌ Task feasibility validation failed:', error);
+      return {
+        feasible: false,
+        confidence: 0.1,
+        reasoning: `Validation failed: ${error.message}`,
+        requiredElements: []
+      };
+    }
+  }
+
+  /**
+   * Emergency stop all automation
+   */
+  async emergencyStopAutomation() {
+    try {
+      console.log('🚨 Emergency stop triggered!');
+      
+      // Stop desktop automation
+      if (this.isDesktopAutomationReady) {
+        await this.desktopAutomation.emergencyStop();
+      }
+      
+      // Stop all services
+      await this.stopAllWithVisualAutomation();
+      
+      console.log('✅ Emergency stop completed');
+      this.emit('emergency-stop-completed');
+      
+    } catch (error) {
+      console.error('❌ Emergency stop failed:', error);
+      this.emit('emergency-stop-failed', error);
+    }
+  }
+
+  /**
+   * Get comprehensive automation status
+   */
+  getAutomationStatus() {
+    return {
+      uiIndexer: this.getUIIndexerStatus(),
+      desktopAutomation: {
+        isReady: this.isDesktopAutomationReady,
+        serviceReady: this.desktopAutomation.isReady()
+      },
+      coreEngine: {
+        isRecording: this.isRecording,
+        hasScreenMonitoring: !!this.screenshotInterval
+      },
+      timestamp: new Date().toISOString()
+    };
   }
 }
 

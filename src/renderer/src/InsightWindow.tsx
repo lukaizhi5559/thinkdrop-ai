@@ -173,7 +173,11 @@ export default function InsightWindow() {
           size="sm"
           onClick={handleClose}
           className="h-6 w-6 p-0 text-white/50 hover:text-white/90 hover:bg-white/10"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ 
+            WebkitAppRegion: 'no-drag',
+            minHeight: 0, // Important for flex child to shrink
+            maxHeight: '100%'
+          } as React.CSSProperties}
         >
           <X className="h-3 w-3" />
         </Button>
