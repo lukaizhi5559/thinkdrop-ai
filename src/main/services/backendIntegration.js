@@ -3,9 +3,9 @@
  * Handles the communication flow: Screenshot + OCR + Task → Backend → Action JSON → Execute
  */
 
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
 
 class BackendIntegrationService {
   constructor(coreEngine) {
@@ -325,4 +325,4 @@ class BackendIntegrationService {
   }
 }
 
-module.exports = BackendIntegrationService;
+export default BackendIntegrationService;

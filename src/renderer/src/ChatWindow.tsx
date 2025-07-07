@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './components/ui/button';
 import { Send, X, Droplet } from 'lucide-react';
-import { useOrchestration, useLocalLLM } from './contexts/LocalLLMContext';
+import { useLocalLLM } from './contexts/LocalLLMContext';
 
 export default function ChatWindow() {
   const [currentMessage, setCurrentMessage] = useState('');
@@ -9,11 +9,10 @@ export default function ChatWindow() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   
   // LocalLLMAgent integration
-  const { orchestrate, isOrchestrating, lastError, clearError } = useOrchestration();
-  const { isInitialized, isLocalLLMAvailable, health } = useLocalLLM();
+  const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
   
   // Combined loading state
-  const isBusy = isLoading || isOrchestrating;
+  const isBusy = isLoading;
 
   // Auto-focus the textarea when component mounts and ensure it's ready
   useEffect(() => {
@@ -62,8 +61,7 @@ export default function ChatWindow() {
       textareaRef.current.style.height = 'auto';
     }
     
-    // Clear any previous errors
-    clearError();
+    // Note: Error handling is now managed by the main process
     
     // Create message object that matches IPC handler expectations
     const userMessage = {
@@ -77,38 +75,14 @@ export default function ChatWindow() {
         await window.electronAPI.sendChatMessage(userMessage);
       }
       
-      // Then orchestrate with LocalLLMAgent for intelligent response
+      // Note: LocalLLMAgent orchestration is handled by the main process
+      // when it receives the user message via IPC. No need to duplicate
+      // the orchestration call here to prevent message duplication.
+      
       if (isInitialized) {
-        const context = {
-          timestamp: new Date().toISOString(),
-          source: 'chat_window',
-          userInput: messageText,
-          localLLMAvailable: isLocalLLMAvailable,
-          agentHealth: health
-        };
-        
-        const orchestrationResult = await orchestrate(messageText, context);
-        
-        if (orchestrationResult.success && orchestrationResult.data) {
-          console.log('✅ Agent orchestration successful:', orchestrationResult.data);
-          
-          // Send agent response back to chat if we got one
-          if (orchestrationResult.data.response && window.electronAPI?.sendChatMessage) {
-            const agentMessage = {
-              text: orchestrationResult.data.response,
-              timestamp: new Date(),
-              isAgent: true,
-              handledBy: orchestrationResult.data.handledBy || 'LocalLLMAgent',
-              sessionId: orchestrationResult.data.sessionId || 'unknown'
-            };
-            await window.electronAPI.sendChatMessage(agentMessage);
-          }
-        } else {
-          console.warn('⚠️ Agent orchestration failed, using fallback');
-          if (lastError) {
-            console.error('Orchestration error:', lastError);
-          }
-        }
+        console.log('✅ User message sent, LocalLLMAgent will handle orchestration via main process');
+      } else {
+        console.warn('⚠️ LocalLLMAgent not initialized, main process will handle fallback');
       }
       
       // Success - regain focus after a delay to ensure message is processed
@@ -177,7 +151,7 @@ export default function ChatWindow() {
             >
               <Droplet className="w-4 h-4 text-white" />
               {/* Agent status indicator */}
-              {isOrchestrating && (
+              {isLoading && (
                 <div className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full animate-pulse" />
               )}
               {isInitialized && isLocalLLMAvailable && (

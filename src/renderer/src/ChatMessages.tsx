@@ -44,34 +44,17 @@ export default function ChatMessages() {
           return [...prev, message];
         });
         
-        // If it's a user message, simulate AI response (only if not already processing)
+        // Show loading indicator for user messages (AI response will come from backend)
         if (message.sender === 'user') {
-          const aiResponseId = `ai-${message.id}-response`;
-          
-          // Check if we've already created a response for this user message
-          if (!processedMessageIds.has(aiResponseId)) {
-            setProcessedMessageIds(prev => new Set([...prev, aiResponseId]));
-            setIsLoading(true);
-            
-            setTimeout(() => {
-              const aiResponse: ChatMessage = {
-                id: aiResponseId,
-                text: `I understand you said: "${message.text}". This is a simulated response from ThinkDrop AI. How can I help you further?`,
-                sender: 'ai',
-                timestamp: new Date()
-              };
-              
-              setChatMessages(prev => {
-                // Check if AI response already exists
-                const exists = prev.some(m => m.id === aiResponse.id);
-                if (exists) {
-                  return prev;
-                }
-                return [...prev, aiResponse];
-              });
-              setIsLoading(false);
-            }, 1000);
-          }
+          setIsLoading(true);
+          // Loading will be cleared when AI response arrives from backend
+          setTimeout(() => {
+            // Clear loading if no response comes within 10 seconds
+            setIsLoading(false);
+          }, 10000);
+        } else if (message.sender === 'ai') {
+          // Clear loading when AI response arrives
+          setIsLoading(false);
         }
       });
     }

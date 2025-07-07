@@ -1,130 +1,122 @@
 /**
- * Core Engine - Handles audio capture, clipboard monitoring, and screen capture
+ * Core Engine - Agent Coordinator and Core Services Provider
+ * Manages agent initialization, provides screenshot services, and handles IPC communication
  */
-const screenshot = require('screenshot-desktop');
-const Tesseract = require('tesseract.js');
-const { mouse, keyboard, Key, screen } = require('@nut-tree-fork/nut-js');
-const fs = require('fs');
-const path = require('path');
-const sharp = require('sharp');
-const { EventEmitter } = require('events');
-const record = require('node-record-lpcm16');
-const clipboard = require('electron').clipboard;
-const uiIndexerDaemon = require('./uiIndexerDaemon');
-const desktopAutomationService = require('./desktopAutomationService');
-const BackendIntegrationService = require('./backendIntegration');
-const ScreenshotAgent = require('./screenshotAgent');
+import { EventEmitter } from 'events';
+import { clipboard } from 'electron';
+import BackendIntegrationService from './backendIntegration.js';
+import ScreenshotAgent from './screenshotAgent.js';
+import LocalLLMAgent from './LocalLLMAgent.js';
 
 class CoreEngine extends EventEmitter {
   constructor() {
     super();
-    this.isRecording = false;
-    this.recording = null;
-    this.ocrWorker = null;
     this.lastClipboardContent = '';
     this.screenshotInterval = null;
-    this.uiIndexer = uiIndexerDaemon;
-    this.isUIIndexerRunning = false;
-    this.desktopAutomation = desktopAutomationService;
-    this.isDesktopAutomationReady = false;
+    
+    // Agent coordination
+    this.localLLMAgent = new LocalLLMAgent();
+    this.isLocalLLMReady = false;
+    
+    // Core services
     this.screenshotAgent = new ScreenshotAgent(this);
     this.isScreenshotAgentReady = false;
-  }
-
-  // Audio capture and STT
-  startAudioCapture() {
-    if (this.isRecording) return;
     
-    console.log('[AUDIO] Starting audio capture...');
-    this.isRecording = true;
-
-    const recording = record.record({
-      sampleRateHertz: 16000,
-      threshold: 0,
-      verbose: false,
-      recordProgram: 'rec',
-      silence: '1.0',
-    });
-
-    recording.stream()
-      .on('data', (chunk) => {
-        this.emit('audioData', chunk);
-      })
-      .on('error', (err) => {
-        console.error('[ERROR] Audio recording error:', err);
-        this.emit('audioError', err);
-      });
-
-    this.recording = recording;
-  }
-
-  stopAudioCapture() {
-    if (!this.isRecording) return;
+    // Backend integration
+    this.backendIntegration = BackendIntegrationService;
     
-    console.log('[AUDIO] Stopping audio capture...');
-    this.isRecording = false;
-    
-    if (this.recording) {
-      this.recording.stop();
-      this.recording = null;
-    }
-  }
-
-  // Start all monitoring services
-  startAll() {
-    this.startAudioCapture();
-  }
-
-  // Stop all monitoring services
-  stopAll() {
-    this.stopAudioCapture();
+    // System status
+    this.isInitialized = false;
   }
 
   /**
-   * Enhanced stopAll method with UI Indexer
+   * Initialize all core agents and services
    */
-  async stopAllWithVisualAutomation() {
+  async initializeAll() {
     try {
-      console.log('[AUDIO] Stopping all services with visual automation...');
+      console.log('🚀 Initializing Core Engine and Agents...');
       
-      // Stop traditional services
-      this.stopAll();
+      // Initialize LocalLLMAgent
+      this.isLocalLLMReady = await this.initializeLocalLLMAgent();
       
-      // Stop UI Indexer
-      await this.stopUIIndexer();
+      // Initialize Screenshot Agent
+      this.isScreenshotAgentReady = await this.initializeScreenshotAgent();
       
-      console.log('✅ All services with visual automation stopped');
+      this.isInitialized = this.isLocalLLMReady && this.isScreenshotAgentReady;
       
-    } catch (error) {
-      console.error('❌ Failed to stop all services with visual automation:', error);
-      throw error;
-    }
-  }
-
-  // ===== HIGH-LEVEL DESKTOP AUTOMATION =====
-
-  /**
-   * Initialize desktop automation service
-   */
-  async initializeDesktopAutomation() {
-    try {
-      console.log('🚀 Initializing desktop automation service...');
-      
-      // Check if service is ready
-      this.isDesktopAutomationReady = this.desktopAutomation.isReady();
-      
-      if (this.isDesktopAutomationReady) {
-        console.log('✅ Desktop automation service ready');
+      if (this.isInitialized) {
+        console.log('✅ Core Engine initialized successfully');
+        this.emit('core-engine-ready');
       } else {
-        console.warn('⚠️ Desktop automation service not ready');
+        console.warn('⚠️ Core Engine initialization incomplete');
+        this.emit('core-engine-partial');
       }
       
-      return this.isDesktopAutomationReady;
+      return this.isInitialized;
       
     } catch (error) {
-      console.error('❌ Failed to initialize desktop automation:', error);
-      this.isDesktopAutomationReady = false;
+      console.error('❌ Core Engine initialization failed:', error);
+      this.emit('core-engine-failed', error);
       return false;
+    }
+  }
+
+  /**
+   * Initialize LocalLLMAgent
+   */
+  async initializeLocalLLMAgent() {
+    try {
+      console.log('🧠 Initializing LocalLLMAgent...');
+      
+      const isReady = await this.localLLMAgent.initialize();
+      
+      if (isReady) {
+        console.log('✅ LocalLLMAgent ready');
+      } else {
+        console.warn('⚠️ LocalLLMAgent not ready');
+      }
+      
+      return isReady;
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize LocalLLMAgent:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Route high-level tasks to LocalLLMAgent orchestration
+   */
+  async executeTask(taskDescription, options = {}) {
+    try {
+      if (!this.isLocalLLMReady) {
+        throw new Error('LocalLLMAgent not ready');
+      }
+      
+      console.log(`🎯 Routing task to LocalLLMAgent: "${taskDescription}"`);
+      
+      // Route through LocalLLMAgent orchestration
+      const result = await this.localLLMAgent.orchestrate({
+        userInput: taskDescription,
+        context: {
+          source: 'coreEngine',
+          options
+        }
+      });
+      
+      this.emit('task-completed', result);
+      return result;
+      
+    } catch (error) {
+      console.error('❌ Task execution failed:', error);
+      const errorResult = {
+        success: false,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+      
+      this.emit('task-failed', errorResult);
+      return errorResult;
     }
   }
 
@@ -158,6 +150,7 @@ class CoreEngine extends EventEmitter {
   async captureScreenshot(options = {}) {
     try {
       if (!this.isScreenshotAgentReady) {
+        console.warn('⚠️ Screenshot agent not ready, initializing...');
         await this.initializeScreenshotAgent();
       }
       
@@ -175,143 +168,55 @@ class CoreEngine extends EventEmitter {
   async processScreenshotRequest(intent, options = {}) {
     try {
       if (!this.isScreenshotAgentReady) {
+        console.warn('⚠️ Screenshot agent not ready, initializing...');
         await this.initializeScreenshotAgent();
       }
       
-      return await this.screenshotAgent.processScreenshotRequest(intent, options);
+      return await this.screenshotAgent.processRequest(intent, options);
       
     } catch (error) {
-      console.error('❌ Screenshot request processing failed:', error);
+      console.error('❌ Screenshot processing failed:', error);
       throw error;
     }
   }
 
   /**
-   * Execute high-level task using natural language description
+   * Get clipboard content for agent context
    */
-  async executeHighLevelTask(taskDescription, options = {}) {
+  getClipboardContent() {
     try {
-      console.log(`🎯 Executing high-level task: "${taskDescription}"`);
+      const currentContent = clipboard.readText();
       
-      // Step 1: Ensure all services are running
-      if (!this.isUIIndexerRunning) {
-        await this.startUIIndexer(options.backendUrl, options.apiKey);
+      if (currentContent !== this.lastClipboardContent) {
+        this.lastClipboardContent = currentContent;
+        this.emit('clipboard-changed', currentContent);
       }
       
-      if (!this.isDesktopAutomationReady) {
-        await this.initializeDesktopAutomation();
-      }
-      
-      // Step 2: Get current application context
-      const currentApp = await this.getCurrentApp();
-      console.log(`📱 Current app: ${currentApp.name} - ${currentApp.windowTitle}`);
-      
-      // Step 3: Scan UI elements
-      const uiScanResult = await this.scanCurrentApp();
-      const uiElements = uiScanResult ? uiScanResult.elements : [];
-      
-      console.log(`📊 Found ${uiElements.length} UI elements for task planning`);
-      
-      // Step 4: Execute task using desktop automation service
-      const executionResult = await this.desktopAutomation.executeTask(
-        taskDescription,
-        uiElements,
-        currentApp,
-        {
-          timeout: options.timeout || 30000,
-          screenshotOnError: options.screenshotOnError !== false,
-          screenshotOnSuccess: options.screenshotOnSuccess || false,
-          retryFailedActions: options.retryFailedActions !== false,
-          maxRetries: options.maxRetries || 2,
-          maxActions: options.maxActions || 10,
-          allowFallback: options.allowFallback !== false
-        }
-      );
-      
-      console.log(`🎯 Task execution completed:`, {
-        success: executionResult.success,
-        executedActions: executionResult.executedActions,
-        totalActions: executionResult.totalActions,
-        duration: `${executionResult.duration.toFixed(2)}ms`
-      });
-      
-      // Emit result for frontend
-      this.emit('task-completed', executionResult);
-      
-      return executionResult;
+      return currentContent;
       
     } catch (error) {
-      console.error('❌ High-level task execution failed:', error);
-      const errorResult = {
-        success: false,
-        executedActions: 0,
-        totalActions: 0,
-        error: error.message,
-        duration: 0,
-        timestamp: new Date().toISOString()
-      };
-      
-      this.emit('task-failed', errorResult);
-      return errorResult;
+      console.error('❌ Failed to read clipboard:', error);
+      return '';
     }
   }
 
   /**
-   * Validate if a task can be completed with current UI state
+   * Emergency stop all agents and services
    */
-  async validateTaskFeasibility(taskDescription) {
-    try {
-      console.log(`🔍 Validating task feasibility: "${taskDescription}"`);
-      
-      // Ensure UI Indexer is running
-      if (!this.isUIIndexerRunning) {
-        console.warn('⚠️ UI Indexer not running, starting for validation...');
-        await this.startUIIndexer();
-      }
-      
-      // Get current UI elements
-      const uiScanResult = await this.scanCurrentApp();
-      const uiElements = uiScanResult ? uiScanResult.elements : [];
-      
-      // Validate with desktop automation service
-      const feasibilityResult = await this.desktopAutomation.validateTaskFeasibility(
-        taskDescription,
-        uiElements
-      );
-      
-      console.log(`📋 Task feasibility result:`, {
-        feasible: feasibilityResult.feasible,
-        confidence: feasibilityResult.confidence,
-        elementCount: uiElements.length
-      });
-      
-      return feasibilityResult;
-      
-    } catch (error) {
-      console.error('❌ Task feasibility validation failed:', error);
-      return {
-        feasible: false,
-        confidence: 0.1,
-        reasoning: `Validation failed: ${error.message}`,
-        requiredElements: []
-      };
-    }
-  }
-
-  /**
-   * Emergency stop all automation
-   */
-  async emergencyStopAutomation() {
+  async emergencyStop() {
     try {
       console.log('🚨 Emergency stop triggered!');
       
-      // Stop desktop automation
-      if (this.isDesktopAutomationReady) {
-        await this.desktopAutomation.emergencyStop();
+      // Stop LocalLLMAgent if running
+      if (this.isLocalLLMReady) {
+        await this.localLLMAgent.emergencyStop();
       }
       
-      // Stop all services
-      await this.stopAllWithVisualAutomation();
+      // Clear any intervals
+      if (this.screenshotInterval) {
+        clearInterval(this.screenshotInterval);
+        this.screenshotInterval = null;
+      }
       
       console.log('✅ Emergency stop completed');
       this.emit('emergency-stop-completed');
@@ -323,26 +228,49 @@ class CoreEngine extends EventEmitter {
   }
 
   /**
-   * Get comprehensive automation status
+   * Get comprehensive system status
    */
-  getAutomationStatus() {
+  getSystemStatus() {
     return {
-      uiIndexer: this.getUIIndexerStatus(),
-      desktopAutomation: {
-        isReady: this.isDesktopAutomationReady,
-        serviceReady: this.desktopAutomation.isReady()
-      },
       coreEngine: {
-        isRecording: this.isRecording,
+        initialized: this.isInitialized,
         hasScreenMonitoring: !!this.screenshotInterval
       },
+      localLLMAgent: {
+        ready: this.isLocalLLMReady,
+        status: this.isLocalLLMReady ? this.localLLMAgent.getHealth() : null
+      },
       screenshotAgent: {
-        isReady: this.isScreenshotAgentReady,
+        ready: this.isScreenshotAgentReady,
         status: this.screenshotAgent ? this.screenshotAgent.getStatus() : null
+      },
+      backendIntegration: {
+        connected: this.backendIntegration ? this.backendIntegration.isConnected() : false
       },
       timestamp: new Date().toISOString()
     };
   }
+
+  /**
+   * Cleanup all resources
+   */
+  async cleanup() {
+    try {
+      console.log('🧹 Cleaning up Core Engine...');
+      
+      await this.emergencyStop();
+      
+      // Cleanup screenshot agent
+      if (this.screenshotAgent) {
+        await this.screenshotAgent.cleanup();
+      }
+      
+      console.log('✅ Core Engine cleanup completed');
+      
+    } catch (error) {
+      console.error('❌ Core Engine cleanup failed:', error);
+    }
+  }
 }
 
-module.exports = CoreEngine;
+export default CoreEngine;

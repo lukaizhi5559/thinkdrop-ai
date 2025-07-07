@@ -1,9 +1,9 @@
 /**
  * LLM Router - Handles multiple AI providers with intelligent routing and fallback
  */
-const OpenAI = require('openai');
-const Anthropic = require('@anthropic-ai/sdk');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 class LLMRouter {
   constructor() {
@@ -312,4 +312,4 @@ class LLMRouter {
   }
 }
 
-module.exports = LLMRouter;
+export default LLMRouter;

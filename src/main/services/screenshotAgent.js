@@ -2,11 +2,11 @@
  * Screenshot Agent - Handles screen capture, OCR, and visual analysis
  * Integrates with CoreEngine for screenshot capabilities and UI analysis
  */
-const screenshot = require('screenshot-desktop');
-const Tesseract = require('tesseract.js');
-const fs = require('fs');
-const path = require('path');
-const { EventEmitter } = require('events');
+import screenshot from 'screenshot-desktop';
+import Tesseract from 'tesseract.js';
+import fs from 'fs';
+import path from 'path';
+import { EventEmitter } from 'events';
 
 class ScreenshotAgent extends EventEmitter {
   constructor(coreEngine) {
@@ -397,4 +397,4 @@ class ScreenshotAgent extends EventEmitter {
   }
 }
 
-module.exports = ScreenshotAgent;
+export default ScreenshotAgent;

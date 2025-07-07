@@ -302,8 +302,8 @@ function toggleChat() {
 app.whenReady().then(() => {
   createOverlayWindow();
   
-  // Initialize core services (disabled for demo)
-  // initializeServices();
+  // Initialize core services including LocalLLMAgent
+  initializeServices();
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
@@ -350,16 +350,17 @@ async function initializeServices() {
     const CoreEngine = (await import('./services/coreEngine.js')).default;
     const AgentDispatcher = (await import('./services/agentDispatcher.js')).default;
     const LLMRouter = (await import('./services/llmRouter.js')).default;
-    const LocalLLMAgent = require('./services/LocalLLMAgent.js');
     
     // Initialize services
     coreEngine = new CoreEngine();
     agentDispatcher = new AgentDispatcher();
     llmRouter = new LLMRouter();
-    localLLMAgent = new LocalLLMAgent();
     
-    // Initialize LocalLLMAgent
-    await localLLMAgent.initialize();
+    // Initialize CoreEngine (which includes LocalLLMAgent)
+    await coreEngine.initializeAll();
+    
+    // Use LocalLLMAgent from coreEngine instead of creating a separate instance
+    localLLMAgent = coreEngine.localLLMAgent;
     
     // Set up event listeners
     coreEngine.on('audioData', (data) => {
@@ -529,7 +530,7 @@ ipcMain.handle('hide-chat-messages', () => {
 });
 
 // IPC handlers for chat messaging system
-ipcMain.handle('send-chat-message', (event, message) => {
+ipcMain.handle('send-chat-message', async (event, message) => {
   // Ensure only one chat messages window exists
   if (!chatMessagesWindow || chatMessagesWindow.isDestroyed()) {
     createChatMessagesWindow();
@@ -539,15 +540,68 @@ ipcMain.handle('send-chat-message', (event, message) => {
   chatMessagesWindow.show();
   chatMessagesWindow.focus();
   
-  // Send the message to the chat messages window
-  const chatMessage = {
+  // Send the user message to the chat messages window
+  const userMessage = {
     id: Date.now().toString(),
     text: message.text,
     sender: 'user',
     timestamp: message.timestamp
   };
   
-  chatMessagesWindow.webContents.send('chat-message', chatMessage);
+  chatMessagesWindow.webContents.send('chat-message', userMessage);
+  
+  // Process message through LocalLLMAgent orchestration
+  try {
+    if (localLLMAgent && localLLMAgent.isInitialized) {
+      console.log('🧠 Processing message through LocalLLMAgent:', message.text);
+      
+      const orchestrationResult = await localLLMAgent.orchestrateAgents(message.text, {
+        source: 'chat',
+        timestamp: message.timestamp
+      });
+      
+      // Send AI response to chat messages window
+      const aiMessage = {
+        id: (Date.now() + 1).toString(),
+        text: orchestrationResult.response || 'I processed your request successfully.',
+        sender: 'ai',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          agentsUsed: orchestrationResult.agentsUsed || [],
+          executionTime: orchestrationResult.executionTime || 0
+        }
+      };
+      
+      chatMessagesWindow.webContents.send('chat-message', aiMessage);
+      
+    } else {
+      console.warn('⚠️ LocalLLMAgent not available, sending fallback response');
+      
+      // Fallback response when LocalLLMAgent is not ready
+      const fallbackMessage = {
+        id: (Date.now() + 1).toString(),
+        text: 'LocalLLMAgent is initializing. Please try again in a moment.',
+        sender: 'ai',
+        timestamp: new Date().toISOString()
+      };
+      
+      chatMessagesWindow.webContents.send('chat-message', fallbackMessage);
+    }
+    
+  } catch (error) {
+    console.error('❌ Chat message processing error:', error);
+    
+    // Send error response to chat
+    const errorMessage = {
+      id: (Date.now() + 2).toString(),
+      text: `Sorry, I encountered an error processing your request: ${error.message}`,
+      sender: 'ai',
+      timestamp: new Date().toISOString(),
+      isError: true
+    };
+    
+    chatMessagesWindow.webContents.send('chat-message', errorMessage);
+  }
 });
 
 ipcMain.handle('adjust-chat-messages-height', (event, height) => {

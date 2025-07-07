@@ -1,7 +1,7 @@
 /**
  * Agent Dispatcher - Routes context data to appropriate n8n webhook agents
  */
-const axios = require('axios');
+import axios from 'axios';
 
 class AgentDispatcher {
   constructor() {
@@ -231,4 +231,4 @@ class AgentDispatcher {
   }
 }
 
-module.exports = AgentDispatcher;
+export default AgentDispatcher;

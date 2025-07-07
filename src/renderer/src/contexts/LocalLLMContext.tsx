@@ -266,18 +266,80 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
     }
   }, [handleError, clearError]);
 
-  // Initialize on mount
+  // Initialize on mount with proper readiness check
   useEffect(() => {
+    const waitForLocalLLMAgent = async () => {
+      // Poll for LocalLLMAgent readiness instead of using fixed delay
+      let attempts = 0;
+      const maxAttempts = 30; // 30 seconds max wait
+      
+      while (attempts < maxAttempts) {
+        try {
+          if (!window.electronAPI) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+            continue;
+          }
+          
+          // Try a simple health check to see if LocalLLMAgent is ready
+          const healthResult = await window.electronAPI.llmGetHealth();
+          if (healthResult.success && healthResult.data?.initialized) {
+            console.log('✅ LocalLLMAgent is ready, initializing context');
+            break;
+          }
+          
+          // Wait 1 second before next attempt
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+          
+        } catch (error) {
+          // LocalLLMAgent not ready yet, continue waiting
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          attempts++;
+        }
+      }
+      
+      if (attempts >= maxAttempts) {
+        console.warn('⚠️ LocalLLMAgent readiness timeout, proceeding with initialization anyway');
+      }
+      
+      return attempts < maxAttempts;
+    };
+    
     const initialize = async () => {
-      await refreshHealth();
-      await refreshCachedAgents();
-      await refreshCommunications();
+      await waitForLocalLLMAgent();
+      
+      try {
+        await refreshHealth();
+        await refreshCachedAgents();
+        await refreshCommunications();
+        console.log('✅ LocalLLMContext initialized successfully');
+      } catch (error) {
+        console.warn('LocalLLMContext initialization failed:', error);
+        // Single retry after 3 seconds
+        setTimeout(async () => {
+          try {
+            await refreshHealth();
+            await refreshCachedAgents();
+            await refreshCommunications();
+            console.log('✅ LocalLLMContext retry successful');
+          } catch (retryError) {
+            console.error('❌ LocalLLMContext retry failed:', retryError);
+          }
+        }, 3000);
+      }
     };
 
     initialize();
 
-    // Set up periodic health checks
-    const healthInterval = setInterval(refreshHealth, 30000); // Every 30 seconds
+    // Set up periodic health checks (with error handling)
+    const healthInterval = setInterval(async () => {
+      try {
+        await refreshHealth();
+      } catch (error) {
+        console.warn('Health check failed:', error);
+      }
+    }, 30000); // Every 30 seconds
 
     return () => {
       clearInterval(healthInterval);

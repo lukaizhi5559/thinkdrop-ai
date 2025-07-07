@@ -2,11 +2,13 @@
  * LocalLLMAgent - Central orchestration brain for ThinkDrop AI's agent ecosystem
  * Provides local-first agent orchestration with optional cloud sync
  */
-const { EventEmitter } = require('events');
-const duckdb = require('duckdb');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
+import { EventEmitter } from 'events';
+import duckdb from 'duckdb';
+import path from 'path';
+import fs from 'fs';
+import crypto from 'crypto';
+import http from 'http';
+import os from 'os';
 
 class LocalLLMAgent extends EventEmitter {
   constructor() {
@@ -21,12 +23,12 @@ class LocalLLMAgent extends EventEmitter {
     // Configuration
     this.config = {
       databasePath: path.join(process.cwd(), 'data', 'local-llm-agent.duckdb'),
-      ollamaUrl: 'http://localhost:11434',
+      ollamaUrl: 'http://127.0.0.1:11434',
       preferredModel: 'phi3:mini', // Microsoft Phi-3 Mini - lightweight and efficient
       fallbackModels: ['llama3.2:1b', 'tinyllama'], // Fallback options if phi3:mini unavailable
       cacheExpiry: 5 * 60 * 1000, // 5 minutes
       maxCacheSize: 100,
-      requestTimeout: 30000, // 30 seconds
+      requestTimeout: 60000, // 60 seconds
       maxRetries: 3
     };
   }
@@ -229,16 +231,76 @@ class LocalLLMAgent extends EventEmitter {
    * Check if Ollama service is running
    */
   async checkOllamaStatus() {
-    try {
-      const response = await fetch(`${this.config.ollamaUrl}/api/tags`, {
+    return new Promise((resolve) => {
+      const url = new URL(this.config.ollamaUrl + '/api/tags');
+      
+      const req = http.request({
+        hostname: url.hostname,
+        port: url.port || 11434,
+        path: '/api/tags',
         method: 'GET',
-        signal: AbortSignal.timeout(5000)
+        timeout: 5000
+      }, (res) => {
+        console.log(`🔍 Ollama status check: ${res.statusCode}`);
+        resolve(res.statusCode === 200);
       });
       
-      return response.ok;
-    } catch (error) {
-      return false;
-    }
+      req.on('error', (error) => {
+        console.log(`🔍 Ollama status check failed: ${error.message}`);
+        resolve(false);
+      });
+      
+      req.on('timeout', () => {
+        console.log('🔍 Ollama status check timed out');
+        req.destroy();
+        resolve(false);
+      });
+      
+      req.end();
+    });
+  }
+
+  /**
+   * Get available models from Ollama using Node.js http
+   */
+  async getOllamaModels() {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.config.ollamaUrl + '/api/tags');
+      
+      const req = http.request({
+        hostname: url.hostname,
+        port: url.port || 11434,
+        path: '/api/tags',
+        method: 'GET',
+        timeout: 5000
+      }, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          try {
+            const parsed = JSON.parse(data);
+            resolve(parsed);
+          } catch (error) {
+            reject(new Error('Failed to parse models response'));
+          }
+        });
+      });
+      
+      req.on('error', (error) => {
+        reject(error);
+      });
+      
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+      
+      req.end();
+    });
   }
 
   /**
@@ -246,10 +308,9 @@ class LocalLLMAgent extends EventEmitter {
    */
   async testLocalLLMCapabilities() {
     try {
-      // Get available models
-      const response = await fetch(`${this.config.ollamaUrl}/api/tags`);
-      const data = await response.json();
-      const models = data.models || [];
+      // Get available models using Node.js http
+      const modelsData = await this.getOllamaModels();
+      const models = modelsData.models || [];
       
       if (models.length === 0) {
         return { success: false, error: 'No models available' };
@@ -281,23 +342,32 @@ class LocalLLMAgent extends EventEmitter {
       }
       
       const testPrompt = 'Respond with "OK" if you can understand this message.';
-      
-      const testResponse = await this.queryLocalLLM(testPrompt, {
+    
+    console.log(`🧪 Testing model ${testModel} with prompt: "${testPrompt}"`);
+    
+    const testResponse = await this.queryLocalLLM(testPrompt, {
+      model: testModel,
+      temperature: 0.1,
+      maxTokens: 10,
+      bypassAvailabilityCheck: true
+    });
+    
+    console.log(`🧪 Model test response: "${testResponse}"`);
+    
+    if (testResponse && testResponse.toLowerCase().includes('ok')) {
+      console.log(`✅ Model test passed for ${testModel}`);
+      return {
+        success: true,
         model: testModel,
-        temperature: 0.1,
-        maxTokens: 10
-      });
-      
-      if (testResponse && testResponse.toLowerCase().includes('ok')) {
-        return {
-          success: true,
-          model: testModel,
-          totalModels: models.length
-        };
-      }
-      
-      return { success: false, error: 'Model test failed' };
+        totalModels: models.length
+      };
+    }
+    
+    console.log(`❌ Model test failed for ${testModel} - response did not contain 'ok'`);
+    return { success: false, error: 'Model test failed' };
     } catch (error) {
+      console.error(`🚨 Model test exception for ${testModel}:`, error.message);
+      console.error('🚨 Full error:', error);
       return { success: false, error: error.message };
     }
   }
@@ -306,41 +376,89 @@ class LocalLLMAgent extends EventEmitter {
    * Query local LLM (Ollama)
    */
   async queryLocalLLM(prompt, options = {}) {
-    if (!this.localLLMAvailable) {
+    // Allow bypass during testing to avoid circular dependency
+    if (!this.localLLMAvailable && !options.bypassAvailabilityCheck) {
       throw new Error('Local LLM not available');
     }
     
+    // Add Thinkdrop AI context to the prompt
+    const systemContext = `You are Thinkdrop AI, an intelligent desktop assistant that helps users with productivity, automation, and information management. You have access to:
+- Screen capture and analysis capabilities
+- File system access for document management
+- Task automation and workflow orchestration
+- Real-time desktop integration
+- Multi-agent coordination for complex tasks
+
+You should be helpful, concise, and proactive in suggesting ways to improve the user's workflow. When appropriate, mention specific Thinkdrop AI features that could help with their request.`;
+    
+    const contextualPrompt = `${systemContext}\n\nUser: ${prompt}\n\nThinkdrop AI:`;
+    
     const requestBody = {
       model: options.model || this.currentLocalModel,
-      prompt: prompt,
+      prompt: contextualPrompt,
       stream: false,
       options: {
-        temperature: options.temperature || 0.7,
-        num_predict: options.maxTokens || 1000,
-        top_p: 0.9,
-        top_k: 40
+        temperature: options.temperature || 0.3, // Lower for faster, more focused responses
+        num_predict: options.maxTokens || 500, // Reduced for faster generation
+        top_p: 0.8, // Slightly more focused
+        top_k: 20, // Reduced for faster sampling
+        repeat_penalty: 1.1,
+        num_ctx: 2048, // Context window optimization
+        num_thread: 4, // Use multiple threads for faster processing
+        num_gpu: 1 // Use GPU if available
       }
     };
     
-    try {
-      const response = await fetch(`${this.config.ollamaUrl}/api/generate`, {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.config.ollamaUrl + '/api/generate');
+      const postData = JSON.stringify(requestBody);
+      
+      const req = http.request({
+        hostname: url.hostname,
+        port: url.port || 11434,
+        path: '/api/generate',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(options.timeout || this.config.requestTimeout)
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(postData)
+        },
+        timeout: options.timeout || this.config.requestTimeout
+      }, (res) => {
+        let data = '';
+        
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        res.on('end', () => {
+          try {
+            if (res.statusCode !== 200) {
+              reject(new Error(`LLM request failed: ${res.statusCode}`));
+              return;
+            }
+            
+            const parsed = JSON.parse(data);
+            resolve(parsed.response);
+          } catch (error) {
+            console.error('❌ Local LLM query failed:', error.message);
+            reject(error);
+          }
+        });
       });
       
-      if (!response.ok) {
-        throw new Error(`LLM request failed: ${response.status}`);
-      }
+      req.on('error', (error) => {
+        console.error('❌ Local LLM query failed:', error.message);
+        reject(error);
+      });
       
-      const data = await response.json();
-      return data.response;
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
       
-    } catch (error) {
-      console.error('❌ Local LLM query failed:', error.message);
-      throw error;
-    }
+      req.write(postData);
+      req.end();
+    });
   }
 
   /**
@@ -508,31 +626,71 @@ class LocalLLMAgent extends EventEmitter {
    */
   async handleLocalOrchestration(userInput, context, sessionId) {
     console.log(`🏠 Handling locally: ${sessionId}`);
+    const startTime = Date.now();
     
-    // For now, provide a basic local response
-    // This will be enhanced with actual agent execution
-    const response = {
-      success: true,
-      sessionId,
-      response: `Local processing: ${userInput}`,
-      handledBy: 'LocalLLMAgent',
-      timestamp: new Date().toISOString(),
-      executionTime: Date.now()
-    };
-    
-    // Log the communication
-    this.logCommunication({
-      from_agent: 'LocalLLMAgent',
-      to_agent: 'user',
-      message_type: 'local_response',
-      content: { userInput, response: response.response },
-      context,
-      success: true,
-      execution_time_ms: Date.now() - response.executionTime,
-      session_id: sessionId
-    });
-    
-    return response;
+    try {
+      // Use the local LLM to generate a response
+      const llmResponse = await this.queryLocalLLM(userInput, {
+        temperature: 0.7,
+        max_tokens: 500
+      });
+      
+      const response = {
+        success: true,
+        sessionId,
+        response: llmResponse.response || llmResponse,
+        handledBy: 'LocalLLMAgent',
+        model: llmResponse.model || this.config.preferredModel,
+        timestamp: new Date().toISOString(),
+        executionTime: Date.now() - startTime,
+        agentsUsed: ['LocalLLMAgent']
+      };
+      
+      console.log(`✅ Local LLM response generated: ${sessionId}`);
+      
+      // Log the communication
+      this.logCommunication({
+        from_agent: 'LocalLLMAgent',
+        to_agent: 'user',
+        message_type: 'local_llm_response',
+        content: { userInput, response: response.response },
+        context,
+        success: true,
+        execution_time_ms: response.executionTime,
+        session_id: sessionId
+      });
+      
+      return response;
+      
+    } catch (error) {
+      console.error(`❌ Local LLM processing failed: ${sessionId}`, error.message);
+      
+      // Fallback response when local LLM fails
+      const fallbackResponse = {
+        success: false,
+        sessionId,
+        response: `I'm having trouble processing your request locally. Error: ${error.message}`,
+        handledBy: 'LocalLLMAgent',
+        timestamp: new Date().toISOString(),
+        executionTime: Date.now() - startTime,
+        error: error.message
+      };
+      
+      // Log the error
+      this.logCommunication({
+        from_agent: 'LocalLLMAgent',
+        to_agent: 'user',
+        message_type: 'local_llm_error',
+        content: { userInput, error: error.message },
+        context,
+        success: false,
+        error_message: error.message,
+        execution_time_ms: fallbackResponse.executionTime,
+        session_id: sessionId
+      });
+      
+      return fallbackResponse;
+    }
   }
 
   /**
@@ -609,7 +767,6 @@ class LocalLLMAgent extends EventEmitter {
    */
   getDeviceId() {
     // Simple device ID based on hostname and platform
-    const os = require('os');
     return crypto.createHash('sha256')
       .update(`${os.hostname()}-${os.platform()}-${os.arch()}`)
       .digest('hex')
@@ -633,4 +790,4 @@ class LocalLLMAgent extends EventEmitter {
   }
 }
 
-module.exports = LocalLLMAgent;
+export default LocalLLMAgent;
