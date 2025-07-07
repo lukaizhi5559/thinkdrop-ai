@@ -10,6 +10,7 @@ import {
 import ChatWindow from './ChatWindow';
 import ChatMessages from './ChatMessages';
 import InsightWindow from './InsightWindow';
+import { LocalLLMProvider } from './contexts/LocalLLMContext';
 
 // Declare global for TypeScript
 declare global {
@@ -43,6 +44,15 @@ declare global {
       stopAudioCapture: () => Promise<void>;
       onTranscriptUpdate: (callback: (event: any, data: any) => void) => void;
       onAgentResponse: (callback: (event: any, data: any) => void) => void;
+      
+      // LocalLLMAgent methods
+      llmOrchestrate: (userInput: string, context?: any) => Promise<any>;
+      llmQueryLocal: (prompt: string, options?: any) => Promise<any>;
+      llmGetHealth: () => Promise<any>;
+      llmGetCachedAgents: () => Promise<any>;
+      llmGetCommunications: (limit?: number) => Promise<any>;
+      llmClearCache: () => Promise<any>;
+      
       platform: string;
     };
   }
@@ -337,4 +347,13 @@ function App() {
   );
 }
 
-export default App;
+// Wrap App with LocalLLMProvider for agent orchestration context
+const AppWithProvider: React.FC = () => {
+  return (
+    <LocalLLMProvider>
+      <App />
+    </LocalLLMProvider>
+  );
+};
+
+export default AppWithProvider;

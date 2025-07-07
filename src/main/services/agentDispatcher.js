@@ -10,7 +10,8 @@ class AgentDispatcher {
       clipboard: process.env.N8N_WEBHOOK_CLIPBOARD,
       docGeneration: process.env.N8N_WEBHOOK_DOC_GENERATION,
       action: process.env.N8N_WEBHOOK_ACTION,
-      tts: process.env.N8N_WEBHOOK_TTS
+      tts: process.env.N8N_WEBHOOK_TTS,
+      screenshot: process.env.N8N_WEBHOOK_SCREENSHOT
     };
   }
 
@@ -42,6 +43,12 @@ class AgentDispatcher {
     // TTS Agent
     if (contentLower.includes('read aloud') || contentLower.includes('speak this')) {
       agents.push('tts');
+    }
+
+    // Screenshot Agent
+    if (contentLower.includes('screenshot') || contentLower.includes('capture screen') || 
+        contentLower.includes('analyze screen') || type === 'screenshot') {
+      agents.push('screenshot');
     }
 
     // Clipboard Agent (always trigger for clipboard events)
@@ -169,6 +176,13 @@ class AgentDispatcher {
         audioUrl: 'https://example.com/synthesized-audio.mp3',
         duration: '30s',
         voice: 'neural'
+      },
+      screenshot: {
+        analysis: 'Screen content analyzed successfully',
+        elements: ['button', 'text field', 'image'],
+        suggestions: ['Click here', 'Fill this form', 'Read this text'],
+        confidence: 0.92,
+        ocrText: `Simulated OCR text from screenshot: "${sessionData.input.content.substring(0, 50)}..."`
       }
     };
 

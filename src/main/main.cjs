@@ -342,6 +342,7 @@ app.on('will-quit', () => {
 let coreEngine = null;
 let agentDispatcher = null;
 let llmRouter = null;
+let localLLMAgent = null;
 
 async function initializeServices() {
   try {
@@ -349,11 +350,16 @@ async function initializeServices() {
     const CoreEngine = (await import('./services/coreEngine.js')).default;
     const AgentDispatcher = (await import('./services/agentDispatcher.js')).default;
     const LLMRouter = (await import('./services/llmRouter.js')).default;
+    const LocalLLMAgent = require('./services/LocalLLMAgent.js');
     
     // Initialize services
     coreEngine = new CoreEngine();
     agentDispatcher = new AgentDispatcher();
     llmRouter = new LLMRouter();
+    localLLMAgent = new LocalLLMAgent();
+    
+    // Initialize LocalLLMAgent
+    await localLLMAgent.initialize();
     
     // Set up event listeners
     coreEngine.on('audioData', (data) => {
@@ -623,6 +629,46 @@ ipcMain.handle('stop-screen-monitoring', async () => {
   return { success: false, error: 'Core engine not available' };
 });
 
+// IPC handlers for screenshot agent
+ipcMain.handle('capture-screenshot', async (event, options = {}) => {
+  if (coreEngine) {
+    try {
+      const result = await coreEngine.captureScreenshot(options);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('Screenshot capture error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Core engine not available' };
+});
+
+ipcMain.handle('process-screenshot-request', async (event, intent, options = {}) => {
+  if (coreEngine) {
+    try {
+      const result = await coreEngine.processScreenshotRequest(intent, options);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('Screenshot request processing error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Core engine not available' };
+});
+
+ipcMain.handle('initialize-screenshot-agent', async () => {
+  if (coreEngine) {
+    try {
+      const result = await coreEngine.initializeScreenshotAgent();
+      return { success: result };
+    } catch (error) {
+      console.error('Screenshot agent initialization error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Core engine not available' };
+});
+
 // IPC handlers for agent processing
 ipcMain.handle('process-input', async (event, inputData) => {
   if (agentDispatcher) {
@@ -653,6 +699,7 @@ ipcMain.handle('get-system-health', async () => {
     coreEngine: coreEngine ? 'ready' : 'not_available',
     agentDispatcher: agentDispatcher ? 'ready' : 'not_available',
     llmRouter: llmRouter ? 'ready' : 'not_available',
+    localLLMAgent: localLLMAgent ? 'ready' : 'not_available',
     services: {
       audio: coreEngine?.isRecording || false,
       clipboard: coreEngine?.clipboardWatcher ? true : false,
@@ -676,5 +723,94 @@ ipcMain.handle('get-system-health', async () => {
     }
   }
   
+  if (localLLMAgent) {
+    try {
+      health.localLLMAgent = await localLLMAgent.getHealthStatus();
+    } catch (error) {
+      health.localLLMAgent = { error: error.message };
+    }
+  }
+  
   return health;
+});
+
+// LocalLLMAgent IPC handlers
+ipcMain.handle('llm-orchestrate', async (event, userInput, context = {}) => {
+  if (localLLMAgent && localLLMAgent.isInitialized) {
+    try {
+      const result = await localLLMAgent.orchestrateAgents(userInput, context);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('LocalLLMAgent orchestration error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'LocalLLMAgent not available' };
+});
+
+ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {
+  if (localLLMAgent && localLLMAgent.localLLMAvailable) {
+    try {
+      const result = await localLLMAgent.queryLocalLLM(prompt, options);
+      return { success: true, data: result };
+    } catch (error) {
+      console.error('Local LLM query error:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'Local LLM not available' };
+});
+
+ipcMain.handle('llm-get-health', async () => {
+  if (localLLMAgent) {
+    try {
+      const health = await localLLMAgent.getHealthStatus();
+      return { success: true, data: health };
+    } catch (error) {
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'LocalLLMAgent not available' };
+});
+
+ipcMain.handle('llm-get-cached-agents', async () => {
+  if (localLLMAgent && localLLMAgent.database) {
+    try {
+      const agents = localLLMAgent.database.prepare('SELECT * FROM cached_agents ORDER BY last_accessed DESC').all();
+      return { success: true, data: agents };
+    } catch (error) {
+      console.error('Error fetching cached agents:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'LocalLLMAgent database not available' };
+});
+
+ipcMain.handle('llm-get-communications', async (event, limit = 50) => {
+  if (localLLMAgent && localLLMAgent.database) {
+    try {
+      const communications = localLLMAgent.database.prepare(
+        'SELECT * FROM agent_communications ORDER BY timestamp DESC LIMIT ?'
+      ).all(limit);
+      return { success: true, data: communications };
+    } catch (error) {
+      console.error('Error fetching communications:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'LocalLLMAgent database not available' };
+});
+
+ipcMain.handle('llm-clear-cache', async () => {
+  if (localLLMAgent && localLLMAgent.database) {
+    try {
+      localLLMAgent.database.prepare('DELETE FROM cached_agents WHERE source != "default"').run();
+      localLLMAgent.agentCache.clear();
+      return { success: true, message: 'Agent cache cleared' };
+    } catch (error) {
+      console.error('Error clearing cache:', error);
+      return { success: false, error: error.message };
+    }
+  }
+  return { success: false, error: 'LocalLLMAgent database not available' };
 });

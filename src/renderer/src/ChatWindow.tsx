@@ -1,11 +1,19 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './components/ui/button';
 import { Send, X, Droplet } from 'lucide-react';
+import { useOrchestration, useLocalLLM } from './contexts/LocalLLMContext';
 
 export default function ChatWindow() {
   const [currentMessage, setCurrentMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  
+  // LocalLLMAgent integration
+  const { orchestrate, isOrchestrating, lastError, clearError } = useOrchestration();
+  const { isInitialized, isLocalLLMAvailable, health } = useLocalLLM();
+  
+  // Combined loading state
+  const isBusy = isLoading || isOrchestrating;
 
   // Auto-focus the textarea when component mounts and ensure it's ready
   useEffect(() => {
@@ -43,7 +51,7 @@ export default function ChatWindow() {
   }, []);
 
   const handleSendMessage = async () => {
-    if (!currentMessage.trim() || isLoading) return;
+    if (!currentMessage.trim() || isBusy) return;
     
     setIsLoading(true);
     const messageText = currentMessage.trim();
@@ -54,6 +62,9 @@ export default function ChatWindow() {
       textareaRef.current.style.height = 'auto';
     }
     
+    // Clear any previous errors
+    clearError();
+    
     // Create message object that matches IPC handler expectations
     const userMessage = {
       text: messageText,  // IPC handler expects 'text' property
@@ -61,9 +72,43 @@ export default function ChatWindow() {
     };
     
     try {
-      // Send message to main process to handle chat logic and show messages window
+      // First send to traditional chat system for UI display
       if (window.electronAPI?.sendChatMessage) {
         await window.electronAPI.sendChatMessage(userMessage);
+      }
+      
+      // Then orchestrate with LocalLLMAgent for intelligent response
+      if (isInitialized) {
+        const context = {
+          timestamp: new Date().toISOString(),
+          source: 'chat_window',
+          userInput: messageText,
+          localLLMAvailable: isLocalLLMAvailable,
+          agentHealth: health
+        };
+        
+        const orchestrationResult = await orchestrate(messageText, context);
+        
+        if (orchestrationResult.success && orchestrationResult.data) {
+          console.log('✅ Agent orchestration successful:', orchestrationResult.data);
+          
+          // Send agent response back to chat if we got one
+          if (orchestrationResult.data.response && window.electronAPI?.sendChatMessage) {
+            const agentMessage = {
+              text: orchestrationResult.data.response,
+              timestamp: new Date(),
+              isAgent: true,
+              handledBy: orchestrationResult.data.handledBy || 'LocalLLMAgent',
+              sessionId: orchestrationResult.data.sessionId || 'unknown'
+            };
+            await window.electronAPI.sendChatMessage(agentMessage);
+          }
+        } else {
+          console.warn('⚠️ Agent orchestration failed, using fallback');
+          if (lastError) {
+            console.error('Orchestration error:', lastError);
+          }
+        }
       }
       
       // Success - regain focus after a delay to ensure message is processed
@@ -124,9 +169,23 @@ export default function ChatWindow() {
         >
           <div className="flex items-center space-x-3"
           >
-            <div className="w-8 h-8 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center flex-shrink-0"
+            <div className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative ${
+              isInitialized && isLocalLLMAvailable 
+                ? 'from-teal-400 to-blue-500' 
+                : 'from-gray-500 to-gray-600'
+            }`}
             >
               <Droplet className="w-4 h-4 text-white" />
+              {/* Agent status indicator */}
+              {isOrchestrating && (
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-yellow-400 rounded-full animate-pulse" />
+              )}
+              {isInitialized && isLocalLLMAvailable && (
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full" />
+              )}
+              {!isInitialized && (
+                <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-400 rounded-full" />
+              )}
             </div>
             <textarea
               ref={textareaRef}

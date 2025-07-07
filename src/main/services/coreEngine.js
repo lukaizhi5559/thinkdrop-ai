@@ -10,8 +10,10 @@ const sharp = require('sharp');
 const { EventEmitter } = require('events');
 const record = require('node-record-lpcm16');
 const clipboard = require('electron').clipboard;
-const { uiIndexerDaemon } = require('./uiIndexerDaemon');
-const { desktopAutomationService } = require('./desktopAutomationService');
+const uiIndexerDaemon = require('./uiIndexerDaemon');
+const desktopAutomationService = require('./desktopAutomationService');
+const BackendIntegrationService = require('./backendIntegration');
+const ScreenshotAgent = require('./screenshotAgent');
 
 class CoreEngine extends EventEmitter {
   constructor() {
@@ -25,6 +27,8 @@ class CoreEngine extends EventEmitter {
     this.isUIIndexerRunning = false;
     this.desktopAutomation = desktopAutomationService;
     this.isDesktopAutomationReady = false;
+    this.screenshotAgent = new ScreenshotAgent(this);
+    this.isScreenshotAgentReady = false;
   }
 
   // Audio capture and STT
@@ -120,6 +124,64 @@ class CoreEngine extends EventEmitter {
     } catch (error) {
       console.error('❌ Failed to initialize desktop automation:', error);
       this.isDesktopAutomationReady = false;
+      return false;
+    }
+  }
+
+  /**
+   * Initialize screenshot agent
+   */
+  async initializeScreenshotAgent() {
+    try {
+      console.log('📸 Initializing screenshot agent...');
+      
+      this.isScreenshotAgentReady = await this.screenshotAgent.initialize();
+      
+      if (this.isScreenshotAgentReady) {
+        console.log('✅ Screenshot agent ready');
+      } else {
+        console.warn('⚠️ Screenshot agent not ready');
+      }
+      
+      return this.isScreenshotAgentReady;
+      
+    } catch (error) {
+      console.error('❌ Failed to initialize screenshot agent:', error);
+      this.isScreenshotAgentReady = false;
+      return false;
+    }
+  }
+
+  /**
+   * Capture and analyze screenshot
+   */
+  async captureScreenshot(options = {}) {
+    try {
+      if (!this.isScreenshotAgentReady) {
+        await this.initializeScreenshotAgent();
+      }
+      
+      return await this.screenshotAgent.captureAndAnalyze(options);
+      
+    } catch (error) {
+      console.error('❌ Screenshot capture failed:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Process screenshot with specific intent
+   */
+  async processScreenshotRequest(intent, options = {}) {
+    try {
+      if (!this.isScreenshotAgentReady) {
+        await this.initializeScreenshotAgent();
+      }
+      
+      return await this.screenshotAgent.processScreenshotRequest(intent, options);
+      
+    } catch (error) {
+      console.error('❌ Screenshot request processing failed:', error);
       throw error;
     }
   }
@@ -273,6 +335,10 @@ class CoreEngine extends EventEmitter {
       coreEngine: {
         isRecording: this.isRecording,
         hasScreenMonitoring: !!this.screenshotInterval
+      },
+      screenshotAgent: {
+        isReady: this.isScreenshotAgentReady,
+        status: this.screenshotAgent ? this.screenshotAgent.getStatus() : null
       },
       timestamp: new Date().toISOString()
     };
