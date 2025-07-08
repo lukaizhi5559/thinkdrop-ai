@@ -1,15 +1,25 @@
 import React, { useState, useEffect } from 'react';
-import { Database, X } from 'lucide-react';
-import './MemoryDebugger.css';
+import { Database, X, Check, AlertCircle } from 'lucide-react';
+// import './MemoryDebugger.css';
 
 /**
  * MemoryDebugger component for viewing and debugging user memories in DuckDB
  */
+interface Notification {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info';
+  timestamp: number;
+}
+
 const MemoryDebugger = () => {
   const [memories, setMemories] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [lastMemoryCount, setLastMemoryCount] = useState(0);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
   const loadMemories = async () => {
     try {
@@ -23,6 +33,7 @@ const MemoryDebugger = () => {
       
       const result = await window.electronAPI.getAllUserMemories();
       setMemories(result || []);
+      setLastRefreshTime(new Date());
     } catch (err) {
       console.error('Failed to load memories:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -32,9 +43,44 @@ const MemoryDebugger = () => {
     }
   };
 
+  // Add a notification to the list
+  const addNotification = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const newNotification: Notification = {
+      id: Date.now().toString(),
+      message,
+      type,
+      timestamp: Date.now()
+    };
+    
+    setNotifications(prev => [newNotification, ...prev.slice(0, 4)]); // Keep only 5 most recent notifications
+    
+    // Auto-remove notification after 5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
+    }, 5000);
+  };
+
+  // Load memories and check for new ones
   useEffect(() => {
     loadMemories();
+    
+    // Set up polling to check for new memories every 5 seconds
+    const intervalId = setInterval(() => {
+      loadMemories();
+    }, 5000);
+    
+    return () => clearInterval(intervalId);
   }, []);
+  
+  // Check for new memories when memories array changes
+  useEffect(() => {
+    if (lastMemoryCount > 0 && memories.length > lastMemoryCount) {
+      // New memories were added
+      const newCount = memories.length - lastMemoryCount;
+      addNotification(`${newCount} new ${newCount === 1 ? 'memory' : 'memories'} added!`, 'success');
+    }
+    setLastMemoryCount(memories.length);
+  }, [memories.length]);
 
   const filteredMemories = memories.filter(memory => {
     const searchTerm = filter.toLowerCase();
@@ -71,18 +117,60 @@ const MemoryDebugger = () => {
     }
   };
 
+  // Notification component
+  const NotificationItem = ({ notification }: { notification: Notification }) => {
+    const icon = notification.type === 'success' ? (
+      <Check className="w-4 h-4 text-green-400" />
+    ) : notification.type === 'error' ? (
+      <AlertCircle className="w-4 h-4 text-red-400" />
+    ) : (
+      <Database className="w-4 h-4 text-blue-400" />
+    );
+
+    return (
+      <div 
+        className={`flex items-center p-2 mb-2 rounded-md text-sm animate-fadeIn ${
+          notification.type === 'success' ? 'bg-green-500/20 border-l-2 border-green-500' : 
+          notification.type === 'error' ? 'bg-red-500/20 border-l-2 border-red-500' : 
+          'bg-blue-500/20 border-l-2 border-blue-500'
+        }`}
+      >
+        <div className="mr-2">{icon}</div>
+        <div className="flex-1">{notification.message}</div>
+      </div>
+    );
+  };
+
   return (
     <div className="w-full h-screen flex flex-col bg-gray-900/95">
+      {/* Notifications */}
+      <div className="fixed top-4 right-4 z-50 w-64 max-w-sm space-y-2">
+        {notifications.map(notification => (
+          <NotificationItem key={notification.id} notification={notification} />
+        ))}
+      </div>
+
       {/* Draggable Header */}
       <div
         className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className="w-6 h-6 bg-gradient-to-br from-purple-400 to-blue-500 rounded-lg flex items-center justify-center">
+        <div className="w-3 h-6 bg-gradient-to-br from-purple-400 to-blue-500 rounded-lg flex items-center justify-center">
           <Database className="w-3 h-3 text-white" />
         </div>
         <span className="text-white/90 font-medium text-sm">Memory Debugger</span>
         <div className="flex-1" />
+        <span className="text-white/50 text-xs mr-2">
+          {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
+        </span>
+        <button 
+          onClick={loadMemories} 
+          disabled={loading}
+          className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </button>
         <span className="text-white/50 text-xs">Drag to move</span>
         <button
           onClick={handleClose}

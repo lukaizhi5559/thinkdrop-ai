@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import http from 'http';
 import os from 'os';
 import { AgentSandbox } from './AgentSandbox.js';
+import { executeAgent } from './executeAgent.js';
 
 class LocalLLMAgent extends EventEmitter {
   constructor() {
@@ -482,7 +483,7 @@ class LocalLLMAgent extends EventEmitter {
     return new Promise((resolve, reject) => {
       const url = new URL(`${this.config.ollamaUrl}/api/generate`);
       const postData = JSON.stringify(requestBody);
-      const timeoutMs = options.timeout || 15000;
+      const timeoutMs = options.timeout || 30000; // Increased to 30s for local LLMs
 
       const req = http.request(
         {
@@ -668,15 +669,176 @@ class LocalLLMAgent extends EventEmitter {
         database_type: 'duckdb',
         code: `module.exports = {
           execute: async (params, context) => {
-            const { prompt, userMemories } = params;
+            const { prompt, userMemories, recentMessages = [] } = params;
             let enrichedPrompt = prompt;
-            if (userMemories && userMemories.name) {
-              enrichedPrompt = \`[User Context: Name is \${userMemories.name}] \${prompt}\`;
+            let contextAdded = 0;
+            
+            // Build context sections
+            const contextSections = [];
+            
+            // Add user personal context
+            if (userMemories && Object.keys(userMemories).length > 0) {
+              const userContext = [];
+              if (userMemories.name) userContext.push(\`Name: \${userMemories.name}\`);
+              if (userMemories.location) userContext.push(\`Location: \${userMemories.location}\`);
+              if (userMemories.preferences) userContext.push(\`Preferences: \${userMemories.preferences}\`);
+              if (userMemories.role) userContext.push(\`Role: \${userMemories.role}\`);
+              
+              if (userContext.length > 0) {
+                contextSections.push(\`User: \${userContext.join(', ')}\`);
+                contextAdded += userContext.length;
+              }
             }
+            
+            // Find and add relevant memories based on the current prompt
+            const relevantMemories = [];
+            const memoryKeys = Object.keys(userMemories || {});
+            
+            // Define related concepts for better memory retrieval
+            const relatedConcepts = {
+              'appointment': ['meeting', 'schedule', 'calendar', 'appt', 'reminder', 'haircut', 'next week', 'tomorrow', 'tuesday', 'time', 'doctor', 'dentist', 'interview'],
+              'name': ['call me', 'my name', 'who am i', 'remember me'],
+              'phone': ['call', 'text', 'message', 'contact', 'number', 'mother', 'mom', 'dad', 'family'],
+              'color': ['favorite', 'preferred', 'like', 'best'],
+              'location': ['address', 'place', 'where', 'destination', 'live', 'work', 'office', 'home'],
+              'time': ['when', 'date', 'schedule', 'appointment', 'calendar', 'reminder', 'upcoming']
+            };
+            
+            // Define related memory keys for better context linking
+            const relatedMemoryGroups = {
+              'appointment': ['reminder', 'schedule', 'meeting', 'calendar'],
+              'contact': ['phone', 'email', 'address'],
+              'personal': ['name', 'birthday', 'age', 'family']
+            };
+            
+            // Check if a memory is relevant to the current prompt
+            const isRelevantToPrompt = (key, value, prompt) => {
+              const lowerKey = key.toLowerCase();
+              const lowerValue = typeof value === 'string' ? value.toLowerCase() : '';
+              const lowerPrompt = prompt.toLowerCase();
+              
+              // Direct match in prompt
+              if (lowerPrompt.includes(lowerKey) || (lowerValue && lowerPrompt.includes(lowerValue))) {
+                return true;
+              }
+              
+              // Special handling for appointment/calendar queries
+              if ((lowerPrompt.includes('when') || lowerPrompt.includes('what time') || lowerPrompt.includes('what day')) && 
+                  (lowerPrompt.includes('appointment') || lowerPrompt.includes('appt') || 
+                   lowerPrompt.includes('meeting') || lowerPrompt.includes('schedule') || 
+                   lowerPrompt.includes('calendar') || lowerPrompt.includes('reminder'))) {
+                
+                // Check all appointment-related memories
+                if (lowerKey.includes('appointment') || lowerKey.includes('reminder') || 
+                    lowerKey.includes('meeting') || lowerKey.includes('schedule')) {
+                  return true;
+                }
+                
+                // Check if the appointment is for a specific purpose that matches the query
+                // For example: "when is my dentist appointment" should match appointment_dentist
+                for (const word of lowerPrompt.split(/\s+/)) {
+                  if (word.length > 3 && lowerKey.includes(word) && 
+                      (lowerKey.startsWith('appointment_') || lowerKey.startsWith('meeting_'))) {
+                    return true;
+                  }
+                }
+              }
+              
+              // Check if the key is a known concept with related terms
+              for (const concept in relatedConcepts) {
+                if (lowerKey.includes(concept)) {
+                  // Check if any related concept is in the prompt
+                  for (const relatedTerm of relatedConcepts[concept]) {
+                    if (lowerPrompt.includes(relatedTerm)) {
+                      return true;
+                    }
+                  }
+                }
+              }
+              
+              return false;
+            };
+            
+            // Find memories that are relevant to the current prompt
+            for (const key of memoryKeys) {
+              const value = userMemories[key];
+              if (isRelevantToPrompt(key, value, prompt)) {
+                relevantMemories.push({ key, value });
+              }
+            }
+            
+            // Find related memories that might be relevant by association
+            const directlyRelevantKeys = relevantMemories.map(mem => mem.key);
+            
+            // Second pass to find related memories
+            if (directlyRelevantKeys.length > 0) {
+              for (const key of memoryKeys) {
+                // Skip if already included
+                if (directlyRelevantKeys.includes(key)) continue;
+                
+                const value = userMemories[key];
+                const keyParts = key.split('_');
+                
+                // Check if this memory belongs to the same group as any relevant memory
+                for (const relevantKey of directlyRelevantKeys) {
+                  const relevantKeyParts = relevantKey.split('_');
+                  
+                  // Check if they share the same prefix (e.g., appointment_dentist and appointment_doctor)
+                  if (keyParts[0] === relevantKeyParts[0]) {
+                    relevantMemories.push({ key, value, relatedTo: relevantKey });
+                    break;
+                  }
+                  
+                  // Check if they belong to related memory groups
+                  for (const groupName in relatedMemoryGroups) {
+                    const group = relatedMemoryGroups[groupName];
+                    if (group.some(term => relevantKey.includes(term)) && 
+                        group.some(term => key.includes(term))) {
+                      relevantMemories.push({ key, value, relatedTo: relevantKey });
+                      break;
+                    }
+                  }
+                }
+              }
+            }
+            
+            // Add relevant memories to context
+            if (relevantMemories.length > 0) {
+              const memoryContext = relevantMemories.map(mem => \`\${mem.key}: \${mem.value}\`).join(', ');
+              contextSections.push(\`Relevant memories: \${memoryContext}\`);
+              contextAdded += relevantMemories.length;
+            }
+            
+            // Add agent capabilities awareness
+            const capabilities = [
+              'I can help with questions, conversations, and information',
+              'I can remember information you share with me across sessions',
+              'I work with various specialized agents (Drops) for different tasks',
+              'I can handle scheduling discussions and appointment-related conversations',
+              'I can assist with planning, research, and workflow discussions'
+            ];
+            contextSections.push(\`My capabilities: \${capabilities.join('; ')}\`);
+            contextAdded += 1;
+            
+            // Add system context about Drops/Agents
+            const systemContext = [
+              'ThinkDrop AI uses specialized agents called "Drops" for different capabilities',
+              'I coordinate with memory agents, intent parsers, and planning agents',
+              'I can escalate complex tasks to cloud-based agents when needed'
+            ];
+            contextSections.push(\`System: \${systemContext.join('; ')}\`);
+            contextAdded += 1;
+            
+            // Construct enriched prompt
+            if (contextSections.length > 0) {
+              enrichedPrompt = \`[Context: \${contextSections.join(' | ')}]\n\n\${prompt}\`;
+            }
+            
             return {
               success: true,
               enrichedPrompt,
-              contextAdded: Object.keys(userMemories || {}).length
+              contextAdded,
+              relevantMemories: relevantMemories.length > 0 ? relevantMemories : undefined
             };
           }
         };`,
@@ -723,6 +885,40 @@ class LocalLLMAgent extends EventEmitter {
         orchestrator_metadata: JSON.stringify({ priority: 'high', type: 'parser' }),
         memory: JSON.stringify({}),
         capabilities: JSON.stringify(['intent_detection', 'entity_extraction', 'classification']),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        version: '1.0.0',
+        source: 'default'
+      },
+      {
+        name: 'PlannerAgent',
+        id: 'planner-agent',
+        description: 'Multi-intent orchestration planner for complex workflows',
+        parameters: JSON.stringify({
+          supportedIntents: [
+            'memory_store',
+            'memory_retrieve', 
+            'external_data_required',
+            'question',
+            'command'
+          ],
+          orchestrationTypes: [
+            'sequential',
+            'parallel',
+            'conditional'
+          ]
+        }),
+        dependencies: JSON.stringify([]),
+        execution_target: 'frontend',
+        requires_database: false,
+        database_type: null,
+        code: `module.exports = {execute: async function(params, context) {const message = params.message;const llmClient = context?.llmClient;if(!llmClient){console.log('PlannerAgent: LLM client not available');return {success: false,error: 'LLM client required for orchestration planning'};}try{const prompt = \`You are an intelligent orchestration planner. Analyze the user message and determine if it requires multiple agents/actions.\n\nFor simple single-intent messages, return: {\"multiIntent\": false, \"primaryIntent\": \"intent_name\"}\n\nFor complex multi-intent messages, return: {\"multiIntent\": true, \"intents\": [\"intent1\", \"intent2\"], \"orchestrationPlan\": [{\"step\": 1, \"agent\": \"AgentName\", \"action\": \"action_name\", \"data\": {}, \"parallel\": false}]}\n\nSupported intents: memory_store, memory_retrieve, external_data_required, question, command\nSupported agents: UserMemoryAgent, MemoryEnrichmentAgent, CalendarIntegrationAgent\n\nUser message: \${message}\`;const result = await llmClient.complete({prompt,max_tokens: 800,temperature: 0.2,stop: [\"\\n\\n\"]});try{const parsedResult = JSON.parse(result.text);console.log('PlannerAgent orchestration result:', parsedResult);if(parsedResult.multiIntent){return {success: true,multiIntent: true,intents: parsedResult.intents,orchestrationPlan: parsedResult.orchestrationPlan,totalSteps: parsedResult.orchestrationPlan?.length || 0};}else{return {success: true,multiIntent: false,primaryIntent: parsedResult.primaryIntent,orchestrationPlan: [{step: 1,agent: 'LocalLLMAgent',action: 'handle_single_intent',data: {intent: parsedResult.primaryIntent},parallel: false}],totalSteps: 1};}}catch(parseError){console.error('Failed to parse PlannerAgent result:', parseError);return {success: true,multiIntent: false,primaryIntent: 'question',orchestrationPlan: [{step: 1,agent: 'LocalLLMAgent',action: 'handle_single_intent',data: {intent: 'question'},parallel: false}],totalSteps: 1};}}catch(error){console.error('Error in PlannerAgent:', error);return {success: false,error: error.message};}}};
+`,
+        config: JSON.stringify({ timeout: 10000 }),
+        secrets: JSON.stringify({}),
+        orchestrator_metadata: JSON.stringify({ priority: 'highest', type: 'orchestrator' }),
+        memory: JSON.stringify({}),
+        capabilities: JSON.stringify(['multi_intent_detection', 'workflow_planning', 'orchestration']),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
         version: '1.0.0',
@@ -942,8 +1138,33 @@ class LocalLLMAgent extends EventEmitter {
     const startTime = Date.now();
 
     try {
-      console.log('🎯 Parsing intent...');
-      const intentResult = await this.executeAgent('IntentParserAgent', { message: userInput }, context);
+      // Phase 1: Use PlannerAgent to determine if multi-intent orchestration is needed
+      console.log('🧠 Analyzing orchestration requirements...');
+      const plannerResult = await this.executeAgent('PlannerAgent', { message: userInput }, context);
+      
+      if (plannerResult.success && plannerResult.multiIntent) {
+        console.log(`🎯 Multi-intent workflow detected: ${plannerResult.intents.join(', ')}`);
+        console.log(`📋 Orchestration plan: ${plannerResult.totalSteps} steps`);
+        
+        // TODO: Phase 2 - Execute multi-step orchestration plan
+        // For now, log the plan and fall back to single intent handling
+        console.log('📋 Generated orchestration plan:', JSON.stringify(plannerResult.orchestrationPlan, null, 2));
+        
+        // Extract primary intent for fallback processing
+        const primaryIntent = plannerResult.intents[0] || 'question';
+        console.log(`🔄 Falling back to single-intent processing: ${primaryIntent}`);
+        
+        // Create a mock intent result for compatibility with existing flow
+        var intentResult = {
+          success: true,
+          intent: primaryIntent,
+          confidence: 0.8,
+          multiIntentPlan: plannerResult // Store the plan for future use
+        };
+      } else {
+        console.log('🎯 Single-intent detected, using IntentParserAgent...');
+        var intentResult = await this.executeAgent('IntentParserAgent', { message: userInput }, context);
+      }
       const intent = intentResult.success ? intentResult.intent : 'question';
       const memoryCategory = intentResult.memoryCategory || null;
       const requiresExternalData = intentResult.requiresExternalData || false;
@@ -953,9 +1174,24 @@ class LocalLLMAgent extends EventEmitter {
       // Handle requests that require external data (prevent hallucinations)
       if (requiresExternalData) {
         console.log('🌐 Request requires external data, providing appropriate response');
+        
+        // Generate context-aware response based on the type of external data needed
+        let contextualMessage;
+        const lowerInput = userInput.toLowerCase();
+        
+        if (lowerInput.includes('calendar') || lowerInput.includes('schedule') || lowerInput.includes('appointment')) {
+          contextualMessage = "I'd be happy to help with calendar management! However, I don't currently have access to your calendar data. To assist with scheduling, I would need integration with your calendar service (Google Calendar, Outlook, etc.). For now, I can help you plan or discuss your scheduling needs.";
+        } else if (lowerInput.includes('flight') || lowerInput.includes('travel') || lowerInput.includes('trip')) {
+          contextualMessage = "I'd love to help with your travel planning! However, I don't have access to real-time flight information or booking systems. I can help you think through travel plans, but for actual flight details or bookings, you'd need to check with airline websites or travel booking services.";
+        } else if (lowerInput.includes('email') || lowerInput.includes('message')) {
+          contextualMessage = "I can help you draft messages or emails! However, I don't have access to send emails or messages directly. I can help you compose what you'd like to say, and then you can copy and send it through your preferred email or messaging service.";
+        } else {
+          contextualMessage = "I'd be happy to help! However, this request might require access to external data or services that I don't currently have. I can still assist with planning, brainstorming, or providing general guidance on this topic.";
+        }
+        
         const response = {
           success: true,
-          message: "I'm sorry, but I don't have access to your calendar or appointment information. This would require integration with your calendar service or other external data sources.",
+          message: contextualMessage,
           executionTime: Date.now() - startTime,
           sessionId
         };
@@ -975,7 +1211,116 @@ class LocalLLMAgent extends EventEmitter {
       }
 
       let userMemories = {};
-      if (intent === 'memory_store') {
+      
+      // Handle command intent
+      if (intent === 'command') {
+        console.log('🔧 Processing command intent...');
+        
+        // Generate appropriate response for command intent
+        let commandResponse;
+        const lowerInput = userInput.toLowerCase();
+        
+        if (lowerInput.includes('text') || lowerInput.includes('message') || lowerInput.includes('send')) {
+          commandResponse = "I've noted your message request. While I can't actually send messages, I can help you draft content or remember important details."; 
+        } else if (lowerInput.includes('call') || lowerInput.includes('phone')) {
+          commandResponse = "I've noted your call request. While I can't make actual phone calls, I can help you prepare what you might want to say or remember important details."; 
+        } else {
+          commandResponse = "I understand you want me to perform an action. While I can't directly perform external actions, I can help you plan or remember the details."; 
+        }
+        
+        const response = {
+          success: true,
+          message: commandResponse,
+          source: 'command_intent_response',
+          model: this.currentLocalModel,
+          executionTime: Date.now() - startTime,
+          sessionId,
+          agentsUsed: ['IntentParserAgent'],
+          intent
+        };
+        
+        await this.logCommunication({
+          from_agent: 'LocalLLMAgent',
+          to_agent: 'user',
+          message_type: 'command_intent_response',
+          content: { userInput, response: response.message },
+          context,
+          success: true,
+          execution_time_ms: response.executionTime,
+          session_id: sessionId
+        });
+        
+        return response;
+      } else if (intent === 'question') {
+        console.log('❓ Processing question intent...');
+        
+        // Get recent messages for conversation context
+        const recentMessages = await this.getRecentMessages(sessionId, 5);
+        
+        // Retrieve user memories to enrich the response
+        console.log('🧠 Retrieving user memories for question context...');
+        const userMemoryResult = await this.executeAgent('UserMemoryAgent', {
+          action: 'retrieve',
+          key: '*'
+        }, context);
+        
+        if (userMemoryResult.success) {
+          userMemories = userMemoryResult.memories || {};
+          console.log(`✅ Retrieved ${Object.keys(userMemories).length} memories for question context`);
+        }
+        
+        // Check if this is a memory-related question
+        const lowerInput = userInput.toLowerCase();
+        const isMemoryQuestion = lowerInput.includes('remember') || 
+                               lowerInput.includes('what') || 
+                               lowerInput.includes('when') || 
+                               lowerInput.includes('where') || 
+                               lowerInput.includes('who') || 
+                               lowerInput.includes('how') || 
+                               lowerInput.includes('my');
+        
+        // Enrich the prompt with user context
+        console.log('✨ Enriching question prompt with user context...');
+        const enrichmentResult = await this.executeAgent('MemoryEnrichmentAgent', {
+          prompt: userInput,
+          userMemories,
+          recentMessages
+        }, context);
+        
+        const enrichedPrompt = enrichmentResult.success ? enrichmentResult.enrichedPrompt : userInput;
+        
+        // Generate response using local LLM
+        console.log('🧠 Generating response with local LLM...');
+        const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
+          max_tokens: 300,
+          temperature: 0.7
+        });
+        
+        const response = {
+          success: true,
+          message: llmResponse || "I'm not sure how to answer that question. Could you rephrase it?",
+          source: 'question_response',
+          model: this.currentLocalModel,
+          executionTime: Date.now() - startTime,
+          sessionId,
+          agentsUsed: ['IntentParserAgent', 'MemoryEnrichmentAgent'],
+          intent,
+          memoriesUsed: Object.keys(userMemories)
+        };
+        
+        await this.logCommunication({
+          from_agent: 'LocalLLMAgent',
+          to_agent: 'user',
+          message_type: 'question_response',
+          content: { userInput, response: response.message },
+          context,
+          success: true,
+          execution_time_ms: response.executionTime,
+          session_id: sessionId
+        });
+        
+        return response;
+      } else if (intent === 'memory_store') {
         console.log('💾 Processing memory storage request with LLM extraction...');
         
         // Use LLM to extract key-value pairs from the memory storage request
@@ -987,122 +1332,416 @@ Examples:
 - "my name is John" → {"key": "name", "value": "John"}
 - "remember my favorite color is blue" → {"key": "favorite_color", "value": "blue"}
 - "I work at Google" → {"key": "workplace", "value": "Google"}
+- "I have an appointment next week Tuesday at 4pm for a haircut" → {"key": "appointment_haircut", "value": "next week Tuesday at 4pm"}
+- "My dentist appointment is on Friday at 2pm" → {"key": "appointment_dentist", "value": "Friday at 2pm"}
 
 JSON:`;
 
-        try {
-          const llmResponse = await this.queryLocalLLM(memoryExtractionPrompt, {
-            max_tokens: 100,
-            temperature: 0.1,
-            stop: ['\n', '```']
-          });
-
-          console.log('🧠 LLM memory extraction response:', llmResponse);
-
-          // Parse the LLM response to extract key-value pair
-          let memoryData;
           try {
-            // Clean up the response (remove any markdown or extra text)
-            const cleanResponse = llmResponse.replace(/```json|```|`/g, '').trim();
-            memoryData = JSON.parse(cleanResponse);
-          } catch (parseError) {
-            console.log('⚠️ Failed to parse LLM response, trying fallback extraction...');
-            
-            // Simple fallback patterns as safety net
-            const fallbackPatterns = [
-              { pattern: /name is ([\w\s]+)/i, key: 'name' },
-              { pattern: /favorite color is ([\w\s]+)/i, key: 'favorite_color' },
-              { pattern: /work at ([\w\s]+)/i, key: 'workplace' }
-            ];
-            
-            for (const { pattern, key } of fallbackPatterns) {
-              const match = userInput.match(pattern);
-              if (match) {
-                memoryData = { key, value: match[1].trim() };
-                break;
+            const llmResponse = await this.queryLocalLLM(memoryExtractionPrompt, {
+              max_tokens: 100,
+              temperature: 0.1,
+              stop: ['\n', '```']
+            });
+
+            console.log('🧠 LLM memory extraction response:', llmResponse);
+
+            // Parse the LLM response to extract key-value pair
+            let memoryData;
+            try {
+              // Clean up the response (remove any markdown or extra text)
+              const cleanResponse = llmResponse.replace(/```json|```|`/g, '').trim();
+              memoryData = JSON.parse(cleanResponse);
+            } catch (parseError) {
+              console.log('⚠️ Failed to parse LLM response, trying fallback extraction...');
+              
+              // Simple fallback patterns as safety net
+              const fallbackPatterns = [
+                { pattern: /name is ([\w\s]+)/i, key: 'name' },
+                { pattern: /favorite color is ([\w\s]+)/i, key: 'favorite_color' },
+                { pattern: /work at ([\w\s]+)/i, key: 'workplace' },
+                // Appointment patterns
+                { 
+                  pattern: /(?:i have|i've got|my)\s+(?:an\s+)?(?:appointment|appt|meeting)\s+(?:next|this|on|for)\s+([\w\s]+)\s+(?:at|for|to)\s+([\w\s:]+)(?:\s+(?:for|to)\s+([\w\s]+))?/i, 
+                  keyFn: (matches) => `appointment_${matches[3] ? matches[3].toLowerCase().replace(/\s+/g, '_') : 'general'}`,
+                  valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim()
+                },
+                { 
+                  pattern: /(?:appointment|appt|meeting)\s+(?:is|for|on)\s+([\w\s]+)\s+(?:at|for)\s+([\w\s:]+)/i, 
+                  keyFn: (matches) => 'appointment_general',
+                  valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim()
+                }
+              ];
+              
+              for (const patternObj of fallbackPatterns) {
+                const match = userInput.match(patternObj.pattern);
+                if (match) {
+                  if (patternObj.keyFn && patternObj.valueFn) {
+                    // Complex pattern with custom key/value extraction functions
+                    memoryData = { 
+                      key: patternObj.keyFn(match),
+                      value: patternObj.valueFn(match)
+                    };
+                  } else {
+                    // Simple pattern with direct key/value
+                    memoryData = { key: patternObj.key, value: match[1].trim() };
+                  }
+                  console.log('🔍 Fallback pattern matched:', patternObj.pattern);
+                  console.log('📦 Extracted memory data:', memoryData);
+                  break;
+                }
               }
             }
+
+            if (memoryData && memoryData.key && memoryData.value) {
+              console.log(`💾 Storing ${memoryData.key}: ${memoryData.value}`);
+
+              await this.executeAgent('UserMemoryAgent', {
+                action: 'store',
+                key: memoryData.key,
+                value: memoryData.value
+              }, context);
+
+            }
+
+            if (memoryData && memoryData.key && memoryData.value) {
+              console.log(`💾 Storing ${memoryData.key}: ${memoryData.value}`);
+
+              const storeResult = await this.executeAgent('UserMemoryAgent', {
+                action: 'store',
+                key: memoryData.key,
+                value: memoryData.value
+              }, context);
+
+              userMemories[memoryData.key] = memoryData.value;
+              
+              // Generate a confirmation message based on the memory type
+              let confirmationMessage = '';
+              if (memoryData.key.includes('appointment')) {
+                confirmationMessage = `I've saved your ${memoryData.key.replace('appointment_', '')} appointment for ${memoryData.value}.`;
+              } else {
+                confirmationMessage = `I've remembered that your ${memoryData.key.replace('_', ' ')} is ${memoryData.value}.`;
+              }
+              
+              // Return a proper response object
+              return {
+                success: true,
+                message: confirmationMessage,
+                source: 'memory_storage',
+                model: this.currentLocalModel,
+                executionTime: Date.now() - startTime,
+                sessionId,
+                agentsUsed: ['IntentParserAgent', 'UserMemoryAgent'],
+                intent,
+                memoryStored: {
+                  key: memoryData.key,
+                  value: memoryData.value
+                }
+              };
+            } else {
+              console.log('⚠️ Could not extract memory data from input:', userInput);
+              
+              // Return a proper response object even when extraction fails
+              return {
+                success: false,
+                message: "I couldn't understand what to remember from that. Could you phrase it differently?",
+                source: 'memory_storage_failed',
+                model: this.currentLocalModel,
+                executionTime: Date.now() - startTime,
+                sessionId,
+                agentsUsed: ['IntentParserAgent'],
+                intent
+              };
+            }
+          } catch (error) {
+            console.error('❌ Failed to extract memory with LLM:', error);
+            
+            // Return a proper error response
+            return {
+              success: false,
+              message: "I had trouble processing that. Could you try again?",
+              source: 'memory_storage_error',
+              model: this.currentLocalModel,
+              executionTime: Date.now() - startTime,
+              sessionId,
+              agentsUsed: ['IntentParserAgent'],
+              intent,
+              error: error.message
+            };
           }
-
-          if (memoryData && memoryData.key && memoryData.value) {
-            console.log(`💾 Storing ${memoryData.key}: ${memoryData.value}`);
-
-            await this.executeAgent('UserMemoryAgent', {
-              action: 'store',
-              key: memoryData.key,
-              value: memoryData.value
+        } else if (intent === 'memory_retrieve') {
+          console.log('🧠 Retrieving user memories...');
+          const userMemoryResult = await this.executeAgent('UserMemoryAgent', {
+            action: 'retrieve',
+            key: '*'
+          }, context);
+          
+          if (userMemoryResult.success) {
+            console.log('🔄 Processing retrieve_memory intent from UserMemoryAgent');
+            const userMemories = userMemoryResult.memories || {};
+            const memoryKeys = Object.keys(userMemories);
+            console.log(`✅ Retrieved ${memoryKeys.length} memories`);
+            
+            // Check if this is an appointment-related query
+            const isAppointmentQuery = this.isAppointmentQuery(userInput);
+            const hasAppointmentMemory = memoryKeys.some(key => key.includes('appointment'));
+            
+            console.log(`🔍 Appointment query: ${isAppointmentQuery}, Has appointment memory: ${hasAppointmentMemory}`);
+            
+            // Get recent messages for conversation context
+            const recentMessages = await this.getRecentMessages(sessionId, 5);
+            
+            // Enrich the prompt with user context
+            console.log('✨ Enriching prompt with user context...');
+            const enrichmentResult = await this.executeAgent('MemoryEnrichmentAgent', {
+              prompt: userInput,
+              userMemories,
+              recentMessages
             }, context);
+            
+            // Log any relevant memories found for debugging
+            if (enrichmentResult.relevantMemories && enrichmentResult.relevantMemories.length > 0) {
+              console.log('🔍 Found relevant memories:', enrichmentResult.relevantMemories);
+            }
+            
+            const enrichedPrompt = enrichmentResult.success ? enrichmentResult.enrichedPrompt : userInput;
 
-            userMemories[memoryData.key] = memoryData.value;
-          } else {
-            console.log('⚠️ Could not extract memory data from input:', userInput);
-          }
-        } catch (error) {
-          console.error('❌ Failed to extract memory with LLM:', error);
+          console.log(`✨ Context added: ${enrichmentResult.contextAdded || 0} items`);
+
+          console.log('🤖 Generating LLM response...');
+          console.log('🎯 Enriched prompt:', enrichedPrompt);
+          const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
+            sessionId,
+            temperature: 0.0,
+            maxTokens: 150,
+            contextWindow: 1024,
+            numThread: 1,
+            stopTokens: ['\n\n'],
+            timeout: 12000
+          });
+          console.log('🎯 LLM raw response:', JSON.stringify(llmResponse));
+
+          const response = {
+            success: true,
+            message: llmResponse || 'Response generated successfully',
+            source: 'agent_orchestrated_llm',
+            model: this.currentLocalModel,
+            executionTime: Date.now() - startTime,
+            sessionId,
+            agentsUsed: ['IntentParserAgent', 'UserMemoryAgent', 'MemoryEnrichmentAgent'],
+            intent,
+            contextEnriched: enrichmentResult.contextAdded > 0
+          };
+
+          await this.logCommunication({
+            from_agent: 'LocalLLMAgent',
+            to_agent: 'user',
+            message_type: 'agent_orchestration_success',
+            content: {
+              userInput,
+              enrichedPrompt,
+              response: response.message,
+              intent,
+              agentsUsed: response.agentsUsed
+            },
+            context,
+            success: true,
+            execution_time_ms: response.executionTime,
+            session_id: sessionId
+          });
+
+          return response;
+        } else if (intent === 'greeting') {
+        console.log('👋 Processing greeting intent...');
+        
+        // Get user name from memory if available
+        console.log('🧠 Retrieving user memories for personalized greeting...');
+        const userMemoryResult = await this.executeAgent('UserMemoryAgent', {
+          action: 'retrieve',
+          key: 'name'
+        }, context);
+        
+        let userName = '';
+        if (userMemoryResult.success && userMemoryResult.memories && userMemoryResult.memories.name) {
+          userName = userMemoryResult.memories.name;
+          console.log(`✅ Retrieved user name: ${userName}`);
+        }
+        
+        // Generate personalized greeting based on time of day and user name
+        const hour = new Date().getHours();
+        let timeGreeting = '';
+        
+        if (hour < 12) {
+          timeGreeting = 'Good morning';
+        } else if (hour < 18) {
+          timeGreeting = 'Good afternoon';
+        } else {
+          timeGreeting = 'Good evening';
+        }
+        
+        // Add user name if available
+        const personalizedGreeting = userName ? `${timeGreeting}, ${userName}!` : `${timeGreeting}!`;
+        
+        // Select a random greeting variation
+        const greetingVariations = [
+          `${personalizedGreeting} How can I help you today?`,
+          `${personalizedGreeting} What can I assist you with?`,
+          `${personalizedGreeting} I'm here and ready to help.`,
+          `${personalizedGreeting} How may I be of service?`,
+          `${personalizedGreeting} What's on your mind today?`
+        ];
+        
+        const randomGreeting = greetingVariations[Math.floor(Math.random() * greetingVariations.length)];
+        
+        const response = {
+          success: true,
+          message: randomGreeting,
+          source: 'greeting_response',
+          model: this.currentLocalModel,
+          executionTime: Date.now() - startTime,
+          sessionId,
+          agentsUsed: ['IntentParserAgent'],
+          intent
+        };
+        
+        await this.logCommunication({
+          from_agent: 'LocalLLMAgent',
+          to_agent: 'user',
+          message_type: 'greeting_response',
+          content: { userInput, response: response.message },
+          context,
+          success: true,
+          execution_time_ms: response.executionTime,
+          session_id: sessionId
+        });
+        
+        return response;
+      } else if (intent === 'multi_command') {
+        console.log('🔄 Processing multi_command intent...');
+        
+        // For multi_command, we need to use PlannerAgent to create a plan
+        console.log('📝 Creating execution plan with PlannerAgent...');
+        
+        // Get user memories for context
+        const userMemoryResult = await this.executeAgent('UserMemoryAgent', {
+          action: 'retrieve',
+          key: '*'
+        }, context);
+        
+        if (userMemoryResult.success) {
+          userMemories = userMemoryResult.memories || {};
+        }
+        
+        // Execute PlannerAgent to create a plan
+        const plannerResult = await this.executeAgent('PlannerAgent', {
+          message: userInput,
+          intent,
+          userMemories
+        }, context);
+        
+        if (plannerResult.success && plannerResult.plan) {
+          console.log('✅ Successfully created execution plan');
+          
+          // For now, we'll just acknowledge the plan and provide a helpful response
+          // In a future implementation, we would execute the plan steps
+          
+          const response = {
+            success: true,
+            message: `I understand you want me to perform multiple actions. I've created a plan to help with "${userInput}", but I'm still learning how to execute these complex tasks. Would you like me to break this down into simpler steps?`,
+            source: 'multi_command_planning',
+            model: this.currentLocalModel,
+            executionTime: Date.now() - startTime,
+            sessionId,
+            agentsUsed: ['IntentParserAgent', 'PlannerAgent'],
+            intent,
+            plan: plannerResult.plan
+          };
+          
+          await this.logCommunication({
+            from_agent: 'LocalLLMAgent',
+            to_agent: 'user',
+            message_type: 'multi_command_planning',
+            content: { userInput, response: response.message, plan: plannerResult.plan },
+            context,
+            success: true,
+            execution_time_ms: response.executionTime,
+            session_id: sessionId
+          });
+          
+          return response;
+        } else {
+          console.log('❌ Failed to create execution plan');
+          
+          // Fallback to treating it as a question
+          return this.handleLocalOrchestration(userInput, { ...context, fallbackIntent: 'question' }, sessionId);
+        }
+      } else if (intent === 'orchestration') {
+        console.log('🎵 Processing orchestration intent...');
+        
+        // For orchestration, we need to use PlannerAgent to create a complex workflow plan
+        console.log('📝 Creating orchestration workflow with PlannerAgent...');
+        
+        // Get user memories for context
+        const userMemoryResult = await this.executeAgent('UserMemoryAgent', {
+          action: 'retrieve',
+          key: '*'
+        }, context);
+        
+        if (userMemoryResult.success) {
+          userMemories = userMemoryResult.memories || {};
+        }
+        
+        // Execute PlannerAgent to create an orchestration plan
+        const plannerResult = await this.executeAgent('PlannerAgent', {
+          message: userInput,
+          intent,
+          userMemories,
+          orchestration: true
+        }, context);
+        
+        if (plannerResult.success && plannerResult.plan) {
+          console.log('✅ Successfully created orchestration workflow');
+          
+          const response = {
+            success: true,
+            message: `I understand you want me to orchestrate a complex workflow. I've created a plan for "${userInput}", but I'm still learning how to execute these sophisticated tasks. Would you like me to explain the steps I would take?`,
+            source: 'orchestration_planning',
+            model: this.currentLocalModel,
+            executionTime: Date.now() - startTime,
+            sessionId,
+            agentsUsed: ['IntentParserAgent', 'PlannerAgent'],
+            intent,
+            plan: plannerResult.plan
+          };
+          
+          await this.logCommunication({
+            from_agent: 'LocalLLMAgent',
+            to_agent: 'user',
+            message_type: 'orchestration_planning',
+            content: { userInput, response: response.message, plan: plannerResult.plan },
+            context,
+            success: true,
+            execution_time_ms: response.executionTime,
+            session_id: sessionId
+          });
+          
+          return response;
+        } else {
+          console.log('❌ Failed to create orchestration workflow');
+          
+          // Fallback to treating it as a question
+          return this.handleLocalOrchestration(userInput, { ...context, fallbackIntent: 'question' }, sessionId);
         }
       } else {
-        console.log('🧠 Retrieving user memories...');
-        const memoryResult = await this.executeAgent('UserMemoryAgent', { action: 'retrieve' }, context);
-
-        if (memoryResult.success && memoryResult.results) {
-          userMemories = memoryResult.results.reduce((acc, mem) => ({ ...acc, [mem.key]: mem.value }), {});
-          console.log('🧠 Retrieved memories:', Object.keys(userMemories));
-        }
+        // Default handler for any other intents
+        console.log(`❓ Processing unhandled intent: ${intent}, falling back to question handling...`);
+        
+        // Treat unhandled intents as questions
+        const fallbackContext = { ...context, fallbackIntent: 'question' };
+        return this.handleLocalOrchestration(userInput, fallbackContext, sessionId);
       }
-
-      console.log('✨ Enriching prompt with user context...');
-      const enrichmentResult = await this.executeAgent('MemoryEnrichmentAgent', {
-        prompt: userInput,
-        userMemories
-      }, context);
-      const enrichedPrompt = enrichmentResult.success ? enrichmentResult.enrichedPrompt : userInput;
-
-      console.log(`✨ Context added: ${enrichmentResult.contextAdded || 0} items`);
-
-      console.log('🤖 Generating LLM response...');
-      console.log('🎯 Enriched prompt:', enrichedPrompt);
-      const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
-        sessionId,
-        temperature: 0.0,
-        maxTokens: 150,
-        contextWindow: 1024,
-        numThread: 1,
-        stopTokens: ['\n\n'],
-        timeout: 12000
-      });
-      console.log('🎯 LLM raw response:', JSON.stringify(llmResponse));
-
-      const response = {
-        success: true,
-        message: llmResponse || 'Response generated successfully',
-        source: 'agent_orchestrated_llm',
-        model: this.currentLocalModel,
-        executionTime: Date.now() - startTime,
-        sessionId,
-        agentsUsed: ['IntentParserAgent', 'UserMemoryAgent', 'MemoryEnrichmentAgent'],
-        intent,
-        contextEnriched: enrichmentResult.contextAdded > 0
-      };
-
-      await this.logCommunication({
-        from_agent: 'LocalLLMAgent',
-        to_agent: 'user',
-        message_type: 'agent_orchestration_success',
-        content: {
-          userInput,
-          enrichedPrompt,
-          response: response.message,
-          intent,
-          agentsUsed: response.agentsUsed
-        },
-        context,
-        success: true,
-        execution_time_ms: response.executionTime,
-        session_id: sessionId
-      });
-
-      return response;
-    } catch (error) {
+    } 
+  } catch (error) {
       console.error(`❌ Agent orchestration failed: ${sessionId}`, error.message);
 
       const fallbackResponse = {
@@ -1147,6 +1786,79 @@ JSON:`;
     };
 
     return response;
+  }
+
+  /**
+   * Check if a user input is an appointment-related query
+   * @param {string} userInput - The user input to check
+   * @returns {boolean} - True if the input is an appointment query
+   */
+  isAppointmentQuery(userInput) {
+    if (!userInput) return false;
+    
+    const lowerInput = userInput.toLowerCase();
+    
+    // Check for appointment-related keywords
+    const appointmentKeywords = ['appointment', 'appt', 'meeting', 'schedule', 'calendar'];
+    const timeKeywords = ['when', 'time', 'date', 'day', 'next week', 'tomorrow', 'tuesday'];
+    
+    // Check if input contains both appointment and time keywords
+    const hasAppointmentKeyword = appointmentKeywords.some(keyword => lowerInput.includes(keyword));
+    const hasTimeKeyword = timeKeywords.some(keyword => lowerInput.includes(keyword));
+    
+    return hasAppointmentKeyword && hasTimeKeyword;
+  }
+  
+  /**
+   * Get recent messages for a session to provide conversation context
+   * @param {string} sessionId - The session ID to get messages for
+   * @param {number} limit - Maximum number of messages to retrieve
+   * @returns {Promise<Array>} - Array of recent messages
+   */
+  async getRecentMessages(sessionId, limit = 5) {
+    if (!sessionId || !this.dbConnection) {
+      return [];
+    }
+    
+    try {
+      const query = `
+        SELECT content, timestamp, from_agent, to_agent
+        FROM agent_communications
+        WHERE execution_id = '${sessionId}'
+        ORDER BY timestamp DESC
+        LIMIT ${limit}
+      `;
+      
+      return new Promise((resolve, reject) => {
+        this.dbConnection.all(query, (err, rows) => {
+          if (err) {
+            console.error('❌ Failed to retrieve recent messages:', err);
+            resolve([]);
+            return;
+          }
+          
+          // Format messages for context
+          const messages = rows.map(row => {
+            try {
+              const content = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
+              return {
+                message: content.userInput || content.response || '',
+                timestamp: row.timestamp,
+                from: row.from_agent,
+                to: row.to_agent
+              };
+            } catch (e) {
+              return null;
+            }
+          }).filter(Boolean);
+          
+          resolve(messages);
+        });
+      });
+    } catch (error) {
+      console.error('❌ Error retrieving recent messages:', error);
+      return [];
+    }
   }
 
   /**
@@ -1252,329 +1964,7 @@ JSON:`;
    * Default trusted agents can bypass the sandbox for performance and reliability
    */
   async executeAgent(agentName, params, context = {}) {
-    try {
-      const agent = this.agentCache.get(agentName);
-      if (!agent) {
-        throw new Error(`Agent '${agentName}' not found in cache`);
-      }
-
-      // List of trusted default agents that can bypass the sandbox
-      const trustedAgents = ['IntentParserAgent'];
-      const bypassSandbox = trustedAgents.includes(agentName);
-
-      if (bypassSandbox) {
-        console.log(`🔑 Executing trusted agent directly (sandbox bypass): ${agentName}`);
-      } else {
-        console.log(`🔒 Executing agent in secure sandbox: ${agentName}`);
-      }
-
-      const agentContext = {
-        ...context,
-        agentName,
-        timestamp: new Date().toISOString()
-      };
-      
-      // Add llmClient adapter for IntentParserAgent
-      if (agentName === 'IntentParserAgent' && this.localLLMAvailable) {
-        console.log('🧠 Adding LLM client to IntentParserAgent context');
-        // Create an adapter that wraps queryLocalLLM for the agent to use
-        agentContext.llmClient = {
-          complete: async (options) => {
-            try {
-              const response = await this.queryLocalLLM(options.prompt, {
-                temperature: options.temperature || 0.1,
-                maxTokens: options.max_tokens || 500,
-                stopTokens: options.stop || []
-              });
-              return { text: response };
-            } catch (error) {
-              console.error('❌ LLM client error:', error.message);
-              throw error;
-            }
-          }
-        };
-      }
-
-      let result;
-      
-      // Execute trusted agents directly, bypassing the sandbox
-      if (bypassSandbox) {
-        try {
-          // For IntentParserAgent, use a hardcoded implementation
-          if (agentName === 'IntentParserAgent') {
-            console.log(`🔑 Using hardcoded implementation for ${agentName}`);
-            
-            // Direct implementation of IntentParserAgent
-            const message = params.message;
-            const llmClient = agentContext?.llmClient;
-            
-            // Fallback detection function
-            const detectIntent = (msg) => {
-              const lowerMessage = msg.toLowerCase();
-              let intent = 'question';
-              let memoryCategory = null;
-              let confidence = 0.7;
-              
-              if(lowerMessage.match(/my name (is|=) [\w\s]+/i)) {
-                intent = 'memory_store';
-                memoryCategory = 'personal_info';
-                confidence = 0.8;
-              } else if(lowerMessage.match(/my favorite|i like|i prefer|i love/i) && 
-                        lowerMessage.match(/color|food|movie|book|music|song/i)) {
-                intent = 'memory_store';
-                memoryCategory = 'preferences';
-                confidence = 0.8;
-              } else if(lowerMessage.match(/what.*my name|who am i/i)) {
-                intent = 'memory_retrieve';
-                memoryCategory = 'personal_info';
-                confidence = 0.8;
-              } else if(lowerMessage.match(/what.*favorite|what.*like|what.*prefer/i)) {
-                intent = 'memory_retrieve';
-                memoryCategory = 'preferences';
-                confidence = 0.8;
-              } else if(lowerMessage.match(/appointment|schedule|meeting|calendar|flight|plane|travel|trip|airport/i) ||
-                        lowerMessage.match(/what time|when is|tomorrow/i)) {
-                intent = 'external_data_required';
-                memoryCategory = lowerMessage.match(/flight|plane|airport|travel|trip/i) ? 'travel' : 'calendar';
-                confidence = 0.8;
-              }
-              
-              return {
-                success: true,
-                intent,
-                memoryCategory,
-                confidence,
-                entities: [],
-                requiresExternalData: intent === 'external_data_required'
-              };
-            };
-            
-            // If no LLM client or LLM fails, use fallback detection
-            if (!llmClient) {
-              console.log('LLM client not available for intent detection, using fallback');
-              result = detectIntent(message);
-            } else {
-              try {
-                // Use LLM for intent detection with simplified prompt
-                const prompt = `Classify this message: "${message}"
-
-Return ONLY a JSON object with these fields:
-- intent: "question", "command", "memory_store", "memory_retrieve", or "external_data_required"
-- category: "personal_info", "preferences", "calendar", "travel", "work", "health", or "general"
-- confidence: number between 0-1
-- requiresExternalData: true or false`;
-                
-                // Set strict parameters to ensure we get complete JSON
-                const maxTokens = message.length < 20 ? 300 : 500; // Adjust based on input length
-                
-                console.log('🔍 Sending intent detection prompt to LLM...');
-                const llmResult = await llmClient.complete({
-                  prompt,
-                  max_tokens: maxTokens,
-                  temperature: 0.1,
-                  stop: ["\n\n", "```"] // Stop on double newline or code block markers
-                });
-                
-                // Log the raw LLM response for debugging
-                console.log('📝 Raw LLM response:', JSON.stringify(llmResult.text));
-                
-                // Check if we got a valid response
-                if (!llmResult.text || llmResult.text.trim() === '' || llmResult.text.includes('No response generated')) {
-                  console.warn('⚠️ Empty or "No response generated" received, using fallback detection');
-                  result = detectIntent(message);
-                } else {
-                  try {
-                    // Preprocess the text to handle markdown-formatted JSON
-                    let textToParse = llmResult.text.trim();
-                    
-                    // Remove markdown code block formatting if present
-                    if (textToParse.includes('```')) {
-                      // Extract content between markdown code blocks
-                      const match = textToParse.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
-                      if (match && match[1]) {
-                        textToParse = match[1].trim();
-                        console.log('🔍 Extracted JSON from code block');
-                      } else {
-                        // If we can't extract between blocks, just remove the backticks
-                        textToParse = textToParse.replace(/```(?:json)?|```/g, '').trim();
-                        console.log('🔍 Removed code block markers');
-                      }
-                    }
-                    
-                    // Check if we have a valid JSON string after preprocessing
-                    if (!textToParse || textToParse.trim() === '') {
-                      console.warn('⚠️ Empty text after preprocessing, using fallback detection');
-                      result = detectIntent(message);
-                    } else {
-                      console.log('🔍 Preprocessed JSON text:', JSON.stringify(textToParse));
-                      
-                      // Handle truncated or malformed JSON
-                      try {
-                        // Try to extract just the intent and category information using regex
-                        // This is more robust than trying to parse the entire JSON
-                        const intentMatch = textToParse.match(/"intent"\s*:\s*"([^"]+)"/i);
-                        const categoryMatch = textToParse.match(/"(?:memoryCategory|category)"\s*:\s*"([^"]+)"/i);
-                        const confidenceMatch = textToParse.match(/"confidence"\s*:\s*([0-9.]+)/i);
-                        const externalDataMatch = textToParse.match(/"requiresExternalData"\s*:\s*(true|false)/i);
-                        
-                        if (intentMatch) {
-                          console.log('🔧 Extracted intent using regex:', intentMatch[1]);
-                          
-                          // Build a result object from the extracted data
-                          const intent = intentMatch[1];
-                          const memoryCategory = categoryMatch ? categoryMatch[1] : null;
-                          const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.7;
-                          const requiresExternalData = externalDataMatch 
-                            ? externalDataMatch[1] === 'true' 
-                            : intent === 'external_data_required';
-                          
-                          // Special handling for calendar/appointment/travel related queries
-                          const isCalendarOrTravel = 
-                            message.toLowerCase().match(/appointment|schedule|meeting|calendar|flight|plane|travel|trip|airport/i) ||
-                            message.toLowerCase().match(/what time|when is|tomorrow/i);
-                          
-                          // If message mentions calendar/travel but intent doesn't reflect that, override
-                          if (isCalendarOrTravel && intent === 'question') {
-                            console.log('🔧 Overriding intent to external_data_required based on message content');
-                            result = {
-                              success: true,
-                              intent: 'external_data_required',
-                              memoryCategory: message.toLowerCase().match(/flight|plane|airport|travel|trip/i) ? 'travel' : 'calendar',
-                              confidence: 0.8,
-                              entities: [],
-                              requiresExternalData: true
-                            };
-                          } else {
-                            result = {
-                              success: true,
-                              intent: intent,
-                              memoryCategory: memoryCategory,
-                              confidence: confidence,
-                              entities: [],
-                              requiresExternalData: requiresExternalData
-                            };
-                          }
-                          
-                          console.log('✅ Extracted intent data:', result);
-                        } else {
-                          // Fallback to trying to parse the JSON directly
-                          try {
-                            // Try to add missing braces if needed
-                            let jsonToTry = textToParse;
-                            if (!jsonToTry.startsWith('{')) {
-                              jsonToTry = '{' + jsonToTry;
-                              console.log('🔧 Added opening brace');
-                            }
-                            if (!jsonToTry.endsWith('}')) {
-                              jsonToTry = jsonToTry + '}';
-                              console.log('🔧 Added closing brace');
-                            }
-                            
-                            // Try to fix common JSON errors
-                            // Replace any trailing commas before closing brackets
-                            jsonToTry = jsonToTry.replace(/,\s*([\}\]])/g, '$1');
-                            // Fix any unquoted property names
-                            jsonToTry = jsonToTry.replace(/(\{|,)\s*([a-zA-Z0-9_]+)\s*:/g, '$1"$2":');
-                            
-                            console.log('🔧 Attempting to parse fixed JSON:', jsonToTry);
-                            const parsedResult = JSON.parse(jsonToTry);
-                            console.log('✅ LLM intent detection result:', parsedResult);
-                            
-                            // Validate the parsed result has the expected fields
-                            if (!parsedResult.intent) {
-                              console.warn('⚠️ Parsed JSON missing intent field, using fallback detection');
-                              result = detectIntent(message);
-                            } else {
-                              result = {
-                                success: true,
-                                intent: parsedResult.intent || 'question',
-                                memoryCategory: parsedResult.memoryCategory || parsedResult.category || null,
-                                confidence: parsedResult.confidence || 0.7,
-                                entities: parsedResult.entities || [],
-                                requiresExternalData: parsedResult.requiresExternalData || parsedResult.intent === 'external_data_required' || false
-                              };
-                            }
-                          } catch (jsonError) {
-                            console.error('❌ Failed to parse fixed JSON:', jsonError);
-                            result = detectIntent(message);
-                          }
-                        }
-                      } catch (regexError) {
-                        console.error('❌ Regex extraction failed:', regexError);
-                        result = detectIntent(message);
-                      }
-                    }
-                  } catch(parseError) {
-                    console.error('❌ Failed to parse LLM intent detection result:', parseError);
-                    console.log('❓ Attempted to parse:', JSON.stringify(llmResult.text));
-                    result = detectIntent(message);
-                  }
-                }
-              } catch(error) {
-                console.error('Error in LLM intent detection:', error);
-                result = detectIntent(message);
-              }
-            }
-            
-            console.log(`✅ Trusted agent ${agentName} executed successfully (hardcoded implementation)`);
-          } else {
-            // For other trusted agents, use Function constructor
-            const moduleExports = {};
-            const agentFunction = new Function('module', 'exports', 'params', 'context', agent.code);
-            agentFunction(moduleExports, moduleExports, params, agentContext);
-            result = await moduleExports.execute(params, agentContext);
-            console.log(`✅ Trusted agent ${agentName} executed successfully (direct execution)`);
-          }
-        } catch (directError) {
-          console.error(`❌ Direct execution failed for ${agentName}, falling back to sandbox:`, directError.message);
-          // Fall back to sandbox if direct execution fails
-          result = await this.agentSandbox.executeAgent(agent.code, agentName, params, agentContext);
-        }
-      } else {
-        // Use sandbox for untrusted agents
-        result = await this.agentSandbox.executeAgent(agent.code, agentName, params, agentContext);
-      }
-
-      if (!result || !result.success) {
-        const errorMsg = result ? result.error : 'Unknown execution error';
-        console.error(`❌ Execution failed for ${agentName}:`, errorMsg);
-        return {
-          success: false,
-          error: `Execution failed: ${errorMsg}`,
-          errorType: result?.errorType || 'EXECUTION_ERROR',
-          agentName
-        };
-      }
-
-      if (bypassSandbox) {
-        console.log(`✅ Trusted agent ${agentName} completed successfully`);
-      } else {
-        console.log(`✅ Agent ${agentName} executed successfully in secure sandbox`);
-      }
-
-      if (agentName === 'UserMemoryAgent' && result.action) {
-        console.log(`🔄 Processing ${result.action} intent from UserMemoryAgent`);
-        switch (result.action) {
-          case 'store_memory':
-            return await this.handleMemoryStore(result.key, result.value);
-          case 'retrieve_memory':
-            return await this.handleMemoryRetrieve(result.key);
-          case 'search_memory':
-            return await this.handleMemorySearch(result.query);
-          default:
-            console.warn(`⚠️ Unknown memory action: ${result.action}`);
-        }
-      }
-
-      return result;
-    } catch (error) {
-      console.error(`❌ Failed to execute agent ${agentName}:`, error.message);
-      return {
-        success: false,
-        error: error.message,
-        agentName
-      };
-    }
+    return await executeAgent(agentName, params, context, this);
   }
 
   /**
@@ -1716,6 +2106,143 @@ Return ONLY a JSON object with these fields:
     }
 
     throw lastError;
+  }
+
+  /**
+   * Handle greeting intent - provide friendly responses
+   */
+  async handle_greeting(params, context = {}) {
+    try {
+      const message = params.message || params.data?.message || '';
+      console.log(`👋 Handling greeting: "${message}"`);
+      
+      const greetingResponses = [
+        "Hello! How can I help you today?",
+        "Hi there! What can I do for you?",
+        "Hey! I'm here to assist you.",
+        "Greetings! How may I be of service?"
+      ];
+      
+      const response = greetingResponses[Math.floor(Math.random() * greetingResponses.length)];
+      
+      return {
+        success: true,
+        response,
+        intent: 'greeting',
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('❌ Error handling greeting:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: "Hello! I'm having trouble right now, but I'm here to help."
+      };
+    }
+  }
+
+  /**
+   * Answer question intent - handle Q&A with local LLM
+   */
+  async answer_question(params, context = {}) {
+    try {
+      const message = params.message || params.data?.message || '';
+      console.log(`❓ Answering question: "${message}"`);
+      
+      if (!this.localLLMAvailable) {
+        return {
+          success: false,
+          error: 'Local LLM not available',
+          response: "I'm sorry, I can't answer questions right now as my local AI is unavailable."
+        };
+      }
+      
+      const prompt = `You are a helpful AI assistant. Answer this question clearly and concisely:\n\nQuestion: ${message}\n\nAnswer:`;
+      
+      const llmResponse = await this.queryLocalLLM(prompt, {
+        max_tokens: 200,
+        temperature: 0.7
+      });
+      
+      if (llmResponse.success) {
+        return {
+          success: true,
+          response: llmResponse.text.trim(),
+          intent: 'question',
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        return {
+          success: false,
+          error: llmResponse.error,
+          response: "I'm having trouble processing your question right now."
+        };
+      }
+    } catch (error) {
+      console.error('❌ Error answering question:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: "I encountered an error while trying to answer your question."
+      };
+    }
+  }
+
+  /**
+   * Handle single intent - generic handler for simple intents
+   */
+  async handle_single_intent(params, context = {}) {
+    try {
+      const intent = params.intent || params.data?.intent || 'unknown';
+      const message = params.message || params.data?.message || '';
+      console.log(`🎯 Handling single intent '${intent}': "${message}"`);
+      
+      // Route to appropriate handler based on intent
+      switch (intent) {
+        case 'greeting':
+          return await this.handle_greeting(params, context);
+        case 'question':
+          return await this.answer_question(params, context);
+        case 'memory_store':
+          const key = params.key || `user_input_${Date.now()}`;
+          return await this.handleMemoryStore(key, message);
+        case 'memory_retrieve':
+          const searchKey = params.key || message;
+          return await this.handleMemoryRetrieve(searchKey);
+        default:
+          // Generic LLM response for unknown intents
+          if (this.localLLMAvailable) {
+            const prompt = `You are a helpful AI assistant. Respond to this user message:\n\n${message}\n\nResponse:`;
+            const llmResponse = await this.queryLocalLLM(prompt, {
+              max_tokens: 150,
+              temperature: 0.7
+            });
+            
+            if (llmResponse.success) {
+              return {
+                success: true,
+                response: llmResponse.text.trim(),
+                intent,
+                timestamp: new Date().toISOString()
+              };
+            }
+          }
+          
+          return {
+            success: true,
+            response: "I understand you're trying to communicate with me, but I'm not sure how to help with that specific request.",
+            intent,
+            timestamp: new Date().toISOString()
+          };
+      }
+    } catch (error) {
+      console.error('❌ Error handling single intent:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: "I encountered an error while processing your request."
+      };
+    }
   }
 
   /**
