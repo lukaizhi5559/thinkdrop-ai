@@ -25,6 +25,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideInsight: () => ipcRenderer.invoke('hide-insight'),
   onInsightUpdate: (callback) => ipcRenderer.on('insight-update', callback),
   
+  // Memory debugger window controls
+  showMemoryDebugger: () => ipcRenderer.invoke('show-memory-debugger'),
+  hideMemoryDebugger: () => ipcRenderer.invoke('hide-memory-debugger'),
+  
   // Chat messaging system
   sendChatMessage: (message) => ipcRenderer.invoke('send-chat-message', message),
   onChatMessage: (callback) => ipcRenderer.on('chat-message', callback),
@@ -48,6 +52,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSystemHealth: () => ipcRenderer.invoke('get-system-health'),
   
   // LocalLLMAgent communication
+  getLocalLLMHealth: () => ipcRenderer.invoke('local-llm:health'),
+  processLocalLLMMessage: (message) => ipcRenderer.invoke('local-llm:process-message', message),
+  getAllUserMemories: () => ipcRenderer.invoke('local-llm:get-all-memories'),
   llmOrchestrate: (userInput, context) => ipcRenderer.invoke('llm-orchestrate', userInput, context),
   llmQueryLocal: (prompt, options) => ipcRenderer.invoke('llm-query-local', prompt, options),
   llmGetHealth: () => ipcRenderer.invoke('llm-get-health'),

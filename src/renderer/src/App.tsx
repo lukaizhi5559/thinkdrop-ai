@@ -5,11 +5,13 @@ import {
   MicOff, 
   Droplet,
   Lightbulb,
-  EyeOff
+  EyeOff,
+  Database
 } from 'lucide-react';
 import ChatWindow from './ChatWindow';
 import ChatMessages from './ChatMessages';
 import InsightWindow from './InsightWindow';
+import MemoryDebugger from './components/MemoryDebugger';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 
 // Declare global for TypeScript
@@ -36,6 +38,10 @@ declare global {
       hideInsight: () => Promise<void>;
       onInsightUpdate: (callback: (event: any, data: any) => void) => void;
       
+      // Memory debugger window methods
+      showMemoryDebugger: () => Promise<void>;
+      hideMemoryDebugger: () => Promise<void>;
+      
       // Focus management between chat windows
       focusChatInput: () => Promise<void>;
       onMessageLoaded: (callback: () => void) => void;
@@ -52,6 +58,9 @@ declare global {
       llmGetCachedAgents: () => Promise<any>;
       llmGetCommunications: (limit?: number) => Promise<any>;
       llmClearCache: () => Promise<any>;
+      
+      // Memory methods
+      getAllUserMemories: () => Promise<any[]>;
       
       platform: string;
     };
@@ -76,6 +85,11 @@ function App() {
   // If in insight mode, render the insight window
   if (mode === 'insight') {
     return <InsightWindow />;
+  }
+  
+  // If in memory mode, render the memory debugger window
+  if (mode === 'memory') {
+    return <MemoryDebugger />;
   }
   
   // Otherwise render the main overlay
@@ -188,6 +202,18 @@ function App() {
     }
   };
 
+  const handleToggleMemoryDebugger = async () => {
+    try {
+      if (window.electronAPI?.showMemoryDebugger) {
+        await window.electronAPI.showMemoryDebugger();
+      } else {
+        console.error('Memory debugger not available - electronAPI not loaded');
+      }
+    } catch (error) {
+      console.error('Failed to show memory debugger:', error);
+    }
+  };
+
   return (
     <>
       {/* Main Floating Overlay - Centered in frameless window */}
@@ -268,6 +294,18 @@ function App() {
                 <Lightbulb className="w-5 h-5" />
               </Button>
               
+              {/* Memory Debugger Button */}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200"
+                onClick={handleToggleMemoryDebugger}
+                title="Open Memory Debugger"
+                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              >
+                <Database className="w-5 h-5" />
+              </Button>
+              
               {/* Hide All Button */}
               <Button
                 variant="ghost"
@@ -341,6 +379,7 @@ function App() {
         )}
         </div>
       </div>
+
 
 
     </>

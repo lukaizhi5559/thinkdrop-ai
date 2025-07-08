@@ -1,8 +1,6 @@
-import React from 'react';
-
-const AgentWindow = ({ agentType, data, onClose }) => {
-  const getAgentIcon = (type) => {
-    const icons = {
+const AgentWindow = ({ agentType, data, onClose }: { agentType: string; data: any; onClose: () => void }) => {
+  const getAgentIcon = (type: string) => {
+    const icons: Record<string, string> = {
       summarizer: '📝',
       clipboard: '📋',
       docGeneration: '📄',
@@ -12,8 +10,8 @@ const AgentWindow = ({ agentType, data, onClose }) => {
     return icons[type] || '🤖';
   };
 
-  const getAgentTitle = (type) => {
-    const titles = {
+  const getAgentTitle = (type: string) => {
+    const titles: Record<string, string> = {
       summarizer: 'Summarizer Agent',
       clipboard: 'Clipboard Agent', 
       docGeneration: 'Document Generator',

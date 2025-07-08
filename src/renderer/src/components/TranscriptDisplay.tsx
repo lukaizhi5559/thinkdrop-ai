@@ -1,6 +1,4 @@
-import React from 'react';
-
-const TranscriptDisplay = ({ transcript, isActive }) => {
+const TranscriptDisplay = ({ transcript, isActive }: { transcript: string | null; isActive: boolean }) => {
   return (
     <div className="agent-window">
       <div className="flex items-center justify-between mb-4">

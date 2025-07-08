@@ -66,12 +66,14 @@ class CoreEngine extends EventEmitter {
    */
   async initializeLocalLLMAgent() {
     try {
-      console.log('🧠 Initializing LocalLLMAgent...');
+      console.log('🚀 Starting LocalLLMAgent initialization from CoreEngine...');
       
       const isReady = await this.localLLMAgent.initialize();
       
       if (isReady) {
-        console.log('✅ LocalLLMAgent ready');
+        // Register IPC handlers after successful initialization
+        this.localLLMAgent.registerIpcHandlers();
+        console.log('✅ LocalLLMAgent ready and IPC handlers registered');
       } else {
         console.warn('⚠️ LocalLLMAgent not ready');
       }

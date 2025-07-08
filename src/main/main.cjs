@@ -7,10 +7,12 @@ let overlayWindow = null;
 let chatWindow = null;
 let chatMessagesWindow = null;
 let insightWindow = null;
+let memoryDebuggerWindow = null;
 let isOverlayVisible = true;
 let isChatVisible = false;
 let isInsightVisible = false;
 let isGloballyVisible = true; // Global visibility state for all windows
+let visibleWindows = [];
 
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -188,6 +190,65 @@ function createChatMessagesWindow() {
   return chatMessagesWindow;
 }
 
+// Create memory debugger window (floating window for debugging user memories)
+function createMemoryDebuggerWindow() {
+  const { screen } = require('electron');
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+  
+  memoryDebuggerWindow = new BrowserWindow({
+    width: Math.min(width - 40, 800), // Wider for debugging interface
+    height: Math.min(height - 40, 600), // Taller for memory data
+    minHeight: 400, // Minimum height for debugging interface
+    maxHeight: Math.min(height - 40, 800), // Maximum height
+    x: Math.floor((width - 800) / 2), // Center horizontally
+    y: Math.floor(height * 0.15), // Position higher on screen
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    movable: true,
+    minimizable: false,
+    maximizable: false,
+    closable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      contextIsolation: true,
+      enableRemoteModule: false,
+      nodeIntegration: false,
+      backgroundThrottling: false
+    }
+  });
+
+  // Set window level to float above all apps
+  memoryDebuggerWindow.setAlwaysOnTop(true, 'floating', 1);
+  memoryDebuggerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  
+  // Load the memory debugger window
+  const memoryUrl = process.env.NODE_ENV === 'development'
+    ? 'http://localhost:5173?mode=memory'
+    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=memory`;
+  
+  memoryDebuggerWindow.loadURL(memoryUrl);
+  
+  // Hide window instead of closing
+  memoryDebuggerWindow.on('close', (event) => {
+    if (memoryDebuggerWindow && !app.isQuiting) {
+      event.preventDefault();
+      memoryDebuggerWindow.hide();
+    }
+  });
+  
+  // Clean up window reference when destroyed
+  memoryDebuggerWindow.on('closed', () => {
+    memoryDebuggerWindow = null;
+  });
+  
+  return memoryDebuggerWindow;
+}
+
 // Create insight window (floating window for displaying contextual insights)
 function createInsightWindow() {
   if (insightWindow) {
@@ -266,12 +327,19 @@ function toggleOverlay() {
     overlayWindow.hide();
     if (chatWindow) {
       chatWindow.hide();
+      visibleWindows.push('chatWindow');
     }
     if (chatMessagesWindow) {
       chatMessagesWindow.hide();
+      visibleWindows.push('chatMessagesWindow');
     }
     if (insightWindow) {
       insightWindow.hide();
+      visibleWindows.push('insightWindow');
+    }
+    if (memoryDebuggerWindow) {
+      memoryDebuggerWindow.hide();
+      visibleWindows.push('memoryDebuggerWindow');
     }
     isOverlayVisible = false;
     isChatVisible = false;
@@ -281,6 +349,23 @@ function toggleOverlay() {
     // Show overlay window (chat windows will be shown when needed)
     overlayWindow.show();
     overlayWindow.focus();
+
+    if (visibleWindows.includes('chatMessagesWindow')) {
+      chatMessagesWindow.show();
+      visibleWindows = visibleWindows.filter((window) => window !== 'chatMessagesWindow');
+    }
+    if (visibleWindows.includes('insightWindow')) {
+      insightWindow.show();
+      visibleWindows = visibleWindows.filter((window) => window !== 'insightWindow');
+    }
+    if (visibleWindows.includes('chatWindow')) {
+      chatWindow.show();
+      visibleWindows =visibleWindows.filter((window) => window !== 'chatWindow');
+    }
+    if (visibleWindows.includes('memoryDebuggerWindow')) {
+      memoryDebuggerWindow.show();
+      visibleWindows =visibleWindows.filter((window) => window !== 'memoryDebuggerWindow');
+    }
     isOverlayVisible = true;
     isGloballyVisible = true;
   }
@@ -477,13 +562,14 @@ ipcMain.handle('show-chat', () => {
     chatWindow.show();
     chatWindow.focus();
     isChatVisible = true;
-  }
+    }
 });
 
 ipcMain.handle('hide-chat', () => {
   if (chatWindow) {
     chatWindow.hide();
     isChatVisible = false;
+    visibleWindows = visibleWindows.filter((window) => window !== 'chatWindow');
   }
 });
 
@@ -495,6 +581,7 @@ ipcMain.handle('show-insight', () => {
     insightWindow.show();
     insightWindow.focus();
     isInsightVisible = true;
+    visibleWindows.push('insightWindow');
   }
 });
 
@@ -502,6 +589,7 @@ ipcMain.handle('hide-insight', () => {
   if (insightWindow) {
     insightWindow.hide();
     isInsightVisible = false;
+    visibleWindows = visibleWindows.filter((window) => window !== 'insightWindow');
   }
 });
 
@@ -521,11 +609,40 @@ ipcMain.handle('show-chat-messages', () => {
   // Show the chat messages window
   chatMessagesWindow.show();
   chatMessagesWindow.focus();
+  visibleWindows.push('chatMessagesWindow');
 });
 
 ipcMain.handle('hide-chat-messages', () => {
   if (chatMessagesWindow) {
     chatMessagesWindow.hide();
+    visibleWindows = visibleWindows.filter((window) => window !== 'chatMessagesWindow');
+  }
+});
+
+// IPC handlers for memory debugger window control
+ipcMain.handle('show-memory-debugger', () => {
+  // Ensure only one memory debugger window exists
+  if (memoryDebuggerWindow && !memoryDebuggerWindow.isDestroyed()) {
+    memoryDebuggerWindow.show();
+    memoryDebuggerWindow.focus();
+    return;
+  }
+  
+  // Create new window if needed
+  if (!memoryDebuggerWindow || memoryDebuggerWindow.isDestroyed()) {
+    createMemoryDebuggerWindow();
+  }
+  
+  // Show the memory debugger window
+  memoryDebuggerWindow.show();
+  memoryDebuggerWindow.focus();
+  visibleWindows.push('memoryDebuggerWindow');
+});
+
+ipcMain.handle('hide-memory-debugger', () => {
+  if (memoryDebuggerWindow) {
+    memoryDebuggerWindow.hide();
+    visibleWindows = visibleWindows.filter((window) => window !== 'memoryDebuggerWindow');
   }
 });
 
@@ -563,7 +680,7 @@ ipcMain.handle('send-chat-message', async (event, message) => {
       // Send AI response to chat messages window
       const aiMessage = {
         id: (Date.now() + 1).toString(),
-        text: orchestrationResult.response || 'I processed your request successfully.',
+        text: orchestrationResult.message || 'I processed your request successfully.',
         sender: 'ai',
         timestamp: new Date().toISOString(),
         metadata: {

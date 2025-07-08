@@ -1,6 +1,4 @@
-import React from 'react';
-
-const InsightPanel = ({ insights, onActionClick }) => {
+const InsightPanel = ({ insights, onActionClick }: { insights: any[]; onActionClick: (action: string) => void }) => {
   return (
     <div className="agent-window">
       <div className="flex items-center justify-between mb-4">
@@ -36,7 +34,7 @@ const InsightPanel = ({ insights, onActionClick }) => {
 
               {insight.actions && insight.actions.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {insight.actions.map((action, actionIndex) => (
+                  {insight.actions.map((action: string, actionIndex: number) => (
                     <button
                       key={actionIndex}
                       onClick={() => onActionClick(action)}
