@@ -11,10 +11,12 @@ import crypto from "crypto";
 import http from "http";
 import os from "os";
 import { AgentSandbox } from "./AgentSandbox.js";
-import { executeAgent } from "./executeAgent.js";
+import ExecuteAgent from "./executeAgent.js";
 import { pipeline } from "@xenova/transformers";
 import OrchestrationService from "./OrchestrationService.js";
-import { loadDefaultAgents } from "./defaultAgents.js";
+import DefaultAgents from "./defaultAgents.js";
+
+
 
 class LocalLLMAgent extends EventEmitter {
   constructor() {
@@ -55,6 +57,12 @@ class LocalLLMAgent extends EventEmitter {
       process.env.BIBSCRIP_BASE_URL
     );
 
+    // Initialize DefaultAgents 
+    this.defaultAgents = new DefaultAgents();
+
+    // Initialize ExecuteAgent
+    this.executeAgentInstance = new ExecuteAgent();
+
     // Configuration
     this.config = {
       databasePath: path.join(
@@ -76,6 +84,7 @@ class LocalLLMAgent extends EventEmitter {
       semanticThreshold: 0.7, // Minimum cosine similarity for semantic matches
       maxEmbeddingCacheSize: 1000, // Cache up to 1000 embeddings
     };
+
   }
 
   /**
@@ -95,7 +104,7 @@ class LocalLLMAgent extends EventEmitter {
       await this.initializeEmbeddingModel();
 
       // 4. Load default agents
-      await this.loadDefaultAgents();
+      await this.defaultAgents.loadDefaultAgents(this.database, this.agentCache);
 
       // 4. Setup health monitoring
       this.setupHealthMonitoring();
@@ -874,26 +883,37 @@ class LocalLLMAgent extends EventEmitter {
     try {
       const complexity = await this.analyzeInputComplexity(userInput);
 
-      // Check if we can handle locally (either with local LLM or with embedding-based search)
+      // If complexity is medium or complex, escalate to backend immediately.
+      if (complexity.level === 'medium' || complexity.level === 'complex') {
+        console.log(`🚀 Complexity is ${complexity.level}, escalating to backend.`);
+        return await this.escalateToBackend(
+          userInput,
+          context,
+          sessionId,
+          complexity,
+        );
+      }
+
+      // For simple complexity, handle locally if possible.
       const canHandleWithEmbeddings =
         this.canHandleWithSemanticSearch(userInput);
 
-      if (
-        complexity.canHandleLocally &&
-        (this.localLLMAvailable || canHandleWithEmbeddings)
-      ) {
+      if (this.localLLMAvailable || canHandleWithEmbeddings) {
+        console.log('🏠 Handling simple request locally.');
         return await this.handleLocalOrchestration(
           userInput,
           context,
           sessionId,
         );
+      } else {
+        console.log('🚀 Local resources unavailable for simple request, escalating to backend.');
+        return await this.escalateToBackend(
+          userInput,
+          context,
+          sessionId,
+          complexity,
+        );
       }
-      return await this.escalateToBackend(
-        userInput,
-        context,
-        sessionId,
-        complexity,
-      );
     } catch (error) {
       console.error(`❌ Orchestration failed: ${sessionId}`, error.message);
 
@@ -2191,11 +2211,11 @@ JSON:`;
           console.log("❌ Failed to create execution plan");
 
           // Fallback to treating it as a question
-          return this.handleLocalOrchestration(
-            userInput,
-            { ...context, fallbackIntent: "question" },
-            sessionId,
-          );
+          // return this.handleLocalOrchestration(
+          //   userInput,
+          //   { ...context, fallbackIntent: "question" },
+          //   sessionId,
+          // );
         }
       } else if (intent === "orchestration") {
         console.log("🎵 Processing orchestration intent...");
@@ -2264,11 +2284,11 @@ JSON:`;
           console.log("❌ Failed to create orchestration workflow");
 
           // Fallback to treating it as a question
-          return this.handleLocalOrchestration(
-            userInput,
-            { ...context, fallbackIntent: "question" },
-            sessionId,
-          );
+          // return this.handleLocalOrchestration(
+          //   userInput,
+          //   { ...context, fallbackIntent: "question" },
+          //   sessionId,
+          // );
         }
       } else {
         // Handle communication intents (compose_email, send_text, etc.)
@@ -2621,7 +2641,7 @@ JSON:`;
         dbConnection: this.dbConnection,
       };
     }
-    return await executeAgent(agentName, params, context, this);
+    return await this.executeAgentInstance.call(agentName, params, context, this);
   }
 
   /**
