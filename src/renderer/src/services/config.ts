@@ -46,7 +46,7 @@ export interface AppConfig {
 // Default configuration
 const defaultConfig: AppConfig = {
   api: {
-    baseUrl: process.env.REACT_APP_API_URL || 'http://localhost:3000',
+    baseUrl: process.env.BIBSCRIP_BASE_URL || '',
     timeout: 30000,
     retries: 3
   },

@@ -8,10 +8,12 @@ let chatWindow = null;
 let chatMessagesWindow = null;
 let insightWindow = null;
 let memoryDebuggerWindow = null;
+let isGloballyVisible = true;
 let isOverlayVisible = true;
 let isChatVisible = false;
 let isInsightVisible = false;
-let isGloballyVisible = true; // Global visibility state for all windows
+let isMemoryDebuggerVisible = false;
+let isOrchestrationActive = false; // Prevent window hiding during orchestration
 let visibleWindows = [];
 
 function createOverlayWindow() {
@@ -331,9 +333,11 @@ function toggleOverlay() {
       chatMessagesWindow.hide();
       visibleWindows.push('chatMessagesWindow');
     }
-    if (insightWindow) {
+    if (insightWindow && !global.isOrchestrationActive) {
       insightWindow.hide();
       visibleWindows.push('insightWindow');
+    } else if (insightWindow && global.isOrchestrationActive) {
+      console.log('🛡️ Protecting insight window during orchestration - not hiding');
     }
     if (memoryDebuggerWindow) {
       memoryDebuggerWindow.hide();
@@ -529,8 +533,19 @@ ipcMain.handle('hide-all-windows', () => {
   if (chatMessagesWindow) {
     chatMessagesWindow.hide();
   }
+  if (insightWindow && !global.isOrchestrationActive) {
+    insightWindow.hide();
+    visibleWindows.push('insightWindow');
+  } else if (insightWindow && global.isOrchestrationActive) {
+    console.log('🛡️ Protecting insight window during orchestration - not hiding in hide-all-windows');
+  }
+  if (memoryDebuggerWindow) {
+    memoryDebuggerWindow.hide();
+  }
   isOverlayVisible = false;
   isChatVisible = false;
+  isInsightVisible = false;
+  isMemoryDebuggerVisible = false;
   isGloballyVisible = false;
 });
 
@@ -541,6 +556,27 @@ ipcMain.handle('show-all-windows', () => {
     overlayWindow.focus();
     isOverlayVisible = true;
     isGloballyVisible = true;
+  }
+  // Restore previously visible windows
+  if (visibleWindows.includes('insightWindow') && insightWindow) {
+    insightWindow.show();
+    insightWindow.focus();
+    isInsightVisible = true;
+    visibleWindows = visibleWindows.filter((window) => window !== 'insightWindow');
+  }
+  if (visibleWindows.includes('chatWindow') && chatWindow) {
+    chatWindow.show();
+    isChatVisible = true;
+    visibleWindows = visibleWindows.filter((window) => window !== 'chatWindow');
+  }
+  if (visibleWindows.includes('chatMessagesWindow') && chatMessagesWindow) {
+    chatMessagesWindow.show();
+    visibleWindows = visibleWindows.filter((window) => window !== 'chatMessagesWindow');
+  }
+  if (visibleWindows.includes('memoryDebuggerWindow') && memoryDebuggerWindow) {
+    memoryDebuggerWindow.show();
+    isMemoryDebuggerVisible = true;
+    visibleWindows = visibleWindows.filter((window) => window !== 'memoryDebuggerWindow');
   }
 });
 
@@ -982,4 +1018,177 @@ ipcMain.handle('llm-clear-cache', async () => {
     }
   }
   return { success: false, error: 'LocalLLMAgent database not available' };
+});
+
+// Orchestration workflow IPC handlers
+ipcMain.handle('submit-clarification-response', async (event, stepId, response) => {
+  try {
+    console.log(`Submitting clarification response for step ${stepId}:`, response);
+    
+    // Here we would integrate with the orchestration system to submit the clarification response
+    // For now, we'll simulate the response handling
+    
+    // In a real implementation, this would:
+    // 1. Find the workflow step by stepId
+    // 2. Submit the clarification response to the orchestration engine
+    // 3. Resume the workflow execution
+    // 4. Send updates back to the frontend
+    
+    // Simulate successful submission
+    const result = {
+      success: true,
+      stepId: stepId,
+      response: response,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Send orchestration update to all renderer processes
+    if (insightWindow && !insightWindow.isDestroyed()) {
+      insightWindow.webContents.send('orchestration-update', {
+        type: 'clarification_submitted',
+        stepId: stepId,
+        response: response,
+        timestamp: result.timestamp
+      });
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error submitting clarification response:', error);
+    return {
+      success: false,
+      error: error.message,
+      stepId: stepId
+    };
+  }
+});
+
+// Function to broadcast orchestration updates to all windows
+function broadcastOrchestrationUpdate(updateData) {
+  const windows = [overlayWindow, chatWindow, chatMessagesWindow, insightWindow, memoryDebuggerWindow];
+  
+  windows.forEach(window => {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('orchestration-update', updateData);
+    }
+  });
+}
+
+// Function to send clarification requests to the frontend
+function sendClarificationRequest(clarificationData) {
+  const windows = [overlayWindow, insightWindow];
+  
+  windows.forEach(window => {
+    if (window && !window.isDestroyed()) {
+      window.webContents.send('clarification-request', clarificationData);
+    }
+  });
+}
+
+// Additional orchestration workflow IPC handlers
+ipcMain.handle('start-orchestration-workflow', async (event, userInput, context = {}) => {
+  try {
+    console.log('Starting orchestration workflow for:', userInput);
+    
+    if (!localLLMAgent) {
+      throw new Error('LocalLLMAgent not initialized');
+    }
+    
+    // Start orchestration workflow through LocalLLMAgent
+    const workflowResult = await localLLMAgent.orchestrateWorkflow(userInput, context);
+    
+    // Broadcast initial workflow state to frontend
+    broadcastOrchestrationUpdate({
+      type: 'workflow_started',
+      workflow: workflowResult,
+      timestamp: new Date().toISOString()
+    });
+    
+    return {
+      success: true,
+      workflow: workflowResult
+    };
+  } catch (error) {
+    console.error('Error starting orchestration workflow:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('get-orchestration-status', async (event, workflowId) => {
+  try {
+    if (!localLLMAgent) {
+      throw new Error('LocalLLMAgent not initialized');
+    }
+    
+    // Get current workflow status from LocalLLMAgent
+    const status = await localLLMAgent.getWorkflowStatus(workflowId);
+    
+    return {
+      success: true,
+      status: status
+    };
+  } catch (error) {
+    console.error('Error getting orchestration status:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('pause-orchestration-workflow', async (event, workflowId) => {
+  try {
+    if (!localLLMAgent) {
+      throw new Error('LocalLLMAgent not initialized');
+    }
+    
+    const result = await localLLMAgent.pauseWorkflow(workflowId);
+    
+    broadcastOrchestrationUpdate({
+      type: 'workflow_paused',
+      workflowId: workflowId,
+      timestamp: new Date().toISOString()
+    });
+    
+    return {
+      success: true,
+      result: result
+    };
+  } catch (error) {
+    console.error('Error pausing orchestration workflow:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
+
+ipcMain.handle('resume-orchestration-workflow', async (event, workflowId) => {
+  try {
+    if (!localLLMAgent) {
+      throw new Error('LocalLLMAgent not initialized');
+    }
+    
+    const result = await localLLMAgent.resumeWorkflow(workflowId);
+    
+    broadcastOrchestrationUpdate({
+      type: 'workflow_resumed',
+      workflowId: workflowId,
+      timestamp: new Date().toISOString()
+    });
+    
+    return {
+      success: true,
+      result: result
+    };
+  } catch (error) {
+    console.error('Error resuming orchestration workflow:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
 });

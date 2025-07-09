@@ -1,14 +1,22 @@
 /**
  * OrchestrationService - Handles backend orchestration API integration
- * Delegates complex multi-step workflows to the backend /api/agents/orchestrate endpoint
+ * Delegates complex multi-step workflows to the backend via centralized apiClient
+ * 
+ * @deprecated - This service now delegates to apiClient.js for centralized API management
  */
 
-import axios from 'axios';
+import apiClient from './apiClient.js';
 
 class OrchestrationService {
-  constructor(apiKey, baseURL = 'http://localhost:4000') {
-    this.apiKey = apiKey;
-    this.baseURL = baseURL;
+  constructor(apiKey, baseURL) {
+    // Configure the centralized API client
+    if (apiKey) {
+      apiClient.setApiKey(apiKey);
+    }
+    if (baseURL && baseURL !== apiClient.baseUrl) {
+      // Note: baseURL changes would require creating a new apiClient instance
+      console.warn('⚠️ OrchestrationService baseURL differs from apiClient. Using apiClient baseURL:', apiClient.baseUrl);
+    }
   }
 
   /**
@@ -18,121 +26,19 @@ class OrchestrationService {
    * @returns {Promise<Object>} Orchestration result
    */
   async orchestrate(request, options = {}) {
-    const payload = {
-      request,
-      requirements: options.requirements || [],
-      availableServices: options.availableServices || [],
-      enrichWithUserContext: options.enrichWithUserContext || false,
-      userId: options.userId || null
-    };
-
-    console.log('🚀 Sending orchestration request to backend:', {
-      request: payload.request,
-      hasRequirements: payload.requirements.length > 0,
-      hasServices: payload.availableServices.length > 0,
-      enrichWithContext: payload.enrichWithUserContext
-    });
-
-    try {
-      const response = await axios.post(`${this.baseURL}/api/agents/orchestrate`, payload, {
-        headers: {
-          'X-API-Key': this.apiKey,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000 // 30 second timeout
-      });
-
-      const result = response.data;
-      console.log('✅ Backend orchestration response:', result.status);
-
-      // Handle different response types
-      switch (result.status) {
-        case 'success':
-          console.log('🎯 Backend orchestration data:', {
-            agents: result.agents?.length || 0,
-            workflow: result.workflow?.steps?.length || 0,
-            processingTime: result.processingTime,
-            userContext: result.userContext ? 'present' : 'none'
-          });
-          console.log('📋 Full orchestration result:', JSON.stringify(result, null, 2));
-
-          return {
-            success: true,
-            data: result,
-            agents: result.agents || [],
-            workflow: result.workflow || {},
-            processingTime: result.processingTime || 0
-          };
-        
-        case 'clarification_needed':
-          return {
-            success: false,
-            needsClarification: true,
-            questions: result.questions || [],
-            clarificationId: result.clarificationId,
-            analysis: result.analysis || {}
-          };
-        
-        case 'validation_error':
-          return {
-            success: false,
-            error: result.error || 'Validation failed',
-            issues: result.issues || []
-          };
-        
-        default:
-          return {
-            success: true,
-            data: result
-          };
-      }
-    } catch (error) {
-      console.error('❌ Orchestration API error:', error.message);
-      
-      if (error.code === 'ECONNREFUSED') {
-        return {
-          success: false,
-          error: 'Backend orchestration service is not available',
-          fallback: true
-        };
-      }
-      
-      return {
-        success: false,
-        error: error.response?.data?.message || error.message,
-        statusCode: error.response?.status
-      };
-    }
+    // Delegate to centralized apiClient
+    return await apiClient.orchestrate(request, options);
   }
 
   /**
-   * Submit clarification response for a pending orchestration
-   * @param {string} clarificationId - ID from the clarification_needed response
-   * @param {Object} answers - User's answers to clarification questions
-   * @returns {Promise<Object>} Updated orchestration result
+   * Submit clarification response to continue orchestration
+   * @param {string} clarificationId - ID of the clarification request
+   * @param {Object} responses - User responses to clarification questions
+   * @returns {Promise<Object>} Orchestration continuation result
    */
-  async submitClarification(clarificationId, answers) {
-    try {
-      const response = await axios.post(`${this.baseURL}/api/agents/orchestrate/clarify`, {
-        clarificationId,
-        answers
-      }, {
-        headers: {
-          'X-API-Key': this.apiKey,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      return {
-        success: true,
-        data: response.data
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.response?.data?.message || error.message
-      };
-    }
+  async submitClarificationResponse(clarificationId, responses) {
+    // Delegate to centralized apiClient
+    return await apiClient.submitClarificationResponse(clarificationId, responses);
   }
 
   /**
@@ -140,26 +46,8 @@ class OrchestrationService {
    * @returns {Promise<Object>} Health status
    */
   async getHealth() {
-    try {
-      const response = await axios.get(`${this.baseURL}/api/agents/health`, {
-        headers: {
-          'X-API-Key': this.apiKey
-        },
-        timeout: 5000
-      });
-
-      return {
-        success: true,
-        status: response.data.status,
-        services: response.data.services || {}
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        available: false
-      };
-    }
+    // Delegate to centralized apiClient
+    return await apiClient.getHealthStatus();
   }
 
   /**
@@ -168,29 +56,8 @@ class OrchestrationService {
    * @returns {Promise<Object>} Intent parsing result
    */
   async parseIntent(message) {
-    try {
-      const response = await axios.post(`${this.baseURL}/api/agents/intent/parse`, {
-        message
-      }, {
-        headers: {
-          'X-API-Key': this.apiKey,
-          'Content-Type': 'application/json'
-        }
-      });
-
-      return {
-        success: true,
-        intent: response.data.intent,
-        confidence: response.data.confidence,
-        requiresOrchestration: response.data.requiresOrchestration || false
-      };
-    } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        fallback: true
-      };
-    }
+    // Delegate to centralized apiClient
+    return await apiClient.parseIntent(message);
   }
 }
 

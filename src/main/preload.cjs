@@ -62,6 +62,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   llmGetCommunications: (limit) => ipcRenderer.invoke('llm-get-communications', limit),
   llmClearCache: () => ipcRenderer.invoke('llm-clear-cache'),
   
+  // Orchestration workflow communication
+  onOrchestrationUpdate: (callback) => ipcRenderer.on('orchestration-update', callback),
+  onInsightOrchestrationUpdate: (callback) => ipcRenderer.on('insight-orchestration-update', callback),
+  onClarificationRequest: (callback) => ipcRenderer.on('clarification-request', callback),
+  submitClarificationResponse: (stepId, response) => ipcRenderer.invoke('submit-clarification-response', stepId, response),
+  startOrchestrationWorkflow: (userInput, context) => ipcRenderer.invoke('start-orchestration-workflow', userInput, context),
+  getOrchestrationStatus: (workflowId) => ipcRenderer.invoke('get-orchestration-status', workflowId),
+  pauseOrchestrationWorkflow: (workflowId) => ipcRenderer.invoke('pause-orchestration-workflow', workflowId),
+  resumeOrchestrationWorkflow: (workflowId) => ipcRenderer.invoke('resume-orchestration-workflow', workflowId),
+  
   // Event listeners
   onTranscriptUpdate: (callback) => ipcRenderer.on('transcript-update', callback),
   onClipboardChange: (callback) => ipcRenderer.on('clipboard-change', callback),

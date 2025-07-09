@@ -8,6 +8,8 @@
  * Default trusted agents can bypass the sandbox for performance and reliability
  */
 export async function executeAgent(agentName, params, context = {}, localLLMAgent) {
+  const startTime = Date.now();
+  
   try {
     const agent = localLLMAgent.agentCache.get(agentName);
     if (!agent) {
@@ -90,51 +92,79 @@ export async function executeAgent(agentName, params, context = {}, localLLMAgen
     if (!result || !result.success) {
       const errorMsg = result ? result.error : 'Unknown execution error';
       console.error(`❌ Execution failed for ${agentName}:`, errorMsg);
+      
+      // Emit step failure event
+      if (localLLMAgent && localLLMAgent.emitOrchestrationUpdate) {
+        await localLLMAgent.emitOrchestrationUpdate({
+          type: 'step-failed',
+          stepId: `${agentName}_${Date.now()}`,
+          agent: agentName,
+          error: errorMsg,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
       return {
         success: false,
-        error: `Execution failed: ${errorMsg}`,
-        errorType: result?.errorType || 'EXECUTION_ERROR',
-        agentName
+        error: errorMsg,
+        agentName,
+        executionTime: Date.now() - startTime
       };
     }
 
-    if (bypassSandbox) {
-      console.log(`✅ Trusted agent ${agentName} completed successfully`);
-    } else {
-      console.log(`✅ Agent ${agentName} executed successfully in secure sandbox`);
+    const executionTime = Date.now() - startTime;
+    console.log(`✅ Agent ${agentName} completed successfully in ${executionTime}ms`);
+    
+    // Emit step completion event
+    if (localLLMAgent && localLLMAgent.emitOrchestrationUpdate) {
+      await localLLMAgent.emitOrchestrationUpdate({
+        type: 'step-completed',
+        stepId: `${agentName}_${Date.now()}`,
+        agent: agentName,
+        result: result,
+        executionTime,
+        timestamp: new Date().toISOString()
+      });
     }
-
-    if (agentName === 'UserMemoryAgent' && result.action) {
-      console.log(`🔄 Processing ${result.action} intent from UserMemoryAgent`);
-      switch (result.action) {
-        case 'store_memory':
-          return await localLLMAgent.handleMemoryStore(result.key, result.value);
-        case 'retrieve_memory':
-          return await localLLMAgent.handleMemoryRetrieve(result.key);
-        case 'search_memory':
-          return await localLLMAgent.handleMemorySearch(result.query);
-        default:
-          console.warn(`⚠️ Unknown memory action: ${result.action}`);
-      }
-    }
-
-    return result;
+    
+    return {
+      ...result,
+      agentName,
+      executionTime
+    };
   } catch (error) {
-    console.error(`❌ Failed to execute agent ${agentName}:`, error.message);
+    const executionTime = Date.now() - startTime;
+    console.error(`❌ Agent execution error for ${agentName}:`, error);
+    
+    // Emit step failure event for exceptions
+    if (localLLMAgent && localLLMAgent.emitOrchestrationUpdate) {
+      await localLLMAgent.emitOrchestrationUpdate({
+        type: 'step-failed',
+        stepId: `${agentName}_${Date.now()}`,
+        agent: agentName,
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+    
     return {
       success: false,
       error: error.message,
-      agentName
+      agentName,
+      executionTime
     };
   }
 }
+
+
 
 /**
  * Hardcoded implementation of IntentParserAgent for trusted bypass
  */
 async function executeIntentParserAgent(params, agentContext) {
   // Direct implementation of IntentParserAgent
-  const message = params.message;
+  // Handle both direct message string and params object
+  const message = typeof params === 'string' ? params : params.message;
   const llmClient = agentContext?.llmClient;
   
   // Fallback detection function with comprehensive intent support
@@ -355,15 +385,23 @@ async function executeIntentParserAgent(params, agentContext) {
     };
   };
   
-  // If no LLM client or LLM fails, use fallback detection
-  if (!llmClient) {
-    console.log('LLM client not available for intent detection, using fallback');
-    return detectIntent(message);
+  // Import the backend API client for improved intent detection flow
+  let backendApiClient;
+  try {
+    const apiClientModule = await import('./apiClient.js');
+    backendApiClient = apiClientModule.default;
+  } catch (error) {
+    console.warn('⚠️ Could not load backend API client:', error.message);
   }
 
-  try {
-    // Use LLM for intent detection with updated Thinkdrop AI intent schema
-const prompt = `You are the Thinkdrop Intent Agent. Interpret the following message and return ONLY a JSON object with the user's intent.
+  // IMPROVED INTENT DETECTION FLOW: Local LLM → Backend API → Hardcoded Fallback
+  
+  // Step 1: Try Local LLM first (fastest, always available)
+  if (llmClient) {
+    try {
+      console.log('🔍 Step 1: Trying Local LLM for intent detection...');
+      
+      const prompt = `You are the Thinkdrop Intent Agent. Interpret the following message and return ONLY a JSON object with the user's intent.
 
 Message: "${message}"
 
@@ -387,129 +425,86 @@ Return ONLY a JSON object with the following fields:
 
 Respond ONLY with the JSON object.`;
 
-    
-    // Set strict parameters to ensure we get complete JSON
-    const maxTokens = message.length < 20 ? 300 : 500; // Adjust based on input length
-    
-    console.log('🔍 Sending intent detection prompt to LLM...');
-    const llmResult = await llmClient.complete({
-      prompt,
-      max_tokens: maxTokens,
-      temperature: 0.1,
-      stop: ["\n\n", "```"] // Stop on double newline or code block markers
-    });
-    
-    // Log the raw LLM response for debugging
-    console.log('📝 Raw LLM response:', JSON.stringify(llmResult.text));
-    
-    // Check if we got a valid response
-    if (!llmResult.text || llmResult.text.trim() === '' || llmResult.text.includes('No response generated')) {
-      console.warn('⚠️ Empty or "No response generated" received, using fallback detection');
-      return detectIntent(message);
-    }
-
-    try {
-      // Preprocess the text to handle markdown-formatted JSON
-      let textToParse = llmResult.text.trim();
+      const maxTokens = message.length < 20 ? 300 : 500;
+      const llmResult = await llmClient.complete({
+        prompt,
+        max_tokens: maxTokens,
+        temperature: 0.1,
+        stop: ["\n\n", "```"]
+      });
       
-      // Remove markdown code block formatting if present
-      if (textToParse.includes('```')) {
-        // Extract content between markdown code blocks
-        const match = textToParse.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
-        if (match && match[1]) {
-          textToParse = match[1].trim();
-          console.log('🔍 Extracted JSON from code block');
-        } else {
-          // If we can't extract between blocks, just remove the backticks
-          textToParse = textToParse.replace(/```(?:json)?|```/g, '').trim();
-          console.log('🔍 Removed code block markers');
-        }
-      }
+      console.log('📝 Local LLM response:', JSON.stringify(llmResult.text));
       
-      // Check if we have a valid JSON string after preprocessing
-      if (!textToParse || textToParse.trim() === '') {
-        console.warn('⚠️ Empty text after preprocessing, using fallback detection');
-        return detectIntent(message);
-      }
-
-      console.log('🔍 Preprocessed JSON text:', JSON.stringify(textToParse));
-      
-      // Handle truncated or malformed JSON
-      try {
-        // Try to extract just the intent and category information using regex
-        // This is more robust than trying to parse the entire JSON
-        const intentMatch = textToParse.match(/"intent"\s*:\s*"([^"]+)"/i);
-        const categoryMatch = textToParse.match(/"(?:memoryCategory|category)"\s*:\s*"([^"]+)"/i);
-        const confidenceMatch = textToParse.match(/"confidence"\s*:\s*([0-9.]+)/i);
-        const externalDataMatch = textToParse.match(/"requiresExternalData"\s*:\s*(true|false)/i);
-        
-        if (intentMatch) {
-          console.log('🔧 Extracted intent using regex:', intentMatch[1]);
+      // Check if we got a valid response from local LLM
+      if (llmResult.text && llmResult.text.trim() !== '' && !llmResult.text.includes('No response generated')) {
+        try {
+          // Preprocess the text to handle markdown-formatted JSON
+          let textToParse = llmResult.text.trim();
           
-          // Build a result object from the extracted data
-          const intent = intentMatch[1];
-          const memoryCategory = categoryMatch ? categoryMatch[1] : null;
-          const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : 0.7;
-          const requiresExternalData = externalDataMatch 
-            ? externalDataMatch[1] === 'true' 
-            : intent === 'external_data_required';
+          // Remove markdown code block formatting if present
+          if (textToParse.includes('```')) {
+            const match = textToParse.match(/```(?:json)?\s*([\s\S]+?)\s*```/);
+            if (match && match[1]) {
+              textToParse = match[1].trim();
+              console.log('🔍 Extracted JSON from code block');
+            } else {
+              textToParse = textToParse.replace(/```(?:json)?|```/g, '').trim();
+              console.log('🔍 Removed code block markers');
+            }
+          }
           
-          // Smart handling for calendar/appointment/travel related queries
-          const lowerMessage = message.toLowerCase();
+          // Try to parse the JSON response
+          const parsedResult = JSON.parse(textToParse);
           
-          // Distinguish between informational vs actionable calendar/appointment requests
-          const isInformationalAppointment = 
-            lowerMessage.match(/\b(i have|i've got|my|there's)\b.*\b(appointment|appt|meeting)\b/i) ||
-            lowerMessage.match(/\b(i'm going|i'll be|i need to go)\b.*\b(to|for)\b/i);
-          
-          const isActionableCalendar = 
-            lowerMessage.match(/\b(schedule|book|create|set up|cancel|reschedule|check|find)\b.*\b(appointment|meeting|calendar)\b/i) ||
-            lowerMessage.match(/\b(when is|what time is)\b.*\b(my|the)\b.*\b(appointment|meeting)\b/i);
-          
-          // Only override to external_data_required for actionable requests, not informational ones
-          if (isActionableCalendar && intent === 'question') {
-            console.log('🔧 Overriding intent to external_data_required for actionable calendar request');
+          if (parsedResult.intent && parsedResult.confidence > 0.5) {
+            console.log('✅ Local LLM intent detection successful:', parsedResult);
             return {
-              success: true,
-              intent: 'external_data_required',
-              memoryCategory: lowerMessage.match(/flight|plane|airport|travel|trip/i) ? 'travel' : 'calendar',
-              confidence: 0.8,
-              entities: [],
-              requiresExternalData: true
+              intent: parsedResult.intent,
+              category: parsedResult.category || 'general',
+              confidence: parsedResult.confidence,
+              entities: parsedResult.entities || [],
+              requiresExternalData: parsedResult.requiresExternalData || false
             };
           }
-          
-          // For informational appointments, let LLM handle naturally
-          if (isInformationalAppointment && intent === 'question') {
-            console.log('🔧 Keeping informational appointment as question for natural LLM response');
-            // Don't override - let it stay as 'question' so LLM can respond naturally
-          }
-          
-          return {
-            success: true,
-            intent,
-            memoryCategory,
-            confidence,
-            entities: [],
-            requiresExternalData
-          };
-        } else {
-          console.warn('⚠️ Could not extract intent from LLM response, using pattern result');
-          return patternResult;
+        } catch (parseError) {
+          console.warn('⚠️ Local LLM response parsing failed:', parseError.message);
         }
-      } catch (regexError) {
-        console.error('❌ Regex extraction failed:', regexError);
-        return patternResult;
       }
-    } catch(parseError) {
-      console.error('❌ Failed to parse LLM intent detection result:', parseError);
-      console.log('❓ Attempted to parse:', JSON.stringify(llmResult.text));
-      return patternResult;
+    } catch (llmError) {
+      console.warn('⚠️ Local LLM intent detection failed:', llmError.message);
     }
-  } catch(error) {
-    console.error('Error in LLM intent detection:', error);
-    return patternResult;
+  } else {
+    console.log('🔍 Local LLM not available, skipping to backend API');
   }
+  
+  // Step 2: Try Backend API (more accurate, if available)
+  if (backendApiClient) {
+    try {
+      console.log('🔍 Step 2: Trying Backend API for intent detection...');
+      const backendResult = await backendApiClient.parseIntent(message);
+      
+      if (backendResult.success && backendResult.confidence > 0.5) {
+        console.log('✅ Backend API intent detection successful:', backendResult);
+        return {
+          intent: backendResult.intent,
+          category: backendResult.category || 'general',
+          confidence: backendResult.confidence,
+          entities: backendResult.entities || [],
+          requiresExternalData: backendResult.requiresExternalData || false
+        };
+      }
+    } catch (backendError) {
+      console.warn('⚠️ Backend API intent detection failed:', backendError.message);
+    }
+  } else {
+    console.log('🔍 Backend API client not available, skipping to hardcoded fallback');
+  }
+  
+  // Step 3: Hardcoded fallback (guaranteed to work)
+  console.log('🔍 Step 3: Using hardcoded fallback intent detection...');
+  const fallbackResult = detectIntent(params.message || message);
+  console.log('✅ Hardcoded fallback intent detection:', fallbackResult);
+  return fallbackResult;
 }
 
 /**
@@ -955,11 +950,11 @@ function generateLeveledPrompt(message, level) {
   const returnFormat = 'Return: {"multiIntent": false, "primaryIntent": "intent_name"} OR {"multiIntent": true, "intents": ["intent1", "intent2"]}';
   
   const intents = {
-    minimal: 'question, greeting',
-    light: 'question, memory_store, memory_retrieve, speak, listen',
-    medium: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, external_data_required, devotion_suggest, verse_lookup, prayer_request, mood_checkin',
-    high: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, task_create, task_update, task_summarize, external_data_required, context_enrich, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen',
-    complex: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, agent_stop, agent_generate, agent_orchestrate, task_create, task_update, task_delete, task_summarize, task_prioritize, context_enrich, context_retrieve, external_data_required, feedback_submit, session_restart, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen'
+    minimal: 'question, greeting, communication_completion',
+    light: 'question, memory_store, memory_retrieve, speak, listen, communication_completion',
+    medium: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, external_data_required, devotion_suggest, verse_lookup, prayer_request, mood_checkin, communication_completion',
+    high: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, task_create, task_update, task_summarize, external_data_required, context_enrich, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen, communication_completion',
+    complex: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, agent_stop, agent_generate, agent_orchestrate, task_create, task_update, task_delete, task_summarize, task_prioritize, context_enrich, context_retrieve, external_data_required, feedback_submit, session_restart, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen, communication_completion'
   };
   
   switch (level) {
@@ -967,10 +962,10 @@ function generateLeveledPrompt(message, level) {
       return `${baseInstruction} ${returnFormat} Intents: ${intents.minimal} Example: "Hello" → {"multiIntent": false, "primaryIntent": "greeting"} User: ${message}`;
       
     case 'light':
-      return `${baseInstruction} ${returnFormat} Intents: ${intents.light} User: ${message}`;
+      return `${baseInstruction} ${returnFormat} Intents: ${intents.light} Examples: "Sent my wife a text" → {"multiIntent": false, "primaryIntent": "communication_completion"} | "My name is John" → {"multiIntent": false, "primaryIntent": "memory_store"} | "Called mom today" → {"multiIntent": false, "primaryIntent": "communication_completion"} | "Remember my birthday is May 15th" → {"multiIntent": false, "primaryIntent": "memory_store"} User: ${message}`;
       
     case 'medium':
-      return `${baseInstruction} ${returnFormat} Intents: ${intents.medium} Examples: "My mom's name is Sarah and her phone is 555-1234" → {"multiIntent": true, "intents": ["memory_store", "memory_store"]} | "Meeting at 3pm" → {"multiIntent": true, "intents": ["memory_store", "external_data_required"]} | "What's the weather?" → {"multiIntent": false, "primaryIntent": "external_data_required"} | "Remember my birthday is May 15th" → {"multiIntent": false, "primaryIntent": "memory_store"} User: ${message}`;
+      return `${baseInstruction} ${returnFormat} Intents: ${intents.medium} Examples: "My mom's name is Sarah and her phone is 555-1234" → {"multiIntent": true, "intents": ["memory_store", "memory_store"]} | "Sent my wife a text saying love you" → {"multiIntent": false, "primaryIntent": "communication_completion"} | "What's the weather?" → {"multiIntent": false, "primaryIntent": "external_data_required"} | "Remember my birthday is May 15th" → {"multiIntent": false, "primaryIntent": "memory_store"} | "Called the doctor yesterday" → {"multiIntent": false, "primaryIntent": "communication_completion"} User: ${message}`;
       
     case 'high':
       return `${baseInstruction} ${returnFormat} Intents: ${intents.high} Examples: "Meeting tomorrow and remind me" → {"multiIntent": true, "intents": ["memory_store", "external_data_required", "command"]} | "Book flight and check my calendar" → {"multiIntent": true, "intents": ["command", "external_data_required"]} | "What time is my dentist appointment?" → {"multiIntent": false, "primaryIntent": "external_data_required"} User: ${message}`;
@@ -1508,3 +1503,6 @@ async function executeMemoryEnrichmentAgent(params, agentContext) {
     };
   }
 }
+
+// Export the executeIntentParserAgent function for testing and external use
+export { executeIntentParserAgent };

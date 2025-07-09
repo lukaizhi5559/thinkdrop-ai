@@ -68,7 +68,7 @@ export function BackendAPIProvider({ children, userId }: BackendAPIProviderProps
     const config = configService.getAPIConfig();
     
     // Set API base URL if different from default
-    if (config.baseUrl !== 'http://localhost:3000') {
+    if (config.baseUrl !== 'http://localhost:4000') {
       // Note: We'd need to modify apiClient to support dynamic base URL changes
       console.log('API Base URL:', config.baseUrl);
     }

@@ -62,6 +62,16 @@ declare global {
       // Memory methods
       getAllUserMemories: (options?: { quiet?: boolean }) => Promise<any[]>;
       
+      // Orchestration workflow communication
+      onOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
+      onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
+      onClarificationRequest: (callback: (event: any, data: any) => void) => void;
+      submitClarificationResponse: (stepId: string, response: string | boolean) => Promise<any>;
+      startOrchestrationWorkflow: (userInput: string, context?: any) => Promise<any>;
+      getOrchestrationStatus: (workflowId: string) => Promise<any>;
+      pauseOrchestrationWorkflow: (workflowId: string) => Promise<any>;
+      resumeOrchestrationWorkflow: (workflowId: string) => Promise<any>;
+      
       platform: string;
     };
   }
@@ -174,16 +184,23 @@ function App() {
   };
 
   const handleToggleInsight = async () => {
+    console.log('handleToggleInsight called - current state:', { isInsightOpen, isGatheringInsight });
+    console.trace('handleToggleInsight stack trace');
+    
+    if (isGatheringInsight) return;
+    
     if (isInsightOpen) {
       // Close insight window
+      console.log('Closing insight window via handleToggleInsight');
       if (window.electronAPI?.hideInsight) {
         await window.electronAPI.hideInsight();
       }
       setIsInsightOpen(false);
     } else {
-      // Open insight window with gathering animation
+      // Open insight window with animation
+      console.log('Opening insight window via handleToggleInsight');
       setIsGatheringInsight(true);
-      // Simulate gathering contextual information
+      
       setTimeout(async () => {
         if (window.electronAPI?.showInsight) {
           await window.electronAPI.showInsight();
@@ -193,6 +210,7 @@ function App() {
         }
         setIsGatheringInsight(false);
         setIsInsightOpen(true);
+        console.log('Insight window opened successfully');
       }, 2000);
     }
   };

@@ -10,7 +10,7 @@ import path from 'path';
 class BackendIntegrationService {
   constructor(coreEngine) {
     this.coreEngine = coreEngine;
-    this.backendUrl = process.env.BIBSCRIP_BACKEND_URL || 'http://localhost:3001';
+    this.backendUrl = process.env.BIBSCRIP_BASE_URL || '';
     this.apiKey = process.env.BIBSCRIP_API_KEY || '';
     this.authToken = null;
   }
