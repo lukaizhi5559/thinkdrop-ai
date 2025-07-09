@@ -101,6 +101,7 @@ function App() {
   // Toggle states for windows
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isInsightOpen, setIsInsightOpen] = useState(false);
+  const [isMemoryDebuggerOpen, setIsMemoryDebuggerOpen] = useState(false);
 
 
 
@@ -204,13 +205,23 @@ function App() {
 
   const handleToggleMemoryDebugger = async () => {
     try {
-      if (window.electronAPI?.showMemoryDebugger) {
-        await window.electronAPI.showMemoryDebugger();
+      if (isMemoryDebuggerOpen) {
+        // Close memory debugger window
+        if (window.electronAPI?.hideMemoryDebugger) {
+          await window.electronAPI.hideMemoryDebugger();
+        }
+        setIsMemoryDebuggerOpen(false);
       } else {
-        console.error('Memory debugger not available - electronAPI not loaded');
+        // Open memory debugger window
+        if (window.electronAPI?.showMemoryDebugger) {
+          await window.electronAPI.showMemoryDebugger();
+          setIsMemoryDebuggerOpen(true);
+        } else {
+          console.error('Memory debugger not available - electronAPI not loaded');
+        }
       }
     } catch (error) {
-      console.error('Failed to show memory debugger:', error);
+      console.error('Failed to toggle memory debugger:', error);
     }
   };
 

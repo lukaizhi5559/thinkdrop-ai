@@ -197,11 +197,11 @@ function createMemoryDebuggerWindow() {
   const { width, height } = primaryDisplay.workAreaSize;
   
   memoryDebuggerWindow = new BrowserWindow({
-    width: Math.min(width - 40, 800), // Wider for debugging interface
+    width: Math.min(width - 40, 400), // Compact width for debugging interface
     height: Math.min(height - 40, 600), // Taller for memory data
     minHeight: 400, // Minimum height for debugging interface
     maxHeight: Math.min(height - 40, 800), // Maximum height
-    x: Math.floor((width - 800) / 2), // Center horizontally
+    x: Math.floor((width - 400) / 2), // Center horizontally
     y: Math.floor(height * 0.15), // Position higher on screen
     frame: false,
     transparent: true,
@@ -262,7 +262,7 @@ function createInsightWindow() {
   const { width, height } = primaryDisplay.workAreaSize;
   
   insightWindow = new BrowserWindow({
-    width: 420, // Fixed width as specified in the UI plan
+    width: Math.min(width - 40, 500), // Compact width for debugging interface
     height: Math.min(height - 100, 600), // Max height 600px with margin
     x: width - 440, // Position on the right side with margin
     y: 50, // Position from top
@@ -310,10 +310,8 @@ function createInsightWindow() {
     insightWindow = null;
   });
   
-  // Development: Open DevTools
-  if (process.env.NODE_ENV === 'development') {
-    insightWindow.webContents.openDevTools({ mode: 'detach' });
-  }
+  // DevTools can be opened manually if needed for debugging
+  // Removed automatic opening to prevent unwanted console popup
   
   isInsightVisible = true;
   return insightWindow;

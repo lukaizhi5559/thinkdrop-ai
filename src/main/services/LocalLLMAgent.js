@@ -13,6 +13,7 @@ import os from "os";
 import { AgentSandbox } from "./AgentSandbox.js";
 import { executeAgent } from "./executeAgent.js";
 import { pipeline } from "@xenova/transformers";
+import OrchestrationService from "./OrchestrationService.js";
 
 class LocalLLMAgent extends EventEmitter {
   constructor() {
@@ -46,6 +47,12 @@ class LocalLLMAgent extends EventEmitter {
         "Math.*",
       ],
     });
+
+    // Backend orchestration service for complex workflows
+    this.orchestrationService = new OrchestrationService(
+      process.env.BIBSCRIP_API_KEY || 'test-api-key-123',
+      process.env.BIBSCRIP_BASE_URL || 'http://localhost:4000'
+    );
 
     // Configuration
     this.config = {
@@ -1780,26 +1787,90 @@ Analyze and return JSON only:\`;
         );
         console.log(`📋 Orchestration plan: ${plannerResult.totalSteps} steps`);
 
-        // TODO: Phase 2 - Execute multi-step orchestration plan
-        // For now, log the plan and fall back to single intent handling
         console.log(
           "📋 Generated orchestration plan:",
           JSON.stringify(plannerResult.orchestrationPlan, null, 2),
         );
 
-        // Extract primary intent for fallback processing
-        const primaryIntent = plannerResult.intents[0] || "question";
-        console.log(
-          `🔄 Falling back to single-intent processing: ${primaryIntent}`,
-        );
+        // Delegate complex orchestration to backend API
+        console.log("🚀 Delegating to backend orchestration service...");
 
-        // Create a mock intent result for compatibility with existing flow
-        var intentResult = {
-          success: true,
-          intent: primaryIntent,
-          confidence: 0.8,
-          multiIntentPlan: plannerResult, // Store the plan for future use
-        };
+        try {
+          const orchestrationResult = await this.orchestrationService.orchestrate(
+            userInput,
+            {
+              requirements: plannerResult.requirements || [],
+              availableServices: plannerResult.availableServices || [],
+              enrichWithUserContext: true,
+              userId: context.userId || sessionId,
+            }
+          );
+
+          if (orchestrationResult.success) {
+            console.log("✅ Backend orchestration successful");
+
+            const response = {
+              success: true,
+              message: this.formatOrchestrationResponse(orchestrationResult.data),
+              orchestrationData: orchestrationResult.data,
+              executionTime: Date.now() - startTime,
+              sessionId,
+              source: "backend_orchestration",
+            };
+
+            await this.logCommunication({
+              from_agent: "LocalLLMAgent",
+              to_agent: "BackendOrchestration",
+              message_type: "orchestration_success",
+              content: {
+                userInput,
+                response: response.message,
+                agentCount: orchestrationResult.data.agents?.length || 0,
+                workflowSteps: orchestrationResult.data.workflow?.steps?.length || 0,
+              },
+              context,
+              success: true,
+              execution_time_ms: response.executionTime,
+              session_id: sessionId,
+            });
+
+            return response;
+          } else if (orchestrationResult.needsClarification) {
+            console.log("❓ Backend orchestration needs clarification");
+
+            const response = {
+              success: true,
+              message: this.formatClarificationResponse(orchestrationResult.questions),
+              needsClarification: true,
+              clarificationId: orchestrationResult.clarificationId,
+              questions: orchestrationResult.questions,
+              executionTime: Date.now() - startTime,
+              sessionId,
+              source: "backend_orchestration",
+            };
+
+            return response;
+          } else {
+            throw new Error(orchestrationResult.error || "Backend orchestration failed");
+          }
+        } catch (orchestrationError) {
+          console.error("❌ Backend orchestration failed:", orchestrationError.message);
+
+          // Fall back to single-intent processing on orchestration failure
+          const primaryIntent = plannerResult.intents[0] || "question";
+          console.log(
+            `🔄 Falling back to single-intent processing: ${primaryIntent}`,
+          );
+
+          var intentResult = {
+            success: true,
+            intent: primaryIntent,
+            confidence: 0.8,
+            multiIntentPlan: plannerResult,
+            orchestrationError: orchestrationError.message,
+            fallback: true,
+          };
+        }
       } else {
         console.log("🎯 Single-intent detected, using IntentParserAgent...");
         var intentResult = await this.executeAgent(
@@ -4336,6 +4407,70 @@ Only include memories with relevance score > 0.7. If no memories provide relevan
     }
     
     return responseTemplate + confidenceInfo;
+  }
+
+  /**
+   * Format orchestration response from backend API
+   */
+  formatOrchestrationResponse(orchestrationData) {
+    if (!orchestrationData) {
+      return "I've processed your request, but didn't receive detailed results from the orchestration service.";
+    }
+
+    const { agents = [], workflow = {}, processingTime = 0 } = orchestrationData;
+    const agentCount = agents.length;
+    const stepCount = workflow.steps?.length || 0;
+
+    let response = "✅ I've successfully orchestrated your request! ";
+
+    if (agentCount > 0) {
+      response += `I've prepared ${agentCount} specialized agent${agentCount > 1 ? 's' : ''} `;
+      if (stepCount > 0) {
+        response += `to execute ${stepCount} step${stepCount > 1 ? 's' : ''} `;
+      }
+      response += "to handle your task. ";
+    }
+
+    if (orchestrationData.userContext?.appliedMemories?.length > 0) {
+      response += "I've also incorporated your personal preferences and context. ";
+    }
+
+    if (processingTime > 0) {
+      response += `Processing completed in ${processingTime}ms.`;
+    }
+
+    // Add brief description of what will happen
+    if (workflow.steps && workflow.steps.length > 0) {
+      response += "\n\nHere's what I'll do:\n";
+      workflow.steps.slice(0, 3).forEach((step, index) => {
+        response += `${index + 1}. ${step.action || 'Execute'} using ${step.agent || 'specialized agent'}\n`;
+      });
+      
+      if (workflow.steps.length > 3) {
+        response += `... and ${workflow.steps.length - 3} more steps.`;
+      }
+    }
+
+    return response;
+  }
+
+  /**
+   * Format clarification response from backend API
+   */
+  formatClarificationResponse(questions) {
+    if (!questions || questions.length === 0) {
+      return "I need some clarification to proceed with your request, but didn't receive specific questions.";
+    }
+
+    let response = "I'd be happy to help with that! I need a bit more information to give you the best solution:\n\n";
+    
+    questions.forEach((question, index) => {
+      response += `${index + 1}. ${question}\n`;
+    });
+
+    response += "\nOnce you provide these details, I can create a complete orchestration plan for you!";
+    
+    return response;
   }
 }
 
