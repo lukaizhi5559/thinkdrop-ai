@@ -15,7 +15,7 @@ export async function executeAgent(agentName, params, context = {}, localLLMAgen
     }
 
     // List of trusted default agents that can bypass the sandbox
-    const trustedAgents = ['IntentParserAgent', 'PlannerAgent'];
+    const trustedAgents = ['IntentParserAgent', 'PlannerAgent', 'UserMemoryAgent', 'MemoryEnrichmentAgent'];
     const bypassSandbox = trustedAgents.includes(agentName);
 
     if (bypassSandbox) {
@@ -63,6 +63,12 @@ export async function executeAgent(agentName, params, context = {}, localLLMAgen
         } else if (agentName === 'PlannerAgent') {
           console.log(`🔑 Using hardcoded implementation for ${agentName}`);
           result = await executePlannerAgent(params, agentContext);
+        } else if (agentName === 'UserMemoryAgent') {
+          console.log(`🔑 Using hardcoded implementation for ${agentName}`);
+          result = await executeUserMemoryAgent(params, agentContext);
+        } else if (agentName === 'MemoryEnrichmentAgent') {
+          console.log(`🔑 Using hardcoded implementation for ${agentName}`);
+          result = await executeMemoryEnrichmentAgent(params, agentContext);
         } else {
           // For other trusted agents, use Function constructor
           const moduleExports = {};
@@ -131,25 +137,45 @@ async function executeIntentParserAgent(params, agentContext) {
   const message = params.message;
   const llmClient = agentContext?.llmClient;
   
-  // Fallback detection function
+  // Fallback detection function with comprehensive intent support
   const detectIntent = (msg) => {
     const lowerMessage = msg.toLowerCase();
     let intent = 'question';
     let memoryCategory = null;
     let confidence = 0.7;
     
-    // Memory storage patterns
-    if(lowerMessage.match(/my name (is|=) [\w\s]+/i)) {
+    // ✅ MEMORY INTENTS (Full CRUD)
+    
+    // Memory deletion patterns
+    if(lowerMessage.match(/\b(remove|delete|forget|clear|erase)\b.*\b(my|name|memory|info|data)\b/i) ||
+       lowerMessage.match(/\b(thinkdrop|ai)\b.*\b(forget|remove|delete)\b.*\b(my|name|info)\b/i)) {
+      intent = 'memory_delete';
+      memoryCategory = 'deletion';
+      confidence = 0.9;
+    }
+    // Memory update patterns (explicit updates)
+    else if(lowerMessage.match(/\b(update|change|set|modify)\b.*\b(my|mom|dad|mother|father|friend|contact)\b.*\b(name|number|phone|email|info)\b/i)) {
+      intent = 'memory_update';
+      memoryCategory = 'personal_info';
+      confidence = 0.85;
+    }
+    // Memory storage patterns (new information)
+    else if(lowerMessage.match(/my name (is|=) [\w\s]+/i)) {
       intent = 'memory_store';
       memoryCategory = 'personal_info';
       confidence = 0.8;
-    } else if(lowerMessage.match(/my favorite|i like|i prefer|i love/i) && 
+    }
+    else if(lowerMessage.match(/\b(mom|dad|mother|father|friend|contact)\b.*\b(name|number|phone|email)\b.*\b(is|to|=)\b/i)) {
+      intent = 'memory_store';
+      memoryCategory = 'personal_info';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/my favorite|i like|i prefer|i love/i) && 
               lowerMessage.match(/color|food|movie|book|music|song/i)) {
       intent = 'memory_store';
       memoryCategory = 'preferences';
       confidence = 0.8;
-    } 
-    // Appointment/scheduling storage patterns
+    }
     else if(lowerMessage.match(/\b(i have|i've got|i got|my)\b.*\b(appointment|appt|meeting|class|session)\b/i) ||
             lowerMessage.match(/\b(appointment|appt|meeting|class|session)\b.*\b(at|on|next|this|tomorrow)\b/i) ||
             lowerMessage.match(/\b(scheduled|booked)\b.*\b(for|at|on)\b/i)) {
@@ -162,9 +188,142 @@ async function executeIntentParserAgent(params, agentContext) {
       intent = 'memory_retrieve';
       memoryCategory = 'personal_info';
       confidence = 0.8;
-    } else if(lowerMessage.match(/what.*favorite|what.*like|what.*prefer/i)) {
+    } 
+    else if(lowerMessage.match(/what.*favorite|what.*like|what.*prefer/i)) {
       intent = 'memory_retrieve';
       memoryCategory = 'preferences';
+      confidence = 0.8;
+    } 
+    else if(lowerMessage.match(/\b(what|show|list|tell)\b.*\b(do you know|remember|stored|saved)\b.*\b(about me|my)\b/i)) {
+      intent = 'memory_retrieve';
+      memoryCategory = 'general';
+      confidence = 0.8;
+    }
+    
+    // 🤖 AGENT-ORIENTED INTENTS
+    
+    else if(lowerMessage.match(/\b(run|execute|start|launch)\b.*\b(agent|drop)\b/i) ||
+            lowerMessage.match(/\b(agent|drop)\b.*\b(run|execute|start|launch)\b/i)) {
+      intent = 'agent_run';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(schedule|automate)\b.*\b(agent|drop)\b/i) ||
+            lowerMessage.match(/\b(agent|drop)\b.*\b(schedule|every|daily|weekly)\b/i)) {
+      intent = 'agent_schedule';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(update|modify|change)\b.*\b(agent|drop)\b.*\b(settings|config)\b/i)) {
+      intent = 'agent_update';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(stop|pause|halt|disable)\b.*\b(agent|drop)\b/i)) {
+      intent = 'agent_stop';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(create|generate|make|build)\b.*\b(agent|drop)\b/i) ||
+            lowerMessage.match(/\b(agent|drop)\b.*\b(that|to|for)\b/i)) {
+      intent = 'agent_generate';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(orchestrate|coordinate|workflow)\b/i) ||
+            (lowerMessage.includes('and') && lowerMessage.split(' ').length > 10)) {
+      intent = 'agent_orchestrate';
+      confidence = 0.75;
+    }
+    else if(lowerMessage.match(/\b(what does|explain|describe)\b.*\b(agent|drop)\b/i)) {
+      intent = 'agent_explain';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(debug|fix|troubleshoot)\b.*\b(agent|drop)\b/i) ||
+            lowerMessage.match(/\b(agent|drop)\b.*\b(error|failed|broken)\b/i)) {
+      intent = 'agent_debug';
+      confidence = 0.85;
+    }
+    
+    // 📅 TASK & PLANNING INTENTS
+    
+    else if(lowerMessage.match(/\b(create|add|new)\b.*\b(task|todo|goal|plan)\b/i)) {
+      intent = 'task_create';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(update|modify|change)\b.*\b(task|todo|deadline)\b/i)) {
+      intent = 'task_update';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(delete|remove|cancel)\b.*\b(task|todo)\b/i)) {
+      intent = 'task_delete';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(what.*next|what.*planned|summarize.*tasks)\b/i) ||
+            lowerMessage.match(/\b(show|list)\b.*\b(tasks|todos|plans)\b/i)) {
+      intent = 'task_summarize';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(prioritize|reorder|organize)\b.*\b(tasks|todos)\b/i)) {
+      intent = 'task_prioritize';
+      confidence = 0.8;
+    }
+    
+    // 🧠 CONTEXTUAL & SYSTEM INTENTS
+    
+    else if(lowerMessage.match(/\b(improve|update|enrich)\b.*\b(context|prompt|tone)\b/i)) {
+      intent = 'context_enrich';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(what.*context|current.*settings|my.*preferences)\b/i)) {
+      intent = 'context_retrieve';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(restart|reset|start over)\b.*\b(session|conversation)\b/i)) {
+      intent = 'session_restart';
+      confidence = 0.9;
+    }
+    else if(lowerMessage.match(/\b(feedback|review|rate)\b/i) && 
+            lowerMessage.match(/\b(response|output|behavior)\b/i)) {
+      intent = 'feedback_submit';
+      confidence = 0.8;
+    }
+    
+    // 📞 INTERACTION & COMMUNICATION INTENTS
+    
+    else if(lowerMessage.match(/\b(speak|say|read.*aloud|voice)\b/i)) {
+      intent = 'speak';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(listen|voice.*command|speech)\b/i)) {
+      intent = 'listen';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(compose|send|write)\b.*\b(email|text|message)\b/i)) {
+      intent = 'compose_email';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(api|web|external|lookup|search)\b/i) ||
+            lowerMessage.match(/\b(weather|news|stock|price)\b/i)) {
+      intent = 'external_data_required';
+      confidence = 0.75;
+    }
+    
+    // 🕊️ SPIRITUAL/WELLNESS INTENTS
+    
+    else if(lowerMessage.match(/\b(daily.*reminder|spiritual.*check)\b/i)) {
+      intent = 'daily_reminder';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(prayer|pray|intention)\b/i)) {
+      intent = 'prayer_request';
+      confidence = 0.85;
+    }
+    else if(lowerMessage.match(/\b(bible.*verse|scripture|verse)\b/i)) {
+      intent = 'verse_lookup';
+      confidence = 0.9;
+    }
+    else if(lowerMessage.match(/\b(devotion|spiritual.*practice|meditation)\b/i)) {
+      intent = 'devotion_suggest';
+      confidence = 0.8;
+    }
+    else if(lowerMessage.match(/\b(how.*feeling|mood|emotional.*check)\b/i)) {
+      intent = 'mood_checkin';
       confidence = 0.8;
     } else {
       // Smart handling for calendar/appointment/travel related queries
@@ -203,14 +362,31 @@ async function executeIntentParserAgent(params, agentContext) {
   }
 
   try {
-    // Use LLM for intent detection with simplified prompt
-    const prompt = `Classify this message: "${message}"
+    // Use LLM for intent detection with updated Thinkdrop AI intent schema
+const prompt = `You are the Thinkdrop Intent Agent. Interpret the following message and return ONLY a JSON object with the user's intent.
 
-Return ONLY a JSON object with these fields:
-- intent: "question", "command", "memory_store", "memory_retrieve", or "external_data_required"
-- category: "personal_info", "preferences", "calendar", "travel", "work", "health", or "general"
-- confidence: number between 0-1
-- requiresExternalData: true or false`;
+Message: "${message}"
+
+Return ONLY a JSON object with the following fields:
+
+- intent: One of:
+  "question", "command", "memory_store", "memory_retrieve", "memory_update", "memory_delete",
+  "agent_run", "agent_schedule", "agent_stop", "agent_generate", "agent_orchestrate",
+  "task_create", "task_update", "task_delete", "task_summarize", "task_prioritize",
+  "context_enrich", "context_retrieve", "external_data_required", "feedback_submit",
+  "session_restart", "devotion_suggest", "verse_lookup", "prayer_request",
+  "mood_checkin", "speak", "listen"
+
+- category: One of:
+  "personal_info", "preferences", "calendar", "spiritual", "automation", "task_management",
+  "context", "communication", "health", "general"
+
+- confidence: A number between 0 and 1 (e.g., 0.92)
+
+- requiresExternalData: true or false (true if this intent depends on an external API or online data)
+
+Respond ONLY with the JSON object.`;
+
     
     // Set strict parameters to ensure we get complete JSON
     const maxTokens = message.length < 20 ? 300 : 500; // Adjust based on input length
@@ -318,21 +494,21 @@ Return ONLY a JSON object with these fields:
             requiresExternalData
           };
         } else {
-          console.warn('⚠️ Could not extract intent from LLM response, using fallback detection');
-          return detectIntent(message);
+          console.warn('⚠️ Could not extract intent from LLM response, using pattern result');
+          return patternResult;
         }
       } catch (regexError) {
         console.error('❌ Regex extraction failed:', regexError);
-        return detectIntent(message);
+        return patternResult;
       }
     } catch(parseError) {
       console.error('❌ Failed to parse LLM intent detection result:', parseError);
       console.log('❓ Attempted to parse:', JSON.stringify(llmResult.text));
-      return detectIntent(message);
+      return patternResult;
     }
   } catch(error) {
     console.error('Error in LLM intent detection:', error);
-    return detectIntent(message);
+    return patternResult;
   }
 }
 
@@ -775,15 +951,15 @@ function getQuickResponse(message, level) {
  * Generate appropriate prompt based on complexity level
  */
 function generateLeveledPrompt(message, level) {
-  const baseInstruction = 'Analyze the user message and return JSON only. Do not include any other text, explanation, or conversation.';
+  const baseInstruction = 'Analyze the user message and return JSON only. Do not include any other text, explanation, or conversation. IMPORTANT: If the message contains multiple distinct pieces of information that should be stored separately (like name AND phone number, or color AND address), use multiIntent: true with multiple memory_store intents.';
   const returnFormat = 'Return: {"multiIntent": false, "primaryIntent": "intent_name"} OR {"multiIntent": true, "intents": ["intent1", "intent2"]}';
   
   const intents = {
-    minimal: 'greeting, question',
-    light: 'memory_store, memory_retrieve, question, greeting',
-    medium: 'memory_store, memory_retrieve, external_data_required, question, command',
-    high: 'memory_store, memory_retrieve, external_data_required, question, command',
-    complex: 'memory_store, memory_retrieve, external_data_required, question, command, multi_command, orchestration'
+    minimal: 'question, greeting',
+    light: 'question, memory_store, memory_retrieve, speak, listen',
+    medium: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, external_data_required, devotion_suggest, verse_lookup, prayer_request, mood_checkin',
+    high: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, task_create, task_update, task_summarize, external_data_required, context_enrich, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen',
+    complex: 'question, command, memory_store, memory_retrieve, memory_update, memory_delete, agent_run, agent_schedule, agent_stop, agent_generate, agent_orchestrate, task_create, task_update, task_delete, task_summarize, task_prioritize, context_enrich, context_retrieve, external_data_required, feedback_submit, session_restart, devotion_suggest, verse_lookup, prayer_request, mood_checkin, speak, listen'
   };
   
   switch (level) {
@@ -794,7 +970,7 @@ function generateLeveledPrompt(message, level) {
       return `${baseInstruction} ${returnFormat} Intents: ${intents.light} User: ${message}`;
       
     case 'medium':
-      return `${baseInstruction} ${returnFormat} Intents: ${intents.medium} Examples: "Meeting at 3pm" → {"multiIntent": true, "intents": ["memory_store", "external_data_required"]} | "What's the weather?" → {"multiIntent": false, "primaryIntent": "external_data_required"} | "Remember my birthday is May 15th" → {"multiIntent": false, "primaryIntent": "memory_store"} User: ${message}`;
+      return `${baseInstruction} ${returnFormat} Intents: ${intents.medium} Examples: "My mom's name is Sarah and her phone is 555-1234" → {"multiIntent": true, "intents": ["memory_store", "memory_store"]} | "Meeting at 3pm" → {"multiIntent": true, "intents": ["memory_store", "external_data_required"]} | "What's the weather?" → {"multiIntent": false, "primaryIntent": "external_data_required"} | "Remember my birthday is May 15th" → {"multiIntent": false, "primaryIntent": "memory_store"} User: ${message}`;
       
     case 'high':
       return `${baseInstruction} ${returnFormat} Intents: ${intents.high} Examples: "Meeting tomorrow and remind me" → {"multiIntent": true, "intents": ["memory_store", "external_data_required", "command"]} | "Book flight and check my calendar" → {"multiIntent": true, "intents": ["command", "external_data_required"]} | "What time is my dentist appointment?" → {"multiIntent": false, "primaryIntent": "external_data_required"} User: ${message}`;
@@ -1026,6 +1202,309 @@ async function executePlannerAgent(params, agentContext) {
     return {
       success: false,
       error: error.message
+    };
+  }
+}
+
+/**
+ * Hardcoded implementation of UserMemoryAgent for trusted bypass
+ */
+async function executeUserMemoryAgent(params, agentContext) {
+  console.log('🧠 Executing UserMemoryAgent with params:', params);
+  
+  const { action, key, value, query } = params;
+  const dbConnection = agentContext.dbConnection;
+  
+  if (!dbConnection) {
+    return {
+      success: false,
+      error: 'Database connection not available'
+    };
+  }
+  
+  try {
+    switch (action) {
+      case 'store':
+        console.log(`💾 Storing memory: ${key} = ${value}`);
+        return new Promise((resolve, reject) => {
+          const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+          const timestamp = new Date().toISOString();
+          
+          const stmt = dbConnection.prepare(
+            "INSERT OR REPLACE INTO user_memories (key, value, created_at, updated_at) VALUES (?, ?, ?, ?)"
+          );
+          
+          stmt.run(key, valueStr, timestamp, timestamp, (err) => {
+            if (err) {
+              console.error('❌ Memory store failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              console.log('✅ Memory stored successfully');
+              resolve({
+                success: true,
+                action: 'store_memory',
+                key,
+                value,
+                timestamp
+              });
+            }
+          });
+        });
+        
+      case 'retrieve':
+        console.log(`🔍 Retrieving memory for key: ${key}`);
+        return new Promise((resolve, reject) => {
+          const sql = key === '*' 
+            ? 'SELECT key, value FROM user_memories ORDER BY updated_at DESC'
+            : 'SELECT key, value FROM user_memories WHERE key = ?';
+          const params = key === '*' ? [] : [key];
+          
+          dbConnection.all(sql, params, (err, rows) => {
+            if (err) {
+              console.error('❌ Memory retrieve failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              const memories = {};
+              rows.forEach(row => {
+                try {
+                  memories[row.key] = JSON.parse(row.value);
+                } catch (parseError) {
+                  memories[row.key] = row.value;
+                }
+              });
+              console.log(`✅ Retrieved ${rows.length} memories`);
+              resolve({
+                success: true,
+                action: 'retrieve_memory',
+                key,
+                memories
+              });
+            }
+          });
+        });
+        
+      case 'search':
+        console.log(`🔍 Searching memories for: ${query}`);
+        return new Promise((resolve, reject) => {
+          const searchTerm = `%${query}%`;
+          const sql = 'SELECT key, value FROM user_memories WHERE key LIKE ? OR value LIKE ?';
+          
+          dbConnection.all(sql, [searchTerm, searchTerm], (err, rows) => {
+            if (err) {
+              console.error('❌ Memory search failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              const results = rows.map(row => {
+                try {
+                  return {
+                    key: row.key,
+                    value: JSON.parse(row.value)
+                  };
+                } catch (parseError) {
+                  return {
+                    key: row.key,
+                    value: row.value
+                  };
+                }
+              });
+              console.log(`✅ Found ${results.length} matching memories`);
+              resolve({
+                success: true,
+                action: 'search_memory',
+                query,
+                results
+              });
+            }
+          });
+        });
+        
+      case 'delete':
+        console.log(` Deleting memory for key: ${key}`);
+        return new Promise((resolve, reject) => {
+          const stmt = dbConnection.prepare('DELETE FROM user_memories WHERE key = ?');
+          
+          stmt.run(key, (err) => {
+            if (err) {
+              console.error(' Memory delete failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              console.log(' Memory deleted successfully');
+              resolve({
+                success: true,
+                action: 'delete_memory',
+                key
+              });
+            }
+          });
+        });
+        
+      case 'update':
+        console.log(`📝 Updating memory: ${key} = ${value}`);
+        return new Promise((resolve, reject) => {
+          const valueStr = typeof value === 'object' ? JSON.stringify(value) : String(value);
+          const timestamp = new Date().toISOString();
+          
+          const stmt = dbConnection.prepare(
+            "UPDATE user_memories SET value = ?, updated_at = ? WHERE key = ?"
+          );
+          
+          stmt.run(valueStr, timestamp, key, (err) => {
+            if (err) {
+              console.error('❌ Memory update failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              console.log(`✅ Updated memory for key: ${key}`);
+              resolve({
+                success: true,
+                action: 'update_memory',
+                key,
+                value,
+                updated: this.changes > 0
+              });
+            }
+          });
+        });
+        
+      case 'list':
+        console.log('📋 Listing all memory keys');
+        return new Promise((resolve, reject) => {
+          const sql = 'SELECT key, updated_at FROM user_memories ORDER BY updated_at DESC';
+          
+          dbConnection.all(sql, [], (err, rows) => {
+            if (err) {
+              console.error('❌ Memory list failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              const keys = rows.map(row => ({
+                key: row.key,
+                updated_at: row.updated_at
+              }));
+              console.log(`✅ Listed ${keys.length} memory keys`);
+              resolve({
+                success: true,
+                action: 'list_memory',
+                keys,
+                count: keys.length
+              });
+            }
+          });
+        });
+        
+      case 'clear':
+        console.log('🧹 Clearing all memories');
+        return new Promise((resolve, reject) => {
+          const stmt = dbConnection.prepare('DELETE FROM user_memories');
+          
+          stmt.run((err) => {
+            if (err) {
+              console.error('❌ Memory clear failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              console.log('✅ All memories cleared successfully');
+              resolve({
+                success: true,
+                action: 'clear_memory'
+              });
+            }
+          });
+        });
+        
+      case 'count':
+        console.log('🔢 Counting memories');
+        return new Promise((resolve, reject) => {
+          const stmt = dbConnection.prepare('SELECT COUNT(*) as count FROM user_memories');
+          
+          stmt.get((err, row) => {
+            if (err) {
+              console.error('❌ Memory count failed:', err);
+              reject({ success: false, error: err.message });
+            } else {
+              console.log(`✅ Memory count: ${row.count}`);
+              resolve({
+                success: true,
+                action: 'count_memory',
+                count: row.count
+              });
+            }
+          });
+        });
+        
+      default:
+        return {
+          success: false,
+          error: `Unknown memory action: ${action}. Supported: store, retrieve, search, delete, update, list, clear, count`
+        };
+    }
+  } catch (error) {
+    console.error('❌ UserMemoryAgent execution error:', error);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
+ * Hardcoded implementation of MemoryEnrichmentAgent for trusted bypass
+ */
+async function executeMemoryEnrichmentAgent(params, agentContext) {
+  console.log('🎯 Executing MemoryEnrichmentAgent with params:', params);
+  
+  const { prompt, userMemories } = params;
+  
+  if (!prompt) {
+    return {
+      success: false,
+      error: 'No prompt provided for enrichment'
+    };
+  }
+  
+  try {
+    let enrichedPrompt = prompt;
+    
+    // Add user context if memories are available
+    if (userMemories && Object.keys(userMemories).length > 0) {
+      const contextSections = [];
+      
+      // Add user personal context
+      const userContext = [];
+      if (userMemories.name) userContext.push(`Name: ${userMemories.name}`);
+      if (userMemories.location) userContext.push(`Location: ${userMemories.location}`);
+      if (userMemories.preferences) userContext.push(`Preferences: ${userMemories.preferences}`);
+      if (userMemories.role) userContext.push(`Role: ${userMemories.role}`);
+      
+      if (userContext.length > 0) {
+        contextSections.push(`[User Context: ${userContext.join(', ')}]`);
+      }
+      
+      // Add recent memories context
+      const recentMemories = Object.entries(userMemories)
+        .filter(([key]) => !['name', 'location', 'preferences', 'role'].includes(key))
+        .slice(0, 3)
+        .map(([key, value]) => `${key}: ${value}`);
+      
+      if (recentMemories.length > 0) {
+        contextSections.push(`[Recent Context: ${recentMemories.join(', ')}]`);
+      }
+      
+      // Prepend context to prompt
+      if (contextSections.length > 0) {
+        enrichedPrompt = `${contextSections.join('\n')}\n\n${prompt}`;
+      }
+    }
+    
+    console.log('✅ Prompt enriched with user context');
+    return {
+      success: true,
+      enrichedPrompt,
+      contextAdded: userMemories ? Object.keys(userMemories).length : 0
+    };
+  } catch (error) {
+    console.error('❌ MemoryEnrichmentAgent execution error:', error);
+    return {
+      success: false,
+      error: error.message,
+      enrichedPrompt: prompt // Fallback to original prompt
     };
   }
 }

@@ -21,7 +21,7 @@ const MemoryDebugger = () => {
   const [lastMemoryCount, setLastMemoryCount] = useState(0);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
 
-  const loadMemories = async () => {
+  const loadMemories = async (quiet = false) => {
     try {
       setLoading(true);
       setError(null);
@@ -31,7 +31,7 @@ const MemoryDebugger = () => {
         throw new Error('Electron API not available - running in web mode');
       }
       
-      const result = await window.electronAPI.getAllUserMemories();
+      const result = await window.electronAPI.getAllUserMemories({ quiet });
       setMemories(result || []);
       setLastRefreshTime(new Date());
     } catch (err) {
@@ -62,11 +62,11 @@ const MemoryDebugger = () => {
 
   // Load memories and check for new ones
   useEffect(() => {
-    loadMemories();
+    loadMemories(false); // Initial load with full logging
     
-    // Set up polling to check for new memories every 5 seconds
+    // Set up polling to check for new memories every 5 seconds (quiet mode)
     const intervalId = setInterval(() => {
-      loadMemories();
+      loadMemories(true); // Use quiet mode for polling to reduce log spam
     }, 5000);
     
     return () => clearInterval(intervalId);
@@ -164,7 +164,7 @@ const MemoryDebugger = () => {
           {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
         </span>
         <button 
-          onClick={loadMemories} 
+          onClick={() => loadMemories(false)} 
           disabled={loading}
           className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -195,7 +195,7 @@ const MemoryDebugger = () => {
             className="flex-1 bg-thinkdrop-dark/30 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-white/20"
           />
           <button
-            onClick={loadMemories}
+            onClick={() => loadMemories(false)}
             disabled={loading}
             className="px-4 py-2 rounded text-sm text-white/90 hover:bg-white/10 transition-colors border border-white/10 disabled:opacity-60 bg-white/5"
           >

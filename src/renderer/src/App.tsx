@@ -60,7 +60,7 @@ declare global {
       llmClearCache: () => Promise<any>;
       
       // Memory methods
-      getAllUserMemories: () => Promise<any[]>;
+      getAllUserMemories: (options?: { quiet?: boolean }) => Promise<any[]>;
       
       platform: string;
     };
