@@ -8,9 +8,9 @@ import {
   EyeOff,
   Database
 } from 'lucide-react';
-import ChatWindow from './ChatWindow';
-import ChatMessages from './ChatMessages';
-import InsightWindow from './InsightWindow';
+import ChatWindow from './components/ChatWindow';
+import ChatMessages from './components/ChatMessages';
+import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 

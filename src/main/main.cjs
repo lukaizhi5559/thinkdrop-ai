@@ -428,7 +428,6 @@ app.on('will-quit', () => {
 // Initialize core engine and services
 let coreEngine = null;
 let agentDispatcher = null;
-let llmRouter = null;
 let localLLMAgent = null;
 
 async function initializeServices() {
@@ -436,12 +435,10 @@ async function initializeServices() {
     // Import services dynamically to handle ES modules
     const CoreEngine = (await import('./services/coreEngine.js')).default;
     const AgentDispatcher = (await import('./services/agentDispatcher.js')).default;
-    const LLMRouter = (await import('./services/llmRouter.js')).default;
     
     // Initialize services
     coreEngine = new CoreEngine();
     agentDispatcher = new AgentDispatcher();
-    llmRouter = new LLMRouter();
     
     // Initialize CoreEngine (which includes LocalLLMAgent)
     await coreEngine.initializeAll();
@@ -903,7 +900,6 @@ ipcMain.handle('get-system-health', async () => {
   const health = {
     coreEngine: coreEngine ? 'ready' : 'not_available',
     agentDispatcher: agentDispatcher ? 'ready' : 'not_available',
-    llmRouter: llmRouter ? 'ready' : 'not_available',
     localLLMAgent: localLLMAgent ? 'ready' : 'not_available',
     services: {
       audio: coreEngine?.isRecording || false,
@@ -917,14 +913,6 @@ ipcMain.handle('get-system-health', async () => {
       health.webhooks = await agentDispatcher.healthCheck();
     } catch (error) {
       health.webhooks = { error: error.message };
-    }
-  }
-  
-  if (llmRouter) {
-    try {
-      health.llmProviders = await llmRouter.healthCheck();
-    } catch (error) {
-      health.llmProviders = { error: error.message };
     }
   }
   

@@ -4,7 +4,6 @@
  */
 import { EventEmitter } from 'events';
 import { clipboard } from 'electron';
-import BackendIntegrationService from './backendIntegration.js';
 import ScreenshotAgent from './screenshotAgent.js';
 import LocalLLMAgent from './LocalLLMAgent.js';
 
@@ -21,9 +20,6 @@ class CoreEngine extends EventEmitter {
     // Core services
     this.screenshotAgent = new ScreenshotAgent(this);
     this.isScreenshotAgentReady = false;
-    
-    // Backend integration
-    this.backendIntegration = BackendIntegrationService;
     
     // System status
     this.isInitialized = false;
@@ -245,9 +241,6 @@ class CoreEngine extends EventEmitter {
       screenshotAgent: {
         ready: this.isScreenshotAgentReady,
         status: this.screenshotAgent ? this.screenshotAgent.getStatus() : null
-      },
-      backendIntegration: {
-        connected: this.backendIntegration ? this.backendIntegration.isConnected() : false
       },
       timestamp: new Date().toISOString()
     };

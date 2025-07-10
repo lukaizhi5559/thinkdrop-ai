@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Button } from './components/ui/button';
+import { Button } from './ui/button';
 import { Send, X, Droplet } from 'lucide-react';
-import { useLocalLLM } from './contexts/LocalLLMContext';
+import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 export default function ChatWindow() {
   const [currentMessage, setCurrentMessage] = useState('');

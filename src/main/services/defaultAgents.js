@@ -118,8 +118,7 @@ class DefaultAgents {
         description: "Advanced intent detection and parsing for user messages",
         parameters: JSON.stringify({
           supportedIntents: [
-            "question", "command", "memory_store", "memory_retrieve", 
-            "task_create", "agent_orchestrate", "external_data_required"
+            "question", "command", "memory_store", "memory_retrieve", "external_data_required"
           ],
           confidenceThreshold: 0.7,
           fallbackIntent: "question"
@@ -230,7 +229,7 @@ class DefaultAgents {
             }
             
             try {
-              const prompt = "You are an intent detection system. Classify the user message into: question, command, memory_store, memory_retrieve, task_create, agent_orchestrate, or external_data_required. For memory operations (store, delete, update), use memory_store with an action field (e.g., 'store', 'delete'). For memory retrieval/queries, use memory_retrieve. For creating tasks/workflows/reminders, use task_create. For complex multi-step orchestration, use agent_orchestrate. Include confidence (0-1), entities, and an action field if applicable. Reply in JSON format only. User message: " + message;
+              const prompt = "You are an intent detection system. Classify the user message into: question, command, memory_store, memory_retrieve, or external_data_required. For memory operations (store, delete, update, retrieve), use memory_store with an action field (e.g., 'store', 'delete'). For memory retrieval/queries, use memory_retrieve. For creating tasks/workflows/reminders, use task_create. For complex multi-step orchestration, use agent_orchestrate. Include confidence (0-1), entities, and an action field if applicable. Reply in JSON format only. User message: " + message;
               
               console.log('🔍 Sending intent detection prompt to LLM...');
               const result = await llmClient.complete({
@@ -306,26 +305,26 @@ class DefaultAgents {
           supportedIntents: [
             // Core Memory Intents (Full CRUD)
             "memory_store", "memory_retrieve", "memory_update", "memory_delete",
+            "greeting", "question", "command", "external_data_required",
             // Agent-Oriented Intents
-            "agent_run", "agent_schedule", "agent_stop", "agent_generate", "agent_orchestrate", "agent_update", "agent_explain", "agent_debug",
+            // "agent_run", "agent_schedule", "agent_stop", "agent_generate", "agent_orchestrate", "agent_update", "agent_explain", "agent_debug",
             // Task & Planning Intents
-            "task_create", "task_update", "task_delete", "task_summarize", "task_prioritize",
+            // "task_create", "task_update", "task_delete", "task_summarize", "task_prioritize",
             // Contextual & System Intents
-            "context_enrich", "context_retrieve", "session_restart", "feedback_submit", "external_data_required",
+            // "context_enrich", "context_retrieve", "session_restart", "feedback_submit", "external_data_required",
             // Communication & Interaction
-            "compose_email", "speak", "listen",
+            // "compose_email", "speak", "listen",
             // Spiritual/Wellness Intents
-            "prayer_request", "verse_lookup", "devotion_suggest", "mood_checkin", "daily_reminder",
+            // "prayer_request", "verse_lookup", "devotion_suggest", "mood_checkin", "daily_reminder",
             // General
-            "question", "command"
           ],
           orchestrationTypes: ["sequential", "parallel", "conditional"],
           minimumV1Intents: [
             "memory_store", "memory_retrieve", "memory_update", "memory_delete",
-            "agent_run", "agent_schedule", "agent_generate", "agent_orchestrate",
-            "external_data_required", "context_enrich", "task_create", "task_summarize",
-            "devotion_suggest", "verse_lookup", "prayer_request", "mood_checkin",
-            "question", "command"
+            "greeting", "question", "command", "external_data_required",
+            // "agent_run", "agent_schedule", "agent_generate", "agent_orchestrate",
+            // "external_data_required", "context_enrich", "task_create", "task_summarize",
+            // "devotion_suggest", "verse_lookup", "prayer_request", "mood_checkin",
           ]
         }),
         dependencies: JSON.stringify([]),
@@ -355,20 +354,13 @@ class DefaultAgents {
   
   ✅ SUPPORTED INTENTS:
   • Memory: memory_store, memory_retrieve, memory_update, memory_delete
-  • Agents: agent_run, agent_schedule, agent_generate, agent_orchestrate
-  • Tasks: task_create, task_summarize, task_update, task_delete
-  • Context: context_enrich, context_retrieve
-  • Communication: compose_email, speak, listen
-  • Spiritual: prayer_request, verse_lookup, devotion_suggest, mood_checkin
-  • System: external_data_required, session_restart, feedback_submit
-  • General: question, command
+  • System: command, external_data_required
+  • General: greeting, question 
   
   🤖 AVAILABLE AGENTS:
   • UserMemoryAgent - Memory CRUD operations
   • MemoryEnrichmentAgent - Context enrichment
   • IntentParserAgent - Intent detection
-  • CalendarIntegrationAgent - Calendar operations
-  • CommunicationAgent - Email/messaging
   • SpiritualAgent - Prayer, verses, devotions
   
   User message: "\${message}"
@@ -474,159 +466,6 @@ class DefaultAgents {
           "orchestration",
           "clarification",
           "local_llm",
-        ]),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        version: "1.0.0",
-        source: "default",
-      },
-      {
-        name: "CalendarIntegrationAgent",
-        id: "calendar-integration-agent",
-        description: "Calendar operations and event management",
-        parameters: JSON.stringify({
-          supportedCalendars: ["google", "microsoft", "apple"],
-          defaultCalendar: "google"
-        }),
-        dependencies: JSON.stringify([]),
-        execution_target: "backend",
-        requires_database: true,
-        database_type: "duckdb",
-        code: `module.exports = {
-          execute: async function(params, context) {
-            const { action, calendarId, eventId } = params;
-            const database = context?.database;
-            const calendarClient = context?.calendarClient;
-            
-            if (!database || !calendarClient) {
-              return {
-                success: false,
-                error: 'Database and calendar client required'
-              };
-            }
-            
-            try {
-              switch (action) {
-                case 'create_event':
-                  const event = await calendarClient.createEvent(calendarId, params.event);
-                  return {
-                    success: true,
-                    message: 'Event created successfully',
-                    eventId: event.id
-                  };
-                case 'update_event':
-                  const updatedEvent = await calendarClient.updateEvent(calendarId, eventId, params.event);
-                  return {
-                    success: true,
-                    message: 'Event updated successfully',
-                    eventId: updatedEvent.id
-                  };
-                case 'delete_event':
-                  await calendarClient.deleteEvent(calendarId, eventId);
-                  return {
-                    success: true,
-                    message: 'Event deleted successfully'
-                  };
-                case 'get_events':
-                  const events = await calendarClient.getEvents(calendarId);
-                  return {
-                    success: true,
-                    events: events
-                  };
-                default:
-                  return {
-                    success: false,
-                    error: 'Unsupported action: ' + action
-                  };
-              }
-            } catch (error) {
-              return {
-                success: false,
-                error: error.message
-              };
-            }
-          }
-        };`,
-        config: JSON.stringify({ timeout: 5000 }),
-        secrets: JSON.stringify({}),
-        orchestrator_metadata: JSON.stringify({
-          priority: "high",
-          type: "calendar",
-        }),
-        memory: JSON.stringify({}),
-        capabilities: JSON.stringify([
-          "calendar_operations",
-          "event_management",
-        ]),
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        version: "1.0.0",
-        source: "default",
-      },
-      {
-        name: "CommunicationAgent",
-        id: "communication-agent",
-        description: "Email and messaging operations",
-        parameters: JSON.stringify({
-          supportedChannels: ["email", "sms", "slack"],
-          defaultChannel: "email"
-        }),
-        dependencies: JSON.stringify([]),
-        execution_target: "backend",
-        requires_database: true,
-        database_type: "duckdb",
-        code: `module.exports = {
-          execute: async function(params, context) {
-            const { action, channelId, message } = params;
-            const database = context?.database;
-            const communicationClient = context?.communicationClient;
-            
-            if (!database || !communicationClient) {
-              return {
-                success: false,
-                error: 'Database and communication client required'
-              };
-            }
-            
-            try {
-              switch (action) {
-                case 'send_message':
-                  const result = await communicationClient.sendMessage(channelId, message);
-                  return {
-                    success: true,
-                    message: 'Message sent successfully',
-                    messageId: result.id
-                  };
-                case 'get_messages':
-                  const messages = await communicationClient.getMessages(channelId);
-                  return {
-                    success: true,
-                    messages: messages
-                  };
-                default:
-                  return {
-                    success: false,
-                    error: 'Unsupported action: ' + action
-                  };
-              }
-            } catch (error) {
-              return {
-                success: false,
-                error: error.message
-              };
-            }
-          }
-        };`,
-        config: JSON.stringify({ timeout: 5000 }),
-        secrets: JSON.stringify({}),
-        orchestrator_metadata: JSON.stringify({
-          priority: "high",
-          type: "communication",
-        }),
-        memory: JSON.stringify({}),
-        capabilities: JSON.stringify([
-          "email_operations",
-          "messaging_operations",
         ]),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),

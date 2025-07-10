@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, AlertTriangle, HelpCircle, CheckCircle, Clock, ChevronDown, ChevronRight, Sparkles, Settings, Play, Pause, XCircle, Droplet, MessageSquare } from 'lucide-react';
-import { OrchestrationWorkflow, OrchestrationUpdate } from './types/orchestration';
+import { OrchestrationWorkflow, OrchestrationUpdate } from '../types/orchestration';
 
 interface InsightData {
   summary: string[];

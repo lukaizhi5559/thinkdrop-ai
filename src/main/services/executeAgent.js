@@ -442,91 +442,91 @@ class ExecuteAgent {
       }
 
       // Step 1: Try Local LLM first (fastest, always available)
-      console.log(' Step 1: Trying Local LLM for intent detection...');
-      if (llmClient && llmClient.complete) {
-          try {
-            // Enhanced prompt to match backend structure
-            const prompt = `Analyze the user's request and extract structured intent information. Return ONLY a JSON object with the specified fields.
+      // console.log(' Step 1: Trying Local LLM for intent detection...');
+//       if (llmClient && llmClient.complete) {
+//           try {
+//             // Enhanced prompt to match backend structure
+//             const prompt = `Analyze the user's request and extract structured intent information. Return ONLY a JSON object with the specified fields.
 
-Here is an example:
+// Here is an example:
 
-User request: "Remind me to call John about the project tomorrow at 10am"
+// User request: "Remind me to call John about the project tomorrow at 10am"
 
-JSON response:
-\`\`\`json
-{
-  "intent": "Remind me to call John about the project tomorrow at 10am",
-  "summary": "Create a reminder to call John.",
-  "intent_type": "task_create",
-  "required_agents": [
-    {
-      "type": "CalendarAgent",
-      "reason": "The user wants to set a reminder, which requires calendar integration."
-    }
-  ],
-  "complexity": "simple",
-  "execution_approach": "single_agent",
-  "confidence": 0.95,
-  "clarification_questions": []
-}
-\`\`\`
+// JSON response:
+// \`\`\`json
+// {
+//   "intent": "Remind me to call John about the project tomorrow at 10am",
+//   "summary": "Create a reminder to call John.",
+//   "intent_type": "task_create",
+//   "required_agents": [
+//     {
+//       "type": "CalendarAgent",
+//       "reason": "The user wants to set a reminder, which requires calendar integration."
+//     }
+//   ],
+//   "complexity": "simple",
+//   "execution_approach": "single_agent",
+//   "confidence": 0.95,
+//   "clarification_questions": []
+// }
+// \`\`\`
 
----
+// ---
 
-Now, analyze the following user request. Respond with only the JSON object in a markdown code block.
+// Now, analyze the following user request. Respond with only the JSON object in a markdown code block.
 
-User request: "${message}"
+// User request: "${message}"
 
-JSON response:`;
-            console.log(' Local LLM LLMClient:', llmClient)
-            const llmResponse = await llmClient.complete(prompt, {
-              temperature: 0.1,
-              maxTokens: 200,
-              timeout: 8000
-            });
+// JSON response:`;
+//             console.log(' Local LLM LLMClient:', llmClient)
+//             const llmResponse = await llmClient.complete(prompt, {
+//               temperature: 0.1,
+//               maxTokens: 200,
+//               timeout: 8000
+//             });
       
-            console.log(' Local LLM response:', llmResponse);
+//             console.log(' Local LLM response:', llmResponse);
       
-            if (llmResponse && llmResponse.text.trim()) {
-              // Preprocess to extract JSON from markdown code blocks
-              let jsonText = llmResponse.text.trim();
-              if (jsonText.includes('```json')) {
-                jsonText = jsonText.split('```json')[1].split('```')[0].trim();
-              } else if (jsonText.includes('```')) {
-                jsonText = jsonText.split('```')[1].split('```')[0].trim();
-              } 
+//             if (llmResponse && llmResponse.text.trim()) {
+//               // Preprocess to extract JSON from markdown code blocks
+//               let jsonText = llmResponse.text.trim();
+//               if (jsonText.includes('```json')) {
+//                 jsonText = jsonText.split('```json')[1].split('```')[0].trim();
+//               } else if (jsonText.includes('```')) {
+//                 jsonText = jsonText.split('```')[1].split('```')[0].trim();
+//               } 
       
-              try {
-                const parsed = JSON.parse(jsonText);
-                if (parsed.intent && parsed.confidence > 0.6) {
-                  console.log(' Local LLM intent detection successful:', parsed);
-                  // Return backend-compatible structure
-                  return {
-                    success: true,
-                    intent: parsed.intent,
-                    summary: parsed.summary,
-                    intent_type: parsed.intent_type,
-                    required_agents: parsed.required_agents || [],
-                    complexity: parsed.complexity || 'simple',
-                    execution_approach: parsed.execution_approach || 'single_agent',
-                    confidence: parsed.confidence,
-                    clarification_questions: parsed.clarification_questions || [],
-                    // Legacy fields for backward compatibility
-                    category: parsed.intent_type,
-                    entities: {},
-                    requiresExternalData: parsed.complexity !== 'simple'
-                  };
-                }
-              } catch (jsonError) {
-                console.log(' Local LLM JSON parsing failed:', jsonError.message);
-              }
-            }
-          } catch (error) {
-            console.log(' Local LLM failed:', error.message);
-          }
-      } else {
-        console.log(' Local LLM not available, skipping to backend API');
-      }
+//               try {
+//                 const parsed = JSON.parse(jsonText);
+//                 if (parsed.intent && parsed.confidence > 0.6) {
+//                   console.log(' Local LLM intent detection successful:', parsed);
+//                   // Return backend-compatible structure
+//                   return {
+//                     success: true,
+//                     intent: parsed.intent,
+//                     summary: parsed.summary,
+//                     intent_type: parsed.intent_type,
+//                     required_agents: parsed.required_agents || [],
+//                     complexity: parsed.complexity || 'simple',
+//                     execution_approach: parsed.execution_approach || 'single_agent',
+//                     confidence: parsed.confidence,
+//                     clarification_questions: parsed.clarification_questions || [],
+//                     // Legacy fields for backward compatibility
+//                     category: parsed.intent_type,
+//                     entities: {},
+//                     requiresExternalData: parsed.complexity !== 'simple'
+//                   };
+//                 }
+//               } catch (jsonError) {
+//                 console.log(' Local LLM JSON parsing failed:', jsonError.message);
+//               }
+//             }
+//           } catch (error) {
+//             console.log(' Local LLM failed:', error.message);
+//           }
+//       } else {
+//         console.log(' Local LLM not available, skipping to backend API');
+//       }
   
       // Step 1: Try Backend API (more accurate, if available)
       if (this.backendApiClient) {

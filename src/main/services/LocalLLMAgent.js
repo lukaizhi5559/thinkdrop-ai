@@ -1057,7 +1057,7 @@ class LocalLLMAgent extends EventEmitter {
         { message: userInput },
         context,
       );
-
+      console.log("CHRIS THE:", plannerResult);
       if (plannerResult.success && plannerResult.multiIntent) {
         console.log(
           `🎯 Multi-intent workflow detected: ${plannerResult.intents.join(", ")}`,
