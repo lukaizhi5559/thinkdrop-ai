@@ -3,6 +3,8 @@
  * Extracted from LocalLLMAgent.js to improve code organization
  */
 
+import { AgentSandbox } from "./AgentSandbox.js";
+
 /**
  * Load default agents into the database and cache
  * @param {Object} database - DuckDB database instance
@@ -333,6 +335,7 @@ class DefaultAgents {
         database_type: null,
         code: `module.exports = {execute: async function(params, context) {
     const message = params.message;
+    const agentsList = params.agentsList;
     const llmClient = context?.llmClient;
     
     if(!llmClient) {
@@ -358,10 +361,15 @@ class DefaultAgents {
   • General: greeting, question 
   
   🤖 AVAILABLE AGENTS:
+  defaultAgents:
+  • PlannerAgent - Orchestration planning
   • UserMemoryAgent - Memory CRUD operations
   • MemoryEnrichmentAgent - Context enrichment
   • IntentParserAgent - Intent detection
   • SpiritualAgent - Prayer, verses, devotions
+  
+  additionalAgents:
+  \${agentsList}
   
   User message: "\${message}"
   

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Button } from './ui/button';
 import { Send, X, Droplet } from 'lucide-react';
 import { useLocalLLM } from '../contexts/LocalLLMContext';
+import useWebSocket from '../hooks/useWebSocket';
 
 export default function ChatWindow() {
   const [currentMessage, setCurrentMessage] = useState('');
@@ -11,8 +12,21 @@ export default function ChatWindow() {
   // LocalLLMAgent integration
   const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
   
+  // WebSocket integration for real-time streaming
+  const {
+    state: wsState,
+    sendLLMRequest,
+    connect: connectWebSocket,
+    disconnect: disconnectWebSocket
+  } = useWebSocket({
+    autoConnect: false, // Manual connection control
+    onConnected: () => console.log('✅ ChatWindow WebSocket connected'),
+    onDisconnected: () => console.log('🔌 ChatWindow WebSocket disconnected'),
+    onError: (error) => console.error('❌ ChatWindow WebSocket error:', error)
+  });
+  
   // Combined loading state
-  const isBusy = isLoading;
+  const isBusy = isLoading || wsState.activeRequests > 0;
 
   // Auto-focus the textarea when component mounts and ensure it's ready
   useEffect(() => {
@@ -61,31 +75,49 @@ export default function ChatWindow() {
       textareaRef.current.style.height = 'auto';
     }
     
-    // Note: Error handling is now managed by the main process
-    
-    // Create message object that matches IPC handler expectations
+    // Create user message for local display
     const userMessage = {
-      text: messageText,  // IPC handler expects 'text' property
+      id: `user_${Date.now()}`,
+      text: messageText,
+      sender: 'user' as const,
       timestamp: new Date()
     };
     
     try {
-      // First send to traditional chat system for UI display
+      // Send to traditional chat system for UI display (user message)
       if (window.electronAPI?.sendChatMessage) {
         await window.electronAPI.sendChatMessage(userMessage);
       }
       
-      // Note: LocalLLMAgent orchestration is handled by the main process
-      // when it receives the user message via IPC. No need to duplicate
-      // the orchestration call here to prevent message duplication.
-      
-      if (isInitialized) {
-        console.log('✅ User message sent, LocalLLMAgent will handle orchestration via main process');
-      } else {
-        console.warn('⚠️ LocalLLMAgent not initialized, main process will handle fallback');
+      // Connect WebSocket if not connected
+      if (!wsState.isConnected) {
+        console.log('🔌 Connecting to WebSocket for streaming...');
+        await connectWebSocket();
+        // Wait a moment for connection to establish
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
       
-      // Success - regain focus after a delay to ensure message is processed
+      // Send LLM request via WebSocket for streaming response
+      if (wsState.isConnected) {
+        console.log('📤 Sending LLM request via WebSocket:', messageText);
+        await sendLLMRequest({
+          message: messageText,
+          sessionId: `session_${Date.now()}`,
+          options: {
+            temperature: 0.7,
+            maxTokens: 1000
+          }
+        });
+        console.log('✅ LLM request sent successfully');
+      } else {
+        console.warn('⚠️ WebSocket not connected, falling back to LocalLLM');
+        // Fallback to local LLM if WebSocket fails
+        if (isInitialized) {
+          console.log('🔄 Using LocalLLM fallback');
+        }
+      }
+      
+      // Success - regain focus after a delay
       setTimeout(() => {
         if (textareaRef.current) {
           textareaRef.current.focus();

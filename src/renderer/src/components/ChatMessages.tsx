@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Droplet, X } from 'lucide-react';
-import { Button } from './components/ui/button';
+import { Button } from './ui/button';
 
 interface ChatMessage {
   id: string;

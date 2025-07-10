@@ -858,82 +858,6 @@ class LocalLLMAgent extends EventEmitter {
   }
 
   /**
-   * Main orchestration method - decides local vs backend processing
-   */
-  async orchestrateAgents(userInput, context = {}) {
-    // Store startTime as a local variable that's accessible throughout the method
-    const methodStartTime = Date.now();
-    const getExecutionTime = () => Date.now() - methodStartTime;
-
-    if (!this.currentSessionId || this.shouldStartNewSession()) {
-      this.currentSessionId = this.generateSessionId();
-      this.sessionStartTime = Date.now();
-      console.log(
-        `🆕 Starting new conversation session: ${this.currentSessionId}`,
-      );
-    } else {
-      console.log(
-        `🔄 Continuing conversation session: ${this.currentSessionId}`,
-      );
-    }
-
-    const sessionId = this.currentSessionId;
-    console.log(`🎯 Starting orchestration: ${sessionId}`);
-
-    try {
-      const complexity = await this.analyzeInputComplexity(userInput);
-
-      // If complexity is medium or complex, escalate to backend immediately.
-      if (complexity.level === 'medium' || complexity.level === 'complex') {
-        console.log(`🚀 Complexity is ${complexity.level}, escalating to backend.`);
-        return await this.escalateToBackend(
-          userInput,
-          context,
-          sessionId,
-          complexity,
-        );
-      }
-
-      // For simple complexity, handle locally if possible.
-      const canHandleWithEmbeddings =
-        this.canHandleWithSemanticSearch(userInput);
-
-      if (this.localLLMAvailable || canHandleWithEmbeddings) {
-        console.log('🏠 Handling simple request locally.');
-        return await this.handleLocalOrchestration(
-          userInput,
-          context,
-          sessionId,
-        );
-      } else {
-        console.log('🚀 Local resources unavailable for simple request, escalating to backend.');
-        return await this.escalateToBackend(
-          userInput,
-          context,
-          sessionId,
-          complexity,
-        );
-      }
-    } catch (error) {
-      console.error(`❌ Orchestration failed: ${sessionId}`, error.message);
-
-      await this.logCommunication({
-        from_agent: "LocalLLMAgent",
-        to_agent: "system",
-        message_type: "orchestration_error",
-        content: { userInput, error: error.message },
-        context,
-        success: false,
-        error_message: error.message,
-        execution_time_ms: getExecutionTime(),
-        session_id: sessionId,
-      });
-
-      throw error;
-    }
-  }
-
-  /**
    * Check if input can be handled with semantic search (even without local LLM)
    * @param {string} userInput - User's input message
    * @returns {boolean} - True if can handle with embedding-based search
@@ -1043,1367 +967,1367 @@ class LocalLLMAgent extends EventEmitter {
   /**
    * Handle orchestration locally using agent-based architecture
    */
-  async handleLocalOrchestration(userInput, context, sessionId) {
-    console.log(`🏠 Handling locally with agents: ${sessionId}`);
-    // Store startTime as a local variable that's accessible throughout the method
-    const methodStartTime = Date.now();
-    const getExecutionTime = () => Date.now() - methodStartTime;
+//   async handleLocalOrchestration(userInput, context, sessionId) {
+//     console.log(`🏠 Handling locally with agents: ${sessionId}`);
+//     // Store startTime as a local variable that's accessible throughout the method
+//     const methodStartTime = Date.now();
+//     const getExecutionTime = () => Date.now() - methodStartTime;
 
-    try {
-      // Phase 1: Use PlannerAgent to determine if multi-intent orchestration is needed
-      console.log("🧠 Analyzing orchestration requirements...");
-      const plannerResult = await this.executeAgent(
-        "PlannerAgent",
-        { message: userInput },
-        context,
-      );
-      console.log("CHRIS THE:", plannerResult);
-      if (plannerResult.success && plannerResult.multiIntent) {
-        console.log(
-          `🎯 Multi-intent workflow detected: ${plannerResult.intents.join(", ")}`,
-        );
-        console.log(`📋 Orchestration plan: ${plannerResult.totalSteps} steps`);
+//     try {
+//       // Phase 1: Use PlannerAgent to determine if multi-intent orchestration is needed
+//       console.log("🧠 Analyzing orchestration requirements...");
+//       const plannerResult = await this.executeAgent(
+//         "PlannerAgent",
+//         { message: userInput },
+//         context,
+//       );
+//       console.log("CHRIS THE:", plannerResult);
+//       if (plannerResult.success && plannerResult.multiIntent) {
+//         console.log(
+//           `🎯 Multi-intent workflow detected: ${plannerResult.intents.join(", ")}`,
+//         );
+//         console.log(`📋 Orchestration plan: ${plannerResult.totalSteps} steps`);
 
-        console.log(
-          "📋 Generated orchestration plan:",
-          JSON.stringify(plannerResult.orchestrationPlan, null, 2),
-        );
+//         console.log(
+//           "📋 Generated orchestration plan:",
+//           JSON.stringify(plannerResult.orchestrationPlan, null, 2),
+//         );
 
-        // Create workflow object for frontend UI
-        const workflowId = `workflow_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-        const workflow = {
-          id: workflowId,
-          name: `Multi-Intent Workflow: ${plannerResult.intents.join(", ")}`,
-          description: `Processing ${plannerResult.totalSteps} steps for: ${userInput.substring(0, 50)}...`,
-          status: 'running',
-          steps: plannerResult.orchestrationPlan.map((step, index) => ({
-            id: `step_${index + 1}`,
-            name: `${step.agent} - ${step.action}`,
-            description: `Execute ${step.agent} with intent: ${step.data.intent}`,
-            status: index === 0 ? 'running' : 'pending',
-            agent: step.agent,
-            startTime: index === 0 ? new Date().toISOString() : undefined,
-            endTime: undefined,
-            result: undefined,
-            error: undefined
-          })),
-          currentStepIndex: 0,
-          startTime: new Date().toISOString(),
-          endTime: undefined,
-          result: undefined,
-          error: undefined,
-          metadata: {
-            sessionId,
-            originalMessage: userInput,
-            intents: plannerResult.intents,
-            totalSteps: plannerResult.totalSteps
-          }
-        };
+//         // Create workflow object for frontend UI
+//         const workflowId = `workflow_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+//         const workflow = {
+//           id: workflowId,
+//           name: `Multi-Intent Workflow: ${plannerResult.intents.join(", ")}`,
+//           description: `Processing ${plannerResult.totalSteps} steps for: ${userInput.substring(0, 50)}...`,
+//           status: 'running',
+//           steps: plannerResult.orchestrationPlan.map((step, index) => ({
+//             id: `step_${index + 1}`,
+//             name: `${step.agent} - ${step.action}`,
+//             description: `Execute ${step.agent} with intent: ${step.data.intent}`,
+//             status: index === 0 ? 'running' : 'pending',
+//             agent: step.agent,
+//             startTime: index === 0 ? new Date().toISOString() : undefined,
+//             endTime: undefined,
+//             result: undefined,
+//             error: undefined
+//           })),
+//           currentStepIndex: 0,
+//           startTime: new Date().toISOString(),
+//           endTime: undefined,
+//           result: undefined,
+//           error: undefined,
+//           metadata: {
+//             sessionId,
+//             originalMessage: userInput,
+//             intents: plannerResult.intents,
+//             totalSteps: plannerResult.totalSteps
+//           }
+//         };
 
-        // Emit workflow started event to frontend
-        await this.emitOrchestrationUpdate({
-          type: 'workflow_started',
-          workflowId: workflowId,
-          workflow: workflow,
-          timestamp: new Date().toISOString()
-        });
+//         // Emit workflow started event to frontend
+//         await this.emitOrchestrationUpdate({
+//           type: 'workflow_started',
+//           workflowId: workflowId,
+//           workflow: workflow,
+//           timestamp: new Date().toISOString()
+//         });
 
-        // Delegate complex orchestration to backend API
-        console.log("🚀 Delegating to backend orchestration service...");
+//         // Delegate complex orchestration to backend API
+//         console.log("🚀 Delegating to backend orchestration service...");
 
-        // Emit workflow_started event to show Live Insights panel
-        await this.emitOrchestrationUpdate({
-          type: 'workflow_started',
-          workflowId: workflowId,
-          workflow: {
-            id: workflowId,
-            status: 'running',
-            steps: [{ id: 'backend-orchestration', agent: 'BackendOrchestration', action: 'Processing request...', status: 'running' }],
-            startTime: new Date().toISOString()
-          },
-          result: {
-            plan_summary: 'Processing backend orchestration request...',
-            task_breakdown: [{ agent: 'BackendOrchestration', description: 'Processing request...', status: 'running' }],
-            agents: [{ name: 'BackendOrchestration', description: 'Processing your request via backend orchestration', capabilities: ['orchestration', 'planning'] }]
-          },
-          timestamp: new Date().toISOString()
-        });
+//         // Emit workflow_started event to show Live Insights panel
+//         await this.emitOrchestrationUpdate({
+//           type: 'workflow_started',
+//           workflowId: workflowId,
+//           workflow: {
+//             id: workflowId,
+//             status: 'running',
+//             steps: [{ id: 'backend-orchestration', agent: 'BackendOrchestrationAgent', action: 'Processing request...', status: 'running' }],
+//             startTime: new Date().toISOString()
+//           },
+//           result: {
+//             plan_summary: 'Processing backend orchestration request...',
+//             task_breakdown: [{ agent: 'BackendOrchestrationAgent', description: 'Processing request...', status: 'running' }],
+//             agents: [{ name: 'BackendOrchestrationAgent', description: 'Processing your request via backend orchestration', capabilities: ['orchestration', 'planning'] }]
+//           },
+//           timestamp: new Date().toISOString()
+//         });
 
-        try {
-          const orchestrationResult = await this.orchestrationService.orchestrate(
-            userInput,
-            {
-              requirements: plannerResult.requirements || [],
-              availableServices: plannerResult.availableServices || [],
-              enrichWithUserContext: true,
-              userId: context.userId || sessionId,
-            }
-          );
+//         try {
+//           const orchestrationResult = await this.orchestrationService.orchestrate(
+//             userInput,
+//             {
+//               requirements: plannerResult.requirements || [],
+//               availableServices: plannerResult.availableServices || [],
+//               enrichWithUserContext: true,
+//               userId: context.userId || sessionId,
+//             }
+//           );
 
-          if (orchestrationResult.success) {
-            console.log("✅ Backend orchestration successful");
+//           if (orchestrationResult.success) {
+//             console.log("✅ Backend orchestration successful");
 
-            const response = {
-              success: true,
-              message: this.formatOrchestrationResponse(orchestrationResult.data),
-              orchestrationData: orchestrationResult.data,
-              executionTime: getExecutionTime(),
-              sessionId,
-              source: "backend_orchestration",
-            };
+//             const response = {
+//               success: true,
+//               message: this.formatOrchestrationResponse(orchestrationResult.data),
+//               orchestrationData: orchestrationResult.data,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               source: "backend_orchestration",
+//             };
 
-            await this.logCommunication({
-              from_agent: "LocalLLMAgent",
-              to_agent: "BackendOrchestration",
-              message_type: "orchestration_success",
-              content: {
-                userInput,
-                response: response.message,
-                agentCount: orchestrationResult.data.agents?.length || 0,
-                workflowSteps: orchestrationResult.data.workflow?.steps?.length || 0,
-              },
-              context,
-              success: true,
-              execution_time_ms: response.executionTime,
-              session_id: sessionId,
-            });
+//             await this.logCommunication({
+//               from_agent: "LocalLLMAgent",
+//               to_agent: "BackendOrchestrationAgent",
+//               message_type: "orchestration_success",
+//               content: {
+//                 userInput,
+//                 response: response.message,
+//                 agentCount: orchestrationResult.data.agents?.length || 0,
+//                 workflowSteps: orchestrationResult.data.workflow?.steps?.length || 0,
+//               },
+//               context,
+//               success: true,
+//               execution_time_ms: response.executionTime,
+//               session_id: sessionId,
+//             });
 
-            // Emit workflow completion event
-            await this.emitOrchestrationUpdate({
-              type: 'workflow_completed',
-              workflowId: workflowId,
-              status: 'success',
-              result: orchestrationResult.data,
-              executionTime: response.executionTime,
-              timestamp: new Date().toISOString()
-            });
+//             // Emit workflow completion event
+//             await this.emitOrchestrationUpdate({
+//               type: 'workflow_completed',
+//               workflowId: workflowId,
+//               status: 'success',
+//               result: orchestrationResult.data,
+//               executionTime: response.executionTime,
+//               timestamp: new Date().toISOString()
+//             });
 
-            return response;
-          } else if (orchestrationResult.needsClarification) {
-            console.log("❓ Backend orchestration needs clarification");
+//             return response;
+//           } else if (orchestrationResult.needsClarification) {
+//             console.log("❓ Backend orchestration needs clarification");
 
-            const response = {
-              success: true,
-              message: this.formatClarificationResponse(orchestrationResult.questions),
-              needsClarification: true,
-              clarificationId: orchestrationResult.clarificationId,
-              questions: orchestrationResult.questions,
-              executionTime: getExecutionTime(),
-              sessionId,
-              source: "backend_orchestration",
-            };
+//             const response = {
+//               success: true,
+//               message: this.formatClarificationResponse(orchestrationResult.questions),
+//               needsClarification: true,
+//               clarificationId: orchestrationResult.clarificationId,
+//               questions: orchestrationResult.questions,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               source: "backend_orchestration",
+//             };
 
-            // Emit clarification needed event
-            await this.emitOrchestrationUpdate({
-              type: 'clarification_needed',
-              workflowId: workflowId,
-              clarificationId: orchestrationResult.clarificationId,
-              questions: orchestrationResult.questions,
-              timestamp: new Date().toISOString()
-            });
+//             // Emit clarification needed event
+//             await this.emitOrchestrationUpdate({
+//               type: 'clarification_needed',
+//               workflowId: workflowId,
+//               clarificationId: orchestrationResult.clarificationId,
+//               questions: orchestrationResult.questions,
+//               timestamp: new Date().toISOString()
+//             });
 
-            return response;
-          } else {
-            throw new Error(orchestrationResult.error || "Backend orchestration failed");
-          }
-        } catch (orchestrationError) {
-          console.error("❌ Backend orchestration failed:", orchestrationError.message);
+//             return response;
+//           } else {
+//             throw new Error(orchestrationResult.error || "Backend orchestration failed");
+//           }
+//         } catch (orchestrationError) {
+//           console.error("❌ Backend orchestration failed:", orchestrationError.message);
 
-          // Emit workflow failure event
-          await this.emitOrchestrationUpdate({
-            type: 'workflow_failed',
-            workflowId: workflowId,
-            error: orchestrationError.message,
-            fallbackIntent: plannerResult.intents[0] || "question",
-            timestamp: new Date().toISOString()
-          });
+//           // Emit workflow failure event
+//           await this.emitOrchestrationUpdate({
+//             type: 'workflow_failed',
+//             workflowId: workflowId,
+//             error: orchestrationError.message,
+//             fallbackIntent: plannerResult.intents[0] || "question",
+//             timestamp: new Date().toISOString()
+//           });
 
-          // Fall back to single-intent processing on orchestration failure
-          const primaryIntent = plannerResult.intents[0] || "question";
-          console.log(
-            `🔄 Falling back to single-intent processing: ${primaryIntent}`,
-          );
+//           // Fall back to single-intent processing on orchestration failure
+//           const primaryIntent = plannerResult.intents[0] || "question";
+//           console.log(
+//             `🔄 Falling back to single-intent processing: ${primaryIntent}`,
+//           );
 
-          var intentResult = {
-            success: true,
-            intent: primaryIntent,
-            confidence: 0.8,
-            multiIntentPlan: plannerResult,
-            orchestrationError: orchestrationError.message,
-            fallback: true,
-          };
-        }
-      } else {
-        console.log("🎯 Single-intent detected, using IntentParserAgent...");
-        var intentResult = await this.executeAgent(
-          "IntentParserAgent",
-          { message: userInput },
-          context,
-        );
-      }
-      const intent = intentResult.success ? intentResult.intent : "question";
-      const memoryCategory = intentResult.memoryCategory || null;
-      const requiresExternalData = intentResult.requiresExternalData || false;
+//           var intentResult = {
+//             success: true,
+//             intent: primaryIntent,
+//             confidence: 0.8,
+//             multiIntentPlan: plannerResult,
+//             orchestrationError: orchestrationError.message,
+//             fallback: true,
+//           };
+//         }
+//       } else {
+//         console.log("🎯 Single-intent detected, using IntentParserAgent...");
+//         var intentResult = await this.executeAgent(
+//           "IntentParserAgent",
+//           { message: userInput },
+//           context,
+//         );
+//       }
+//       const intent = intentResult.success ? intentResult.intent : "question";
+//       const memoryCategory = intentResult.memoryCategory || null;
+//       const requiresExternalData = intentResult.requiresExternalData || false;
 
-      console.log(
-        `🎯 Detected intent: ${intent}, category: ${memoryCategory || "general"}, requires external data: ${requiresExternalData}`,
-      );
+//       console.log(
+//         `🎯 Detected intent: ${intent}, category: ${memoryCategory || "general"}, requires external data: ${requiresExternalData}`,
+//       );
 
-      // Handle requests that require external data (prevent hallucinations)
-      if (requiresExternalData) {
-        console.log(
-          "🌐 Request requires external data, providing appropriate response",
-        );
+//       // Handle requests that require external data (prevent hallucinations)
+//       if (requiresExternalData) {
+//         console.log(
+//           "🌐 Request requires external data, providing appropriate response",
+//         );
 
-        // Generate context-aware response based on the type of external data needed
-        let contextualMessage;
-        const lowerInput = userInput.toLowerCase();
+//         // Generate context-aware response based on the type of external data needed
+//         let contextualMessage;
+//         const lowerInput = userInput.toLowerCase();
 
-        if (
-          lowerInput.includes("calendar") ||
-          lowerInput.includes("schedule") ||
-          lowerInput.includes("appointment")
-        ) {
-          contextualMessage =
-            "I'd be happy to help with calendar management! However, I don't currently have access to your calendar data. To assist with scheduling, I would need integration with your calendar service (Google Calendar, Outlook, etc.). For now, I can help you plan or discuss your scheduling needs.";
-        } else if (
-          lowerInput.includes("flight") ||
-          lowerInput.includes("travel") ||
-          lowerInput.includes("trip")
-        ) {
-          contextualMessage =
-            "I'd love to help with your travel planning! However, I don't have access to real-time flight information or booking systems. I can help you think through travel plans, but for actual flight details or bookings, you'd need to check with airline websites or travel booking services.";
-        } else if (
-          lowerInput.includes("email") ||
-          lowerInput.includes("message")
-        ) {
-          contextualMessage =
-            "I can help you draft messages or emails! However, I don't have access to send emails or messages directly. I can help you compose what you'd like to say, and then you can copy and send it through your preferred email or messaging service.";
-        } else {
-          contextualMessage =
-            "I'd be happy to help! However, this request might require access to external data or services that I don't currently have. I can still assist with planning, brainstorming, or providing general guidance on this topic.";
-        }
+//         if (
+//           lowerInput.includes("calendar") ||
+//           lowerInput.includes("schedule") ||
+//           lowerInput.includes("appointment")
+//         ) {
+//           contextualMessage =
+//             "I'd be happy to help with calendar management! However, I don't currently have access to your calendar data. To assist with scheduling, I would need integration with your calendar service (Google Calendar, Outlook, etc.). For now, I can help you plan or discuss your scheduling needs.";
+//         } else if (
+//           lowerInput.includes("flight") ||
+//           lowerInput.includes("travel") ||
+//           lowerInput.includes("trip")
+//         ) {
+//           contextualMessage =
+//             "I'd love to help with your travel planning! However, I don't have access to real-time flight information or booking systems. I can help you think through travel plans, but for actual flight details or bookings, you'd need to check with airline websites or travel booking services.";
+//         } else if (
+//           lowerInput.includes("email") ||
+//           lowerInput.includes("message")
+//         ) {
+//           contextualMessage =
+//             "I can help you draft messages or emails! However, I don't have access to send emails or messages directly. I can help you compose what you'd like to say, and then you can copy and send it through your preferred email or messaging service.";
+//         } else {
+//           contextualMessage =
+//             "I'd be happy to help! However, this request might require access to external data or services that I don't currently have. I can still assist with planning, brainstorming, or providing general guidance on this topic.";
+//         }
 
-        const response = {
-          success: true,
-          message: contextualMessage,
-          executionTime: getExecutionTime(),
-          sessionId,
-        };
+//         const response = {
+//           success: true,
+//           message: contextualMessage,
+//           executionTime: getExecutionTime(),
+//           sessionId,
+//         };
 
-        await this.logCommunication({
-          from_agent: "LocalLLMAgent",
-          to_agent: "user",
-          message_type: "external_data_required",
-          content: { userInput, response: response.message },
-          context,
-          success: true,
-          execution_time_ms: response.executionTime,
-          session_id: sessionId,
-        });
+//         await this.logCommunication({
+//           from_agent: "LocalLLMAgent",
+//           to_agent: "user",
+//           message_type: "external_data_required",
+//           content: { userInput, response: response.message },
+//           context,
+//           success: true,
+//           execution_time_ms: response.executionTime,
+//           session_id: sessionId,
+//         });
 
-        return response;
-      }
+//         return response;
+//       }
 
-      let userMemories = {};
+//       let userMemories = {};
 
-      // Handle command intent
-      if (intent === "command") {
-        console.log("🔧 Processing command intent...");
+//       // Handle command intent
+//       if (intent === "command") {
+//         console.log("🔧 Processing command intent...");
 
-        // Generate appropriate response for command intent
-        let commandResponse;
-        const lowerInput = userInput.toLowerCase();
+//         // Generate appropriate response for command intent
+//         let commandResponse;
+//         const lowerInput = userInput.toLowerCase();
 
-        if (
-          lowerInput.includes("text") ||
-          lowerInput.includes("message") ||
-          lowerInput.includes("send")
-        ) {
-          commandResponse =
-            "I've noted your message request. While I can't actually send messages, I can help you draft content or remember important details.";
-        } else if (
-          lowerInput.includes("call") ||
-          lowerInput.includes("phone")
-        ) {
-          commandResponse =
-            "I've noted your call request. While I can't make actual phone calls, I can help you prepare what you might want to say or remember important details.";
-        } else {
-          commandResponse =
-            "I understand you want me to perform an action. While I can't directly perform external actions, I can help you plan or remember the details.";
-        }
+//         if (
+//           lowerInput.includes("text") ||
+//           lowerInput.includes("message") ||
+//           lowerInput.includes("send")
+//         ) {
+//           commandResponse =
+//             "I've noted your message request. While I can't actually send messages, I can help you draft content or remember important details.";
+//         } else if (
+//           lowerInput.includes("call") ||
+//           lowerInput.includes("phone")
+//         ) {
+//           commandResponse =
+//             "I've noted your call request. While I can't make actual phone calls, I can help you prepare what you might want to say or remember important details.";
+//         } else {
+//           commandResponse =
+//             "I understand you want me to perform an action. While I can't directly perform external actions, I can help you plan or remember the details.";
+//         }
 
-        const response = {
-          success: true,
-          message: commandResponse,
-          source: "command_intent_response",
-          model: this.currentLocalModel,
-          executionTime: getExecutionTime(),
-          sessionId,
-          agentsUsed: ["IntentParserAgent"],
-          intent,
-        };
+//         const response = {
+//           success: true,
+//           message: commandResponse,
+//           source: "command_intent_response",
+//           model: this.currentLocalModel,
+//           executionTime: getExecutionTime(),
+//           sessionId,
+//           agentsUsed: ["IntentParserAgent"],
+//           intent,
+//         };
 
-        await this.logCommunication({
-          from_agent: "LocalLLMAgent",
-          to_agent: "user",
-          message_type: "command_intent_response",
-          content: { userInput, response: response.message },
-          context,
-          success: true,
-          execution_time_ms: response.executionTime,
-          session_id: sessionId,
-        });
+//         await this.logCommunication({
+//           from_agent: "LocalLLMAgent",
+//           to_agent: "user",
+//           message_type: "command_intent_response",
+//           content: { userInput, response: response.message },
+//           context,
+//           success: true,
+//           execution_time_ms: response.executionTime,
+//           session_id: sessionId,
+//         });
 
-        return response;
-      } else if (intent === "question") {
-        console.log("❓ Processing question intent...");
+//         return response;
+//       } else if (intent === "question") {
+//         console.log("❓ Processing question intent...");
 
-        // Get recent messages for conversation context
-        const recentMessages = await this.getRecentMessages(sessionId, 5);
+//         // Get recent messages for conversation context
+//         const recentMessages = await this.getRecentMessages(sessionId, 5);
 
-        // Retrieve user memories to enrich the response
-        console.log("🧠 Retrieving user memories for question context...");
-        const userMemoryResult = await this.executeAgent(
-          "UserMemoryAgent",
-          {
-            action: "retrieve",
-            key: "*",
-          },
-          context,
-        );
+//         // Retrieve user memories to enrich the response
+//         console.log("🧠 Retrieving user memories for question context...");
+//         const userMemoryResult = await this.executeAgent(
+//           "UserMemoryAgent",
+//           {
+//             action: "retrieve",
+//             key: "*",
+//           },
+//           context,
+//         );
 
-        if (userMemoryResult.success) {
-          userMemories = userMemoryResult.memories || {};
-          console.log(
-            `✅ Retrieved ${Object.keys(userMemories).length} memories for question context`,
-          );
-        }
+//         if (userMemoryResult.success) {
+//           userMemories = userMemoryResult.memories || {};
+//           console.log(
+//             `✅ Retrieved ${Object.keys(userMemories).length} memories for question context`,
+//           );
+//         }
 
-        // Check if this is a memory-related question
-        const lowerInput = userInput.toLowerCase();
-        const isMemoryQuestion =
-          lowerInput.includes("remember") ||
-          lowerInput.includes("what") ||
-          lowerInput.includes("when") ||
-          lowerInput.includes("where") ||
-          lowerInput.includes("who") ||
-          lowerInput.includes("how") ||
-          lowerInput.includes("my");
+//         // Check if this is a memory-related question
+//         const lowerInput = userInput.toLowerCase();
+//         const isMemoryQuestion =
+//           lowerInput.includes("remember") ||
+//           lowerInput.includes("what") ||
+//           lowerInput.includes("when") ||
+//           lowerInput.includes("where") ||
+//           lowerInput.includes("who") ||
+//           lowerInput.includes("how") ||
+//           lowerInput.includes("my");
 
-        // Enrich the prompt with user context
-        console.log("✨ Enriching question prompt with user context...");
-        const enrichmentResult = await this.executeAgent(
-          "MemoryEnrichmentAgent",
-          {
-            prompt: userInput,
-            userMemories,
-            recentMessages,
-          },
-          context,
-        );
+//         // Enrich the prompt with user context
+//         console.log("✨ Enriching question prompt with user context...");
+//         const enrichmentResult = await this.executeAgent(
+//           "MemoryEnrichmentAgent",
+//           {
+//             prompt: userInput,
+//             userMemories,
+//             recentMessages,
+//           },
+//           context,
+//         );
 
-        const enrichedPrompt = enrichmentResult.success
-          ? enrichmentResult.enrichedPrompt
-          : userInput;
+//         const enrichedPrompt = enrichmentResult.success
+//           ? enrichmentResult.enrichedPrompt
+//           : userInput;
 
-        // Generate response using local LLM
-        console.log("🧠 Generating response with local LLM...");
-        const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
-          max_tokens: 300,
-          temperature: 0.7,
-        });
+//         // Generate response using local LLM
+//         console.log("🧠 Generating response with local LLM...");
+//         const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
+//           max_tokens: 300,
+//           temperature: 0.7,
+//         });
 
-        const response = {
-          success: true,
-          message:
-            llmResponse ||
-            "I'm not sure how to answer that question. Could you rephrase it?",
-          source: "question_response",
-          model: this.currentLocalModel,
-          executionTime: getExecutionTime(),
-          sessionId,
-          agentsUsed: ["IntentParserAgent", "MemoryEnrichmentAgent"],
-          intent,
-          memoriesUsed: Object.keys(userMemories),
-        };
+//         const response = {
+//           success: true,
+//           message:
+//             llmResponse ||
+//             "I'm not sure how to answer that question. Could you rephrase it?",
+//           source: "question_response",
+//           model: this.currentLocalModel,
+//           executionTime: getExecutionTime(),
+//           sessionId,
+//           agentsUsed: ["IntentParserAgent", "MemoryEnrichmentAgent"],
+//           intent,
+//           memoriesUsed: Object.keys(userMemories),
+//         };
 
-        await this.logCommunication({
-          from_agent: "LocalLLMAgent",
-          to_agent: "user",
-          message_type: "question_response",
-          content: { userInput, response: response.message },
-          context,
-          success: true,
-          execution_time_ms: response.executionTime,
-          session_id: sessionId,
-        });
+//         await this.logCommunication({
+//           from_agent: "LocalLLMAgent",
+//           to_agent: "user",
+//           message_type: "question_response",
+//           content: { userInput, response: response.message },
+//           context,
+//           success: true,
+//           execution_time_ms: response.executionTime,
+//           session_id: sessionId,
+//         });
 
-        return response;
-      } else if (intent === "memory_store") {
-        console.log(
-          "💾 Processing memory storage request with LLM extraction...",
-        );
+//         return response;
+//       } else if (intent === "memory_store") {
+//         console.log(
+//           "💾 Processing memory storage request with LLM extraction...",
+//         );
 
-        // First check if this is a deletion command
-        const lowerInput = userInput.toLowerCase();
-        const isDeletionCommand = lowerInput.match(/remove|delete|clear|forget|erase/i);
+//         // First check if this is a deletion command
+//         const lowerInput = userInput.toLowerCase();
+//         const isDeletionCommand = lowerInput.match(/remove|delete|clear|forget|erase/i);
         
-        if (isDeletionCommand) {
-          console.log("🗑️ Detected memory deletion command...");
+//         if (isDeletionCommand) {
+//           console.log("🗑️ Detected memory deletion command...");
           
-          // Extract what to delete using patterns
-          let keyToDelete = null;
+//           // Extract what to delete using patterns
+//           let keyToDelete = null;
           
-          if (lowerInput.match(/favorite.*color|color.*favorite/i)) {
-            keyToDelete = "favorite_color";
-          } else if (lowerInput.match(/that favorite|my favorite/i)) {
-            // Get all user memories and find the most recent favorite
-            const allMemories = await this.getAllUserMemories();
-            const favoriteKeys = allMemories.filter(m => m.key.includes('favorite'));
-            if (favoriteKeys.length > 0) {
-              keyToDelete = favoriteKeys[0].key; // Most recent favorite
-            }
-          } else if (lowerInput.match(/name|my name/i)) {
-            keyToDelete = "name";
-          } else if (lowerInput.match(/appointment|appt/i)) {
-            // Find appointment keys
-            const allMemories = await this.getAllUserMemories();
-            const appointmentKeys = allMemories.filter(m => m.key.includes('appointment'));
-            if (appointmentKeys.length > 0) {
-              keyToDelete = appointmentKeys[0].key; // Most recent appointment
-            }
-          }
+//           if (lowerInput.match(/favorite.*color|color.*favorite/i)) {
+//             keyToDelete = "favorite_color";
+//           } else if (lowerInput.match(/that favorite|my favorite/i)) {
+//             // Get all user memories and find the most recent favorite
+//             const allMemories = await this.getAllUserMemories();
+//             const favoriteKeys = allMemories.filter(m => m.key.includes('favorite'));
+//             if (favoriteKeys.length > 0) {
+//               keyToDelete = favoriteKeys[0].key; // Most recent favorite
+//             }
+//           } else if (lowerInput.match(/name|my name/i)) {
+//             keyToDelete = "name";
+//           } else if (lowerInput.match(/appointment|appt/i)) {
+//             // Find appointment keys
+//             const allMemories = await this.getAllUserMemories();
+//             const appointmentKeys = allMemories.filter(m => m.key.includes('appointment'));
+//             if (appointmentKeys.length > 0) {
+//               keyToDelete = appointmentKeys[0].key; // Most recent appointment
+//             }
+//           }
           
-          if (keyToDelete) {
-            console.log(`🗑️ Deleting memory key: ${keyToDelete}`);
+//           if (keyToDelete) {
+//             console.log(`🗑️ Deleting memory key: ${keyToDelete}`);
             
-            try {
-              // Delete the memory using UserMemoryAgent
-              await this.executeAgent(
-                "UserMemoryAgent",
-                {
-                  action: "delete",
-                  key: keyToDelete,
-                },
-                context,
-              );
+//             try {
+//               // Delete the memory using UserMemoryAgent
+//               await this.executeAgent(
+//                 "UserMemoryAgent",
+//                 {
+//                   action: "delete",
+//                   key: keyToDelete,
+//                 },
+//                 context,
+//               );
               
-              // Remove from local cache
-              delete userMemories[keyToDelete];
+//               // Remove from local cache
+//               delete userMemories[keyToDelete];
               
-              return {
-                success: true,
-                message: `I've removed your ${keyToDelete.replace(/_/g, ' ')} from memory.`,
-                source: "memory_deletion",
-                model: this.currentLocalModel,
-                executionTime: getExecutionTime(),
-                sessionId,
-                agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
-                intent,
-                memoryDeleted: {
-                  key: keyToDelete,
-                },
-              };
-            } catch (error) {
-              console.error("❌ Failed to delete memory:", error);
-              return {
-                success: false,
-                message: "I had trouble removing that from memory. Could you try again?",
-                source: "memory_deletion_failed",
-                model: this.currentLocalModel,
-                executionTime: getExecutionTime(),
-                sessionId,
-                agentsUsed: ["IntentParserAgent"],
-                intent,
-              };
-            }
-          } else {
-            return {
-              success: false,
-              message: "I'm not sure what you'd like me to remove. Could you be more specific?",
-              source: "memory_deletion_unclear",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: ["IntentParserAgent"],
-              intent,
-            };
-          }
-        }
+//               return {
+//                 success: true,
+//                 message: `I've removed your ${keyToDelete.replace(/_/g, ' ')} from memory.`,
+//                 source: "memory_deletion",
+//                 model: this.currentLocalModel,
+//                 executionTime: getExecutionTime(),
+//                 sessionId,
+//                 agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
+//                 intent,
+//                 memoryDeleted: {
+//                   key: keyToDelete,
+//                 },
+//               };
+//             } catch (error) {
+//               console.error("❌ Failed to delete memory:", error);
+//               return {
+//                 success: false,
+//                 message: "I had trouble removing that from memory. Could you try again?",
+//                 source: "memory_deletion_failed",
+//                 model: this.currentLocalModel,
+//                 executionTime: getExecutionTime(),
+//                 sessionId,
+//                 agentsUsed: ["IntentParserAgent"],
+//                 intent,
+//               };
+//             }
+//           } else {
+//             return {
+//               success: false,
+//               message: "I'm not sure what you'd like me to remove. Could you be more specific?",
+//               source: "memory_deletion_unclear",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: ["IntentParserAgent"],
+//               intent,
+//             };
+//           }
+//         }
 
-        // Use LLM to extract key-value pairs from the memory storage request
-        // Check if this might be a multi-intent scenario with multiple pieces of information
-        const hasMultipleInfo = userInput.includes(' and ') || userInput.includes(', ') || 
-                               (userInput.match(/\b(name|phone|number|color|address|email)\b/gi) || []).length > 1;
+//         // Use LLM to extract key-value pairs from the memory storage request
+//         // Check if this might be a multi-intent scenario with multiple pieces of information
+//         const hasMultipleInfo = userInput.includes(' and ') || userInput.includes(', ') || 
+//                                (userInput.match(/\b(name|phone|number|color|address|email)\b/gi) || []).length > 1;
         
-        let memoryExtractionPrompt;
-        if (hasMultipleInfo) {
-          memoryExtractionPrompt = `Extract ALL key-value pairs from this memory storage request. The input contains multiple pieces of information that should be stored separately. Respond with ONLY a JSON array of objects, each containing "key" and "value" fields. Use snake_case for keys and be concise.
+//         let memoryExtractionPrompt;
+//         if (hasMultipleInfo) {
+//           memoryExtractionPrompt = `Extract ALL key-value pairs from this memory storage request. The input contains multiple pieces of information that should be stored separately. Respond with ONLY a JSON array of objects, each containing "key" and "value" fields. Use snake_case for keys and be concise.
 
-User input: "${userInput}"
+// User input: "${userInput}"
 
-Examples:
-- "My mom's name is Sarah and her phone is 555-1234" → [{"key": "moms_name", "value": "Sarah"}, {"key": "moms_phone", "value": "555-1234"}]
-- "remember my favorite color is blue and I work at Google" → [{"key": "favorite_color", "value": "blue"}, {"key": "workplace", "value": "Google"}]
-- "John's email is john@email.com and his address is 123 Main St" → [{"key": "johns_email", "value": "john@email.com"}, {"key": "johns_address", "value": "123 Main St"}]
+// Examples:
+// - "My mom's name is Sarah and her phone is 555-1234" → [{"key": "moms_name", "value": "Sarah"}, {"key": "moms_phone", "value": "555-1234"}]
+// - "remember my favorite color is blue and I work at Google" → [{"key": "favorite_color", "value": "blue"}, {"key": "workplace", "value": "Google"}]
+// - "John's email is john@email.com and his address is 123 Main St" → [{"key": "johns_email", "value": "john@email.com"}, {"key": "johns_address", "value": "123 Main St"}]
 
-JSON:`;
-        } else {
-          memoryExtractionPrompt = `Extract the key-value pair from this memory storage request. Respond with ONLY a JSON object containing "key" and "value" fields. Use snake_case for keys and be concise.
+// JSON:`;
+//         } else {
+//           memoryExtractionPrompt = `Extract the key-value pair from this memory storage request. Respond with ONLY a JSON object containing "key" and "value" fields. Use snake_case for keys and be concise.
 
-User input: "${userInput}"
+// User input: "${userInput}"
 
-Examples:
-- "my name is John" → {"key": "name", "value": "John"}
-- "remember my favorite color is blue" → {"key": "favorite_color", "value": "blue"}
-- "I work at Google" → {"key": "workplace", "value": "Google"}
-- "I have an appointment next week Tuesday at 4pm for a haircut" → {"key": "appointment_haircut", "value": "next week Tuesday at 4pm"}
-- "My dentist appointment is on Friday at 2pm" → {"key": "appointment_dentist", "value": "Friday at 2pm"}
+// Examples:
+// - "my name is John" → {"key": "name", "value": "John"}
+// - "remember my favorite color is blue" → {"key": "favorite_color", "value": "blue"}
+// - "I work at Google" → {"key": "workplace", "value": "Google"}
+// - "I have an appointment next week Tuesday at 4pm for a haircut" → {"key": "appointment_haircut", "value": "next week Tuesday at 4pm"}
+// - "My dentist appointment is on Friday at 2pm" → {"key": "appointment_dentist", "value": "Friday at 2pm"}
 
-JSON:`;
-        }
+// JSON:`;
+//         }
 
-        try {
-          const llmResponse = await this.queryLocalLLM(memoryExtractionPrompt, {
-            max_tokens: 300, // Increased for complex multi-intent workflows
-            temperature: 0.1,
-            stop: ["}", "]"], // Better stop tokens for JSON completion
-          });
+//         try {
+//           const llmResponse = await this.queryLocalLLM(memoryExtractionPrompt, {
+//             max_tokens: 300, // Increased for complex multi-intent workflows
+//             temperature: 0.1,
+//             stop: ["}", "]"], // Better stop tokens for JSON completion
+//           });
 
-          console.log("🧠 LLM memory extraction response:", llmResponse);
+//           console.log("🧠 LLM memory extraction response:", llmResponse);
 
-          // Parse the LLM response to extract key-value pair(s)
-          let memoryDataArray = [];
-          try {
-            // Clean up the response (remove any markdown or extra text)
-            let cleanResponse = llmResponse
-              .replace(/```json|```|`/g, "")
-              .trim();
+//           // Parse the LLM response to extract key-value pair(s)
+//           let memoryDataArray = [];
+//           try {
+//             // Clean up the response (remove any markdown or extra text)
+//             let cleanResponse = llmResponse
+//               .replace(/```json|```|`/g, "")
+//               .trim();
             
-            // Handle truncated JSON by attempting to complete it
-            if (cleanResponse.includes('[') && !cleanResponse.includes(']')) {
-              cleanResponse += ']';
-              console.log('🔧 Attempting to fix truncated JSON array');
-            }
-            if (cleanResponse.includes('{') && !cleanResponse.endsWith('}') && !cleanResponse.endsWith(']')) {
-              cleanResponse += '}';
-              console.log('🔧 Attempting to fix truncated JSON object');
-            }
+//             // Handle truncated JSON by attempting to complete it
+//             if (cleanResponse.includes('[') && !cleanResponse.includes(']')) {
+//               cleanResponse += ']';
+//               console.log('🔧 Attempting to fix truncated JSON array');
+//             }
+//             if (cleanResponse.includes('{') && !cleanResponse.endsWith('}') && !cleanResponse.endsWith(']')) {
+//               cleanResponse += '}';
+//               console.log('🔧 Attempting to fix truncated JSON object');
+//             }
             
-            const parsedData = JSON.parse(cleanResponse);
+//             const parsedData = JSON.parse(cleanResponse);
             
-            // Handle both single object and array responses
-            if (Array.isArray(parsedData)) {
-              memoryDataArray = parsedData;
-            } else if (parsedData.key && parsedData.value) {
-              memoryDataArray = [parsedData];
-            }
-          } catch (parseError) {
-            console.log(
-              "⚠️ Failed to parse LLM response, trying fallback extraction...",
-            );
+//             // Handle both single object and array responses
+//             if (Array.isArray(parsedData)) {
+//               memoryDataArray = parsedData;
+//             } else if (parsedData.key && parsedData.value) {
+//               memoryDataArray = [parsedData];
+//             }
+//           } catch (parseError) {
+//             console.log(
+//               "⚠️ Failed to parse LLM response, trying fallback extraction...",
+//             );
 
-            // Enhanced fallback patterns for both single and multi-intent scenarios
-            const fallbackPatterns = [
-              // Multi-intent patterns (check these first)
-              {
-                pattern: /(?:mom|mother).*(?:favorite color|color).*is\s+([\w\s]+).*(?:number|phone).*is\s+([\d\-\.\s]+)/i,
-                multiExtract: (match) => [
-                  { key: "moms_favorite_color", value: match[1].trim() },
-                  { key: "moms_phone_number", value: match[2].trim() }
-                ]
-              },
-              {
-                pattern: /(?:mom|mother).*(?:name|called).*is\s+([\w\s]+).*(?:number|phone).*is\s+([\d\-\.\s]+)/i,
-                multiExtract: (match) => [
-                  { key: "moms_name", value: match[1].trim() },
-                  { key: "moms_phone_number", value: match[2].trim() }
-                ]
-              },
-              // Complex workflow patterns
-              {
-                pattern: /(?:create|make|set up|schedule).*(?:workflow|plan|task|reminder).*(?:for|about|to)\s+([\w\s]+)/i,
-                multiExtract: (match) => [
-                  { key: "workflow_request", value: match[1].trim() },
-                  { key: "workflow_type", value: "creation" }
-                ]
-              },
-              {
-                pattern: /(?:remind me|set reminder|schedule).*(?:to|about)\s+([\w\s]+).*(?:at|on|in)\s+([\w\s:]+)/i,
-                multiExtract: (match) => [
-                  { key: "reminder_task", value: match[1].trim() },
-                  { key: "reminder_time", value: match[2].trim() }
-                ]
-              },
-              // Single-intent patterns
-              { pattern: /name is ([\w\s]+)/i, key: "name" },
-              {
-                pattern: /favorite color is ([\w\s]+)/i,
-                key: "favorite_color",
-              },
-              { pattern: /work at ([\w\s]+)/i, key: "workplace" },
-              {
-                pattern: /(?:phone|number).*is\s+([\d\-\.\s]+)/i,
-                key: "phone_number"
-              },
-              // Appointment patterns
-              {
-                pattern:
-                  /(?:i have|i've got|my)\s+(?:an\s+)?(?:appointment|appt|meeting)\s+(?:next|this|on|for)\s+([\w\s]+)\s+(?:at|for|to)\s+([\w\s:]+)(?:\s+(?:for|to)\s+([\w\s]+))?/i,
-                keyFn: (matches) =>
-                  `appointment_${matches[3] ? matches[3].toLowerCase().replace(/\s+/g, "_") : "general"}`,
-                valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim(),
-              },
-              {
-                pattern:
-                  /(?:appointment|appt|meeting)\s+(?:is|for|on)\s+([\w\s]+)\s+(?:at|for)\s+([\w\s:]+)/i,
-                keyFn: (matches) => "appointment_general",
-                valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim(),
-              },
-            ];
+//             // Enhanced fallback patterns for both single and multi-intent scenarios
+//             const fallbackPatterns = [
+//               // Multi-intent patterns (check these first)
+//               {
+//                 pattern: /(?:mom|mother).*(?:favorite color|color).*is\s+([\w\s]+).*(?:number|phone).*is\s+([\d\-\.\s]+)/i,
+//                 multiExtract: (match) => [
+//                   { key: "moms_favorite_color", value: match[1].trim() },
+//                   { key: "moms_phone_number", value: match[2].trim() }
+//                 ]
+//               },
+//               {
+//                 pattern: /(?:mom|mother).*(?:name|called).*is\s+([\w\s]+).*(?:number|phone).*is\s+([\d\-\.\s]+)/i,
+//                 multiExtract: (match) => [
+//                   { key: "moms_name", value: match[1].trim() },
+//                   { key: "moms_phone_number", value: match[2].trim() }
+//                 ]
+//               },
+//               // Complex workflow patterns
+//               {
+//                 pattern: /(?:create|make|set up|schedule).*(?:workflow|plan|task|reminder).*(?:for|about|to)\s+([\w\s]+)/i,
+//                 multiExtract: (match) => [
+//                   { key: "workflow_request", value: match[1].trim() },
+//                   { key: "workflow_type", value: "creation" }
+//                 ]
+//               },
+//               {
+//                 pattern: /(?:remind me|set reminder|schedule).*(?:to|about)\s+([\w\s]+).*(?:at|on|in)\s+([\w\s:]+)/i,
+//                 multiExtract: (match) => [
+//                   { key: "reminder_task", value: match[1].trim() },
+//                   { key: "reminder_time", value: match[2].trim() }
+//                 ]
+//               },
+//               // Single-intent patterns
+//               { pattern: /name is ([\w\s]+)/i, key: "name" },
+//               {
+//                 pattern: /favorite color is ([\w\s]+)/i,
+//                 key: "favorite_color",
+//               },
+//               { pattern: /work at ([\w\s]+)/i, key: "workplace" },
+//               {
+//                 pattern: /(?:phone|number).*is\s+([\d\-\.\s]+)/i,
+//                 key: "phone_number"
+//               },
+//               // Appointment patterns
+//               {
+//                 pattern:
+//                   /(?:i have|i've got|my)\s+(?:an\s+)?(?:appointment|appt|meeting)\s+(?:next|this|on|for)\s+([\w\s]+)\s+(?:at|for|to)\s+([\w\s:]+)(?:\s+(?:for|to)\s+([\w\s]+))?/i,
+//                 keyFn: (matches) =>
+//                   `appointment_${matches[3] ? matches[3].toLowerCase().replace(/\s+/g, "_") : "general"}`,
+//                 valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim(),
+//               },
+//               {
+//                 pattern:
+//                   /(?:appointment|appt|meeting)\s+(?:is|for|on)\s+([\w\s]+)\s+(?:at|for)\s+([\w\s:]+)/i,
+//                 keyFn: (matches) => "appointment_general",
+//                 valueFn: (matches) => `${matches[1]} at ${matches[2]}`.trim(),
+//               },
+//             ];
 
-            for (const patternObj of fallbackPatterns) {
-              const match = userInput.match(patternObj.pattern);
-              if (match) {
-                if (patternObj.multiExtract) {
-                  // Multi-intent extraction
-                  memoryDataArray = patternObj.multiExtract(match);
-                  console.log("🔍 Multi-intent fallback pattern matched:", patternObj.pattern);
-                  console.log("📦 Extracted multiple memory data:", memoryDataArray);
-                } else if (patternObj.keyFn && patternObj.valueFn) {
-                  // Complex single pattern with custom key/value extraction functions
-                  memoryDataArray = [{
-                    key: patternObj.keyFn(match),
-                    value: patternObj.valueFn(match),
-                  }];
-                  console.log("🔍 Complex fallback pattern matched:", patternObj.pattern);
-                  console.log("📦 Extracted memory data:", memoryDataArray[0]);
-                } else {
-                  // Simple single pattern with direct key/value
-                  memoryDataArray = [{ key: patternObj.key, value: match[1].trim() }];
-                  console.log("🔍 Simple fallback pattern matched:", patternObj.pattern);
-                  console.log("📦 Extracted memory data:", memoryDataArray[0]);
-                }
-                break;
-              }
-            }
-          }
+//             for (const patternObj of fallbackPatterns) {
+//               const match = userInput.match(patternObj.pattern);
+//               if (match) {
+//                 if (patternObj.multiExtract) {
+//                   // Multi-intent extraction
+//                   memoryDataArray = patternObj.multiExtract(match);
+//                   console.log("🔍 Multi-intent fallback pattern matched:", patternObj.pattern);
+//                   console.log("📦 Extracted multiple memory data:", memoryDataArray);
+//                 } else if (patternObj.keyFn && patternObj.valueFn) {
+//                   // Complex single pattern with custom key/value extraction functions
+//                   memoryDataArray = [{
+//                     key: patternObj.keyFn(match),
+//                     value: patternObj.valueFn(match),
+//                   }];
+//                   console.log("🔍 Complex fallback pattern matched:", patternObj.pattern);
+//                   console.log("📦 Extracted memory data:", memoryDataArray[0]);
+//                 } else {
+//                   // Simple single pattern with direct key/value
+//                   memoryDataArray = [{ key: patternObj.key, value: match[1].trim() }];
+//                   console.log("🔍 Simple fallback pattern matched:", patternObj.pattern);
+//                   console.log("📦 Extracted memory data:", memoryDataArray[0]);
+//                 }
+//                 break;
+//               }
+//             }
+//           }
 
-          // Store all extracted memory entries
-          if (memoryDataArray && memoryDataArray.length > 0) {
-            console.log(`💾 Storing ${memoryDataArray.length} memory entries:`);
+//           // Store all extracted memory entries
+//           if (memoryDataArray && memoryDataArray.length > 0) {
+//             console.log(`💾 Storing ${memoryDataArray.length} memory entries:`);
             
-            for (const memoryData of memoryDataArray) {
-              if (memoryData && memoryData.key && memoryData.value) {
-                console.log(`💾 Storing ${memoryData.key}: ${memoryData.value}`);
+//             for (const memoryData of memoryDataArray) {
+//               if (memoryData && memoryData.key && memoryData.value) {
+//                 console.log(`💾 Storing ${memoryData.key}: ${memoryData.value}`);
 
-                await this.executeAgent(
-                  "UserMemoryAgent",
-                  {
-                    action: "store",
-                    key: memoryData.key,
-                    value: memoryData.value,
-                  },
-                  context,
-                );
-              }
-            }
-          }
+//                 await this.executeAgent(
+//                   "UserMemoryAgent",
+//                   {
+//                     action: "store",
+//                     key: memoryData.key,
+//                     value: memoryData.value,
+//                   },
+//                   context,
+//                 );
+//               }
+//             }
+//           }
 
-          // Generate confirmation message for stored memories
-          if (memoryDataArray && memoryDataArray.length > 0) {
-            // Update userMemories object for context
-            for (const memoryData of memoryDataArray) {
-              if (memoryData && memoryData.key && memoryData.value) {
-                userMemories[memoryData.key] = memoryData.value;
-              }
-            }
+//           // Generate confirmation message for stored memories
+//           if (memoryDataArray && memoryDataArray.length > 0) {
+//             // Update userMemories object for context
+//             for (const memoryData of memoryDataArray) {
+//               if (memoryData && memoryData.key && memoryData.value) {
+//                 userMemories[memoryData.key] = memoryData.value;
+//               }
+//             }
 
-            // Generate appropriate confirmation message
-            let confirmationMessage = "";
-            if (memoryDataArray.length === 1) {
-              const memoryData = memoryDataArray[0];
-              if (memoryData.key.includes("appointment")) {
-                confirmationMessage = `I've saved your ${memoryData.key.replace("appointment_", "")} appointment for ${memoryData.value}.`;
-              } else {
-                confirmationMessage = `I've remembered that your ${memoryData.key.replace(/_/g, " ")} is ${memoryData.value}.`;
-              }
-            } else {
-              // Multiple memories stored
-              const memoryDescriptions = memoryDataArray.map(data => {
-                if (data.key.includes("appointment")) {
-                  return `${data.key.replace("appointment_", "")} appointment (${data.value})`;
-                } else {
-                  return `${data.key.replace(/_/g, " ")} (${data.value})`;
-                }
-              });
-              confirmationMessage = `I've remembered ${memoryDescriptions.length} things: ${memoryDescriptions.join(", ")}.`;
-            }
+//             // Generate appropriate confirmation message
+//             let confirmationMessage = "";
+//             if (memoryDataArray.length === 1) {
+//               const memoryData = memoryDataArray[0];
+//               if (memoryData.key.includes("appointment")) {
+//                 confirmationMessage = `I've saved your ${memoryData.key.replace("appointment_", "")} appointment for ${memoryData.value}.`;
+//               } else {
+//                 confirmationMessage = `I've remembered that your ${memoryData.key.replace(/_/g, " ")} is ${memoryData.value}.`;
+//               }
+//             } else {
+//               // Multiple memories stored
+//               const memoryDescriptions = memoryDataArray.map(data => {
+//                 if (data.key.includes("appointment")) {
+//                   return `${data.key.replace("appointment_", "")} appointment (${data.value})`;
+//                 } else {
+//                   return `${data.key.replace(/_/g, " ")} (${data.value})`;
+//                 }
+//               });
+//               confirmationMessage = `I've remembered ${memoryDescriptions.length} things: ${memoryDescriptions.join(", ")}.`;
+//             }
 
-            // Return a proper response object
-            return {
-              success: true,
-              message: confirmationMessage,
-              source: "memory_storage",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
-              intent,
-              memoryStored: memoryDataArray.map(data => ({
-                key: data.key,
-                value: data.value,
-              })),
-            };
-          } else {
-            console.log(
-              "⚠️ Could not extract memory data from input:",
-              userInput,
-            );
+//             // Return a proper response object
+//             return {
+//               success: true,
+//               message: confirmationMessage,
+//               source: "memory_storage",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
+//               intent,
+//               memoryStored: memoryDataArray.map(data => ({
+//                 key: data.key,
+//                 value: data.value,
+//               })),
+//             };
+//           } else {
+//             console.log(
+//               "⚠️ Could not extract memory data from input:",
+//               userInput,
+//             );
 
-            // Return a proper response object even when extraction fails
-            return {
-              success: false,
-              message:
-                "I couldn't understand what to remember from that. Could you phrase it differently?",
-              source: "memory_storage_failed",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: ["IntentParserAgent"],
-              intent,
-            };
-          }
-        } catch (error) {
-          console.error("❌ Failed to extract memory with LLM:", error);
+//             // Return a proper response object even when extraction fails
+//             return {
+//               success: false,
+//               message:
+//                 "I couldn't understand what to remember from that. Could you phrase it differently?",
+//               source: "memory_storage_failed",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: ["IntentParserAgent"],
+//               intent,
+//             };
+//           }
+//         } catch (error) {
+//           console.error("❌ Failed to extract memory with LLM:", error);
 
-          // Return a proper error response
-          return {
-            success: false,
-            message: "I had trouble processing that. Could you try again?",
-            source: "memory_storage_error",
-            model: this.currentLocalModel,
-            executionTime: getExecutionTime(),
-            sessionId,
-            agentsUsed: ["IntentParserAgent"],
-            intent,
-            error: error.message,
-          };
-        }
-      } else if (intent === "memory_delete") {
-        console.log("🗑️ Processing memory deletion request...");
+//           // Return a proper error response
+//           return {
+//             success: false,
+//             message: "I had trouble processing that. Could you try again?",
+//             source: "memory_storage_error",
+//             model: this.currentLocalModel,
+//             executionTime: getExecutionTime(),
+//             sessionId,
+//             agentsUsed: ["IntentParserAgent"],
+//             intent,
+//             error: error.message,
+//           };
+//         }
+//       } else if (intent === "memory_delete") {
+//         console.log("🗑️ Processing memory deletion request...");
         
-        // Extract what to delete using patterns
-        const lowerInput = userInput.toLowerCase();
-        let keyToDelete = null;
+//         // Extract what to delete using patterns
+//         const lowerInput = userInput.toLowerCase();
+//         let keyToDelete = null;
         
-        if (lowerInput.match(/favorite.*color|color.*favorite/i)) {
-          keyToDelete = "favorite_color";
-        } else if (lowerInput.match(/that favorite|my favorite/i)) {
-          // Get all user memories and find the most recent favorite
-          const allMemories = await this.getAllUserMemories();
-          const favoriteKeys = allMemories.filter(m => m.key.includes('favorite'));
-          if (favoriteKeys.length > 0) {
-            keyToDelete = favoriteKeys[0].key; // Most recent favorite
-          }
-        } else if (lowerInput.match(/name|my name/i)) {
-          keyToDelete = "name";
-        } else if (lowerInput.match(/appointment|appt/i)) {
-          // Find appointment keys
-          const allMemories = await this.getAllUserMemories();
-          const appointmentKeys = allMemories.filter(m => m.key.includes('appointment'));
-          if (appointmentKeys.length > 0) {
-            keyToDelete = appointmentKeys[0].key; // Most recent appointment
-          }
-        } else if (lowerInput.match(/everything|all.*memor/i)) {
-          keyToDelete = "*"; // Clear all memories
-        }
+//         if (lowerInput.match(/favorite.*color|color.*favorite/i)) {
+//           keyToDelete = "favorite_color";
+//         } else if (lowerInput.match(/that favorite|my favorite/i)) {
+//           // Get all user memories and find the most recent favorite
+//           const allMemories = await this.getAllUserMemories();
+//           const favoriteKeys = allMemories.filter(m => m.key.includes('favorite'));
+//           if (favoriteKeys.length > 0) {
+//             keyToDelete = favoriteKeys[0].key; // Most recent favorite
+//           }
+//         } else if (lowerInput.match(/name|my name/i)) {
+//           keyToDelete = "name";
+//         } else if (lowerInput.match(/appointment|appt/i)) {
+//           // Find appointment keys
+//           const allMemories = await this.getAllUserMemories();
+//           const appointmentKeys = allMemories.filter(m => m.key.includes('appointment'));
+//           if (appointmentKeys.length > 0) {
+//             keyToDelete = appointmentKeys[0].key; // Most recent appointment
+//           }
+//         } else if (lowerInput.match(/everything|all.*memor/i)) {
+//           keyToDelete = "*"; // Clear all memories
+//         }
         
-        if (keyToDelete) {
-          console.log(`🗑️ Deleting memory key: ${keyToDelete}`);
+//         if (keyToDelete) {
+//           console.log(`🗑️ Deleting memory key: ${keyToDelete}`);
           
-          try {
-            // Delete the memory using UserMemoryAgent
-            const deleteResult = await this.executeAgent(
-              "UserMemoryAgent",
-              {
-                action: keyToDelete === "*" ? "clear" : "delete",
-                key: keyToDelete === "*" ? undefined : keyToDelete,
-              },
-              {
-                ...context,
-                dbConnection: this.dbConnection, // Pass database connection
-              },
-            );
+//           try {
+//             // Delete the memory using UserMemoryAgent
+//             const deleteResult = await this.executeAgent(
+//               "UserMemoryAgent",
+//               {
+//                 action: keyToDelete === "*" ? "clear" : "delete",
+//                 key: keyToDelete === "*" ? undefined : keyToDelete,
+//               },
+//               {
+//                 ...context,
+//                 dbConnection: this.dbConnection, // Pass database connection
+//               },
+//             );
             
-            if (deleteResult.success) {
-              const response = {
-                success: true,
-                message: keyToDelete === "*" 
-                  ? "I've cleared all your memories."
-                  : `I've removed your ${keyToDelete.replace(/_/g, ' ')} from memory.`,
-                source: "memory_deletion",
-                model: this.currentLocalModel,
-                executionTime: getExecutionTime(),
-                sessionId,
-                agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
-                intent,
-                memoryDeleted: {
-                  key: keyToDelete,
-                },
-              };
+//             if (deleteResult.success) {
+//               const response = {
+//                 success: true,
+//                 message: keyToDelete === "*" 
+//                   ? "I've cleared all your memories."
+//                   : `I've removed your ${keyToDelete.replace(/_/g, ' ')} from memory.`,
+//                 source: "memory_deletion",
+//                 model: this.currentLocalModel,
+//                 executionTime: getExecutionTime(),
+//                 sessionId,
+//                 agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
+//                 intent,
+//                 memoryDeleted: {
+//                   key: keyToDelete,
+//                 },
+//               };
               
-              await this.logCommunication({
-                from_agent: "LocalLLMAgent",
-                to_agent: "UserMemoryAgent",
-                message_type: "memory_delete",
-                content: JSON.stringify({ key: keyToDelete }),
-                context: JSON.stringify(context),
-                success: true,
-                execution_time_ms: getExecutionTime(),
-                session_id: sessionId,
-              });
+//               await this.logCommunication({
+//                 from_agent: "LocalLLMAgent",
+//                 to_agent: "UserMemoryAgent",
+//                 message_type: "memory_delete",
+//                 content: JSON.stringify({ key: keyToDelete }),
+//                 context: JSON.stringify(context),
+//                 success: true,
+//                 execution_time_ms: getExecutionTime(),
+//                 session_id: sessionId,
+//               });
               
-              return response;
-            } else {
-              throw new Error(deleteResult.error || "Delete operation failed");
-            }
-          } catch (error) {
-            console.error("❌ Failed to delete memory:", error);
-            return {
-              success: false,
-              message: "I had trouble removing that from memory. Could you try again?",
-              source: "memory_deletion_failed",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: ["IntentParserAgent"],
-              intent,
-              error: error.message,
-            };
-          }
-        } else {
-          return {
-            success: false,
-            message: "I'm not sure what you'd like me to remove. Could you be more specific?",
-            source: "memory_deletion_unclear",
-            model: this.currentLocalModel,
-            executionTime: getExecutionTime(),
-            sessionId,
-            agentsUsed: ["IntentParserAgent"],
-            intent,
-          };
-        }
-      } else if (intent === "memory_retrieve") {
-        console.log("🧠 Processing memory retrieval with semantic search...");
+//               return response;
+//             } else {
+//               throw new Error(deleteResult.error || "Delete operation failed");
+//             }
+//           } catch (error) {
+//             console.error("❌ Failed to delete memory:", error);
+//             return {
+//               success: false,
+//               message: "I had trouble removing that from memory. Could you try again?",
+//               source: "memory_deletion_failed",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: ["IntentParserAgent"],
+//               intent,
+//               error: error.message,
+//             };
+//           }
+//         } else {
+//           return {
+//             success: false,
+//             message: "I'm not sure what you'd like me to remove. Could you be more specific?",
+//             source: "memory_deletion_unclear",
+//             model: this.currentLocalModel,
+//             executionTime: getExecutionTime(),
+//             sessionId,
+//             agentsUsed: ["IntentParserAgent"],
+//             intent,
+//           };
+//         }
+//       } else if (intent === "memory_retrieve") {
+//         console.log("🧠 Processing memory retrieval with semantic search...");
 
-        // Retrieve all user memories
-        const userMemoryResult = await this.executeAgent(
-          "UserMemoryAgent",
-          {
-            action: "retrieve",
-            key: "*",
-          },
-          context,
-        );
+//         // Retrieve all user memories
+//         const userMemoryResult = await this.executeAgent(
+//           "UserMemoryAgent",
+//           {
+//             action: "retrieve",
+//             key: "*",
+//           },
+//           context,
+//         );
 
-        if (userMemoryResult.success) {
-          const userMemories = userMemoryResult.memories || {};
-          const memoryKeys = Object.keys(userMemories);
-          console.log(
-            `✅ Retrieved ${memoryKeys.length} memories for semantic search`,
-          );
+//         if (userMemoryResult.success) {
+//           const userMemories = userMemoryResult.memories || {};
+//           const memoryKeys = Object.keys(userMemories);
+//           console.log(
+//             `✅ Retrieved ${memoryKeys.length} memories for semantic search`,
+//           );
 
-          // Perform semantic memory search
-          const semanticMatches = await this.performSemanticMemorySearch(
-            userInput,
-            userMemories,
-          );
-          console.log(
-            `🔍 Found ${semanticMatches.length} semantic matches:`,
-            semanticMatches,
-          );
+//           // Perform semantic memory search
+//           const semanticMatches = await this.performSemanticMemorySearch(
+//             userInput,
+//             userMemories,
+//           );
+//           console.log(
+//             `🔍 Found ${semanticMatches.length} semantic matches:`,
+//             semanticMatches,
+//           );
 
-          // If we found relevant memories, format a response
-          if (semanticMatches.length > 0) {
-            const matchedMemory = semanticMatches[0]; // Use the best match
+//           // If we found relevant memories, format a response
+//           if (semanticMatches.length > 0) {
+//             const matchedMemory = semanticMatches[0]; // Use the best match
 
-            // Generate contextual response based on the matched memory
-            const contextualResponse = this.generateContextualMemoryResponse(
-              userInput,
-              matchedMemory,
-            );
+//             // Generate contextual response based on the matched memory
+//             const contextualResponse = this.generateContextualMemoryResponse(
+//               userInput,
+//               matchedMemory,
+//             );
 
-            const response = {
-              success: true,
-              message: contextualResponse,
-              source: "semantic_memory_match",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
-              intent,
-              matchedMemories: semanticMatches,
-              searchQuery: userInput,
-            };
+//             const response = {
+//               success: true,
+//               message: contextualResponse,
+//               source: "semantic_memory_match",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
+//               intent,
+//               matchedMemories: semanticMatches,
+//               searchQuery: userInput,
+//             };
 
-            await this.logCommunication({
-              from_agent: "LocalLLMAgent",
-              to_agent: "user",
-              message_type: "semantic_memory_match",
-              content: {
-                userInput,
-                matchedMemories: semanticMatches,
-                response: response.message,
-              },
-              context,
-              success: true,
-              execution_time_ms: response.executionTime,
-              session_id: sessionId,
-            });
+//             await this.logCommunication({
+//               from_agent: "LocalLLMAgent",
+//               to_agent: "user",
+//               message_type: "semantic_memory_match",
+//               content: {
+//                 userInput,
+//                 matchedMemories: semanticMatches,
+//                 response: response.message,
+//               },
+//               context,
+//               success: true,
+//               execution_time_ms: response.executionTime,
+//               session_id: sessionId,
+//             });
 
-            return response;
-          } else {
-            // No semantic matches found, try fallback search or LLM enrichment
-            console.log(
-              "⚠️ No semantic matches found, trying LLM enrichment...",
-            );
+//             return response;
+//           } else {
+//             // No semantic matches found, try fallback search or LLM enrichment
+//             console.log(
+//               "⚠️ No semantic matches found, trying LLM enrichment...",
+//             );
 
-            // Get recent messages for conversation context
-            const recentMessages = await this.getRecentMessages(sessionId, 5);
+//             // Get recent messages for conversation context
+//             const recentMessages = await this.getRecentMessages(sessionId, 5);
 
-            // Enrich the prompt with user context
-            const enrichmentResult = await this.executeAgent(
-              "MemoryEnrichmentAgent",
-              {
-                prompt: userInput,
-                userMemories,
-                recentMessages,
-              },
-              context,
-            );
+//             // Enrich the prompt with user context
+//             const enrichmentResult = await this.executeAgent(
+//               "MemoryEnrichmentAgent",
+//               {
+//                 prompt: userInput,
+//                 userMemories,
+//                 recentMessages,
+//               },
+//               context,
+//             );
 
-            const enrichedPrompt = enrichmentResult.success
-              ? enrichmentResult.enrichedPrompt
-              : userInput;
+//             const enrichedPrompt = enrichmentResult.success
+//               ? enrichmentResult.enrichedPrompt
+//               : userInput;
 
-            // Generate LLM response for cases where no direct matches exist
-            const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
-              sessionId,
-              temperature: 0.7,
-              maxTokens: 200,
-              contextWindow: 1024,
-              numThread: 1,
-              stopTokens: ["\n\n"],
-              timeout: 12000,
-            });
+//             // Generate LLM response for cases where no direct matches exist
+//             const llmResponse = await this.queryLocalLLM(enrichedPrompt, {
+//               sessionId,
+//               temperature: 0.7,
+//               maxTokens: 200,
+//               contextWindow: 1024,
+//               numThread: 1,
+//               stopTokens: ["\n\n"],
+//               timeout: 12000,
+//             });
 
-            const response = {
-              success: true,
-              message:
-                llmResponse ||
-                "I don't have specific information about that in my memory. Would you like me to remember something for you?",
-              source: "memory_retrieval_fallback",
-              model: this.currentLocalModel,
-              executionTime: getExecutionTime(),
-              sessionId,
-              agentsUsed: [
-                "IntentParserAgent",
-                "UserMemoryAgent",
-                "MemoryEnrichmentAgent",
-              ],
-              intent,
-              availableMemories: memoryKeys,
-            };
+//             const response = {
+//               success: true,
+//               message:
+//                 llmResponse ||
+//                 "I don't have specific information about that in my memory. Would you like me to remember something for you?",
+//               source: "memory_retrieval_fallback",
+//               model: this.currentLocalModel,
+//               executionTime: getExecutionTime(),
+//               sessionId,
+//               agentsUsed: [
+//                 "IntentParserAgent",
+//                 "UserMemoryAgent",
+//                 "MemoryEnrichmentAgent",
+//               ],
+//               intent,
+//               availableMemories: memoryKeys,
+//             };
 
-            await this.logCommunication({
-              from_agent: "LocalLLMAgent",
-              to_agent: "user",
-              message_type: "memory_retrieval_fallback",
-              content: {
-                userInput,
-                enrichedPrompt,
-                response: response.message,
-                availableMemories: memoryKeys,
-              },
-              context,
-              success: true,
-              execution_time_ms: response.executionTime,
-              session_id: sessionId,
-            });
+//             await this.logCommunication({
+//               from_agent: "LocalLLMAgent",
+//               to_agent: "user",
+//               message_type: "memory_retrieval_fallback",
+//               content: {
+//                 userInput,
+//                 enrichedPrompt,
+//                 response: response.message,
+//                 availableMemories: memoryKeys,
+//               },
+//               context,
+//               success: true,
+//               execution_time_ms: response.executionTime,
+//               session_id: sessionId,
+//             });
 
-            return response;
-          }
-        } else {
-          // Handle case where memory retrieval failed
-          console.log("❌ Failed to retrieve memories");
+//             return response;
+//           }
+//         } else {
+//           // Handle case where memory retrieval failed
+//           console.log("❌ Failed to retrieve memories");
 
-          const response = {
-            success: false,
-            message:
-              "I'm having trouble accessing my memory right now. Could you try again?",
-            source: "memory_retrieve_failed",
-            model: this.currentLocalModel,
-            executionTime: getExecutionTime(),
-            sessionId,
-            agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
-            intent,
-          };
+//           const response = {
+//             success: false,
+//             message:
+//               "I'm having trouble accessing my memory right now. Could you try again?",
+//             source: "memory_retrieve_failed",
+//             model: this.currentLocalModel,
+//             executionTime: getExecutionTime(),
+//             sessionId,
+//             agentsUsed: ["IntentParserAgent", "UserMemoryAgent"],
+//             intent,
+//           };
 
-          await this.logCommunication({
-            from_agent: "LocalLLMAgent",
-            to_agent: "user",
-            message_type: "memory_retrieve_failed",
-            content: { userInput, response: response.message },
-            context,
-            success: false,
-            execution_time_ms: response.executionTime,
-            session_id: sessionId,
-          });
+//           await this.logCommunication({
+//             from_agent: "LocalLLMAgent",
+//             to_agent: "user",
+//             message_type: "memory_retrieve_failed",
+//             content: { userInput, response: response.message },
+//             context,
+//             success: false,
+//             execution_time_ms: response.executionTime,
+//             session_id: sessionId,
+//           });
 
-          return response;
-        }
-      } else if (intent === "greeting") {
-        console.log("👋 Processing greeting intent...");
+//           return response;
+//         }
+//       } else if (intent === "greeting") {
+//         console.log("👋 Processing greeting intent...");
 
-        // Get user name from memory if available
-        console.log("🧠 Retrieving user memories for personalized greeting...");
-        const userMemoryResult = await this.executeAgent(
-          "UserMemoryAgent",
-          {
-            action: "retrieve",
-            key: "name",
-          },
-          context,
-        );
+//         // Get user name from memory if available
+//         console.log("🧠 Retrieving user memories for personalized greeting...");
+//         const userMemoryResult = await this.executeAgent(
+//           "UserMemoryAgent",
+//           {
+//             action: "retrieve",
+//             key: "name",
+//           },
+//           context,
+//         );
 
-        let userName = "";
-        if (
-          userMemoryResult.success &&
-          userMemoryResult.memories &&
-          userMemoryResult.memories.name
-        ) {
-          userName = userMemoryResult.memories.name;
-          console.log(`✅ Retrieved user name: ${userName}`);
-        }
+//         let userName = "";
+//         if (
+//           userMemoryResult.success &&
+//           userMemoryResult.memories &&
+//           userMemoryResult.memories.name
+//         ) {
+//           userName = userMemoryResult.memories.name;
+//           console.log(`✅ Retrieved user name: ${userName}`);
+//         }
 
-        // Generate personalized greeting based on time of day and user name
-        const hour = new Date().getHours();
-        let timeGreeting = "";
+//         // Generate personalized greeting based on time of day and user name
+//         const hour = new Date().getHours();
+//         let timeGreeting = "";
 
-        if (hour < 12) {
-          timeGreeting = "Good morning";
-        } else if (hour < 18) {
-          timeGreeting = "Good afternoon";
-        } else {
-          timeGreeting = "Good evening";
-        }
+//         if (hour < 12) {
+//           timeGreeting = "Good morning";
+//         } else if (hour < 18) {
+//           timeGreeting = "Good afternoon";
+//         } else {
+//           timeGreeting = "Good evening";
+//         }
 
-        // Add user name if available
-        const personalizedGreeting = userName
-          ? `${timeGreeting}, ${userName}!`
-          : `${timeGreeting}!`;
+//         // Add user name if available
+//         const personalizedGreeting = userName
+//           ? `${timeGreeting}, ${userName}!`
+//           : `${timeGreeting}!`;
 
-        // Select a random greeting variation
-        const greetingVariations = [
-          `${personalizedGreeting} How can I help you today?`,
-          `${personalizedGreeting} What can I assist you with?`,
-          `${personalizedGreeting} I'm here and ready to help.`,
-          `${personalizedGreeting} How may I be of service?`,
-          `${personalizedGreeting} What's on your mind today?`,
-        ];
+//         // Select a random greeting variation
+//         const greetingVariations = [
+//           `${personalizedGreeting} How can I help you today?`,
+//           `${personalizedGreeting} What can I assist you with?`,
+//           `${personalizedGreeting} I'm here and ready to help.`,
+//           `${personalizedGreeting} How may I be of service?`,
+//           `${personalizedGreeting} What's on your mind today?`,
+//         ];
 
-        const randomGreeting =
-          greetingVariations[
-            Math.floor(Math.random() * greetingVariations.length)
-          ];
+//         const randomGreeting =
+//           greetingVariations[
+//             Math.floor(Math.random() * greetingVariations.length)
+//           ];
 
-        const response = {
-          success: true,
-          message: randomGreeting,
-          source: "greeting_response",
-          model: this.currentLocalModel,
-          executionTime: getExecutionTime(),
-          sessionId,
-          agentsUsed: ["IntentParserAgent"],
-          intent,
-        };
+//         const response = {
+//           success: true,
+//           message: randomGreeting,
+//           source: "greeting_response",
+//           model: this.currentLocalModel,
+//           executionTime: getExecutionTime(),
+//           sessionId,
+//           agentsUsed: ["IntentParserAgent"],
+//           intent,
+//         };
 
-        await this.logCommunication({
-          from_agent: "LocalLLMAgent",
-          to_agent: "user",
-          message_type: "greeting_response",
-          content: { userInput, response: response.message },
-          context,
-          success: true,
-          execution_time_ms: response.executionTime,
-          session_id: sessionId,
-        });
+//         await this.logCommunication({
+//           from_agent: "LocalLLMAgent",
+//           to_agent: "user",
+//           message_type: "greeting_response",
+//           content: { userInput, response: response.message },
+//           context,
+//           success: true,
+//           execution_time_ms: response.executionTime,
+//           session_id: sessionId,
+//         });
 
-        return response;
-      } else if (intent === "multi_command") {
-        console.log("🔄 Processing multi_command intent...");
+//         return response;
+//       } else if (intent === "multi_command") {
+//         console.log("🔄 Processing multi_command intent...");
 
-        // For multi_command, we need to use PlannerAgent to create a plan
-        console.log("📝 Creating execution plan with PlannerAgent...");
+//         // For multi_command, we need to use PlannerAgent to create a plan
+//         console.log("📝 Creating execution plan with PlannerAgent...");
 
-        // Get user memories for context
-        const userMemoryResult = await this.executeAgent(
-          "UserMemoryAgent",
-          {
-            action: "retrieve",
-            key: "*",
-          },
-          context,
-        );
+//         // Get user memories for context
+//         const userMemoryResult = await this.executeAgent(
+//           "UserMemoryAgent",
+//           {
+//             action: "retrieve",
+//             key: "*",
+//           },
+//           context,
+//         );
 
-        if (userMemoryResult.success) {
-          userMemories = userMemoryResult.memories || {};
-        }
+//         if (userMemoryResult.success) {
+//           userMemories = userMemoryResult.memories || {};
+//         }
 
-        // Execute PlannerAgent to create a plan
-        const plannerResult = await this.executeAgent(
-          "PlannerAgent",
-          {
-            message: userInput,
-            intent,
-            userMemories,
-          },
-          context,
-        );
+//         // Execute PlannerAgent to create a plan
+//         const plannerResult = await this.executeAgent(
+//           "PlannerAgent",
+//           {
+//             message: userInput,
+//             intent,
+//             userMemories,
+//           },
+//           context,
+//         );
 
-        if (plannerResult.success && plannerResult.plan) {
-          console.log("✅ Successfully created execution plan");
+//         if (plannerResult.success && plannerResult.plan) {
+//           console.log("✅ Successfully created execution plan");
 
-          // For now, we'll just acknowledge the plan and provide a helpful response
-          // In a future implementation, we would execute the plan steps
+//           // For now, we'll just acknowledge the plan and provide a helpful response
+//           // In a future implementation, we would execute the plan steps
 
-          const response = {
-            success: true,
-            message: `I understand you want me to perform multiple actions. I've created a plan to help with "${userInput}", but I'm still learning how to execute these complex tasks. Would you like me to break this down into simpler steps?`,
-            source: "multi_command_planning",
-            model: this.currentLocalModel,
-            executionTime: getExecutionTime(),
-            sessionId,
-            agentsUsed: ["IntentParserAgent", "PlannerAgent"],
-            intent,
-            plan: plannerResult.plan,
-          };
+//           const response = {
+//             success: true,
+//             message: `I understand you want me to perform multiple actions. I've created a plan to help with "${userInput}", but I'm still learning how to execute these complex tasks. Would you like me to break this down into simpler steps?`,
+//             source: "multi_command_planning",
+//             model: this.currentLocalModel,
+//             executionTime: getExecutionTime(),
+//             sessionId,
+//             agentsUsed: ["IntentParserAgent", "PlannerAgent"],
+//             intent,
+//             plan: plannerResult.plan,
+//           };
 
-          await this.logCommunication({
-            from_agent: "LocalLLMAgent",
-            to_agent: "user",
-            message_type: "multi_command_planning",
-            content: {
-              userInput,
-              response: response.message,
-              plan: plannerResult.plan,
-            },
-            context,
-            success: true,
-            execution_time_ms: response.executionTime,
-            session_id: sessionId,
-          });
+//           await this.logCommunication({
+//             from_agent: "LocalLLMAgent",
+//             to_agent: "user",
+//             message_type: "multi_command_planning",
+//             content: {
+//               userInput,
+//               response: response.message,
+//               plan: plannerResult.plan,
+//             },
+//             context,
+//             success: true,
+//             execution_time_ms: response.executionTime,
+//             session_id: sessionId,
+//           });
 
-          return response;
-        } else {
-          console.log("❌ Failed to create execution plan");
+//           return response;
+//         } else {
+//           console.log("❌ Failed to create execution plan");
 
-          // Fallback to treating it as a question
-          // return this.handleLocalOrchestration(
-          //   userInput,
-          //   { ...context, fallbackIntent: "question" },
-          //   sessionId,
-          // );
-        }
-      } else if (intent === "orchestration") {
-        console.log("🎵 Processing orchestration intent...");
+//           // Fallback to treating it as a question
+//           // return this.handleLocalOrchestration(
+//           //   userInput,
+//           //   { ...context, fallbackIntent: "question" },
+//           //   sessionId,
+//           // );
+//         }
+//       } else if (intent === "orchestration") {
+//         console.log("🎵 Processing orchestration intent...");
 
-        // For orchestration, we need to use PlannerAgent to create a complex workflow plan
-        console.log("📝 Creating orchestration workflow with PlannerAgent...");
+//         // For orchestration, we need to use PlannerAgent to create a complex workflow plan
+//         console.log("📝 Creating orchestration workflow with PlannerAgent...");
 
-        // Get user memories for context
-        const userMemoryResult = await this.executeAgent(
-          "UserMemoryAgent",
-          {
-            action: "retrieve",
-            key: "*",
-          },
-          context,
-        );
+//         // Get user memories for context
+//         const userMemoryResult = await this.executeAgent(
+//           "UserMemoryAgent",
+//           {
+//             action: "retrieve",
+//             key: "*",
+//           },
+//           context,
+//         );
 
-        if (userMemoryResult.success) {
-          userMemories = userMemoryResult.memories || {};
-        }
+//         if (userMemoryResult.success) {
+//           userMemories = userMemoryResult.memories || {};
+//         }
 
-        // Execute PlannerAgent to create an orchestration plan
-        const plannerResult = await this.executeAgent(
-          "PlannerAgent",
-          {
-            message: userInput,
-            intent,
-            userMemories,
-            orchestration: true,
-          },
-          context,
-        );
+//         // Execute PlannerAgent to create an orchestration plan
+//         const plannerResult = await this.executeAgent(
+//           "PlannerAgent",
+//           {
+//             message: userInput,
+//             intent,
+//             userMemories,
+//             orchestration: true,
+//           },
+//           context,
+//         );
 
-        if (plannerResult.success && plannerResult.plan) {
-          console.log("✅ Successfully created orchestration workflow");
+//         if (plannerResult.success && plannerResult.plan) {
+//           console.log("✅ Successfully created orchestration workflow");
 
-          const response = {
-            success: true,
-            message: `I understand you want me to orchestrate a complex workflow. I've created a plan for "${userInput}", but I'm still learning how to execute these sophisticated tasks. Would you like me to explain the steps I would take?`,
-            source: "orchestration_planning",
-            model: this.currentLocalModel,
-            executionTime: getExecutionTime(),
-            sessionId,
-            agentsUsed: ["IntentParserAgent", "PlannerAgent"],
-            intent,
-            plan: plannerResult.plan,
-          };
+//           const response = {
+//             success: true,
+//             message: `I understand you want me to orchestrate a complex workflow. I've created a plan for "${userInput}", but I'm still learning how to execute these sophisticated tasks. Would you like me to explain the steps I would take?`,
+//             source: "orchestration_planning",
+//             model: this.currentLocalModel,
+//             executionTime: getExecutionTime(),
+//             sessionId,
+//             agentsUsed: ["IntentParserAgent", "PlannerAgent"],
+//             intent,
+//             plan: plannerResult.plan,
+//           };
 
-          await this.logCommunication({
-            from_agent: "LocalLLMAgent",
-            to_agent: "user",
-            message_type: "orchestration_planning",
-            content: {
-              userInput,
-              response: response.message,
-              plan: plannerResult.plan,
-            },
-            context,
-            success: true,
-            execution_time_ms: response.executionTime,
-            session_id: sessionId,
-          });
+//           await this.logCommunication({
+//             from_agent: "LocalLLMAgent",
+//             to_agent: "user",
+//             message_type: "orchestration_planning",
+//             content: {
+//               userInput,
+//               response: response.message,
+//               plan: plannerResult.plan,
+//             },
+//             context,
+//             success: true,
+//             execution_time_ms: response.executionTime,
+//             session_id: sessionId,
+//           });
 
-          return response;
-        } else {
-          console.log("❌ Failed to create orchestration workflow");
+//           return response;
+//         } else {
+//           console.log("❌ Failed to create orchestration workflow");
 
-          // Fallback to treating it as a question
-          // return this.handleLocalOrchestration(
-          //   userInput,
-          //   { ...context, fallbackIntent: "question" },
-          //   sessionId,
-          // );
-        }
-      } else {
-        // Handle communication intents (compose_email, send_text, etc.)
-        if (intent === 'compose_email' || intent === 'send_text' || intent === 'communication') {
-          console.log(`📧 Handling communication intent: ${intent}`);
+//           // Fallback to treating it as a question
+//           // return this.handleLocalOrchestration(
+//           //   userInput,
+//           //   { ...context, fallbackIntent: "question" },
+//           //   sessionId,
+//           // );
+//         }
+//       } else {
+//         // Handle communication intents (compose_email, send_text, etc.)
+//         if (intent === 'compose_email' || intent === 'send_text' || intent === 'communication') {
+//           console.log(`📧 Handling communication intent: ${intent}`);
           
-          // For communication intents, provide a helpful response about limitations
-          const response = {
-            success: true,
-            message: "I understand you want to send a message. Currently, I can help you draft messages, but I don't have access to send emails or texts directly. I can help you compose the message content or guide you through the process.",
-            intent,
-            category: 'communication',
-            executionTime: Date.now() - methodStartTime,
-            sessionId
-          };
+//           // For communication intents, provide a helpful response about limitations
+//           const response = {
+//             success: true,
+//             message: "I understand you want to send a message. Currently, I can help you draft messages, but I don't have access to send emails or texts directly. I can help you compose the message content or guide you through the process.",
+//             intent,
+//             category: 'communication',
+//             executionTime: Date.now() - methodStartTime,
+//             sessionId
+//           };
 
-          await this.logCommunication({
-            from_agent: 'LocalLLMAgent',
-            to_agent: 'user',
-            message_type: 'communication_response',
-            content: {
-              userInput,
-              response: response.message,
-              intent
-            },
-            context,
-            success: true,
-            execution_time_ms: response.executionTime,
-            session_id: sessionId
-          });
+//           await this.logCommunication({
+//             from_agent: 'LocalLLMAgent',
+//             to_agent: 'user',
+//             message_type: 'communication_response',
+//             content: {
+//               userInput,
+//               response: response.message,
+//               intent
+//             },
+//             context,
+//             success: true,
+//             execution_time_ms: response.executionTime,
+//             session_id: sessionId
+//           });
 
-          return response;
-        }
+//           return response;
+//         }
         
-        // For truly unhandled intents, prevent infinite recursion
-        if (context.fallbackIntent === 'question' || context.recursionDepth >= 2) {
-          console.log(`🛑 Preventing infinite recursion for intent: ${intent}`);
+//         // For truly unhandled intents, prevent infinite recursion
+//         if (context.fallbackIntent === 'question' || context.recursionDepth >= 2) {
+//           console.log(`🛑 Preventing infinite recursion for intent: ${intent}`);
           
-          const response = {
-            success: true,
-            message: "I'm not sure how to handle that specific request right now. Could you try rephrasing it or asking something else?",
-            intent: 'unknown',
-            category: 'general',
-            executionTime: Date.now() - methodStartTime,
-            sessionId
-          };
+//           const response = {
+//             success: true,
+//             message: "I'm not sure how to handle that specific request right now. Could you try rephrasing it or asking something else?",
+//             intent: 'unknown',
+//             category: 'general',
+//             executionTime: Date.now() - methodStartTime,
+//             sessionId
+//           };
 
-          await this.logCommunication({
-            from_agent: 'LocalLLMAgent',
-            to_agent: 'user', 
-            message_type: 'fallback_response',
-            content: {
-              userInput,
-              response: response.message,
-              originalIntent: intent
-            },
-            context,
-            success: true,
-            execution_time_ms: response.executionTime,
-            session_id: sessionId
-          });
+//           await this.logCommunication({
+//             from_agent: 'LocalLLMAgent',
+//             to_agent: 'user', 
+//             message_type: 'fallback_response',
+//             content: {
+//               userInput,
+//               response: response.message,
+//               originalIntent: intent
+//             },
+//             context,
+//             success: true,
+//             execution_time_ms: response.executionTime,
+//             session_id: sessionId
+//           });
 
-          return response;
-        }
+//           return response;
+//         }
         
-        // Default handler for other intents (with recursion protection)
-        console.log(
-          `❓ Processing unhandled intent: ${intent}, falling back to question handling...`,
-        );
+//         // Default handler for other intents (with recursion protection)
+//         console.log(
+//           `❓ Processing unhandled intent: ${intent}, falling back to question handling...`,
+//         );
 
-        // Treat unhandled intents as questions with recursion protection
-        const fallbackContext = { 
-          ...context, 
-          fallbackIntent: "question",
-          recursionDepth: (context.recursionDepth || 0) + 1
-        };
+//         // Treat unhandled intents as questions with recursion protection
+//         const fallbackContext = { 
+//           ...context, 
+//           fallbackIntent: "question",
+//           recursionDepth: (context.recursionDepth || 0) + 1
+//         };
         
-        return this.handleLocalOrchestration(
-          userInput,
-          fallbackContext,
-          sessionId,
-        );
-      }
-    } catch (error) {
-      console.error(
-        `❌ Agent orchestration failed: ${sessionId}`,
-        error.message,
-      );
+//         return this.handleLocalOrchestration(
+//           userInput,
+//           fallbackContext,
+//           sessionId,
+//         );
+//       }
+//     } catch (error) {
+//       console.error(
+//         `❌ Agent orchestration failed: ${sessionId}`,
+//         error.message,
+//       );
 
-      const fallbackResponse = {
-        success: false,
-        message:
-          "I apologize, but I'm having trouble processing your request right now. Please try again.",
-        source: "fallback",
-        timestamp: new Date().toISOString(),
-        executionTime: getExecutionTime(),
-        error: error.message,
-        fallback: true,
-      };
+//       const fallbackResponse = {
+//         success: false,
+//         message:
+//           "I apologize, but I'm having trouble processing your request right now. Please try again.",
+//         source: "fallback",
+//         timestamp: new Date().toISOString(),
+//         executionTime: getExecutionTime(),
+//         error: error.message,
+//         fallback: true,
+//       };
 
-      await this.logCommunication({
-        from_agent: "LocalLLMAgent",
-        to_agent: "user",
-        message_type: "local_llm_error",
-        content: { userInput, error: error.message },
-        context,
-        success: false,
-        error_message: error.message,
-        execution_time_ms: fallbackResponse.executionTime,
-        session_id: sessionId,
-      });
+//       await this.logCommunication({
+//         from_agent: "LocalLLMAgent",
+//         to_agent: "user",
+//         message_type: "local_llm_error",
+//         content: { userInput, error: error.message },
+//         context,
+//         success: false,
+//         error_message: error.message,
+//         execution_time_ms: fallbackResponse.executionTime,
+//         session_id: sessionId,
+//       });
 
-      return fallbackResponse;
-    }
-  }
+//       return fallbackResponse;
+//     }
+//   }
 
   /**
    * Escalate to backend processing

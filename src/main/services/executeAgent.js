@@ -22,7 +22,7 @@ class ExecuteAgent {
       }
   
       // List of trusted default agents that can bypass the sandbox
-      const trustedAgents = ['IntentParserAgent', 'PlannerAgent', 'UserMemoryAgent', 'MemoryEnrichmentAgent'];
+      const trustedAgents = []; // ['IntentParserAgent', 'PlannerAgent', 'UserMemoryAgent', 'MemoryEnrichmentAgent'];
       const bypassSandbox = trustedAgents.includes(agentName);
   
       if (bypassSandbox) {
@@ -70,13 +70,15 @@ class ExecuteAgent {
           } else if (agentName === 'PlannerAgent') {
             console.log(`🔑 Using hardcoded implementation for ${agentName}`);
             result = await this.executePlannerAgent(params, agentContext);
-          } else if (agentName === 'UserMemoryAgent') {
-            console.log(`🔑 Using hardcoded implementation for ${agentName}`);
-            result = await this.executeUserMemoryAgent(params, agentContext);
-          } else if (agentName === 'MemoryEnrichmentAgent') {
-            console.log(`🔑 Using hardcoded implementation for ${agentName}`);
-            result = await this.executeMemoryEnrichmentAgent(params, agentContext);
-          } else {
+          } 
+          // else if (agentName === 'UserMemoryAgent') {
+          //   console.log(`🔑 Using hardcoded implementation for ${agentName}`);
+          //   result = await this.executeUserMemoryAgent(params, agentContext);
+          // } else if (agentName === 'MemoryEnrichmentAgent') {
+          //   console.log(`🔑 Using hardcoded implementation for ${agentName}`);
+          //   result = await this.executeMemoryEnrichmentAgent(params, agentContext);
+          // } 
+          else {
             // For other trusted agents, use Function constructor
             const moduleExports = {};
             const agentFunction = new Function('module', 'exports', 'params', 'context', agent.code);

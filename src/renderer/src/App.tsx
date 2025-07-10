@@ -12,6 +12,7 @@ import ChatWindow from './components/ChatWindow';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
+import WebSocketTest from './components/WebSocketTest';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 
 // Declare global for TypeScript
@@ -100,6 +101,11 @@ function App() {
   // If in memory mode, render the memory debugger window
   if (mode === 'memory') {
     return <MemoryDebugger />;
+  }
+  
+  // If in websocket mode, render the WebSocket test component
+  if (mode === 'websocket') {
+    return <WebSocketTest />;
   }
   
   // Otherwise render the main overlay
