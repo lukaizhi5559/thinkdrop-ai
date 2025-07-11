@@ -332,17 +332,17 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
 
     initialize();
 
-    // Set up periodic health checks (with error handling)
-    const healthInterval = setInterval(async () => {
-      try {
-        await refreshHealth();
-      } catch (error) {
-        console.warn('Health check failed:', error);
-      }
-    }, 30000); // Every 30 seconds
+    // TEMPORARILY DISABLED: Set up periodic health checks (LocalLLMAgent disabled)
+    // const healthInterval = setInterval(async () => {
+    //   try {
+    //     await refreshHealth();
+    //   } catch (error) {
+    //     console.warn('Health check failed:', error);
+    //   }
+    // }, 30000); // Every 30 seconds
 
     return () => {
-      clearInterval(healthInterval);
+      // clearInterval(healthInterval); // DISABLED: healthInterval is commented out
     };
   }, [refreshHealth, refreshCachedAgents, refreshCommunications]);
 

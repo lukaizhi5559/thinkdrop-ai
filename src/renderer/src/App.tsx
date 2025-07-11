@@ -8,7 +8,6 @@ import {
   EyeOff,
   Database
 } from 'lucide-react';
-import ChatWindow from './components/ChatWindow';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
@@ -63,6 +62,13 @@ declare global {
       // Memory methods
       getAllUserMemories: (options?: { quiet?: boolean }) => Promise<any[]>;
       
+      // Dynamic CoreAgent IPC handlers
+      agentExecute: (request: { agentName: string; message?: string; input?: string; action?: string; options?: any }) => Promise<any>;
+      agentScreenshot: (options?: any) => Promise<any>;
+      agentMemoryStore: (data: { content: string; type?: string; tags?: string[]; source?: string }) => Promise<any>;
+      agentMemoryQuery: (query: string) => Promise<any>;
+      agentOrchestrate: (request: { message: string; intent?: string; context?: any }) => Promise<any>;
+      
       // Orchestration workflow communication
       onOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
       onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
@@ -83,12 +89,12 @@ function App() {
   const urlParams = new URLSearchParams(window.location.search);
   const mode = urlParams.get('mode');
   
-  // If in chat mode, render the chat input window
+  // If in chat mode, render the unified chat component (input + messages)
   if (mode === 'chat') {
-    return <ChatWindow />;
+    return <ChatMessages />;
   }
   
-  // If in messages mode, render the chat messages window
+  // If in messages mode, render the unified chat component (input + messages)
   if (mode === 'messages') {
     return <ChatMessages />;
   }

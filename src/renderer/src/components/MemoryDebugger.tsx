@@ -26,13 +26,26 @@ const MemoryDebugger = () => {
       setLoading(true);
       setError(null);
       
-      // Check if electronAPI is available
-      if (!window.electronAPI?.getAllUserMemories) {
-        throw new Error('Electron API not available - running in web mode');
+      // Check if new agent memory query is available
+      if (window.electronAPI?.agentMemoryQuery) {
+        // Use new dynamic CoreAgent memory query
+        const result = await window.electronAPI.agentMemoryQuery('*'); // Query all memories
+        if (result.success && result.data) {
+          setMemories(Array.isArray(result.data) ? result.data : [result.data]);
+        } else {
+          setMemories([]);
+          if (!quiet) {
+            console.warn('Memory query returned no data:', result);
+          }
+        }
+      } else if (window.electronAPI?.getAllUserMemories) {
+        // Fallback to legacy method
+        const result = await window.electronAPI.getAllUserMemories({ quiet });
+        setMemories(result || []);
+      } else {
+        throw new Error('Memory API not available - running in web mode');
       }
       
-      const result = await window.electronAPI.getAllUserMemories({ quiet });
-      setMemories(result || []);
       setLastRefreshTime(new Date());
     } catch (err) {
       console.error('Failed to load memories:', err);
@@ -58,6 +71,27 @@ const MemoryDebugger = () => {
     setTimeout(() => {
       setNotifications(prev => prev.filter(n => n.id !== newNotification.id));
     }, 5000);
+  };
+
+  // Delete a specific memory
+  const deleteMemory = async (memoryKey: string) => {
+    try {
+      if (window.electronAPI?.agentMemoryQuery) {
+        // Use CoreAgent to delete memory (query with delete intent)
+        const result = await window.electronAPI.agentMemoryQuery(`DELETE:${memoryKey}`);
+        if (result.success) {
+          addNotification('Memory deleted successfully', 'success');
+          await loadMemories(true); // Refresh the list
+        } else {
+          addNotification(`Failed to delete memory: ${result.error || 'Unknown error'}`, 'error');
+        }
+      } else {
+        addNotification('Delete functionality not available', 'error');
+      }
+    } catch (err) {
+      console.error('Failed to delete memory:', err);
+      addNotification(`Failed to delete memory: ${err instanceof Error ? err.message : String(err)}`, 'error');
+    }
   };
 
   // Load memories and check for new ones
@@ -231,7 +265,16 @@ const MemoryDebugger = () => {
         ) : (
           filteredMemories.map((memory, index) => (
             <div key={index} className="bg-thinkdrop-dark/50 rounded p-3">
-              <div className="font-mono text-thinkdrop-teal text-xs mb-1 break-all">{memory.key}</div>
+              <div className="flex justify-between items-start mb-1">
+                <div className="font-mono text-thinkdrop-teal text-xs break-all flex-1">{memory.key}</div>
+                <button
+                  onClick={() => deleteMemory(memory.key)}
+                  className="ml-2 p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors flex-shrink-0"
+                  title="Delete memory"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
               <div className="memory-value text-xs text-gray-200 mb-1">
                 <pre className="whitespace-pre-wrap break-all">{formatValue(memory.value)}</pre>
               </div>

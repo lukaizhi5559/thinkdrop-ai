@@ -3,6 +3,8 @@ const { app, BrowserWindow, ipcMain, globalShortcut, screen } = require('electro
 const path = require('path');
 require('dotenv').config(); // Load .env variables
 
+// CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
+
 let overlayWindow = null;
 let chatWindow = null;
 let chatMessagesWindow = null;
@@ -15,6 +17,9 @@ let isInsightVisible = false;
 let isMemoryDebuggerVisible = false;
 let isOrchestrationActive = false; // Prevent window hiding during orchestration
 let visibleWindows = [];
+
+// CoreAgent instance for dynamic agent management
+let coreAgent = null; // AgentOrchestrator instance
 
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -139,13 +144,19 @@ function createChatMessagesWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   
+  const windowWidth = Math.min(width - 40, 500);
+  const windowHeight = Math.min(height - 40, 600);
+
+  const x = width - windowWidth - 20; // 20px margin from right
+  const y = height - windowHeight - 20; // 20px margin from bottom
+  
   chatMessagesWindow = new BrowserWindow({
-    width: Math.min(width - 40, 500), // Responsive width  
-    height: Math.min(height - 40, 400), // Increased initial height for better usability
+    width: windowWidth, // Responsive width  
+    height: windowHeight, // Increased initial height for better usability
     minHeight: 250, // Minimum height to show header + some messages
     maxHeight: Math.min(height - 40, 600), // Maximum height
-    x: Math.floor((width - 500) / 2), // Center horizontally
-    y: Math.floor(height * 0.2), // Position higher on screen
+    x: x, // Center horizontally
+    y: y, // Position higher on screen
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -374,15 +385,14 @@ function toggleOverlay() {
 }
 
 function toggleChat() {
-  if (!chatWindow) {
-    createChatWindow();
-  } else if (isChatVisible) {
-    chatWindow.hide();
-    isChatVisible = false;
+  // Since ChatWindow is merged into ChatMessages, use the unified window
+  if (!chatMessagesWindow || chatMessagesWindow.isDestroyed()) {
+    createChatMessagesWindow();
+  } else if (chatMessagesWindow.isVisible()) {
+    chatMessagesWindow.hide();
   } else {
-    chatWindow.show();
-    chatWindow.focus();
-    isChatVisible = true;
+    chatMessagesWindow.show();
+    chatMessagesWindow.focus();
   }
 }
 
@@ -440,11 +450,35 @@ async function initializeServices() {
     coreEngine = new CoreEngine();
     agentDispatcher = new AgentDispatcher();
     
-    // Initialize CoreEngine (which includes LocalLLMAgent)
-    await coreEngine.initializeAll();
+    // Initialize CoreEngine (which includes LocalLLMAgent) - TEMPORARILY DISABLED
+    // await coreEngine.initializeAll();
     
-    // Use LocalLLMAgent from coreEngine instead of creating a separate instance
-    localLLMAgent = coreEngine.localLLMAgent;
+    // Use LocalLLMAgent from coreEngine instead of creating a separate instance - TEMPORARILY DISABLED
+    // localLLMAgent = coreEngine.localLLMAgent;
+    
+    // Initialize CoreAgent (AgentOrchestrator) for dynamic agent management
+    console.log('🧠 Initializing CoreAgent (AgentOrchestrator)...');
+    try {
+      // Dynamic import for ES module compatibility
+      const { AgentOrchestrator } = await import('./services_new/AgentOrchestrator.js');
+      
+      coreAgent = new AgentOrchestrator({
+        llmClient: null, // Will be set when needed
+        database: null,  // Will use local DuckDB
+        logger: console,
+        apiConfig: {
+          baseURL: process.env.BIBSCRIP_BASE_URL || 'http://localhost:3001',
+          apiKey: process.env.BIBSCRIP_API_KEY
+        }
+      });
+      
+      // Initialize the CoreAgent
+      await coreAgent.initialize();
+      
+      console.log('✅ CoreAgent initialized - ready for dynamic agent creation');
+    } catch (error) {
+      console.error('❌ Failed to initialize CoreAgent:', error);
+    }
     
     // Set up event listeners
     coreEngine.on('audioData', (data) => {
@@ -587,20 +621,20 @@ ipcMain.handle('toggle-chat', () => {
 });
 
 ipcMain.handle('show-chat', () => {
-  if (!chatWindow) {
-    createChatWindow();
+  // Redirect to unified ChatMessages window
+  if (!chatMessagesWindow || chatMessagesWindow.isDestroyed()) {
+    createChatMessagesWindow();
   } else {
-    chatWindow.show();
-    chatWindow.focus();
-    isChatVisible = true;
-    }
+    chatMessagesWindow.show();
+    chatMessagesWindow.focus();
+  }
 });
 
 ipcMain.handle('hide-chat', () => {
-  if (chatWindow) {
-    chatWindow.hide();
-    isChatVisible = false;
-    visibleWindows = visibleWindows.filter((window) => window !== 'chatWindow');
+  // Redirect to unified ChatMessages window
+  if (chatMessagesWindow && !chatMessagesWindow.isDestroyed()) {
+    chatMessagesWindow.hide();
+    visibleWindows = visibleWindows.filter((window) => window !== 'chatMessagesWindow');
   }
 });
 
@@ -698,58 +732,11 @@ ipcMain.handle('send-chat-message', async (event, message) => {
   
   chatMessagesWindow.webContents.send('chat-message', userMessage);
   
-  // Process message through LocalLLMAgent orchestration
-  try {
-    if (localLLMAgent && localLLMAgent.isInitialized) {
-      console.log('🧠 Processing message through LocalLLMAgent:', message.text);
-      
-      const orchestrationResult = await localLLMAgent.orchestrateAgents(message.text, {
-        source: 'chat',
-        timestamp: message.timestamp
-      });
-      
-      // Send AI response to chat messages window
-      const aiMessage = {
-        id: (Date.now() + 1).toString(),
-        text: orchestrationResult.message || 'I processed your request successfully.',
-        sender: 'ai',
-        timestamp: new Date().toISOString(),
-        metadata: {
-          agentsUsed: orchestrationResult.agentsUsed || [],
-          executionTime: orchestrationResult.executionTime || 0
-        }
-      };
-      
-      chatMessagesWindow.webContents.send('chat-message', aiMessage);
-      
-    } else {
-      console.warn('⚠️ LocalLLMAgent not available, sending fallback response');
-      
-      // Fallback response when LocalLLMAgent is not ready
-      const fallbackMessage = {
-        id: (Date.now() + 1).toString(),
-        text: 'LocalLLMAgent is initializing. Please try again in a moment.',
-        sender: 'ai',
-        timestamp: new Date().toISOString()
-      };
-      
-      chatMessagesWindow.webContents.send('chat-message', fallbackMessage);
-    }
-    
-  } catch (error) {
-    console.error('❌ Chat message processing error:', error);
-    
-    // Send error response to chat
-    const errorMessage = {
-      id: (Date.now() + 2).toString(),
-      text: `Sorry, I encountered an error processing your request: ${error.message}`,
-      sender: 'ai',
-      timestamp: new Date().toISOString(),
-      isError: true
-    };
-    
-    chatMessagesWindow.webContents.send('chat-message', errorMessage);
-  }
+  // Local LLM orchestration temporarily disabled - using WebSocket streaming only
+  console.log('📡 WebSocket streaming mode active - local LLM orchestration disabled');
+  
+  // Note: WebSocket streaming responses are handled directly in ChatMessages.tsx
+  // The frontend WebSocket integration will handle all AI responses via streaming
 });
 
 ipcMain.handle('adjust-chat-messages-height', (event, height) => {
@@ -781,6 +768,141 @@ ipcMain.handle('notify-message-loaded', () => {
     chatMessagesWindow.blur();
   }
 });
+
+// ========================================
+// IPC HANDLERS FOR DYNAMIC AGENT OPERATIONS
+// ========================================
+
+// Dynamic agent execution - CoreAgent creates agents on-demand
+ipcMain.handle('agent-execute', async (event, request) => {
+  try {
+    if (!coreAgent || !coreAgent.isInitialized) {
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log(`🤖 Executing agent: ${request.agentName}`);
+    
+    // CoreAgent will dynamically load/create the agent if needed
+    const result = await coreAgent.ask(request.message || request.input, {
+      agentName: request.agentName,
+      action: request.action,
+      options: request.options || {},
+      source: 'ipc',
+      timestamp: new Date().toISOString()
+    });
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error(`❌ Agent execution error:`, error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Screen Capture Agent - for "Give me a response to this email" scenarios
+ipcMain.handle('agent-screenshot', async (event, options = {}) => {
+  try {
+    if (!coreAgent || !coreAgent.isInitialized) {
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log('📷 Taking screenshot via CoreAgent...');
+    const result = await coreAgent.ask('Take a screenshot with OCR extraction', {
+      agentName: 'ScreenCaptureAgent',
+      action: 'capture',
+      options: {
+        includeOCR: true,
+        storeInMemory: true,
+        ...options
+      }
+    });
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('❌ Screenshot capture error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// User Memory Agent - for storing context and retrieval
+ipcMain.handle('agent-memory-store', async (event, data) => {
+  try {
+    if (!coreAgent || !coreAgent.isInitialized) {
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log('🧠 Storing data via CoreAgent...');
+    const result = await coreAgent.ask(`Store this data: ${JSON.stringify(data)}`, {
+      agentName: 'UserMemoryAgent',
+      action: 'store',
+      data: {
+        content: data.content,
+        type: data.type || 'general',
+        tags: data.tags || [],
+        timestamp: new Date().toISOString(),
+        source: data.source || 'user'
+      }
+    });
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('❌ Memory storage error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('agent-memory-query', async (event, query) => {
+  try {
+    if (!coreAgent || !coreAgent.isInitialized) {
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log('🔍 Querying memory via CoreAgent:', query);
+    const result = await coreAgent.ask(`Query memory: ${query}`, {
+      agentName: 'UserMemoryAgent',
+      action: 'query',
+      query: query,
+      options: {
+        limit: 10,
+        includeContext: true
+      }
+    });
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('❌ Memory query error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Agent Orchestration - for complex multi-step workflows
+ipcMain.handle('agent-orchestrate', async (event, request) => {
+  try {
+    if (!coreAgent || !coreAgent.isInitialized) {
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log('🎭 Orchestrating agents via CoreAgent:', request.intent || request.message);
+    
+    // CoreAgent.ask() handles the full orchestration workflow
+    const result = await coreAgent.ask(request.message, {
+      intent: request.intent,
+      source: 'chat',
+      timestamp: new Date().toISOString(),
+      ...request.context
+    });
+    
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('❌ Agent orchestration error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Note: Removed specific workflow handlers - CoreAgent handles all scenarios dynamically
+// The "Give me a response to this email" scenario is handled through:
+// 1. User message → agent-orchestrate → CoreAgent.ask()
+// 2. CoreAgent dynamically determines needed agents (ScreenCapture, Memory, etc.)
+// 3. Results flow to WebSocket streaming for ChatMessage/InsightView display
 
 // IPC handlers for core engine
 ipcMain.handle('start-audio-capture', async () => {

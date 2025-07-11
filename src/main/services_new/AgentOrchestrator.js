@@ -3,10 +3,10 @@
  * Receives user input and coordinates all downstream planning and execution
  */
 
-import { PlannerAgent } from './agents/PlannerAgent.js';
-import { IntentParserAgent } from './agents/IntentParserAgent.js';
-import { UserMemoryAgent } from './agents/UserMemoryAgent.js';
-import { ScreenCaptureAgent } from './agents/ScreenCaptureAgent.js';
+import PlannerAgent from './agents/PlannerAgent.js';
+import IntentParserAgent from './agents/IntentParserAgent.js';
+import UserMemoryAgent from './agents/UserMemoryAgent.js';
+import ScreenCaptureAgent from './agents/ScreenCaptureAgent.js';
 import { AgentSandbox } from './AgentSandbox.js';
 import { OrchestrationService } from './OrchestrationService.js';
 
@@ -16,13 +16,16 @@ export class AgentOrchestrator {
     this.database = options.database;
     this.logger = options.logger || console;
     
-    // Initialize core agents
+    // Initialize core agents (using new LLM-compatible JSON structure format)
     this.agents = {
-      planner: new PlannerAgent({ llmClient: this.llmClient }),
-      intent: new IntentParserAgent({ llmClient: this.llmClient }),
-      memory: new UserMemoryAgent({ database: this.database }),
-      screenCapture: new ScreenCaptureAgent()
+      planner: PlannerAgent,
+      intent: IntentParserAgent,
+      memory: UserMemoryAgent,
+      screenCapture: ScreenCaptureAgent
     };
+    
+    // Store agent instances for execution context
+    this.agentInstances = new Map();
     
     // Initialize sandbox for dynamic agents
     this.sandbox = new AgentSandbox();
@@ -71,18 +74,25 @@ export class AgentOrchestrator {
       this.logger.info('🎯 Processing user input:', userInput);
       
       // Step 1: Parse intent
-      const intentResult = await this.agents.intent.execute({
-        message: userInput,
-        context
+      const intentResult = await this.agents.intent.code.execute({
+        message: userInput
+      }, {
+        llmClient: this.llmClient,
+        logger: this.logger,
+        ...context
       });
       
       this.logger.info('🔍 Intent detected:', intentResult.intent);
       
       // Step 2: Generate execution plan
-      const planResult = await this.agents.planner.execute({
+      const planResult = await this.agents.planner.code.execute({
         message: userInput,
-        intent: intentResult.intent,
-        context: { ...context, intentResult }
+        intent: intentResult.intent
+      }, {
+        llmClient: this.llmClient,
+        logger: this.logger,
+        ...context,
+        intentResult
       });
       
       this.logger.info('📋 Execution plan generated:', planResult.plan);
@@ -96,7 +106,7 @@ export class AgentOrchestrator {
       });
       
       // Step 4: Store interaction in memory
-      await this.agents.memory.execute({
+      await this.agents.memory.code.execute({
         action: 'store_interaction',
         data: {
           userInput,
@@ -105,6 +115,10 @@ export class AgentOrchestrator {
           result: executionResult,
           timestamp: new Date().toISOString()
         }
+      }, {
+        database: this.database,
+        logger: this.logger,
+        ...context
       });
       
       return {
