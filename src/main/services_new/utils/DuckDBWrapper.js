@@ -5,7 +5,19 @@
 
 class DuckDBWrapper {
   constructor(duckdbConnection) {
+    if (!duckdbConnection) {
+      throw new Error('DuckDB connection is required');
+    }
     this.connection = duckdbConnection;
+  }
+  
+  /**
+   * Validate connection is still active
+   */
+  _validateConnection() {
+    if (!this.connection) {
+      throw new Error('Database connection is not available');
+    }
   }
 
   /**
