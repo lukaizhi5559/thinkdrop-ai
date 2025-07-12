@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Droplet, X, Send, Unplug } from 'lucide-react';
 import { Button } from './ui/button';
 import {
@@ -23,8 +23,8 @@ interface ChatMessage {
   isStreaming?: boolean;
 }
 
-// Simple markdown renderer component
-const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
+// Simple markdown renderer component (memoized for performance)
+const MarkdownRenderer: React.FC<{ content: string }> = React.memo(({ content }) => {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks]}
@@ -63,19 +63,19 @@ const MarkdownRenderer: React.FC<{ content: string }> = ({ content }) => {
       {content}
     </ReactMarkdown>
   );
-};
+});
 
 export default function ChatMessages() {
-  // Load chat messages from localStorage on component mount
+  // Load chat messages from localStorage on component mount (memoized)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem('thinkdrop-chat-messages');
-      console.log('💾 Loading messages from localStorage:', saved ? 'found data' : 'no data');
-      const loadedMessages = saved ? JSON.parse(saved).map((msg: any) => ({
+      if (!saved) return [];
+      
+      const loadedMessages = JSON.parse(saved).map((msg: any) => ({
         ...msg,
         timestamp: new Date(msg.timestamp)
-      })) : [];
-      console.log('📊 Loaded messages count:', loadedMessages.length);
+      }));
       return loadedMessages;
     } catch (error) {
       console.error('Failed to load chat messages from localStorage:', error);
@@ -119,6 +119,96 @@ export default function ChatMessages() {
     }
   });
   
+  // Handle agent orchestration with direct intent classification payload
+  const handleAgentOrchestrationDirect = async (intentClassificationMessage: any) => {
+    try {
+      console.log('🎯 [AGENT] Processing direct intent classification payload...');
+      
+      if (window.electronAPI) {
+        const orchestrationResult = await window.electronAPI.agentOrchestrate({
+          message: JSON.stringify(intentClassificationMessage),
+          intent: intentClassificationMessage.primaryIntent,
+          context: { source: 'intent_classification_direct' }
+        });
+        console.log('✅ [AGENT] Direct AgentOrchestrator result:', orchestrationResult);
+        
+        if (orchestrationResult.success) {
+          console.log('🎉 [AGENT] Agent chain executed successfully from intent classification!');
+          // TODO: Show success indicator in UI
+        } else {
+          console.error('❌ [AGENT] Direct agent orchestration failed:', orchestrationResult.error);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [AGENT] Error in direct agent orchestration:', error);
+    }
+  };
+
+  // Handle agent orchestration after streaming completes
+  const handleAgentOrchestration = async (message: any, finalText: string) => {
+    try {
+      console.log('🧠 [AGENT] Processing intent classification for agent orchestration...');
+      
+      // Extract intent classification data from backend response
+      const intentClassification = message.payload?.intentClassification || message.intentClassification;
+      
+      if (intentClassification) {
+        console.log('🎯 [AGENT] Found intent classification data:', intentClassification);
+        
+        // Trigger AgentOrchestrator with intent classification payload directly
+        if (window.electronAPI) {
+          const orchestrationResult = await window.electronAPI.agentOrchestrate({
+            intentPayload: intentClassification, // Pass as object, not string
+            context: { source: 'chat_streaming' }
+          });
+          console.log('✅ [AGENT] AgentOrchestrator result:', orchestrationResult);
+          
+          if (orchestrationResult.success) {
+            console.log('🎉 [AGENT] Agent chain executed successfully!');
+            // TODO: Show success indicator in UI
+          } else {
+            console.error('❌ [AGENT] Agent orchestration failed:', orchestrationResult.error);
+          }
+        }
+      } else {
+        console.log('ℹ️ [AGENT] No intent classification data found, creating basic payload...');
+        
+        // Create a basic intent classification payload for memory storage
+        const basicIntentPayload = {
+          intents: [{
+            intent: 'general_query',
+            confidence: 0.8,
+            reasoning: 'General user query without specific intent classification'
+          }],
+          primaryIntent: 'general_query',
+          entities: [],
+          requiresMemoryAccess: true, // Always store for memory
+          requiresExternalData: false,
+          suggestedResponse: finalText,
+          sourceText: chatMessages[chatMessages.length - 1]?.text || 'User query',
+          metadata: {
+            timestamp: new Date().toISOString(),
+            source: 'chat_message',
+            requestId: message.requestId
+          }
+        };
+        
+        console.log('📝 [AGENT] Triggering with basic intent payload:', basicIntentPayload);
+        
+        // Trigger AgentOrchestrator with basic payload directly
+        if (window.electronAPI) {
+          const orchestrationResult = await window.electronAPI.agentOrchestrate({
+            intentPayload: basicIntentPayload, // Pass as object, not string
+            context: { source: 'chat_streaming_basic' }
+          });
+          console.log('✅ [AGENT] Basic orchestration result:', orchestrationResult);
+        }
+      }
+    } catch (error) {
+      console.error('❌ [AGENT] Error in agent orchestration:', error);
+    }
+  };
+
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = (message: any) => {
     try {
@@ -147,12 +237,8 @@ export default function ChatMessages() {
                 const newText = prev + chunkText;
                 console.log('📄 Updated streaming message length:', newText.length);
                 
-                // Auto-scroll to bottom as text streams in
-                setTimeout(() => {
-                  if (!isUserScrolling) {
-                    scrollToBottom();
-                  }
-                }, 10); // Small delay to ensure DOM is updated
+                // Auto-scroll is now handled by the unified useEffect system
+                // No need for manual scroll calls during streaming
                 
                 return newText;
               });
@@ -167,6 +253,9 @@ export default function ChatMessages() {
       } else if (message.type === 'llm_stream_end') {
         console.log('✅ Stream completed for request:', message.requestId);
         console.log('📄 Full response text:', message.payload?.fullText);
+        console.log('🔍 [DEBUG] Full llm_stream_end message:', JSON.stringify(message, null, 2));
+        console.log('🔍 [DEBUG] Intent classification data:', message.payload?.intentClassification);
+        console.log('🔍 [DEBUG] All payload keys:', Object.keys(message.payload || {}));
         
         // Set streaming ended flag FIRST to prevent delayed chunks
         isStreamingEndedRef.current = true;
@@ -199,6 +288,21 @@ export default function ChatMessages() {
           console.log('📊 Messages after adding AI message:', newMessages.length);
           return newMessages;
         });
+        
+        // 🧠 CRITICAL: Trigger AgentOrchestrator for intent classification and memory storage
+        console.log('🧠 [AGENT] Triggering AgentOrchestrator for intent classification...');
+        handleAgentOrchestration(message, finalText);
+        
+      } else if (message.type === 'intent_classification') {
+        console.log('🎯🎯🎯 INTENT CLASSIFICATION MESSAGE FOUND! 🎯🎯🎯');
+        console.log('  Primary Intent:', message.primaryIntent);
+        console.log('  Requires Memory Access:', message.requiresMemoryAccess);
+        console.log('  Entities:', message.entities);
+        console.log('  Full payload:', JSON.stringify(message, null, 2));
+        
+        // 🧠 CRITICAL: Trigger AgentOrchestrator with intent classification payload
+        console.log('🧠 [AGENT] Triggering AgentOrchestrator with intent classification...');
+        handleAgentOrchestrationDirect(message);
         
       } else if (message.type === 'connection_status') {
         console.log('🔗 Connection status:', message.status);
@@ -298,13 +402,19 @@ export default function ChatMessages() {
     }
   };
   
-  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setCurrentMessage(e.target.value);
-    // Auto-resize textarea
+  const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value;
+    setCurrentMessage(value);
+    
+    // Debounced auto-resize to prevent lag
     const target = e.target;
-    target.style.height = 'auto';
-    target.style.height = target.scrollHeight + 'px';
-  };
+    requestAnimationFrame(() => {
+      if (target.scrollHeight !== target.clientHeight) {
+        target.style.height = 'auto';
+        target.style.height = Math.min(target.scrollHeight, 128) + 'px'; // Max height 128px
+      }
+    });
+  }, []);
   
   // Focus management from ChatWindow
   const focusTextarea = () => {
@@ -348,7 +458,7 @@ export default function ChatMessages() {
   // Auto-scroll to bottom when new messages arrive or streaming updates
   useEffect(() => {
     if (!isUserScrolling && (chatMessages.length > 0 || currentStreamingMessage)) {
-      scrollToBottom();
+      // scrollToBottom();
     }
   }, [chatMessages, currentStreamingMessage, isUserScrolling]);
 
@@ -385,16 +495,29 @@ export default function ChatMessages() {
     };
   }, []);
 
-  // Scroll to bottom function
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
+  // Unified scroll to bottom function with options
+  const scrollToBottom = useCallback((options = { smooth: true, force: false }) => {
+    // Don't auto-scroll if user is manually scrolling (unless forced)
+    if (!options.force && isUserScrolling) {
+      return;
+    }
+    
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ 
+          behavior: options.smooth ? 'smooth' : 'auto',
+          block: 'end'
+        });
+      }
+    });
+  }, [isUserScrolling]);
 
   // Handle scroll to bottom button click
-  const handleScrollToBottom = () => {
+  const handleScrollToBottom = useCallback(() => {
     setIsUserScrolling(false);
-    scrollToBottom();
-  };
+    scrollToBottom({ smooth: true, force: true });
+  }, [scrollToBottom]);
 
   useEffect(() => {
     // Listen for new messages from the main process
@@ -449,16 +572,12 @@ export default function ChatMessages() {
     }
   }, [chatMessages.length]);
 
-  // Auto-scroll to bottom when new messages are added
+  // Auto-scroll to bottom when new messages are added or streaming updates
   useEffect(() => {
-    const scrollContainer = document.querySelector('.chat-messages-scroll');
-    if (scrollContainer && chatMessages.length > 0) {
-      // Use setTimeout to ensure DOM is updated before scrolling
-      setTimeout(() => {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      }, 100);
+    if (chatMessages.length > 0 || currentStreamingMessage) {
+      scrollToBottom({ smooth: true, force: false });
     }
-  }, [chatMessages.length, isLoading]);
+  }, [chatMessages.length, currentStreamingMessage, scrollToBottom]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -486,7 +605,15 @@ export default function ChatMessages() {
 
   return (
     <TooltipProvider>
-      <div className="w-full h-screen flex flex-col bg-gray-900/95">
+      <div 
+        className="w-full flex flex-col bg-gray-900/95"
+        style={{
+          height: '100vh',
+          minHeight: '100vh',
+          maxHeight: '100vh',
+          overflow: 'hidden'
+        }}
+      >
         {/* Draggable Header */}
         <div
           className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
@@ -527,11 +654,13 @@ export default function ChatMessages() {
       {/* Messages Container - Takes up remaining space and scrolls */}
       <div 
         ref={messagesContainerRef}
-        className="chat-messages-scroll flex-1 overflow-y-auto overflow-x-hidden p-4"
+        className="overflow-y-auto overflow-x-hidden p-4"
         style={{ 
           WebkitAppRegion: 'no-drag',
+          // flex: '1 1 0%', // Explicit flex-grow with flex-basis 0
           minHeight: 0, // Important for flex child to shrink
-          maxHeight: '100%'
+          // maxHeight: '100%',
+          // height: '300vh' // Force full height
         } as React.CSSProperties}
       >
         <div className="space-y-4">
@@ -675,33 +804,7 @@ export default function ChatMessages() {
                   WebSocket: {wsState.isConnected ? 'Connected' : 'Disconnected'}
                 </p>
               </TooltipContent>
-            </Tooltip>
-            {/* WebSocket Connection Status Text */}
-            <div className="flex items-center space-x-2 text-xs text-white/70">
-              {/* <div className={`w-2 h-2 rounded-full ${
-                wsState.isConnected ? 'bg-green-400' : 'bg-red-400'
-              }`} />
-              <span>
-                WS: {wsState.isConnected ? 'Connected' : 'Disconnected'}
-                {wsState.activeRequests > 0 && ` (${wsState.activeRequests} active)`}
-              </span> */}
-              {/* Reconnect button when disconnected */}
-              {/* {!wsState.isConnected && (
-                <button
-                  onClick={() => {
-                    console.log('🔄 Manual reconnection requested');
-                    connectWebSocket().catch(error => {
-                      console.error('❌ Manual reconnection failed:', error);
-                    });
-                  }}
-                  className="ml-2 px-2 py-1 bg-teal-500/20 hover:bg-teal-500/30 text-teal-400 rounded text-xs transition-colors"
-                  style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                  title="Reconnect WebSocket"
-                >
-                  <Unplug />
-                </button>
-              )} */}
-            </div>
+            </Tooltip>   
             <textarea
               ref={textareaRef}
               value={currentMessage}

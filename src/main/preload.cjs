@@ -50,11 +50,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Agent communication
   processInput: (inputData) => ipcRenderer.invoke('process-input', inputData),
   getSystemHealth: () => ipcRenderer.invoke('get-system-health'),
+  agentOrchestrate: (request) => ipcRenderer.invoke('agent-orchestrate', request),
+  openScreenshotWindow: (imageData) => ipcRenderer.invoke('open-screenshot-window', imageData),
   
   // LocalLLMAgent communication
   getLocalLLMHealth: () => ipcRenderer.invoke('local-llm:health'),
   processLocalLLMMessage: (message) => ipcRenderer.invoke('local-llm:process-message', message),
-  getAllUserMemories: (options = {}) => ipcRenderer.invoke('local-llm:get-all-memories', options),
   llmOrchestrate: (userInput, context) => ipcRenderer.invoke('llm-orchestrate', userInput, context),
   llmQueryLocal: (prompt, options) => ipcRenderer.invoke('llm-query-local', prompt, options),
   llmGetHealth: () => ipcRenderer.invoke('llm-get-health'),

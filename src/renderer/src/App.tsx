@@ -59,15 +59,14 @@ declare global {
       llmGetCommunications: (limit?: number) => Promise<any>;
       llmClearCache: () => Promise<any>;
       
-      // Memory methods
-      getAllUserMemories: (options?: { quiet?: boolean }) => Promise<any[]>;
-      
       // Dynamic CoreAgent IPC handlers
       agentExecute: (request: { agentName: string; message?: string; input?: string; action?: string; options?: any }) => Promise<any>;
       agentScreenshot: (options?: any) => Promise<any>;
       agentMemoryStore: (data: { content: string; type?: string; tags?: string[]; source?: string }) => Promise<any>;
       agentMemoryQuery: (query: string) => Promise<any>;
-      agentOrchestrate: (request: { message: string; intent?: string; context?: any }) => Promise<any>;
+      agentMemoryDelete: (memoryId: string) => Promise<any>;
+      agentOrchestrate: (intentPayload: any) => Promise<any>;
+      openScreenshotWindow: (imageData: Uint8Array | string) => Promise<{ success: boolean }>;
       
       // Orchestration workflow communication
       onOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
@@ -91,7 +90,7 @@ function App() {
   
   // If in chat mode, render the unified chat component (input + messages)
   if (mode === 'chat') {
-    return <ChatMessages />;
+    // return <ChatMessages />;
   }
   
   // If in messages mode, render the unified chat component (input + messages)
@@ -339,9 +338,11 @@ function App() {
               <Button
                 variant="ghost"
                 size="sm"
-                className="text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200"
+                className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
+                  isMemoryDebuggerOpen ? 'bg-purple-500/20 text-purple-400' : ''
+                }`}
                 onClick={handleToggleMemoryDebugger}
-                title="Open Memory Debugger"
+                title={isMemoryDebuggerOpen ? 'Close Memory Debugger' : 'Open Memory Debugger'}
                 style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
               >
                 <Database className="w-5 h-5" />
