@@ -98,6 +98,7 @@ export default function ChatMessages() {
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isProgrammaticScrolling = useRef(false);
   
   // LocalLLM integration comment out for now
   // const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
@@ -341,6 +342,10 @@ export default function ChatMessages() {
       return newMessages;
     });
     
+    // Immediately scroll to bottom after user submits a new prompt
+    console.log('📜 Triggering scroll-to-bottom for new user message');
+    scrollToBottom({ smooth: true, force: true });
+    
     try {
       // Check if this is a complex request that needs agent orchestration
       const needsOrchestration = /\b(screenshot|capture|screen|email|analyze|remember|save|store)\b/i.test(messageText);
@@ -455,12 +460,70 @@ export default function ChatMessages() {
     localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(chatMessages));
   }, [chatMessages]);
 
+  // Enhanced scroll to bottom function with smooth WebSocket chunk handling
+  const scrollToBottom = useCallback((options = { smooth: true, force: false }) => {
+    // Don't auto-scroll if user is manually scrolling (unless forced)
+    if (!options.force && isUserScrolling) {
+      return;
+    }
+    
+    // Mark as programmatic scrolling to avoid triggering user scroll detection
+    isProgrammaticScrolling.current = true;
+    
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      if (messagesEndRef.current && messagesContainerRef.current) {
+        const container = messagesContainerRef.current;
+        const target = messagesEndRef.current;
+        
+        // Enhanced smooth scrolling for WebSocket chunks
+        if (options.smooth) {
+          // Calculate the distance to scroll
+          const containerRect = container.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const scrollDistance = targetRect.bottom - containerRect.bottom;
+          
+          if (scrollDistance > 0) {
+            // Smooth scroll animation for streaming content
+            container.scrollBy({
+              top: scrollDistance,
+              behavior: 'smooth'
+            });
+            
+            // Reset programmatic flag after scroll completes
+            setTimeout(() => {
+              isProgrammaticScrolling.current = false;
+            }, 300); // Give time for smooth scroll to complete
+          } else {
+            isProgrammaticScrolling.current = false;
+          }
+        } else {
+          // Instant scroll fallback
+          target.scrollIntoView({ 
+            behavior: 'auto',
+            block: 'end'
+          });
+          isProgrammaticScrolling.current = false;
+        }
+      }
+    });
+  }, [isUserScrolling]);
+
   // Auto-scroll to bottom when new messages arrive or streaming updates
   useEffect(() => {
     if (!isUserScrolling && (chatMessages.length > 0 || currentStreamingMessage)) {
-      // scrollToBottom();
+      scrollToBottom({ smooth: true, force: false });
     }
-  }, [chatMessages, currentStreamingMessage, isUserScrolling]);
+  }, [chatMessages, currentStreamingMessage, isUserScrolling, scrollToBottom]);
+
+  // Gentle scroll for streaming messages - respect user scrolling behavior
+  useEffect(() => {
+    if (currentStreamingMessage && !isUserScrolling) {
+      console.log('📡 Streaming message detected, gentle scroll:', { isUserScrolling });
+      // Only auto-scroll during streaming if user is not manually scrolling
+      scrollToBottom({ smooth: true, force: false });
+    }
+  }, [currentStreamingMessage, isUserScrolling, scrollToBottom]);
 
   // Scroll detection to show/hide scroll button
   useEffect(() => {
@@ -468,19 +531,35 @@ export default function ChatMessages() {
     if (!container) return;
 
     const handleScroll = () => {
+      // Ignore scroll events caused by programmatic scrolling
+      if (isProgrammaticScrolling.current) {
+        console.log('🤖 Ignoring programmatic scroll event');
+        return;
+      }
+      
       const { scrollTop, scrollHeight, clientHeight } = container;
       const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px threshold
       
+      console.log('👆 User scroll detected:', { scrollTop, scrollHeight, clientHeight, isAtBottom, hasStreaming: !!currentStreamingMessage });
+      
       setShowScrollButton(!isAtBottom);
       
-      // Detect if user is manually scrolling
+      // Don't pause auto-scroll during streaming - let streaming continue
+      if (currentStreamingMessage) {
+        console.log('📡 Streaming active - not pausing auto-scroll');
+        return;
+      }
+      
+      // Detect if user is manually scrolling (only for actual user interaction)
       if (scrollTimeoutRef.current) {
         clearTimeout(scrollTimeoutRef.current);
       }
       
+      console.log('⏸️ Setting isUserScrolling = true');
       setIsUserScrolling(true);
       scrollTimeoutRef.current = setTimeout(() => {
         if (isAtBottom) {
+          console.log('▶️ Resuming auto-scroll (user at bottom)');
           setIsUserScrolling(false);
         }
       }, 1000); // Resume auto-scroll after 1 second if at bottom
@@ -494,24 +573,6 @@ export default function ChatMessages() {
       }
     };
   }, []);
-
-  // Unified scroll to bottom function with options
-  const scrollToBottom = useCallback((options = { smooth: true, force: false }) => {
-    // Don't auto-scroll if user is manually scrolling (unless forced)
-    if (!options.force && isUserScrolling) {
-      return;
-    }
-    
-    // Use requestAnimationFrame to ensure DOM is updated
-    requestAnimationFrame(() => {
-      if (messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ 
-          behavior: options.smooth ? 'smooth' : 'auto',
-          block: 'end'
-        });
-      }
-    });
-  }, [isUserScrolling]);
 
   // Handle scroll to bottom button click
   const handleScrollToBottom = useCallback(() => {
@@ -664,16 +725,6 @@ export default function ChatMessages() {
         } as React.CSSProperties}
       >
         <div className="space-y-4">
-        {/* Debug Panel - Remove this after fixing */}
-        <div className="bg-red-900/20 border border-red-500/30 rounded p-2 mb-4 text-xs text-white/70">
-          <div className="font-bold text-red-400 mb-1">🐛 DEBUG INFO:</div>
-          <div>Messages in state: {chatMessages.length}</div>
-          <div>LocalStorage: {localStorage.getItem('thinkdrop-chat-messages') ? 'Has data' : 'Empty'}</div>
-          <div>Streaming: {currentStreamingMessage ? 'Yes' : 'No'}</div>
-          <div>WebSocket: {wsState.isConnected ? 'Connected' : 'Disconnected'}</div>
-          <div>Last message IDs: {chatMessages.slice(-2).map(m => m.id.slice(-8)).join(', ')}</div>
-        </div>
-        
         {chatMessages.length === 0 && !currentStreamingMessage ? (
           <div className="text-center py-8">
             <div className="text-white/40 text-sm mb-2">No messages yet</div>

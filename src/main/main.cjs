@@ -153,16 +153,19 @@ function createChatMessagesWindow() {
   chatMessagesWindow = new BrowserWindow({
     width: windowWidth, // Responsive width  
     height: windowHeight, // Use calculated full height
-    minHeight: windowHeight, // Minimum height to show header + some messages
+    minWidth: 250, // Minimum width for usability
+    maxWidth: width - 20, // Maximum width with margin
+    minHeight: windowHeight - 20, // Fixed height - no height resizing
+    maxHeight: windowHeight, // Fixed height - no height resizing
     x: x, // Position from right edge
     y: y, // Position from top with minimal margin
     frame: false,
     transparent: true,
-    // alwaysOnTop: true,
+    alwaysOnTop: true,
     alwaysOnBottom: true,
     skipTaskbar: true,
-    resizable: true,
-    movable: true,
+    resizable: true, // Allow resizing (width only due to height constraints)
+    movable: true, // Allow dragging
     minimizable: false,
     maximizable: false,
     closable: false,
@@ -179,6 +182,22 @@ function createChatMessagesWindow() {
   // Set window level to float above all apps
   chatMessagesWindow.setAlwaysOnTop(true, 'floating', 1);
   chatMessagesWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  
+  // Constrain dragging to horizontal only (prevent vertical movement)
+  const fixedHeight = windowHeight; // Store the fixed height
+  const fixedWidth = windowWidth; // Store the fixed width
+    
+  // Constrain resizing to width only (prevent height changes)
+  chatMessagesWindow.on('resize', () => {
+    if (chatMessagesWindow && !chatMessagesWindow.isDestroyed()) {
+      const [currentWidth, currentHeight] = chatMessagesWindow.getSize();
+      if (currentHeight !== fixedHeight && currentWidth !== fixedWidth) {
+        // Reset height if it changed, keep width
+        // chatMessagesWindow.setSize(currentWidth, fixedHeight);
+        chatMessagesWindow.setMinimumSize(currentWidth - 20, currentHeight - 20);
+      }
+    }
+  });
   
   // Load the messages window
   const messagesUrl = process.env.NODE_ENV === 'development'
