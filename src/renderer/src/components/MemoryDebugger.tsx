@@ -249,21 +249,85 @@ const MemoryDebugger = () => {
     try {
       // Log the screenshot data for debugging
       console.log('Screenshot data type:', typeof memory.screenshot);
-      console.log('Screenshot data:', memory.screenshot);
+      console.log('Screenshot data length:', memory.screenshot instanceof Uint8Array ? memory.screenshot.length : memory.screenshot.length);
       
-      // Use Electron IPC to open screenshot in always-on-top window
-      if (!window.electronAPI) {
-        throw new Error('Electron API not available');
+      // Log first few characters to see what we're dealing with
+      if (memory.screenshot instanceof Uint8Array) {
+        const preview = Array.from(memory.screenshot.slice(0, 50), byte => String.fromCharCode(byte)).join('');
+        console.log('Uint8Array preview (first 50 chars):', preview);
+      } else if (typeof memory.screenshot === 'string') {
+        console.log('String preview (first 100 chars):', memory.screenshot.substring(0, 100));
       }
       
-      const result = await window.electronAPI.openScreenshotWindow(memory.screenshot);
+      let screenshotData: string;
       
-      if (!result.success) {
-        throw new Error('Failed to open screenshot window');
+      // Handle different screenshot data formats
+      if (memory.screenshot instanceof Uint8Array) {
+        // The Uint8Array likely contains ASCII codes of a base64 string, not raw binary
+        const base64String = Array.from(memory.screenshot, byte => String.fromCharCode(byte)).join('');
+        
+        // Check if it's already a valid base64 string (no need to btoa again)
+        if (base64String.match(/^[A-Za-z0-9+/]*={0,2}$/)) {
+          screenshotData = `data:image/png;base64,${base64String}`;
+          console.log('📸 Converted Uint8Array (base64 ASCII) to data URL');
+        } else {
+          // If it's not base64, treat as raw binary and encode
+          screenshotData = `data:image/png;base64,${btoa(base64String)}`;
+          console.log('📸 Converted Uint8Array (raw binary) to data URL');
+        }
+      } else if (typeof memory.screenshot === 'string') {
+        // Handle base64 string (add data URL prefix if missing)
+        if (memory.screenshot.startsWith('data:image')) {
+          screenshotData = memory.screenshot;
+        } else {
+          screenshotData = `data:image/png;base64,${memory.screenshot}`;
+        }
+        console.log('📸 Using string screenshot data');
+      } else {
+        throw new Error(`Unsupported screenshot data type: ${typeof memory.screenshot}`);
+      }
+      
+      // Use Electron IPC to open screenshot in chromeless overlay window
+      if (!window.electronAPI) {
+        // Fallback: open in new browser tab for debugging
+        console.log('Electron API not available, opening in new tab');
+        const newWindow = window.open();
+        if (newWindow) {
+          newWindow.document.write(`<img src="${screenshotData}" style="max-width: 100%; height: auto;" />`);
+          addNotification('Screenshot opened in new tab (fallback)', 'info');
+        } else {
+          throw new Error('Could not open screenshot window');
+        }
+        return;
+      }
+      
+      console.log('Frontend - About to send screenshot data to Electron:');
+      console.log('Frontend - Data type:', typeof screenshotData);
+      console.log('Frontend - Data length:', screenshotData?.length || 'N/A');
+      console.log('Frontend - Data preview:', screenshotData.substring(0, 100));
+      console.log('Frontend - Starts with data URL:', screenshotData.startsWith('data:'));
+      
+      const result = await window.electronAPI.openScreenshotWindow(screenshotData);
+      
+      console.log('Frontend - Screenshot window result:', result);
+      
+      if (result && result.success) {
+        addNotification('Screenshot opened successfully', 'success');
+      } else {
+        console.error('Electron screenshot window failed, trying fallback');
+        console.error('Result object:', result);
+        // Fallback: open in new browser tab
+        const newWindow = window.open();
+        if (newWindow) {
+          newWindow.document.write(`<img src="${screenshotData}" style="max-width: 100%; height: auto;" />`);
+          addNotification('Screenshot opened in new tab (fallback)', 'info');
+        } else {
+          throw new Error('Failed to open screenshot window and fallback failed');
+        }
       }
     } catch (err) {
       console.error('Failed to view screenshot:', err);
-      addNotification('Failed to view screenshot', 'error');
+      addNotification(`Failed to view screenshot: ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
   };
 
@@ -390,7 +454,7 @@ const MemoryDebugger = () => {
         <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-blue-500 rounded-lg flex items-center justify-center">
           <Database className="w-3 h-3 text-white" />
         </div>
-        <span className="text-white/90 font-medium text-sm">Memory Debugger</span>
+        <span className="text-white/90 font-medium text-sm">Memory</span>
         <div className="flex-1" />
         <span className="text-white/50 text-xs mr-2">
           {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
@@ -426,7 +490,7 @@ const MemoryDebugger = () => {
             onChange={(e) => setFilter(e.target.value)}
             className="flex-1 bg-thinkdrop-dark/30 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-white/20"
           />
-          <button 
+          {/* <button 
             onClick={populateTestData}
             disabled={loading}
             className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
@@ -441,7 +505,7 @@ const MemoryDebugger = () => {
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
-          </button>
+          </button> */}
         </div>
       </div>
 
@@ -577,7 +641,7 @@ const MemoryDebugger = () => {
                       </div>
                     </div>
                   )}
-
+                  
                   {/* Entities */}
                   {memory.entities && memory.entities.length > 0 && (
                     <div className="mb-2">
@@ -594,10 +658,10 @@ const MemoryDebugger = () => {
 
                   {/* Flags */}
                   <div className="flex items-center space-x-4 mb-2 text-xs">
-                    {memory.requires_memory_access && (
+                    {memory.requires_memory_access > 0 && (
                       <span className="text-blue-300 bg-blue-900/30 px-2 py-1 rounded">Memory Access</span>
                     )}
-                    {memory.requires_external_data && (
+                    {memory.requires_external_data > 0 && (
                       <span className="text-orange-300 bg-orange-900/30 px-2 py-1 rounded">External Data</span>
                     )}
                     {memory.screenshot && (

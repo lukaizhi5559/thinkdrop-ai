@@ -1,3 +1,6 @@
+import { nativeImage, BrowserWindow } from 'electron';
+import screenshot from 'screenshot-desktop';
+
 /**
  * ScreenCaptureAgent - LLM-compatible agent for screenshot capture and OCR
  */
@@ -8,16 +11,11 @@ const code = {
       
       const { action = 'capture_and_extract', options = {} } = params;
       
-      // Import required modules dynamically
-      const { desktopCapturer } = await import('electron');
-      const fs = await import('fs/promises');
-      const path = await import('path');
-      
       switch (action) {
         case 'capture_and_extract':
-          return await this.captureAndExtract(options, context, { desktopCapturer, fs, path });
+          return await this.captureAndExtract(options, context);
         case 'capture_only':
-          return await this.captureScreenshot(options, { desktopCapturer });
+          return await this.captureScreenshot(options);
         case 'extract_text':
           return await this.extractTextFromImage(params.imagePath || params.imageBuffer);
         default:
@@ -32,12 +30,10 @@ const code = {
     }
   },
 
-  async captureAndExtract(options = {}, context = {}, modules) {
+  async captureAndExtract(options = {}, context = {}) {
     try {
-      const { desktopCapturer } = modules;
-      
       // Step 1: Capture screenshot
-      const screenshotResult = await this.captureScreenshot(options, { desktopCapturer });
+      const screenshotResult = await this.captureScreenshot(options);
       if (!screenshotResult.success) {
         throw new Error(`Screenshot capture failed: ${screenshotResult.error}`);
       }
@@ -68,11 +64,7 @@ const code = {
             timestamp: screenshotResult.timestamp,
             size: screenshotResult.size
           },
-          ocr: {
-            text: ocrResult.text || '',
-            confidence: ocrResult.confidence || 0,
-            success: ocrResult.success
-          },
+          ocr: ocrResult,
           storage: storageResult,
           summary: this.generateSummary(ocrResult.text || '', screenshotResult)
         }
@@ -86,56 +78,129 @@ const code = {
     }
   },
 
-  async captureScreenshot(options = {}, modules) {
+  async captureScreenshot(options = {}) {
+    let hiddenWindows = [];
+    let windowStates = [];
+    
     try {
-      const { desktopCapturer } = modules;
-      const {
-        displayId = null,
-        format = 'png',
-        quality = 0.9,
-        thumbnailSize = null
-      } = options;
-
-      // Get available sources
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: thumbnailSize || { width: 1920, height: 1080 }
-      });
-
-      if (sources.length === 0) {
-        throw new Error('No screen sources available');
+      const platform = process.platform;
+      console.log(`📸 Starting screenshot capture on ${platform}...`);
+      
+      // Hide ThinkDrop AI window during screenshot to exclude UI components
+      try {
+        const allWindows = BrowserWindow.getAllWindows();
+        console.log(`📸 Found ${allWindows.length} windows:`);
+        
+        // Log all window titles for debugging
+        allWindows.forEach((win, index) => {
+          const title = win.getTitle();
+          const isVisible = win.isVisible();
+          const isMinimized = win.isMinimized();
+          console.log(`📸 Window ${index}: "${title}" (visible: ${isVisible}, minimized: ${isMinimized})`);
+        });
+        
+        // Find ALL ThinkDrop AI windows that need to be hidden
+        const thinkdropWindows = allWindows.filter(win => {
+          const title = win.getTitle();
+          return title.includes('ThinkDrop') || 
+                 title.includes('Thinkdrop') ||
+                 title.includes('AI') ||
+                 title.includes('Memory') ||
+                 title.includes('Screenshot') ||
+                 title.includes('Debugger') ||
+                 title.includes('Insight') ||
+                 title === '' || // Sometimes Electron windows have empty titles
+                 win.isVisible(); // Include all visible windows as potential ThinkDrop windows
+        });
+        
+        console.log(`📸 Found ${thinkdropWindows.length} ThinkDrop AI windows to hide`);
+        
+        // Hide all ThinkDrop AI windows
+        for (const win of thinkdropWindows) {
+          const title = win.getTitle();
+          const isVisible = win.isVisible();
+          
+          if (isVisible) {
+            console.log(`📸 Hiding window: "${title}"`);
+            windowStates.push({ window: win, title, wasVisible: true });
+            hiddenWindows.push(win);
+            win.hide();
+          } else {
+            console.log(`📸 Window already hidden: "${title}"`);
+            windowStates.push({ window: win, title, wasVisible: false });
+          }
+        }
+        
+        if (hiddenWindows.length > 0) {
+          console.log(`📸 Hidden ${hiddenWindows.length} windows, waiting for them to disappear...`);
+          // Wait longer for multiple windows to be fully hidden
+          await new Promise(resolve => setTimeout(resolve, 500));
+          console.log('📸 All windows hidden, proceeding with screenshot...');
+        } else {
+          console.log('📸 No windows needed hiding, proceeding with screenshot...');
+        }
+      } catch (windowError) {
+        console.warn('📸 Could not hide main window:', windowError.message);
       }
-
-      // Select the appropriate display
-      let selectedSource = sources[0];
-      if (displayId) {
-        const found = sources.find(source => source.display_id === displayId);
-        if (found) selectedSource = found;
+      
+      // Capture screenshot from primary display
+      const imageBuffer = await screenshot({ format: 'png' });
+      
+      if (!imageBuffer || imageBuffer.length === 0) {
+        throw new Error('Screenshot capture returned empty buffer');
       }
-
-      // Capture the screenshot
-      const thumbnail = selectedSource.thumbnail;
-      const imageBuffer = thumbnail.toPNG();
+      
+      // Get image dimensions using Electron's nativeImage
+      const image = nativeImage.createFromBuffer(imageBuffer);
+      const size = image.getSize();
+      
+      if (size.width === 0 || size.height === 0) {
+        throw new Error('Screenshot has invalid dimensions');
+      }
       
       const timestamp = new Date().toISOString();
-      const size = {
-        width: thumbnail.getSize().width,
-        height: thumbnail.getSize().height
-      };
 
-      console.log(`Screenshot captured: ${size.width}x${size.height}, ${imageBuffer.length} bytes`);
-
+      console.log(`📸 Screenshot captured successfully: ${size.width}x${size.height}, ${imageBuffer.length} bytes`);
+      
+      // Restore all ThinkDrop AI windows that were visible
+      if (windowStates.length > 0) {
+        console.log(`📸 Restoring ${windowStates.length} ThinkDrop AI windows...`);
+        for (const { window, title, wasVisible } of windowStates) {
+          if (wasVisible) {
+            console.log(`📸 Restoring window: "${title}"`);
+            window.show();
+          }
+        }
+        console.log('📸 All windows restored');
+      }
+      
       return {
         success: true,
         imageBuffer,
         format: 'png',
         timestamp,
         size,
-        displayId: selectedSource.display_id,
-        sourceName: selectedSource.name
+        method: 'screenshot-desktop',
+        platform: process.platform
       };
     } catch (error) {
-      console.error('Screenshot capture failed:', error);
+      console.error('Screenshot-desktop capture failed:', error);
+      
+      // Always restore all windows even if screenshot failed
+      if (windowStates.length > 0) {
+        console.log(`📸 Restoring ${windowStates.length} ThinkDrop AI windows after error...`);
+        for (const { window, title, wasVisible } of windowStates) {
+          if (wasVisible) {
+            try {
+              console.log(`📸 Restoring window after error: "${title}"`);
+              window.show();
+            } catch (restoreError) {
+              console.error(`📸 Failed to restore window "${title}":`, restoreError.message);
+            }
+          }
+        }
+      }
+      
       return {
         success: false,
         error: error.message

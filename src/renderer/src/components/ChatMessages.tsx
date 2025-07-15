@@ -70,12 +70,14 @@ export default function ChatMessages() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem('thinkdrop-chat-messages');
+      console.log('THE MESSAGES SAVAED:', JSON.stringify(saved));
       if (!saved) return [];
       
       const loadedMessages = JSON.parse(saved).map((msg: any) => ({
         ...msg,
         timestamp: new Date(msg.timestamp)
       }));
+      console.log('THE MESSAGES SAVAED:', JSON.stringify(loadedMessages), saved);
       return loadedMessages;
     } catch (error) {
       console.error('Failed to load chat messages from localStorage:', error);
@@ -146,69 +148,69 @@ export default function ChatMessages() {
   };
 
   // Handle agent orchestration after streaming completes
-  const handleAgentOrchestration = async (message: any, finalText: string) => {
-    try {
-      console.log('🧠 [AGENT] Processing intent classification for agent orchestration...');
+  // const handleAgentOrchestration = async (message: any, finalText: string) => {
+  //   try {
+  //     console.log('🧠 [AGENT] Processing intent classification for agent orchestration...', message);
       
-      // Extract intent classification data from backend response
-      const intentClassification = message.payload?.intentClassification || message.intentClassification;
+  //     // Extract intent classification data from backend response
+  //     const intentClassification = message.payload?.intentClassification || message.intentClassification;
       
-      if (intentClassification) {
-        console.log('🎯 [AGENT] Found intent classification data:', intentClassification);
+  //     if (intentClassification) {
+  //       console.log('🎯 [AGENT] Found intent classification data:', intentClassification);
         
-        // Trigger AgentOrchestrator with intent classification payload directly
-        if (window.electronAPI) {
-          const orchestrationResult = await window.electronAPI.agentOrchestrate({
-            intentPayload: intentClassification, // Pass as object, not string
-            context: { source: 'chat_streaming' }
-          });
-          console.log('✅ [AGENT] AgentOrchestrator result:', orchestrationResult);
+  //       // Trigger AgentOrchestrator with intent classification payload directly
+  //       if (window.electronAPI) {
+  //         const orchestrationResult = await window.electronAPI.agentOrchestrate({
+  //           intentPayload: intentClassification, // Pass as object, not string
+  //           context: { source: 'chat_streaming' }
+  //         });
+  //         console.log('✅ [AGENT] AgentOrchestrator result:', orchestrationResult);
           
-          if (orchestrationResult.success) {
-            console.log('🎉 [AGENT] Agent chain executed successfully!');
-            // TODO: Show success indicator in UI
-          } else {
-            console.error('❌ [AGENT] Agent orchestration failed:', orchestrationResult.error);
-          }
-        }
-      } else {
-        console.log('ℹ️ [AGENT] No intent classification data found, creating basic payload...');
+  //         if (orchestrationResult.success) {
+  //           console.log('🎉 [AGENT] Agent chain executed successfully!');
+  //           // TODO: Show success indicator in UI
+  //         } else {
+  //           console.error('❌ [AGENT] Agent orchestration failed:', orchestrationResult.error);
+  //         }
+  //       }
+  //     } else {
+  //       console.log('ℹ️ [AGENT] No intent classification data found, creating basic payload...');
         
-        // Create a basic intent classification payload for memory storage
-        const basicIntentPayload = {
-          intents: [{
-            intent: 'general_query',
-            confidence: 0.8,
-            reasoning: 'General user query without specific intent classification'
-          }],
-          primaryIntent: 'general_query',
-          entities: [],
-          requiresMemoryAccess: true, // Always store for memory
-          requiresExternalData: false,
-          suggestedResponse: finalText,
-          sourceText: chatMessages[chatMessages.length - 1]?.text || 'User query',
-          metadata: {
-            timestamp: new Date().toISOString(),
-            source: 'chat_message',
-            requestId: message.requestId
-          }
-        };
+  //       // Create a basic intent classification payload for memory storage
+  //       const basicIntentPayload = {
+  //         intents: [{
+  //           intent: 'general_query',
+  //           confidence: 0.8,
+  //           reasoning: 'General user query without specific intent classification'
+  //         }],
+  //         primaryIntent: 'general_query',
+  //         entities: [],
+  //         requiresMemoryAccess: true, // Always store for memory
+  //         requiresExternalData: false,
+  //         suggestedResponse: finalText,
+  //         sourceText: chatMessages[chatMessages.length - 1]?.text || 'User query',
+  //         metadata: {
+  //           timestamp: new Date().toISOString(),
+  //           source: 'chat_message',
+  //           requestId: message.requestId
+  //         }
+  //       };
         
-        console.log('📝 [AGENT] Triggering with basic intent payload:', basicIntentPayload);
+  //       console.log('📝 [AGENT] Triggering with basic intent payload:', basicIntentPayload);
         
-        // Trigger AgentOrchestrator with basic payload directly
-        if (window.electronAPI) {
-          const orchestrationResult = await window.electronAPI.agentOrchestrate({
-            intentPayload: basicIntentPayload, // Pass as object, not string
-            context: { source: 'chat_streaming_basic' }
-          });
-          console.log('✅ [AGENT] Basic orchestration result:', orchestrationResult);
-        }
-      }
-    } catch (error) {
-      console.error('❌ [AGENT] Error in agent orchestration:', error);
-    }
-  };
+  //       // Trigger AgentOrchestrator with basic payload directly
+  //       if (window.electronAPI) {
+  //         const orchestrationResult = await window.electronAPI.agentOrchestrate({
+  //           intentPayload: basicIntentPayload, // Pass as object, not string
+  //           context: { source: 'chat_streaming_basic' }
+  //         });
+  //         console.log('✅ [AGENT] Basic orchestration result:', orchestrationResult);
+  //       }
+  //     }
+  //   } catch (error) {
+  //     console.error('❌ [AGENT] Error in agent orchestration:', error);
+  //   }
+  // };
 
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = (message: any) => {
@@ -290,14 +292,26 @@ export default function ChatMessages() {
           return newMessages;
         });
         
+        // Final scroll-to-bottom when streaming completes (unless user is scrolling)
+        console.log('🏁 LLM streaming ended - triggering final scroll-to-bottom');
+        setTimeout(() => {
+          if (!isUserScrolling) {
+            console.log('✅ Final scroll-to-bottom (user not scrolling)');
+            scrollToBottom({ smooth: true, force: true });
+          } else {
+            console.log('⏸️ Skipping final scroll - user is scrolling');
+          }
+        }, 100); // Small delay to ensure message is rendered
+        
         // 🧠 CRITICAL: Trigger AgentOrchestrator for intent classification and memory storage
         console.log('🧠 [AGENT] Triggering AgentOrchestrator for intent classification...');
-        handleAgentOrchestration(message, finalText);
+        // handleAgentOrchestration(message, finalText);
         
       } else if (message.type === 'intent_classification') {
         console.log('🎯🎯🎯 INTENT CLASSIFICATION MESSAGE FOUND! 🎯🎯🎯');
         console.log('  Primary Intent:', message.primaryIntent);
         console.log('  Requires Memory Access:', message.requiresMemoryAccess);
+        console.log('  📸 CAPTURE SCREEN FLAG:', message.captureScreen);
         console.log('  Entities:', message.entities);
         console.log('  Full payload:', JSON.stringify(message, null, 2));
         
@@ -342,13 +356,17 @@ export default function ChatMessages() {
       return newMessages;
     });
     
-    // Immediately scroll to bottom after user submits a new prompt
+    // Scroll to bottom and wait for completion before making backend call
     console.log('📜 Triggering scroll-to-bottom for new user message');
-    scrollToBottom({ smooth: true, force: true });
-    
-    try {
-      // Check if this is a complex request that needs agent orchestration
-      const needsOrchestration = /\b(screenshot|capture|screen|email|analyze|remember|save|store)\b/i.test(messageText);
+    scrollToBottom({ 
+      smooth: true, 
+      force: true, 
+      onComplete: async () => {
+        console.log('✅ Scroll completed, now making backend call');
+        
+        try {
+          // Check if this is a complex request that needs agent orchestration
+          const needsOrchestration = /\b(screenshot|capture|screen|email|analyze|remember|save|store)\b/i.test(messageText);
       
       if (needsOrchestration) {
         console.log('🤖 Complex request detected - running agent orchestration first');
@@ -390,10 +408,12 @@ export default function ChatMessages() {
         setIsLoading(false);
       }
       
-    } catch (error) {
-      console.error('❌ Error sending message:', error);
-      setIsLoading(false);
-    }
+        } catch (error) {
+          console.error('❌ Error sending message:', error);
+          setIsLoading(false);
+        }
+      }
+    });
   };
   
   // Input handlers from ChatWindow
@@ -461,9 +481,11 @@ export default function ChatMessages() {
   }, [chatMessages]);
 
   // Enhanced scroll to bottom function with smooth WebSocket chunk handling
-  const scrollToBottom = useCallback((options = { smooth: true, force: false }) => {
+  const scrollToBottom = useCallback((options: { smooth?: boolean; force?: boolean; onComplete?: (() => void) | null } = {}) => {
+    const { smooth = true, force = false, onComplete = null } = options;
     // Don't auto-scroll if user is manually scrolling (unless forced)
-    if (!options.force && isUserScrolling) {
+    if (!force && isUserScrolling) {
+      if (onComplete) onComplete();
       return;
     }
     
@@ -477,25 +499,25 @@ export default function ChatMessages() {
         const target = messagesEndRef.current;
         
         // Enhanced smooth scrolling for WebSocket chunks
-        if (options.smooth) {
+        if (smooth) {
           // Calculate the distance to scroll
-          const containerRect = container.getBoundingClientRect();
-          const targetRect = target.getBoundingClientRect();
-          const scrollDistance = targetRect.bottom - containerRect.bottom;
-          
+          const scrollDistance = target.offsetTop - container.scrollTop - container.clientHeight + target.offsetHeight;
+
           if (scrollDistance > 0) {
             // Smooth scroll animation for streaming content
-            container.scrollBy({
-              top: scrollDistance,
+            container.scrollTo({
+              top: container.scrollTop + scrollDistance,
               behavior: 'smooth'
             });
             
-            // Reset programmatic flag after scroll completes
+            // Reset programmatic flag and call callback after scroll completes
             setTimeout(() => {
               isProgrammaticScrolling.current = false;
+              if (onComplete) onComplete();
             }, 300); // Give time for smooth scroll to complete
           } else {
             isProgrammaticScrolling.current = false;
+            if (onComplete) onComplete();
           }
         } else {
           // Instant scroll fallback
@@ -504,7 +526,10 @@ export default function ChatMessages() {
             block: 'end'
           });
           isProgrammaticScrolling.current = false;
+          if (onComplete) onComplete();
         }
+      } else {
+        if (onComplete) onComplete();
       }
     });
   }, [isUserScrolling]);
@@ -661,6 +686,18 @@ export default function ChatMessages() {
       console.log('Chat messages window close requested - Electron API not available');
     }
   };
+
+  useEffect(() => {
+    if (!currentStreamingMessage) return;
+  
+    const interval = setInterval(() => {
+      if (!isUserScrolling && messagesContainerRef.current && messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
+    }, 100); // Adjust for smoother feeling: try 50–150ms
+  
+    return () => clearInterval(interval);
+  }, [currentStreamingMessage, isUserScrolling]);
 
   // Always show the window, even when empty
 

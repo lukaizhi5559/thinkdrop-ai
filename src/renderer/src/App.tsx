@@ -1,87 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from './components/ui/button';
 import { 
-  Mic, 
-  MicOff, 
-  Droplet,
-  Lightbulb,
-  EyeOff,
-  Database
+  Droplet
 } from 'lucide-react';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
 import WebSocketTest from './components/WebSocketTest';
+import PrimaryControlBar from './components/PrimaryControlBar';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
-
-// Declare global for TypeScript
-declare global {
-  interface Window {
-    electronAPI?: {
-      toggleOverlay: () => Promise<void>;
-      hideOverlay: () => Promise<void>;
-      showOverlay: () => Promise<void>;
-      hideAllWindows: () => Promise<void>;
-      showAllWindows: () => Promise<void>;
-      getGlobalVisibility: () => Promise<boolean>;
-      toggleChat: () => Promise<void>;
-      showChat: () => Promise<void>;
-      hideChat: () => Promise<void>;
-      showChatMessages: () => Promise<void>;
-      hideChatMessages: () => Promise<void>;
-      sendChatMessage: (message: any) => Promise<void>;
-      onChatMessage: (callback: (event: any, message: any) => void) => void;
-      adjustChatMessagesHeight: (height: number) => Promise<void>;
-      
-      // Insight window methods
-      showInsight: () => Promise<void>;
-      hideInsight: () => Promise<void>;
-      onInsightUpdate: (callback: (event: any, data: any) => void) => void;
-      
-      // Memory debugger window methods
-      showMemoryDebugger: () => Promise<void>;
-      hideMemoryDebugger: () => Promise<void>;
-      
-      // Focus management between chat windows
-      focusChatInput: () => Promise<void>;
-      onMessageLoaded: (callback: () => void) => void;
-      notifyMessageLoaded: () => Promise<void>;
-      startAudioCapture: () => Promise<void>;
-      stopAudioCapture: () => Promise<void>;
-      onTranscriptUpdate: (callback: (event: any, data: any) => void) => void;
-      onAgentResponse: (callback: (event: any, data: any) => void) => void;
-      
-      // LocalLLMAgent methods
-      llmOrchestrate: (userInput: string, context?: any) => Promise<any>;
-      llmQueryLocal: (prompt: string, options?: any) => Promise<any>;
-      llmGetHealth: () => Promise<any>;
-      llmGetCachedAgents: () => Promise<any>;
-      llmGetCommunications: (limit?: number) => Promise<any>;
-      llmClearCache: () => Promise<any>;
-      
-      // Dynamic CoreAgent IPC handlers
-      agentExecute: (request: { agentName: string; message?: string; input?: string; action?: string; options?: any }) => Promise<any>;
-      agentScreenshot: (options?: any) => Promise<any>;
-      agentMemoryStore: (data: { content: string; type?: string; tags?: string[]; source?: string }) => Promise<any>;
-      agentMemoryQuery: (query: string) => Promise<any>;
-      agentMemoryDelete: (memoryId: string) => Promise<any>;
-      agentOrchestrate: (intentPayload: any) => Promise<any>;
-      openScreenshotWindow: (imageData: Uint8Array | string) => Promise<{ success: boolean }>;
-      
-      // Orchestration workflow communication
-      onOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
-      onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
-      onClarificationRequest: (callback: (event: any, data: any) => void) => void;
-      submitClarificationResponse: (stepId: string, response: string | boolean) => Promise<any>;
-      startOrchestrationWorkflow: (userInput: string, context?: any) => Promise<any>;
-      getOrchestrationStatus: (workflowId: string) => Promise<any>;
-      pauseOrchestrationWorkflow: (workflowId: string) => Promise<any>;
-      resumeOrchestrationWorkflow: (workflowId: string) => Promise<any>;
-      
-      platform: string;
-    };
-  }
-}
+import './types/electronAPI'; // Import Electron API types
 
 function App() {
   // Check if this is the chat window mode
@@ -164,8 +92,6 @@ function App() {
       }
     }
   };
-
-
 
   const handleToggleChat = async () => {
     if (isChatOpen) {
@@ -260,108 +186,18 @@ function App() {
       <div className="flex items-start justify-center w-full h-full">
         <div className="z-50">
         {/* Primary Control Bar */}
-        <div 
-          className="rounded-2xl bg-gray-900/95 backdrop-blur-sm px-6 py-4 min-w-[400px]"
-          style={{
-            WebkitAppRegion: 'drag',
-            // backdropFilter: 'blur(25px) saturate(180%)',
-            // background: 'rgba(0, 0, 0, 0.35)'
-          } as React.CSSProperties}
-        >
-          <div className="flex items-center justify-between">
-            {/* Left - ThinkDrop Branding */}
-            {/* Chat Button */}
-            <Button
-                variant="ghost"
-                size="lg"
-                className={`text-white/80 hover:text-white hover:bg-white/10 rounded-xl p-2 transition-all duration-200 ${
-                  isChatOpen ? 'bg-white/10 text-white' : ''
-                }`}
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                onClick={handleToggleChat}
-              >
-                <div className="flex items-center space-x-3">
-                  <div className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center ${
-                    isChatOpen ? 'from-teal-300 to-blue-400' : 'from-teal-400 to-blue-500'
-                  }`}>
-                    <Droplet className="w-4 h-4 text-white" />
-                  </div>
-                  <span className="text-white/90 text-base font-medium">
-                    {isChatOpen ? 'Ask?' : 'Ask?'}
-                  </span>
-                </div>
-              </Button>
-            
-            {/* Center - Main Listen Button */}
-            <Button
-              onClick={toggleListening}
-              className={`w-24 h-10 rounded-xl transition-all duration-300 shadow-lg font-medium ${
-                isListening
-                  ? 'bg-red-500 hover:bg-red-600 text-white'
-                  : 'bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white'
-              }`}
-              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            >
-              {isListening ? (
-                <div className="flex items-center space-x-2">
-                  <MicOff className="w-4 h-4" />
-                  <span className="text-sm">Stop</span>
-                </div>
-              ) : (
-                <div className="flex items-center space-x-2">
-                  <Mic className="w-4 h-4" />
-                  <span className="text-sm">Listen</span>
-                </div>
-              )}
-            </Button>
-
-            {/* Right - Action Buttons */}
-            <div className="flex items-center space-x-2">
-              {/* Insight Button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
-                  isGatheringInsight ? 'animate-pulse bg-yellow-500/20 text-yellow-400' : ''
-                } ${
-                  isInsightOpen ? 'bg-yellow-500/20 text-yellow-400' : ''
-                }`}
-                onClick={handleToggleInsight}
-                disabled={isGatheringInsight}
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-                title={isInsightOpen ? 'Close Insight' : 'Open Insight'}
-              >
-                <Lightbulb className="w-5 h-5" />
-              </Button>
-              
-              {/* Memory Debugger Button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
-                  isMemoryDebuggerOpen ? 'bg-purple-500/20 text-purple-400' : ''
-                }`}
-                onClick={handleToggleMemoryDebugger}
-                title={isMemoryDebuggerOpen ? 'Close Memory Debugger' : 'Open Memory Debugger'}
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-              >
-                <Database className="w-5 h-5" />
-              </Button>
-              
-              {/* Hide All Button */}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200"
-                onClick={handleHideAll}
-                title="Hide ThinkDrop AI"
-                style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-              >
-                <EyeOff className="w-5 h-5" />
-              </Button>
-            </div>
-          </div>
-        </div>
+        <PrimaryControlBar
+          isChatOpen={isChatOpen}
+          handleToggleChat={handleToggleChat}
+          isListening={isListening}
+          toggleListening={toggleListening}
+          isGatheringInsight={isGatheringInsight}
+          isInsightOpen={isInsightOpen}
+          handleToggleInsight={handleToggleInsight}
+          isMemoryDebuggerOpen={isMemoryDebuggerOpen}
+          handleToggleMemoryDebugger={handleToggleMemoryDebugger}
+          handleHideAll={handleHideAll}
+        />
 
         {/* Analysis Indicator */}
         {(isAnalyzing || isGatheringInsight) && (

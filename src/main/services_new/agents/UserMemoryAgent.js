@@ -149,9 +149,11 @@ const code = {
         
         // Handle screenshot data - save to disk for efficient binary storage
         let screenshotFilename = null;
+        let buffer = null; // Declare buffer outside the if block
+        
         if (screenshot) {
-          let buffer = null;
-          
+          console.log('📸 Screenshot received:', screenshot);
+
           if (Buffer.isBuffer(screenshot)) {
             buffer = screenshot;
           } else if (screenshot instanceof Uint8Array) {
@@ -179,6 +181,19 @@ const code = {
           // }
         }
         
+        // Convert buffer to base64 string for DuckDB BLOB storage
+        let screenshotData = null;
+        if (buffer) {
+          try {
+            // Convert buffer to base64 string for safe DuckDB storage
+            screenshotData = buffer.toString('base64');
+            console.log('📸 Screenshot converted to base64 for storage:', screenshotData.length, 'characters');
+          } catch (error) {
+            console.warn('⚠️ Failed to convert screenshot buffer to base64:', error.message);
+            screenshotData = null;
+          }
+        }
+        
         const params = [
           memoryId,
           timestamp,
@@ -190,7 +205,7 @@ const code = {
           suggestedResponse,
           sourceText,
           metadata,
-          screenshotFilename,  // Store filename reference instead of binary data
+          screenshotData,  // Store base64 string instead of binary buffer
           extractedText,
           0, // synced_to_backend (false)
           null,  // backend_memory_id
@@ -343,17 +358,39 @@ const code = {
           }
         }
         
-        // Load screenshot from disk if filename is stored
-        let screenshotDataUrl = null;
-        // if (memory.screenshot && memory.screenshot !== 'null') {
-        //   screenshotDataUrl = await screenshotStorage.getScreenshotDataUrl(memory.screenshot);
-        // }
+        // Convert screenshot BLOB data back to usable format
+        let processedScreenshot = null;
+        if (memory.screenshot && memory.screenshot !== 'null') {
+          try {
+            // Handle different formats that DuckDB might return
+            if (memory.screenshot instanceof Uint8Array) {
+              // Convert Uint8Array back to base64 string
+              const base64String = Array.from(memory.screenshot, byte => String.fromCharCode(byte)).join('');
+              processedScreenshot = base64String;
+              console.log('📸 Converted Uint8Array screenshot to base64 string:', base64String.length, 'characters');
+            } else if (typeof memory.screenshot === 'string') {
+              // Already a string, use as-is
+              processedScreenshot = memory.screenshot;
+              console.log('📸 Using string screenshot data:', memory.screenshot.length, 'characters');
+            } else if (Buffer.isBuffer(memory.screenshot)) {
+              // Convert Buffer to base64 string
+              processedScreenshot = memory.screenshot.toString('base64');
+              console.log('📸 Converted Buffer screenshot to base64 string:', processedScreenshot.length, 'characters');
+            } else {
+              console.warn('⚠️ Unknown screenshot data type:', typeof memory.screenshot);
+              processedScreenshot = null;
+            }
+          } catch (error) {
+            console.error('❌ Failed to process screenshot data:', error.message);
+            processedScreenshot = null;
+          }
+        }
         
         enrichedMemories.push({
           ...memory,
           sourceText: memory.source_text,
           metadata,
-          screenshot: screenshotDataUrl,  // Use data URL for display instead of filename
+          screenshot: processedScreenshot,  // Use processed screenshot data
           extractedText: memory.extracted_text,
           syncedToBackend: !!memory.synced_to_backend,
           backendMemoryId: memory.backend_memory_id,
@@ -559,7 +596,7 @@ const code = {
           suggested_response TEXT,
           source_text TEXT,
           metadata TEXT,
-          screenshot TEXT,
+          screenshot BLOB,
           extracted_text TEXT,
           synced_to_backend INTEGER DEFAULT 0,
           backend_memory_id TEXT,
@@ -594,7 +631,7 @@ const code = {
           id TEXT PRIMARY KEY,
           key TEXT UNIQUE NOT NULL,
           value TEXT,
-          screenshot TEXT,
+          screenshot BLOB,
           extracted_text TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

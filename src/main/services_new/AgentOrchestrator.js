@@ -61,6 +61,41 @@ export class AgentOrchestrator {
     }
   }
 
+  async screenCapture(captureScreen, context) {
+    // Debug logging for screenshot decision
+    this.logger.info(`🔍 [DEBUG] Screenshot capture decision:`);
+    this.logger.info(`  - captureScreen value: ${captureScreen} (type: ${typeof captureScreen})`);
+    this.logger.info(`  - shouldCaptureScreenshot: ${captureScreen}`);
+    
+    // Step 1a: Capture screenshot if backend determined it's needed via captureScreen flag
+    if (captureScreen) {
+      this.logger.info(`📸 Capturing screenshot for memory context (captureScreen=${captureScreen})...`);
+      const screenshotResult = await this.agents.screenCapture.code.execute({
+        action: 'capture_and_extract',
+        includeOCR: true,
+        ocrOptions: {
+          languages: ['eng'],
+          confidence: 0.7
+        }
+      }, {
+        logger: this.logger,
+        ...context
+      });
+      
+      console.log('📸 Screenshot capture result:', screenshotResult);
+      if (screenshotResult.success) {
+        this.logger.info('✅ Screenshot captured with OCR');
+        return screenshotResult;
+      } else {
+        this.logger.warn('⚠️ Screenshot capture failed:', screenshotResult.error);
+        return null;
+      }
+    } else {
+      this.logger.info(`⏭️ Skipping screenshot capture (captureScreen=${captureScreen})`);
+      return null;
+    }
+  }
+
   /**
    * Main orchestration method - processes intent classification payloads from backend
    */
@@ -184,6 +219,7 @@ export class AgentOrchestrator {
           primaryIntent: 'question',
           entities: [],
           requiresMemoryAccess: false,
+          captureScreen: false,
           requiresExternalData: false,
           suggestedResponse: '',
           sourceText: String(intentPayload)
@@ -192,8 +228,17 @@ export class AgentOrchestrator {
       
       const { intents, primaryIntent, entities, requiresMemoryAccess, sourceText } = processedPayload;
       
-      // Log the requiresMemoryAccess value for debugging
+      // Auto-enable captureScreen for memory-related intents or when requiresMemoryAccess is true
+      let captureScreen = processedPayload.captureScreen;
+      // if (captureScreen === undefined || captureScreen === null) {
+      //   // Auto-enable screenshot capture for memory intents or when memory access is required
+      //   captureScreen = primaryIntent === 'memory_store' || requiresMemoryAccess === true;
+      //   this.logger.info(`🔧 Auto-setting captureScreen to ${captureScreen} for intent: ${primaryIntent} (requiresMemoryAccess: ${requiresMemoryAccess})`);
+      // }
+      
+      // Log the screenshot capture flags for debugging
       this.logger.info(`📸 requiresMemoryAccess flag: ${requiresMemoryAccess}`);
+      this.logger.info(`📸 captureScreen flag: ${captureScreen} (auto-set: ${processedPayload.captureScreen === undefined})`);
       
       // Validate intents array
       if (!Array.isArray(intents)) {
@@ -228,31 +273,8 @@ export class AgentOrchestrator {
             // Trigger screenshot capture + memory storage chain
             this.logger.info('💾 Memory store intent detected - triggering agent chain');
             
-            // For memory_store intent, we should always capture a screenshot
-            // Override requiresMemoryAccess if backend didn't set it
-            const shouldCaptureScreenshot = requiresMemoryAccess || intent === 'memory_store';
-            
-            // Step 1a: Capture screenshot if memory access required or memory_store intent
-            if (shouldCaptureScreenshot) {
-              this.logger.info(`📸 Capturing screenshot for memory context (requiresMemoryAccess=${requiresMemoryAccess}, intent=${intent})...`);
-              screenshotResult = await this.agents.screenCapture.code.execute({
-                action: 'capture_and_extract',
-                includeOCR: true,
-                ocrOptions: {
-                  languages: ['eng'],
-                  confidence: 0.7
-                }
-              }, {
-                logger: this.logger,
-                ...context
-              });
-              
-              if (screenshotResult.success) {
-                this.logger.info('✅ Screenshot captured with OCR');
-              } else {
-                this.logger.warn('⚠️ Screenshot capture failed:', screenshotResult.error);
-              }
-            }
+            // Use captureScreen boolean from intent classification to determine screenshot capture
+            screenshotResult = await this.screenCapture(captureScreen, context);
             
             // Step 1b: Store intent classification in memory
             this.logger.info('💾 Storing intent classification in memory...');
@@ -260,7 +282,7 @@ export class AgentOrchestrator {
               action: 'store_intent_classification',
               data: {
                 ...processedPayload,
-                screenshot: screenshotResult?.result?.screenshot?.buffer || null,  // Pass only the buffer
+                screenshot: screenshotResult?.result?.screenshot?.filepath || null,  // Use file path instead of buffer
                 extractedText: screenshotResult?.result?.ocr?.text || null  // Fix OCR text path
               }
             }, {
@@ -315,6 +337,37 @@ export class AgentOrchestrator {
         
         // Process command intent
         if (intent === 'command') {
+          screenshotResult = await this.screenCapture(captureScreen, context);
+          console.log('📸 SCREENSHOT RESULTS:', screenshotResult);
+          
+          // Read screenshot data from file if buffer is empty but filepath exists
+          let screenshotData = screenshotResult?.result?.screenshot?.buffer || null;
+          if (!screenshotData && screenshotResult?.result?.screenshot?.filepath) {
+            try {
+              const fs = require('fs');
+              screenshotData = fs.readFileSync(screenshotResult.result.screenshot.filepath);
+              console.log('📸 Screenshot data read from file:', screenshotData.length, 'bytes');
+            } catch (error) {
+              console.warn('⚠️ Failed to read screenshot file:', error.message);
+              screenshotData = null;
+            }
+          }
+          
+          memoryResult = await this.agents.memory.code.execute({
+            action: 'store_intent_classification',
+            data: {
+              ...processedPayload,
+              screenshot: screenshotData,  // Use actual screenshot data (buffer or file contents)
+              extractedText: screenshotResult?.result?.ocr?.text || null  // Fix OCR text path
+            }
+          }, {
+            database: this.database,
+            logger: this.logger,
+            userId: context.userId || 'default_user',
+            orchestrationService: this.orchestrationService,
+            ...context
+          });
+
           // Future: Call orchestration API
           this.logger.info('⚙️ Command intent detected (future: orchestration API)');
           results.push({
@@ -377,59 +430,44 @@ export class AgentOrchestrator {
             }
         }
         
-        // Process test_populate intent
-        if (intent === 'test_populate') {
-            // Handle test data population requests (e.g., from MemoryDebugger)
-            this.logger.info('🧪 Test populate intent detected - populating test data');
-            
-            try {
-              const populateResult = await this.agents.memory.code.execute({
-                action: 'test_populate'
-              }, {
-                logger: this.logger,
-                database: context.database || this.database,
-                ...context
-              });
-              
-              if (populateResult.success) {
-                this.logger.info('✅ Test data populated successfully');
-                results.push({
-                  intent: 'test_populate',
-                  action: 'populated',
-                  agent: 'UserMemoryAgent',
-                  result: populateResult,
-                  message: 'Test data populated successfully'
-                });
-              } else {
-                this.logger.warn('⚠️ Test data population failed:', populateResult.error);
-                results.push({
-                  intent: 'test_populate',
-                  action: 'failed',
-                  agent: 'UserMemoryAgent',
-                  error: populateResult.error,
-                  message: 'Test data population failed'
-                });
-              }
-            } catch (error) {
-              this.logger.error('❌ Test populate error:', error.message);
-              results.push({
-                intent: 'test_populate',
-                action: 'error',
-                agent: 'UserMemoryAgent',
-                error: error.message,
-                message: 'Test data population error'
-              });
-            }
-        }
-        
         // Process question intent
         if (intent === 'question') {
-          // Future: Memory retrieval
-          this.logger.info('❓ Question intent detected (future: memory retrieval)');
+          this.logger.info('❓ Question intent detected');
+          
+          // If captureScreen is true, capture screenshot for context (e.g., "Help me understand this page?")
+          if (captureScreen) {
+            this.logger.info('📸 Question requires screenshot context - capturing screen...');
+            screenshotResult = await this.screenCapture(captureScreen, context);
+            
+            // Store the question with screenshot context
+            memoryResult = await this.agents.memory.code.execute({
+              action: 'store_intent_classification',
+              data: {
+                ...processedPayload,
+                screenshot: screenshotResult?.result?.screenshot?.filepath || null,
+                extractedText: screenshotResult?.result?.ocr?.text || null
+              }
+            }, {
+              database: this.database,
+              logger: this.logger,
+              userId: context.userId || 'default_user',
+              orchestrationService: this.orchestrationService,
+              ...context
+            });
+            
+            if (memoryResult.success) {
+              this.logger.info('✅ Question with screenshot context stored in memory');
+            }
+          }
+          
           results.push({
             intent: 'question',
-            action: 'noted',
-            message: 'Question processing not yet implemented'
+            action: captureScreen ? 'processed_with_screenshot' : 'processed',
+            metadata: {
+              hasScreenshot: !!screenshotResult?.success,
+              hasOCR: !!screenshotResult?.result?.extractedText,
+              memoryStored: !!memoryResult?.success
+            }
           });
         }
         
