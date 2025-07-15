@@ -755,7 +755,7 @@ ipcMain.handle('notify-message-loaded', () => {
 // ========================================
 
 // Unified IPC handler for all agent operations (Memory, InsightView, Messages, etc.)
-// Routes through AgentOrchestrator.ask() with AgentSandbox validation for non-default agents
+// Routes through AgentOrchestrator.ask() for unified agent execution
 ipcMain.handle('agent-orchestrate', async (event, intentPayload) => {
   try {
     if (!coreAgent || !coreAgent.isInitialized) {
@@ -766,7 +766,7 @@ ipcMain.handle('agent-orchestrate', async (event, intentPayload) => {
     
     // Route all requests through AgentOrchestrator.ask()
     // AgentOrchestrator will handle:
-    // 1. AgentSandbox validation for non-default agents
+    // 1. Agent validation and security checks
     // 2. Intent routing via switch statement (greeting, memory_store, command, question)
     // 3. Agent execution and result return
     const result = await coreAgent.ask(intentPayload);
