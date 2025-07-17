@@ -39,156 +39,113 @@ const MemoryDebugger = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [lastMemoryCount, setLastMemoryCount] = useState(0);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const [paginationInfo, setPaginationInfo] = useState<any>(null);
 
-  const populateTestData = async () => {
-    if (!window.electronAPI?.agentOrchestrate) {
-      console.error('❌ Agent orchestration API not available');
-      setError('Agent orchestration API not available');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    
+  const loadMemories = async (loadMore: boolean = false, searchQuery: string = '') => {
     try {
-      console.log('🧪 Populating test data via agent orchestration...');
-      
-      // Create UserMemoryAgent payload to populate test data
-      const agentPayload = {
-        intents: [{
-          intent: 'test_populate',
-          confidence: 1.0,
-          agent: 'UserMemoryAgent',
-          action: 'test_populate'
-        }],
-        primaryIntent: 'test_populate',
-        entities: [],
-        requiresMemoryAccess: true,
-        sourceText: 'MemoryDebugger requesting test data population'
-      };
-      
-      console.log('🧪 Sending test data population request:', agentPayload);
-      
-      const result = await window.electronAPI.agentOrchestrate(agentPayload);
-      console.log('📥 Test data population result:', result);
-      
-      if (result?.success) {
-        console.log('✅ Test data populated successfully', result);
-        // Automatically refresh to show the new data
-        await loadMemories(agentPayload);
-      } else {
-        console.error('❌ Test data population failed:', result);
-        setError('Failed to populate test data');
+      if (!loadMore) {
+        setLoading(true);
+        setError(null);
       }
       
-    } catch (error) {
-      console.error('❌ Error populating test data:', error);
-      setError(`Error populating test data: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadMemories = async (agentPayloadOverride: any = null) => {
-    try {
-      setLoading(true);
-      setError(null);
+      // Calculate pagination parameters
+      const limit = 25; // Load 25 memories at a time for better performance
+      const offset = loadMore ? memories.length : 0;
       
-      // Debug logging
-      console.log('🔍 MemoryDebugger: Starting memory load...');
-      console.log('🔍 window.electronAPI exists:', !!window.electronAPI);
-      console.log('🔍 agentOrchestrate exists:', !!window.electronAPI?.agentOrchestrate);
+      console.log(`🔍 MemoryDebugger: Loading memories (offset: ${offset}, limit: ${limit}, search: '${searchQuery}')`);
       
-      // Use proper agent orchestration architecture
-      if (window.electronAPI?.agentOrchestrate) {
-        // Create UserMemoryAgent payload to retrieve all intent classification memories
-        const agentPayload = agentPayloadOverride ? agentPayloadOverride : {
+      // Use direct memory query for fast loading
+      if (window.electronAPI?.queryMemoriesDirect) {
+        const result = await (window.electronAPI as any).queryMemoriesDirect({
+          limit,
+          offset,
+          searchQuery: searchQuery || null
+        });
+        
+        console.log('📥 Direct memory query result:', result);
+        
+        if (result.success && result.data) {
+          console.log('🔍 Direct query result structure:', result.data);
+          
+          // Handle direct query response format: { memories: [...], pagination: {...} }
+          const { memories: newMemories, pagination } = result.data;
+          
+          if (Array.isArray(newMemories)) {
+            console.log(`✅ Retrieved ${newMemories.length} memories directly (${pagination.offset}-${pagination.offset + newMemories.length} of ${pagination.total})`);
+            
+            if (newMemories.length > 0) {
+              console.log('🔍 First memory item:', newMemories[0]);
+            }
+            
+            // Update memories: append if loading more, replace if fresh load
+            if (loadMore) {
+              setMemories(prev => [...prev, ...newMemories]);
+            } else {
+              setMemories(newMemories);
+            }
+            
+            // Store pagination info for "Load More" functionality
+            setPaginationInfo(pagination);
+          } else {
+            console.warn('🔍 No memories array found in direct query result:', result.data);
+            if (!loadMore) {
+              setMemories([]);
+            }
+          }
+        } else {
+          console.warn('Direct memory query failed:', result);
+          if (!loadMore) {
+            setMemories([]);
+          }
+        }
+      } else {
+        // Fallback to old agent orchestration method if direct query not available
+        console.log('⚠️ Direct query not available, falling back to agent orchestration...');
+        const result = await (window.electronAPI as any).agentOrchestrate({
           intents: [{
             intent: 'memory_retrieve',
             confidence: 1.0,
             agent: 'UserMemoryAgent',
-            action: 'query_intent_memories', // Use correct action for intent memories
-            query: '*' // Retrieve all memories
+            action: 'query_intent_memories',
+            query: searchQuery || '*'
           }],
           primaryIntent: 'memory_retrieve',
           entities: [],
           requiresMemoryAccess: true,
-          sourceText: 'MemoryDebugger requesting all stored intent classification memories'
-        };
+          sourceText: 'MemoryDebugger requesting stored memories'
+        });
         
-        console.log('🔍 Sending agent orchestration request:', agentPayload);
-        const result = await (window.electronAPI as any).agentOrchestrate(agentPayload);
-        
-        console.log('📥 Agent orchestration result:', result);
-        
-        if (result.success && result.data) {
-          console.log('🔍 Full result.data structure:', result.data);
+        if (result.success && result.data?.intentsProcessed) {
+          const memoryIntent = result.data.intentsProcessed.find((intent: any) => 
+            intent.intent === 'memory_retrieve'
+          );
           
-          // Extract memory data from the correct structure
-          // result.data.intentsProcessed is the array of processed intents
-          if (result.data.intentsProcessed && Array.isArray(result.data.intentsProcessed)) {
-            const memoryIntent = result.data.intentsProcessed.find((intent: any) => 
-              intent.intent === 'memory_retrieve'
-            );
-            
-            console.log('🔍 Memory intent found:', memoryIntent);
-            
-            if (memoryIntent && memoryIntent.result) {
-              console.log('🔍 Raw result from UserMemoryAgent:', memoryIntent.result);
-              
-              // UserMemoryAgent returns { memories: [...], total: ..., userId: ..., retrievedAt: ... }
-              // Extract the memories array from the result object
-              let memoryData = [];
-              
-              if (Array.isArray(memoryIntent.result)) {
-                // Direct array (legacy format)
-                memoryData = memoryIntent.result;
-              } else if (memoryIntent.result && Array.isArray(memoryIntent.result.memories)) {
-                // New format: { memories: [...], ... }
-                memoryData = memoryIntent.result.memories;
-                console.log('🔍 UserMemoryAgent metadata:', {
-                  total: memoryIntent.result.total,
-                  userId: memoryIntent.result.userId,
-                  retrievedAt: memoryIntent.result.retrievedAt
-                });
-              } else {
-                console.warn('🔍 Unexpected result format:', memoryIntent.result);
-              }
-              
-              console.log('🔍 Extracted memory data:', memoryData);
-              console.log('✅ Retrieved memories via agent orchestration:', memoryData.length);
-              
-              if (memoryData.length > 0) {
-                console.log('🔍 First memory item:', memoryData[0]);
-              }
-              
-              setMemories(memoryData);
+          if (memoryIntent?.result?.memories) {
+            const newMemories = memoryIntent.result.memories;
+            if (loadMore) {
+              setMemories(prev => [...prev, ...newMemories]);
             } else {
-              console.warn('No memory result found in intent:', memoryIntent);
-              setMemories([]);
+              setMemories(newMemories);
             }
-          } else {
-            console.warn('No intentsProcessed found in result.data:', result.data);
-            setMemories([]);
           }
         } else {
-          console.warn('Agent orchestration failed or returned no results:', result);
-          setMemories([]);
+          throw new Error('Agent orchestration not available - running in web mode');
         }
-      } else {
-        throw new Error('Agent orchestration not available - running in web mode');
       }
       
       setLastRefreshTime(new Date());
+      console.log('✅ Memory loading completed successfully, component should remain visible');
     } catch (err) {
       console.error('Failed to load memories:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
       setError('Failed to load memories: ' + errorMessage);
     } finally {
       setLoading(false);
+      console.log('🔄 Loading state set to false, component render cycle complete');
     }
   };
 
@@ -212,29 +169,34 @@ const MemoryDebugger = () => {
   // Delete a specific memory
   const deleteMemory = async (memoryId: string) => {
     try {
-      if (window.electronAPI?.agentMemoryDelete) {
-        // Use dedicated delete method for intent memories
+      console.log('🗑️ Attempting to delete memory with ID:', memoryId);
+      
+      if (window.electronAPI?.deleteMemoryDirect) {
+        // Use new direct delete method for fast deletion
+        const result = await window.electronAPI.deleteMemoryDirect(memoryId);
+        if (result.success) {
+          console.log('✅ Memory deleted successfully:', result);
+          addNotification(`Memory deleted successfully (${result.deletedCount} record removed)`, 'success');
+          await loadMemories(false, searchQuery); // Refresh the list with current search
+        } else {
+          console.error('❌ Delete failed:', result.error);
+          addNotification(`Failed to delete memory: ${result.error || 'Unknown error'}`, 'error');
+        }
+      } else if (window.electronAPI?.agentMemoryDelete) {
+        // Fallback to legacy delete method
         const result = await window.electronAPI.agentMemoryDelete(memoryId);
         if (result.success) {
           addNotification('Memory deleted successfully', 'success');
-          await loadMemories(); // Refresh the list
-        } else {
-          addNotification(`Failed to delete memory: ${result.error || 'Unknown error'}`, 'error');
-        }
-      } else if (window.electronAPI?.agentMemoryQuery) {
-        // Fallback to query-based delete
-        const result = await window.electronAPI.agentMemoryQuery(`DELETE:${memoryId}`);
-        if (result.success) {
-          addNotification('Memory deleted successfully', 'success');
-          await loadMemories();
+          await loadMemories(false, searchQuery);
         } else {
           addNotification(`Failed to delete memory: ${result.error || 'Unknown error'}`, 'error');
         }
       } else {
+        console.error('❌ No delete functionality available');
         addNotification('Delete functionality not available', 'error');
       }
     } catch (err) {
-      console.error('Failed to delete memory:', err);
+      console.error('❌ Failed to delete memory:', err);
       addNotification(`Failed to delete memory: ${err instanceof Error ? err.message : String(err)}`, 'error');
     }
   };
@@ -331,16 +293,15 @@ const MemoryDebugger = () => {
     }
   };
 
-  // Load memories and check for new ones
+  // Load memories on component mount
   useEffect(() => {
-    loadMemories(); // Initial load with full logging
+    console.log('🚀 MemoryDebugger component mounted, loading memories...');
+    loadMemories(false, '');
     
-    // Set up polling to check for new memories every 5 seconds (quiet mode)
-    // const intervalId = setInterval(() => {
-    //   loadMemories(); // Use quiet mode for polling to reduce log spam
-    // }, 5000);
-    
-    // return () => clearInterval(intervalId);
+    // Cleanup function to track unmounting
+    return () => {
+      console.log('🚨 MemoryDebugger component unmounting!');
+    };
   }, []);
   
   // Check for new memories when memories array changes
@@ -405,6 +366,8 @@ const MemoryDebugger = () => {
   };
 
   const handleClose = () => {
+    console.log('🚨 handleClose called - Memory Debugger being hidden!');
+    console.trace('Stack trace for handleClose call:');
     // Hide the memory debugger window via Electron IPC
     if (window.electronAPI?.hideMemoryDebugger) {
       window.electronAPI.hideMemoryDebugger();
@@ -449,7 +412,9 @@ const MemoryDebugger = () => {
       {/* Draggable Header */}
       <div
         className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        style={{ 
+          WebkitAppRegion: 'drag' 
+        } as React.CSSProperties}
       >
         <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-blue-500 rounded-lg flex items-center justify-center">
           <Database className="w-3 h-3 text-white" />
@@ -460,7 +425,7 @@ const MemoryDebugger = () => {
           {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
         </span>
         <button 
-          onClick={() => loadMemories()} 
+          onClick={() => loadMemories(false, searchQuery)} 
           disabled={loading}
           className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -485,27 +450,24 @@ const MemoryDebugger = () => {
         <div className="flex items-center gap-4 mb-4">
           <input
             type="text"
-            placeholder="Filter memories..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Search memories..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !loading) {
+                loadMemories(false, searchQuery);
+              }
+            }}
             className="flex-1 bg-thinkdrop-dark/30 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-white/20"
           />
-          {/* <button 
-            onClick={populateTestData}
-            disabled={loading}
-            className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            <Database className="w-4 h-4" />
-            {loading ? 'Loading...' : 'Test Data'}
-          </button>
           <button 
-            onClick={() => loadMemories()}
+            onClick={() => loadMemories(false, searchQuery)}
             disabled={loading}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 ml-2"
+            className="px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button> */}
+            Search
+          </button>
         </div>
       </div>
 
@@ -704,6 +666,36 @@ const MemoryDebugger = () => {
               );
             }
           })
+        )}
+        
+        {/* Load More Button for Pagination */}
+        {memories.length > 0 && paginationInfo && paginationInfo.hasMore && (
+          <div className="flex justify-center mt-4 pt-4 border-t border-white/10">
+            <button
+              onClick={() => loadMemories(true, searchQuery)}
+              disabled={loading}
+              className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+            >
+              {loading ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Loading...
+                </>
+              ) : (
+                <>
+                  <Database className="w-4 h-4" />
+                  Load More ({Number(paginationInfo.total) - memories.length} remaining)
+                </>
+              )}
+            </button>
+          </div>
+        )}
+        
+        {/* Pagination Info */}
+        {paginationInfo && (
+          <div className="text-center mt-2 text-xs text-gray-400">
+            Showing {memories.length} of {Number(paginationInfo.total)} memories
+          </div>
         )}
         </div>
       </div>

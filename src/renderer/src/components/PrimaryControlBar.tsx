@@ -48,6 +48,7 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
       className="rounded-2xl bg-gray-900/95 backdrop-blur-sm px-6 py-2 min-w-[400px]"
       style={{
         WebkitAppRegion: 'drag',
+        boxShadow: 'none',
         // backdropFilter: 'blur(25px) saturate(180%)',
         // background: 'rgba(0, 0, 0, 0.35)'
       } as React.CSSProperties}
@@ -79,7 +80,7 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
         {/* Center - Main Listen Button */}
         <Button
           onClick={toggleListening}
-          className={`w-24 h-10 rounded-xl transition-all duration-300 shadow-lg font-medium ${
+          className={`w-24 h-10 rounded-xl transition-all duration-300 font-medium ${
             isListening
               ? 'bg-red-500 hover:bg-red-600 text-white'
               : 'bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white'

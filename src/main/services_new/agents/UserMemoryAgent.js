@@ -7,9 +7,9 @@ import DuckDBWrapper from '../utils/DuckDBWrapper.js';
 // import { screenshotStorage } from '../utils/ScreenshotStorage.js';
 
 const code = {
-  async execute(input, context) {
+  async execute(params, context) {
     try {
-      const { action, data, key, value, query } = input;
+      const { action, data, key, value, query } = params;
       
       console.log(`💾 UserMemoryAgent executing: ${action}`);
       
@@ -51,11 +51,6 @@ const code = {
         case 'query_intent_memories':
         case 'intent_memories':
           result = await this.queryIntentMemories(context);
-          break;
-          
-        case 'test_populate':
-          console.log('🧪 TEST POPULATE was called');
-          result = await this.populateTestData(context);
           break;
           
         default:
@@ -707,10 +702,12 @@ export default {
   name: 'UserMemoryAgent',
   description: 'Manages persistent user context and memories with DuckDB storage, supporting text and screenshot data with OCR extraction',
   code,
-  dependencies: ['duckdb'],
+  dependencies: ['duckdb', 'path'],
   execution_target: 'frontend',
   requires_database: true,
   config: {
+    projectRoot: true,
+    dbPath: ['data', 'agent_memory.duckdb'],
     maxMemories: 10000,
     screenshotFormat: 'base64',
     enableOCR: true,
@@ -721,7 +718,7 @@ export default {
   secrets: [],
   orchestrator_metadata: {
     chainOrder: 2,
-    nextAgents: ['ChatMessage'],
+    nextAgents: ['ScreenCaptureAgent'],
     resourceRequirements: {
       memory: 'medium',
       storage: 'high',
@@ -731,3 +728,4 @@ export default {
     retryCount: 2
   }
 };
+

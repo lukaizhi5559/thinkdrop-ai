@@ -25,11 +25,16 @@ function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   
+  const windowWidth = width / 2;
+  const windowHeight = Math.min(height - 40, 70); // Use almost full height with minimal margin
+
+
   overlayWindow = new BrowserWindow({
     width: Math.min(width - 40, 400), // Responsive width with max limit
-    height: 80, // Proper height for toolbar with padding
-    minHeight: 80, // Minimum height for toolbar
-    x: 5, // Small margin from left
+    height: windowHeight, // Proper height for toolbar with padding
+    minHeight: 30, // Minimum height for toolbar
+    maxHeight: 40,
+    x: windowWidth - 200, // Small margin from left
     y: 20, // Position at top of screen
     frame: false, // Remove window frame completely
     transparent: true, // Transparent background
@@ -51,6 +56,9 @@ function createOverlayWindow() {
       backgroundThrottling: false // Keep overlay responsive
     }
   });
+
+  // Explicitly disable shadow using setShadow
+  overlayWindow.setHasShadow(false);
 
   // Set window level to float above all apps (similar to Cluely)
   overlayWindow.setAlwaysOnTop(true, 'floating', 1);
@@ -78,64 +86,6 @@ function createOverlayWindow() {
   if (process.env.NODE_ENV === 'development') {
     overlayWindow.webContents.openDevTools({ mode: 'detach' });
   }
-}
-
-function createChatWindow() {
-  if (chatWindow) {
-    chatWindow.show();
-    chatWindow.focus();
-    isChatVisible = true;
-    return;
-  }
-
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-  
-  chatWindow = new BrowserWindow({
-    width: Math.min(width - 80, 800), // Max width 800px with margins
-    height: Math.min(height - 40, 95),
-    x: Math.floor((width - Math.min(width - 80, 800)) / 2), // Center horizontally
-    y: height - 120, // Position at bottom with margin
-    frame: false, // Remove window frame completely
-    transparent: true, // Transparent background
-    alwaysOnTop: true, // Always stay on top
-    skipTaskbar: true, // Don't show in taskbar
-    resizable: false,
-    movable: true, // Ensure window is movable
-    minimizable: false,
-    maximizable: false,
-    closable: false, // Prevent close button 
-    focusable: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      enableRemoteModule: false,
-      nodeIntegration: false,
-      backgroundThrottling: false
-    }
-  });
-
-  // Set window level to float above all apps
-  chatWindow.setAlwaysOnTop(true, 'floating', 1);
-  chatWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  
-  // Load the same app but with a chat parameter
-  const chatUrl = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:5173?mode=chat'
-    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=chat`;
-  
-  chatWindow.loadURL(chatUrl);
-  
-  // Hide window instead of closing 
-  chatWindow.on('close', (event) => {
-    if (chatWindow && !app.isQuiting) {
-      event.preventDefault();
-      chatWindow.hide();
-      isChatVisible = false;
-    }
-  });
-
-  isChatVisible = true;
 }
 
 // Create chat messages window (floating window for displaying messages)
@@ -433,10 +383,10 @@ app.whenReady().then(() => {
   });
   
   // Register global shortcut to quit app
-  globalShortcut.register('CommandOrControl+Q', () => {
-    app.isQuiting = true;
-    app.quit();
-  });
+  // globalShortcut.register('CommandOrControl+Q', () => {
+  //   app.isQuiting = true;
+  //   app.quit();
+  // });
   
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -474,8 +424,8 @@ async function initializeServices() {
       console.log('🗄️ Initializing DuckDB database for agent memory...');
       const duckdb = require('duckdb');
       const path = require('path');
-      const userDataPath = app.getPath('userData');
-      const dbPath = path.join(userDataPath, 'agent_memory.duckdb');
+      const projectRoot = path.dirname(path.dirname(__dirname)); // Go up from src/main to project root
+      const dbPath = path.join(projectRoot, 'data', 'agent_memory.duckdb');
       
       console.log(`📁 Database path: ${dbPath}`);
       
@@ -552,6 +502,7 @@ ipcMain.handle('hide-all-windows', () => {
     console.log('🛡️ Protecting insight window during orchestration - not hiding in hide-all-windows');
   }
   if (memoryDebuggerWindow) {
+    console.log('🔍 hide-all-windows hiding Memory Debugger');
     memoryDebuggerWindow.hide();
   }
   isOverlayVisible = false;
@@ -680,12 +631,14 @@ ipcMain.handle('show-memory-debugger', () => {
   }
   
   // Show the memory debugger window
+  console.log('🔍 Showing Memory Debugger window');
   memoryDebuggerWindow.show();
   memoryDebuggerWindow.focus();
   visibleWindows.push('memoryDebuggerWindow');
 });
 
 ipcMain.handle('hide-memory-debugger', () => {
+  console.log('🔍 hide-memory-debugger IPC called');
   if (memoryDebuggerWindow) {
     memoryDebuggerWindow.hide();
     visibleWindows = visibleWindows.filter((window) => window !== 'memoryDebuggerWindow');
@@ -791,6 +744,236 @@ ipcMain.handle('agent-orchestrate', async (event, intentPayload) => {
 // Legacy IPC handlers removed - functionality will be re-implemented using new agent architecture as needed
 
 // Legacy screenshot IPC handlers removed - functionality available through agent-screenshot handler using new agent architecture
+
+// Direct memory query handler for fast MemoryDebugger access (bypasses agent orchestration)
+ipcMain.handle('query-memories-direct', async (event, options = {}) => {
+  try {
+    console.log('🔍 Direct memory query received:', options);
+    const { limit = 50, offset = 0, searchQuery = null } = options;
+    
+    // Check if coreAgent is initialized
+    if (!coreAgent) {
+      console.log('❌ CoreAgent is null');
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    if (!coreAgent.isInitialized) {
+      console.log('❌ CoreAgent not initialized');
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    console.log('✅ CoreAgent available and initialized');
+    
+    // Try to get database connection directly from coreAgent
+    let db = null;
+    
+    // First try to get database from coreAgent directly
+    if (coreAgent.database) {
+      db = coreAgent.database;
+      console.log('✅ Using database from coreAgent.database');
+    } else if (coreAgent.orchestrator && coreAgent.orchestrator.db) {
+      db = coreAgent.orchestrator.db;
+      console.log('✅ Using database from coreAgent.orchestrator.db');
+    } else {
+      console.log('❌ No database connection found in coreAgent');
+      console.log('CoreAgent keys:', Object.keys(coreAgent));
+      if (coreAgent.orchestrator) {
+        console.log('Orchestrator keys:', Object.keys(coreAgent.orchestrator));
+      }
+      return { success: false, error: 'Database connection not available' };
+    }
+    
+    // Check available tables first (DuckDB syntax)
+    try {
+      const tables = await new Promise((resolve, reject) => {
+        db.all("SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'", (err, rows) => {
+          if (err) {
+            // Fallback to SHOW TABLES for DuckDB
+            db.all("SHOW TABLES", (err2, rows2) => {
+              if (err2) reject(err2);
+              else resolve(rows2 || []);
+            });
+          } else {
+            resolve(rows || []);
+          }
+        });
+      });
+      console.log('📋 Available tables:', tables);
+    } catch (err) {
+      console.log('⚠️ Could not list tables:', err.message);
+    }
+    
+    // Use the table that we know exists
+    const tableName = 'memory';
+    console.log(`✅ Using table: ${tableName}`);
+    
+    // Build queries - DuckDB compatible with correct column names
+    const query = searchQuery 
+      ? `SELECT * FROM ${tableName} WHERE (source_text LIKE '%${searchQuery}%' OR suggested_response LIKE '%${searchQuery}%' OR backend_memory_id LIKE '%${searchQuery}%') ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`
+      : `SELECT * FROM ${tableName} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
+    
+    const countQuery = searchQuery
+      ? `SELECT COUNT(*) as total FROM ${tableName} WHERE (source_text LIKE '%${searchQuery}%' OR suggested_response LIKE '%${searchQuery}%' OR backend_memory_id LIKE '%${searchQuery}%')`
+      : `SELECT COUNT(*) as total FROM ${tableName}`;
+    
+    console.log('🔍 Executing query:', query);
+    
+    // Execute queries with DuckDB async API
+    const memories = await new Promise((resolve, reject) => {
+      db.all(query, (err, rows) => {
+        if (err) {
+          console.error('❌ Query error:', err);
+          reject(err);
+        } else {
+          console.log(`✅ Query returned ${rows ? rows.length : 0} rows`);
+          resolve(rows || []);
+        }
+      });
+    });
+    
+    const countResult = await new Promise((resolve, reject) => {
+      db.all(countQuery, (err, rows) => {
+        if (err) {
+          console.error('❌ Count query error:', err);
+          reject(err);
+        } else {
+          const total = rows && rows[0] ? rows[0].total : 0;
+          resolve({ total });
+        }
+      });
+    });
+    
+    const total = countResult?.total || 0;
+    
+    console.log(`📊 Direct memory query: ${memories.length} memories loaded (${offset}-${offset + memories.length} of ${total})`);
+    
+    return {
+      success: true,
+      data: {
+        memories,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore: offset + memories.length < total
+        }
+      }
+    };
+  } catch (error) {
+    console.error('❌ Direct memory query error:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Direct memory delete handler for fast MemoryDebugger delete operations
+ipcMain.handle('delete-memory-direct', async (event, memoryId) => {
+  try {
+    console.log('🗑️ Direct memory delete requested for ID:', memoryId);
+    
+    // Check if coreAgent is initialized
+    if (!coreAgent || !coreAgent.isInitialized) {
+      console.log('❌ CoreAgent not initialized for delete operation');
+      return { success: false, error: 'CoreAgent not initialized' };
+    }
+    
+    // Get database connection
+    let db = null;
+    if (coreAgent.database) {
+      db = coreAgent.database;
+      console.log('🔗 Delete using coreAgent.database connection');
+      console.log('🔍 Database connection object:', typeof db, db.constructor?.name);
+    } else if (coreAgent.orchestrator && coreAgent.orchestrator.db) {
+      db = coreAgent.orchestrator.db;
+      console.log('🔗 Delete using coreAgent.orchestrator.db connection');
+      console.log('🔍 Database connection object:', typeof db, db.constructor?.name);
+    } else {
+      console.log('❌ No database connection found for delete operation');
+      return { success: false, error: 'Database connection not available' };
+    }
+    
+    // Test database connection with a simple query first
+    try {
+      const testQuery = 'SELECT 1 as test';
+      const testResult = await db.all(testQuery);
+      console.log('🔍 Database connection test successful:', testResult);
+    } catch (testError) {
+      console.error('❌ Database connection test failed:', testError.message);
+      return { success: false, error: 'Database connection not working' };
+    }
+    
+    // First, verify the specific record exists before delete
+    const recordExistsQuery = `SELECT backend_memory_id, source_text FROM memory WHERE backend_memory_id = ? LIMIT 1`;
+    const recordBefore = await db.all(recordExistsQuery, [memoryId]);
+    console.log('🔍 Record before delete:', recordBefore.length > 0 ? 'EXISTS' : 'NOT FOUND');
+    if (recordBefore.length > 0) {
+      console.log('📝 Record details:', { id: recordBefore[0].backend_memory_id, text: recordBefore[0].source_text?.substring(0, 50) + '...' });
+    } else {
+      console.log('⚠️ WARNING: Record to delete does not exist in database!');
+      return { success: false, error: 'Record not found in database' };
+    }
+    
+    // Check total count before delete
+    const countBeforeQuery = `SELECT COUNT(*) as total FROM memory`;
+    const countBefore = await db.all(countBeforeQuery);
+    console.log('📊 Count query result:', countBefore);
+    const totalBefore = countBefore && countBefore[0] ? Number(countBefore[0].total) : 0;
+    console.log('📊 Total records before delete:', totalBefore);
+    
+    // Delete from memory table using the correct ID column
+    const deleteQuery = `DELETE FROM memory WHERE backend_memory_id = ?`;
+    console.log('🔍 Executing delete query:', deleteQuery, 'with ID:', memoryId);
+    
+    // Use DuckDB's async API for delete operations
+    const result = await db.all(deleteQuery, [memoryId]);
+    console.log('🔍 Delete query result:', result);
+    
+    // Try to commit the transaction explicitly (DuckDB might need this)
+    try {
+      await db.all('COMMIT;');
+      console.log('🔍 Transaction committed');
+    } catch (commitErr) {
+      console.log('🔍 No explicit transaction to commit (auto-commit mode)');
+    }
+    
+    // Add a small delay to ensure the delete is fully processed
+    await new Promise(resolve => setTimeout(resolve, 100));
+    
+    // Check total count after delete
+    const countAfterQuery = `SELECT COUNT(*) as total FROM memory`;
+    const countAfter = await db.all(countAfterQuery);
+    const totalAfter = countAfter && countAfter[0] ? Number(countAfter[0].total) : 0;
+    console.log('📊 Total records after delete:', totalAfter);
+    
+    // For DuckDB DELETE operations, we need to check if the operation succeeded
+    // by querying if the record still exists
+    const checkQuery = `SELECT COUNT(*) as count FROM memory WHERE backend_memory_id = ?`;
+    const checkResult = await db.all(checkQuery, [memoryId]);
+    const recordExists = checkResult && checkResult[0] ? Number(checkResult[0].count) > 0 : false;
+    
+    console.log(`🔍 Record check after delete - exists: ${recordExists}`);
+    console.log(`📊 Records deleted: ${totalBefore - totalAfter}`);
+    console.log(`📊 Remaining records: ${totalAfter}`);
+    
+    // Show which record was actually deleted for debugging
+    if (!recordExists && totalBefore > totalAfter) {
+      console.log(`✅ Confirmed: Memory ${memoryId} was successfully deleted from database`);
+    }
+    
+    const deletedCount = recordExists ? 0 : 1; // If record doesn't exist, it was deleted
+    
+    if (deletedCount > 0) {
+      console.log(`✅ Successfully deleted memory with ID: ${memoryId}`);
+      return { success: true, deletedCount: deletedCount };
+    } else {
+      console.log(`⚠️ No memory found with ID: ${memoryId}`);
+      return { success: false, error: 'Memory not found' };
+    }
+    
+  } catch (error) {
+    console.error('❌ Direct memory delete error:', error);
+    return { success: false, error: error.message };
+  }
+});
 
 // Legacy agent processing IPC handler removed - functionality available through new agent architecture
 

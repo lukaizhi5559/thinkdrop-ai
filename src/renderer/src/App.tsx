@@ -246,7 +246,7 @@ function App() {
           </div>
         )}
         
-        {!isListening && !showResponse && !isAnalyzing && !isGatheringInsight && (
+        {/* {!isListening && !showResponse && !isAnalyzing && !isGatheringInsight && (
           <div className="mt-4 text-center">
             <div className="bg-black/20 backdrop-blur-sm rounded-xl border border-white/10 px-5 py-4">
               <p className="text-white/50 text-sm">
@@ -254,7 +254,7 @@ function App() {
               </p>
             </div>
           </div>
-        )}
+        )} */}
         </div>
       </div>
 

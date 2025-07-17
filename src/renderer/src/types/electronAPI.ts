@@ -49,6 +49,8 @@ declare global {
       agentMemoryStore: (data: { content: string; type?: string; tags?: string[]; source?: string }) => Promise<any>;
       agentMemoryQuery: (query: string) => Promise<any>;
       agentMemoryDelete: (memoryId: string) => Promise<any>;
+      queryMemoriesDirect: (params: { limit: number; offset: number; searchQuery?: string | null }) => Promise<any>;
+      deleteMemoryDirect: (memoryId: string) => Promise<{ success: boolean; deletedCount?: number; error?: string }>;
       agentOrchestrate: (intentPayload: any) => Promise<any>;
       openScreenshotWindow: (imageData: Uint8Array | string) => Promise<{ success: boolean }>;
       

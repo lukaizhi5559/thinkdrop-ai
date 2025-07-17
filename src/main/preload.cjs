@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   agentOrchestrate: (request) => ipcRenderer.invoke('agent-orchestrate', request),
   openScreenshotWindow: (imageData) => ipcRenderer.invoke('open-screenshot-window', imageData),
   
+  // Direct memory queries for fast loading
+  queryMemoriesDirect: (params) => ipcRenderer.invoke('query-memories-direct', params),
+  deleteMemoryDirect: (memoryId) => ipcRenderer.invoke('delete-memory-direct', memoryId),
+  
   // LocalLLMAgent communication
   getLocalLLMHealth: () => ipcRenderer.invoke('local-llm:health'),
   processLocalLLMMessage: (message) => ipcRenderer.invoke('local-llm:process-message', message),
