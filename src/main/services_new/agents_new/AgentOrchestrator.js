@@ -56,13 +56,14 @@ export class AgentOrchestrator {
       throw new Error('Database connection not available');
     }
 
-    const createTableSQL = `
-      CREATE TABLE IF NOT EXISTS agents (
+    try {
+      // Create table first
+      const createTableSQL = `CREATE TABLE IF NOT EXISTS agents (
         id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
         description TEXT,
         parameters JSON,
-        dependencies TEXT[],
+        dependencies JSON,
         execution_target TEXT DEFAULT 'frontend' NOT NULL 
           CHECK (execution_target IN ('frontend', 'backend')),
         requires_database BOOLEAN DEFAULT false,
@@ -77,16 +78,20 @@ export class AgentOrchestrator {
         secrets JSON DEFAULT '{}',
         orchestrator_metadata JSON DEFAULT '{}',
         memory JSON
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_agents_name ON agents (name);
-      CREATE INDEX IF NOT EXISTS idx_agents_execution_target ON agents (execution_target);
-      CREATE INDEX IF NOT EXISTS idx_agents_requires_database ON agents (requires_database);
-      CREATE INDEX IF NOT EXISTS idx_agents_created_at ON agents (created_at);
-    `;
+      );`;
 
-    try {
-      await database.run(createTableSQL, []);
+      await database.run(createTableSQL);
+
+      // Create indexes
+      const indexStatements = [
+        'CREATE INDEX IF NOT EXISTS idx_agents_name ON agents (name)',
+        'CREATE INDEX IF NOT EXISTS idx_agents_execution_target ON agents (execution_target)',
+        'CREATE INDEX IF NOT EXISTS idx_agents_requires_database ON agents (requires_database)',
+        'CREATE INDEX IF NOT EXISTS idx_agents_created_at ON agents (created_at)'
+      ];
+
+      await Promise.all(indexStatements.map(stmt => database.run(stmt)));
+
       console.log('✅ Agents table created/verified in DuckDB');
     } catch (error) {
       console.error('❌ Failed to create agents table:', error);
@@ -116,7 +121,7 @@ export class AgentOrchestrator {
         return existingAgent[0];
       }
 
-      // Ensure dependencies is properly formatted as an array for TEXT[] column
+      // Ensure dependencies is properly formatted as an array for JSON column
       let dependencies;
       if (agentData.dependencies) {
         // If it's a string, split it into an array
@@ -138,18 +143,17 @@ export class AgentOrchestrator {
           requires_database, database_type, bootstrap, code, version,
           config, secrets, orchestrator_metadata, memory
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        RETURNING id;
       `;
 
-      // Convert dependencies to proper DuckDB array format
-      const duckDbDependencies = JSON.stringify(dependencies);
-      console.log(`🔧 Formatted dependencies for ${agentName}:`, duckDbDependencies);
+      // Convert dependencies to JSON format
+      const jsonDependencies = JSON.stringify(dependencies);
+      console.log(`🔧 Formatted dependencies for ${agentName}:`, jsonDependencies);
 
-      const result = await database.query(insertSQL, [
+      await database.run(insertSQL, [
         agentData.name,
         agentData.description || null,
         JSON.stringify(agentData.parameters || {}),
-        duckDbDependencies, // Use the properly formatted dependencies
+        jsonDependencies, // Use JSON format for dependencies
         agentData.execution_target || 'frontend',
         agentData.requires_database || false,
         agentData.database_type || null,
@@ -161,6 +165,9 @@ export class AgentOrchestrator {
         JSON.stringify(agentData.orchestrator_metadata || {}),
         agentData.memory ? JSON.stringify(agentData.memory) : null
       ]);
+      
+      // Query for the inserted agent to get the ID
+      const result = await database.query('SELECT id FROM agents WHERE name = ?', [agentData.name]);
 
       console.log(`✅ Created default agent: ${agentName}`, result);
       
@@ -231,10 +238,7 @@ export class AgentOrchestrator {
     const fs = await import('fs');
     
     for (const agentData of defaultAgents) {
-      // Create default agent record in database
-      await this.createDefaultAgent(agentData.name, agentData);
-      
-      // Read agent code from file
+      // Read agent code from file first
       const agentPath = path.join(agentsDir, `${agentData.name}.cjs`);
       console.log(`📖 Reading agent code from file: ${agentPath}`);
       
@@ -258,14 +262,14 @@ export class AgentOrchestrator {
         agentData.bootstrap = bootstrap;
         agentData.filePath = agentPath;
         
-        // Register agent with full code in database
+        // Register agent with full code in database (single operation)
         await this.registerAgent(agentData.name, agentData);
         console.log(`✅ Registered agent with code: ${agentData.name}`);
         
       } catch (readError) {
         console.error(`❌ Failed to read agent file: ${agentPath}`, readError);
-        // Fall back to legacy registration without code
-        this.registerAgent(agentData.name, agentPath);
+        // Fall back to basic registration without code
+        await this.registerAgent(agentData.name, agentData);
       }
     }
   }
@@ -322,16 +326,15 @@ export class AgentOrchestrator {
     }
 
     try {
-      // Ensure agents table exists
-      await this.createAgentsTable();
-
+      // Note: Table creation is handled by registerDefaultAgents() to avoid race conditions
+      
       // Check if agent already exists
       const existingAgent = await database.query(
         'SELECT id FROM agents WHERE name = ?',
         [name]
       );
       
-      // Ensure dependencies is properly formatted as an array for TEXT[] column
+      // Ensure dependencies is properly formatted as an array for JSON column
       let dependencies;
       if (agentData.dependencies) {
         // If it's a string, split it into an array
@@ -346,8 +349,8 @@ export class AgentOrchestrator {
         dependencies = [];
       }
       
-      // Convert dependencies to proper DuckDB array format
-      const duckDbDependencies = JSON.stringify(dependencies);
+      // Convert dependencies to JSON format
+      const jsonDependencies = JSON.stringify(dependencies);
 
       // Safely check if existingAgent is defined and has entries
       if (existingAgent && Array.isArray(existingAgent) && existingAgent.length > 0) {
@@ -363,7 +366,7 @@ export class AgentOrchestrator {
         await database.run(updateSQL, [
           agentData.description || null,
           JSON.stringify(agentData.parameters || {}),
-          duckDbDependencies,
+          jsonDependencies,
           agentData.execution_target || 'frontend',
           agentData.requires_database || false,
           agentData.database_type || null,
@@ -389,7 +392,7 @@ export class AgentOrchestrator {
           name,
           agentData.description || null,
           JSON.stringify(agentData.parameters || {}),
-          duckDbDependencies,
+          jsonDependencies,
           agentData.execution_target || 'frontend',
           agentData.requires_database || false,
           agentData.database_type || null,
@@ -401,6 +404,12 @@ export class AgentOrchestrator {
           JSON.stringify(agentData.orchestrator_metadata || {}),
           agentData.memory ? JSON.stringify(agentData.memory) : null
         ]);
+
+        // No explicit commit needed in DuckDB auto-commit mode
+        console.log('🔍 Insert completed, DuckDB auto-commit should handle persistence');
+        
+        // Small delay to ensure write is flushed
+        await new Promise(resolve => setTimeout(resolve, 100));
 
         console.log(`✅ Registered agent in database: ${name}`);
       }
@@ -547,7 +556,7 @@ export class AgentOrchestrator {
         name: agentRow.name,
         description: agentRow.description,
         parameters: agentRow.parameters ? JSON.parse(agentRow.parameters) : {},
-        dependencies: agentRow.dependencies || [],
+        dependencies: agentRow.dependencies ? (typeof agentRow.dependencies === 'string' ? JSON.parse(agentRow.dependencies) : agentRow.dependencies) : [],
         execution_target: agentRow.execution_target,
         requires_database: agentRow.requires_database,
         database_type: agentRow.database_type,
@@ -937,7 +946,7 @@ export class AgentOrchestrator {
       
       const result = await agent.execute(params, enhancedContext);
       
-      console.log(`✅ ${agentName} executed successfully`, enhancedContext);
+      // console.log(`✅ ${agentName} executed successfully`, enhancedContext);
       return {
         success: true,
         agent: agentName,

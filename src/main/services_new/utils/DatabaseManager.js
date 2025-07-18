@@ -120,8 +120,14 @@ class DatabaseManager {
   async query(sql, params = []) {
     const connection = await this.ensureConnection();
     
+    console.log('[DEBUG] DatabaseManager.query() called with sql:', sql.substring(0, 100) + '...');
+    console.log('[DEBUG] DatabaseManager.query() params:', params);
+    console.log('[DEBUG] DatabaseManager.query() connection type:', typeof connection);
+    console.log('[DEBUG] DatabaseManager.query() connection.query type:', typeof connection.query);
+    
     return new Promise((resolve, reject) => {
       connection.query(sql, params, (err, rows) => {
+        console.log('[DEBUG] DatabaseManager.query() callback called with err:', err, 'rows:', rows);
         if (err) {
           reject(err);
         } else {

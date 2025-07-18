@@ -79,18 +79,10 @@ function query(sql, params = [], cb) {
     return cb(new Error('Connection not ready'));
   }
   
-  // Convert SQL from ? placeholders to $n placeholders for DuckDB
-  let convertedSql = sql;
-  if (params.length > 0 && sql.includes('?')) {
-    let paramIndex = 1;
-    convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-    console.log('[DUCKDB-WRAPPER] Converted SQL query:', convertedSql.substring(0, 100) + '...');
-  }
-  
   if (params.length > 0) {
-    connection.all(convertedSql, params, cb);
+    connection.all(sql, ...params, cb);
   } else {
-    connection.all(convertedSql, cb);
+    connection.all(sql, cb);
   }
 }
 
@@ -116,15 +108,8 @@ function run(sql, params = [], cb) {
     return cb(new Error('Connection not ready'));
   }
   
-  // Convert SQL from ? placeholders to $n placeholders for DuckDB
-  let convertedSql = sql;
-  if (params.length > 0 && sql.includes('?')) {
-    let paramIndex = 1;
-    convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-    console.log('[DUCKDB-WRAPPER] Converted SQL:', convertedSql.substring(0, 100) + '...');
-  }
-  
-  console.log('[DUCKDB-WRAPPER] Executing run() with SQL:', convertedSql.substring(0, 100) + '...');
+  // DuckDB uses ? placeholders directly - no conversion needed
+  console.log('[DUCKDB-WRAPPER] Executing run() with SQL:', sql.substring(0, 100) + '...');
   console.log('[DUCKDB-WRAPPER] Parameters count:', params.length);
   console.log('[DUCKDB-WRAPPER] Connection state:', !!connection);
   
@@ -139,9 +124,9 @@ function run(sql, params = [], cb) {
   };
   
   if (params.length > 0) {
-    connection.run(convertedSql, params, wrappedCallback);
+    connection.run(sql, ...params, wrappedCallback);
   } else {
-    connection.run(convertedSql, wrappedCallback);
+    connection.run(sql, wrappedCallback);
   }
 }
 
