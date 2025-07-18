@@ -63,14 +63,34 @@ function query(sql, params = [], cb) {
     params = [];
   }
   
+  // Handle missing callback gracefully
+  if (typeof cb !== 'function') {
+    console.warn('[DUCKDB-WRAPPER] Warning: No callback provided for query, using default');
+    cb = (err, rows) => {
+      if (err) {
+        console.error('[DUCKDB-WRAPPER] Query failed with error:', err);
+      } else {
+        console.log('[DUCKDB-WRAPPER] Query completed successfully, rows:', rows?.length || 0);
+      }
+    };
+  }
+  
   if (!connection) {
     return cb(new Error('Connection not ready'));
   }
   
+  // Convert SQL from ? placeholders to $n placeholders for DuckDB
+  let convertedSql = sql;
+  if (params.length > 0 && sql.includes('?')) {
+    let paramIndex = 1;
+    convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+    console.log('[DUCKDB-WRAPPER] Converted SQL query:', convertedSql.substring(0, 100) + '...');
+  }
+  
   if (params.length > 0) {
-    connection.all(sql, ...params, cb);
+    connection.all(convertedSql, params, cb);
   } else {
-    connection.all(sql, cb);
+    connection.all(convertedSql, cb);
   }
 }
 
@@ -80,14 +100,48 @@ function run(sql, params = [], cb) {
     params = [];
   }
   
+  // Handle missing callback gracefully
+  if (typeof cb !== 'function') {
+    console.warn('[DUCKDB-WRAPPER] Warning: No callback provided, using default');
+    cb = (err) => {
+      if (err) {
+        console.error('[DUCKDB-WRAPPER] Run failed with error:', err);
+      } else {
+        console.log('[DUCKDB-WRAPPER] Run completed successfully');
+      }
+    };
+  }
+  
   if (!connection) {
     return cb(new Error('Connection not ready'));
   }
   
+  // Convert SQL from ? placeholders to $n placeholders for DuckDB
+  let convertedSql = sql;
+  if (params.length > 0 && sql.includes('?')) {
+    let paramIndex = 1;
+    convertedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+    console.log('[DUCKDB-WRAPPER] Converted SQL:', convertedSql.substring(0, 100) + '...');
+  }
+  
+  console.log('[DUCKDB-WRAPPER] Executing run() with SQL:', convertedSql.substring(0, 100) + '...');
+  console.log('[DUCKDB-WRAPPER] Parameters count:', params.length);
+  console.log('[DUCKDB-WRAPPER] Connection state:', !!connection);
+  
+  const wrappedCallback = (err) => {
+    if (err) {
+      console.error('[DUCKDB-WRAPPER] Run failed with error:', err);
+      cb(err);
+    } else {
+      console.log('[DUCKDB-WRAPPER] Run completed successfully');
+      cb();
+    }
+  };
+  
   if (params.length > 0) {
-    connection.run(sql, ...params, cb);
+    connection.run(convertedSql, params, wrappedCallback);
   } else {
-    connection.run(sql, cb);
+    connection.run(convertedSql, wrappedCallback);
   }
 }
 

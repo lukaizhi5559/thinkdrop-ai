@@ -274,7 +274,7 @@ function setupSystemHealthHandlers(ipcMain, coreAgent, windowState) {
   // System health check
   ipcMain.handle('get-system-health', async () => {
     const health = {
-      coreAgent: coreAgent ? (coreAgent.isInitialized ? 'ready' : 'initializing') : 'not_available',
+      coreAgent: coreAgent ? (coreAgent.initialized ? 'ready' : 'initializing') : 'not_available',
       windows: {
         overlay: windowState.isOverlayVisible,
         chat: windowState.isChatVisible,
@@ -297,7 +297,7 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
     try {
       // Return health status compatible with legacy LocalLLMContext expectations
       const health = {
-        status: coreAgent && coreAgent.isInitialized ? 'ready' : 'initializing',
+        status: coreAgent && coreAgent.initialized ? 'ready' : 'initializing',
         agents: coreAgent ? Object.keys(coreAgent.agents || {}).length : 0,
         database: coreAgent && coreAgent.database ? 'connected' : 'disconnected',
         lastActivity: new Date().toISOString()
@@ -313,7 +313,7 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
   // Legacy LLM query handler - routes to unified agent system
   ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {
     try {
-      if (!coreAgent || !coreAgent.isInitialized) {
+      if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
@@ -336,7 +336,7 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
   // Legacy LLM orchestration handler - routes to unified agent system
   ipcMain.handle('llm-orchestrate', async (event, userInput, context = {}) => {
     try {
-      if (!coreAgent || !coreAgent.isInitialized) {
+      if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
@@ -376,7 +376,7 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
     try {
       // Return health status compatible with legacy LocalLLMContext expectations
       const health = {
-        status: coreAgent && coreAgent.isInitialized ? 'ready' : 'initializing',
+        status: coreAgent && coreAgent.initialized ? 'ready' : 'initializing',
         agents: coreAgent ? Object.keys(coreAgent.agents || {}).length : 0,
         database: coreAgent && coreAgent.database ? 'connected' : 'disconnected',
         lastActivity: new Date().toISOString()
@@ -392,7 +392,7 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
   // Legacy local LLM process message handler - routes to unified agent system
   ipcMain.handle('local-llm:process-message', async (event, message) => {
     try {
-      if (!coreAgent || !coreAgent.isInitialized) {
+      if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       

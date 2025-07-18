@@ -352,7 +352,7 @@ function initializeIPCHandlers({
   // Routes through AgentOrchestrator.ask() for unified agent execution
   ipcMain.handle('agent-orchestrate', async (event, intentPayload) => {
     try {
-      if (!coreAgent || !coreAgent.isInitialized) {
+      if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       

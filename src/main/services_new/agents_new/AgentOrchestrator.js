@@ -86,7 +86,7 @@ export class AgentOrchestrator {
     `;
 
     try {
-      await database.run(createTableSQL);
+      await database.run(createTableSQL, []);
       console.log('✅ Agents table created/verified in DuckDB');
     } catch (error) {
       console.error('❌ Failed to create agents table:', error);
@@ -135,8 +135,9 @@ export class AgentOrchestrator {
       const insertSQL = `
         INSERT INTO agents (
           name, description, parameters, dependencies, execution_target,
-          requires_database, database_type, bootstrap, code, config, orchestrator_metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          requires_database, database_type, bootstrap, code, version,
+          config, secrets, orchestrator_metadata, memory
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         RETURNING id;
       `;
 
@@ -154,8 +155,11 @@ export class AgentOrchestrator {
         agentData.database_type || null,
         agentData.bootstrap || null,
         agentData.code || null,
+        agentData.version || 'v1',
         JSON.stringify(agentData.config || {}),
-        JSON.stringify(agentData.orchestrator_metadata || {})
+        JSON.stringify(agentData.secrets || {}),
+        JSON.stringify(agentData.orchestrator_metadata || {}),
+        agentData.memory ? JSON.stringify(agentData.memory) : null
       ]);
 
       console.log(`✅ Created default agent: ${agentName}`, result);
@@ -376,8 +380,9 @@ export class AgentOrchestrator {
         const insertSQL = `
           INSERT INTO agents (
             name, description, parameters, dependencies, execution_target,
-            requires_database, database_type, bootstrap, code, config, orchestrator_metadata
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            requires_database, database_type, bootstrap, code, version,
+            config, secrets, orchestrator_metadata, memory
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         await database.run(insertSQL, [
@@ -390,8 +395,11 @@ export class AgentOrchestrator {
           agentData.database_type || null,
           agentData.bootstrap || null,
           agentData.code || null,
+          agentData.version || 'v1',
           JSON.stringify(agentData.config || {}),
-          JSON.stringify(agentData.orchestrator_metadata || {})
+          JSON.stringify(agentData.secrets || {}),
+          JSON.stringify(agentData.orchestrator_metadata || {}),
+          agentData.memory ? JSON.stringify(agentData.memory) : null
         ]);
 
         console.log(`✅ Registered agent in database: ${name}`);
@@ -1304,52 +1312,84 @@ export class AgentOrchestrator {
       });
     }
     
-    // Process each intent and map to agents
+    // Process each intent and map to agents (supports multiple agents per intent)
     const intentsToProcess = intents || [{ intent: primaryIntent }];
     
     for (const intentObj of intentsToProcess) {
       const intent = intentObj.intent;
-      const agentName = this.getAgentForIntent(intent);
+      const agentNames = this.getAgentsForIntent(intent);
       
-      console.log(`🎭 Processing intent: ${intent} -> Agent: ${agentName}`);
+      console.log(`🎭 Processing intent: ${intent} -> Agents: [${agentNames.join(', ')}]`);
       
-      if (agentName) {
-        const agentParams = this.getAgentParamsForIntent(intent, processedPayload, context);
-        
-        workflow.push({
-          agent: agentName,
-          params: agentParams,
-          context: { 
-            ...context, 
-            stepName: `${intent}_processing`,
-            intent: intent,
-            originalPayload: processedPayload
-          }
-        });
+      if (agentNames.length > 0) {
+        // Create workflow step for each agent mapped to this intent
+        for (let i = 0; i < agentNames.length; i++) {
+          const agentName = agentNames[i];
+          const agentParams = this.getAgentParamsForIntent(intent, processedPayload, context, agentName);
+          
+          workflow.push({
+            agent: agentName,
+            params: agentParams,
+            context: { 
+              ...context, 
+              stepName: `${intent}_${agentName.toLowerCase()}_processing`,
+              intent: intent,
+              agentIndex: i,
+              totalAgentsForIntent: agentNames.length,
+              originalPayload: processedPayload
+            }
+          });
+          
+          console.log(`  ✅ Added ${agentName} to workflow for intent: ${intent}`);
+        }
       } else {
-        console.log(`⚠️ No agent found for intent: ${intent}`);
+        console.log(`⚠️ No agents found for intent: ${intent}`);
       }
     }
     
     console.log(`✅ Created workflow with ${workflow.length} steps`);
     return workflow;
   }
-
   /**
-   * Get agent parameters for specific intent
+   * Get agent parameters for specific intent and agent
    */
-  getAgentParamsForIntent(intent, processedPayload, context) {
-    console.log(`🔧 Getting params for intent: ${intent}`);
+  getAgentParamsForIntent(intent, processedPayload, context, agentName = null) {
+    console.log(`🔧 Getting params for intent: ${intent}, agent: ${agentName}`);
     
     const { sourceText, entities } = processedPayload;
     
+    // Agent-specific parameter handling
+    if (agentName) {
+      switch (agentName) {
+        case 'UserMemoryAgent':
+          return this.getMemoryAgentParams(intent, processedPayload, context);
+        case 'DynamicAgent':
+          return this.getDynamicAgentParams(intent, processedPayload, context);
+        case 'SchedulingAgent':
+          return this.getSchedulingAgentParams(intent, processedPayload, context);
+        case 'TaskAgent':
+          return this.getTaskAgentParams(intent, processedPayload, context);
+        case 'ReminderAgent':
+          return this.getReminderAgentParams(intent, processedPayload, context);
+        case 'AutomationAgent':
+          return this.getAutomationAgentParams(intent, processedPayload, context);
+        case 'ScreenCaptureAgent':
+          return this.getScreenCaptureAgentParams(intent, processedPayload, context);
+        case 'IntentParserAgent':
+          return this.getIntentParserAgentParams(intent, processedPayload, context);
+        case 'MemoryEnrichmentAgent':
+          return this.getMemoryEnrichmentAgentParams(intent, processedPayload, context);
+      }
+    }
+    
+    // Legacy intent-based parameter handling (fallback)
     switch (intent) {
+      case 'memory_store':
       case 'memory_store':
         return {
           action: 'store_intent_classification',
           data: {
             ...processedPayload,
-            // Screenshot will be available from previous workflow step
             timestamp: new Date().toISOString()
           }
         };
@@ -1366,6 +1406,30 @@ export class AgentOrchestrator {
         return {
           action: 'list_memories',
           limit: 20
+        };
+        
+      case 'command':
+        return {
+          action: 'execute_command',
+          command: sourceText,
+          entities: entities,
+          context: context
+        };
+        
+      case 'appointment':
+        return {
+          action: 'schedule_appointment',
+          description: sourceText,
+          entities: entities,
+          context: context
+        };
+        
+      case 'task':
+        return {
+          action: 'create_task',
+          description: sourceText,
+          entities: entities,
+          context: context
         };
         
       case 'capture-screen':
@@ -1404,27 +1468,197 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Get appropriate agent for an intent
+   * Agent-specific parameter methods
    */
-  getAgentForIntent(intent) {
+  getMemoryAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    switch (intent) {
+      case 'memory_store':
+      case 'memory_store':
+        return {
+          action: 'store_intent_classification',
+          data: {
+            ...processedPayload,
+            timestamp: new Date().toISOString()
+          }
+        };
+      case 'command':
+      case 'appointment':
+      case 'task':
+      case 'question':
+      case 'greeting':                                                  
+        return {
+          action: 'store_context',
+          data: {
+            intent: intent,
+            sourceText: sourceText,
+            entities: entities,
+            timestamp: new Date().toISOString()
+          }
+        };
+      default:
+        return {
+          action: 'query_memories',
+          query: sourceText || 'recent memories',
+          limit: 10
+        };
+    }
+  }
+
+  getDynamicAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'execute_dynamic_task',
+      task: {
+        intent: intent,
+        description: sourceText,
+        entities: entities,
+        context: context
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  getSchedulingAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'schedule_appointment',
+      appointment: {
+        description: sourceText,
+        entities: entities,
+        context: context
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  getTaskAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'create_task',
+      task: {
+        description: sourceText,
+        entities: entities,
+        priority: 'normal',
+        context: context
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  getReminderAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'create_reminder',
+      reminder: {
+        description: sourceText,
+        entities: entities,
+        context: context
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  getAutomationAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'execute_automation',
+      automation: {
+        description: sourceText,
+        entities: entities,
+        context: context
+      },
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  getScreenCaptureAgentParams(intent, processedPayload, context) {
+    return {
+      action: 'capture_and_extract',
+      includeOCR: true,
+      ocrOptions: {
+        languages: ['eng'],
+        confidence: 0.7
+      }
+    };
+  }
+
+  getIntentParserAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      text: sourceText,
+      context: entities
+    };
+  }
+
+  getMemoryEnrichmentAgentParams(intent, processedPayload, context) {
+    const { sourceText, entities } = processedPayload;
+    
+    return {
+      action: 'enrich_context',
+      text: sourceText,
+      entities: entities,
+      context: context
+    };
+  }
+
+  /**
+   * Get appropriate agents for an intent (supports multiple agents per intent)
+   */
+  getAgentsForIntent(intent) {
     const intentMap = {
-      'capture-screen': 'ScreenCaptureAgent',
-      'capture-window': 'ScreenCaptureAgent',
-      'extract-text': 'ScreenCaptureAgent',
-      'memory-store': 'UserMemoryAgent',
-      'memory-retrieve': 'UserMemoryAgent',
-      'memory-search': 'UserMemoryAgent',
-      'memory-list': 'UserMemoryAgent',
-      'parse-intent': 'IntentParserAgent',
-      'enrich-memory': 'MemoryEnrichmentAgent',
-      'question': null, // Questions don't map to specific agents
-      'greeting': null, // Greetings don't need agent processing
-      'command': null   // Commands handled elsewhere
+      // Screen capture intents
+      'capture-screen': ['ScreenCaptureAgent'],
+      'capture-window': ['ScreenCaptureAgent'],
+      'extract-text': ['ScreenCaptureAgent'],
+      
+      // Memory intents - support both hyphen and underscore formats
+      'memory-store': ['UserMemoryAgent'],
+      'memory_store': ['UserMemoryAgent'],
+      'memory-retrieve': ['UserMemoryAgent'], 
+      'memory_retrieve': ['UserMemoryAgent'],
+      'memory-search': ['UserMemoryAgent'],
+      'memory_search': ['UserMemoryAgent'],
+      'memory-list': ['UserMemoryAgent'],
+      'memory_list': ['UserMemoryAgent'],
+      
+      // Multi-agent intents
+      'command': ['UserMemoryAgent', 'DynamicAgent'], // Commands need memory + dynamic execution
+      'appointment': ['UserMemoryAgent', 'SchedulingAgent'], // Appointments need memory + scheduling
+      'task': ['UserMemoryAgent', 'TaskAgent'], // Tasks need memory + task management
+      'reminder': ['UserMemoryAgent', 'ReminderAgent'], // Reminders need memory + reminder system
+      'automation': ['UserMemoryAgent', 'AutomationAgent'], // Automation needs memory + execution
+      
+      // Context-aware intents
+      'question': ['UserMemoryAgent'], // Questions may need memory context
+      'greeting': ['UserMemoryAgent'], // Greetings should be remembered
+      'conversation': ['UserMemoryAgent'], // General conversation needs memory
+      
+      // Utility intents
+      'parse-intent': ['IntentParserAgent'],
+      'enrich-memory': ['MemoryEnrichmentAgent']
     };
     
-    const agentName = intentMap[intent];
-    console.log(`🔍 Intent '${intent}' maps to agent: ${agentName || 'none'}`);
-    return agentName;
+    const agents = intentMap[intent] || [];
+    console.log(`🔍 Intent '${intent}' maps to agents: [${agents.join(', ')}]`);
+    return agents;
+  }
+
+  /**
+   * Legacy method for backward compatibility (returns first agent only)
+   */
+  getAgentForIntent(intent) {
+    const agents = this.getAgentsForIntent(intent);
+    const firstAgent = agents.length > 0 ? agents[0] : null;
+    console.log(`🔍 Intent '${intent}' maps to agent: ${firstAgent || 'none'}`);
+    return firstAgent;
   }
 
   /**

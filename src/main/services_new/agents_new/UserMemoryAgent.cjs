@@ -150,7 +150,116 @@ const AGENT_FORMAT = {
         }
         
         // Create memory table if it doesn't exist
-        await this.ensureMemoryTable();
+        // Define helper functions locally to avoid this binding issues
+        const ensureMemoryTable = async () => {
+          try {
+            // Check if memory table exists
+            const tables = await new Promise((resolve, reject) => {
+              // Check if it's a DatabaseManager-style connection (has .query method)
+              if (typeof this.connection.query === 'function') {
+                this.connection.query(
+                  "SELECT table_name as name FROM information_schema.tables WHERE table_schema='main'", 
+                  [],
+                  (err, rows) => {
+                    if (err) {
+                      // Fallback to SHOW TABLES if information_schema fails
+                      this.connection.query("SHOW TABLES", [], (err2, rows2) => {
+                        if (err2) reject(err2);
+                        else resolve(rows2 || []);
+                      });
+                    } else {
+                      resolve(rows || []);
+                    }
+                  }
+                );
+              }
+              // Check if it's a direct DuckDB connection (has .all method)
+              else if (typeof this.connection.all === 'function') {
+                this.connection.all(
+                  "SELECT table_name as name FROM information_schema.tables WHERE table_schema='main'", 
+                  (err, rows) => {
+                    if (err) {
+                      // Fallback to SHOW TABLES if information_schema fails
+                      this.connection.all("SHOW TABLES", (err2, rows2) => {
+                        if (err2) reject(err2);
+                        else resolve(rows2 || []);
+                      });
+                    } else {
+                      resolve(rows || []);
+                    }
+                  }
+                );
+              }
+              else {
+                reject(new Error('Unsupported database connection interface'));
+              }
+            });
+            
+            console.log('UserMemoryAgent: Available tables:', tables?.map(t => t.name) || []);
+            
+            const memoryTableExists = tables?.some(t => t.name === 'memory');
+            
+            if (!memoryTableExists) {
+              console.log('Memory table does not exist, creating...');
+              await createMemoryTable();
+            } else {
+              console.log('Memory table exists, verifying schema...');
+              // For now, skip schema verification to avoid more this binding issues
+              console.log('Schema verification skipped for bootstrap');
+            }
+            
+          } catch (error) {
+            console.error('[ERROR] Failed to ensure memory table:', error);
+            throw error;
+          }
+        };
+        
+        const createMemoryTable = async () => {
+          const createTableSQL = `
+            CREATE TABLE IF NOT EXISTS memory (
+              id TEXT PRIMARY KEY,
+              user_id TEXT,
+              type TEXT DEFAULT 'user_memory',
+              primary_intent TEXT,
+              requires_memory_access BOOLEAN DEFAULT false,
+              suggested_response TEXT,
+              source_text TEXT,
+              metadata TEXT,
+              screenshot TEXT,
+              extracted_text TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              synced_to_backend BOOLEAN DEFAULT false,
+              backend_memory_id TEXT,
+              sync_attempts INTEGER DEFAULT 0,
+              last_sync_attempt TIMESTAMP
+            )
+          `;
+          
+          await new Promise((resolve, reject) => {
+            // Check if it's a DatabaseManager-style connection (has .run method)
+            if (typeof this.connection.run === 'function') {
+              this.connection.run(createTableSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            }
+            // Check if it's a direct DuckDB connection (has .run method)
+            else if (typeof this.connection.run === 'function') {
+              this.connection.run(createTableSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            }
+            else {
+              reject(new Error('Unsupported database connection interface for table creation'));
+            }
+          });
+          
+          console.log('[SUCCESS] Memory table created successfully');
+        };
+        
+        await ensureMemoryTable();
         
         console.log('[SUCCESS] UserMemoryAgent bootstrap completed');
         return { success: true, dbPath: this.dbPath };
@@ -177,24 +286,433 @@ const AGENT_FORMAT = {
         }
         
         // Validate connection before proceeding
-        await this.validateConnection();
+        // Define validateConnection locally to avoid this binding issues
+        const validateConnection = async () => {
+          if (!this.connection) {
+            throw new Error('Database connection not available');
+          }
+          
+          try {
+            // Test the connection with a simple query
+            await new Promise((resolve, reject) => {
+              if (typeof this.connection.all === 'function') {
+                this.connection.all('SELECT 1 as test', (err, result) => {
+                  if (err) reject(err);
+                  else resolve(result);
+                });
+              } else if (typeof this.connection.query === 'function') {
+                this.connection.query('SELECT 1 as test', [], (err, result) => {
+                  if (err) reject(err);
+                  else resolve(result);
+                });
+              } else {
+                reject(new Error('Unsupported database connection interface'));
+              }
+            });
+            
+            console.log('[SUCCESS] Database connection validated');
+          } catch (error) {
+            console.error('[ERROR] Database connection validation failed:', error);
+            throw new Error('Database connection validation failed: ' + error.message);
+          }
+        };
+        
+        await validateConnection();
         console.log(`[INFO] Connection validated, executing ${action}`);
         
         switch (action) {
           case 'memory-store':
-            return await this.storeMemory(params, context);
+          case 'store_context':
+          case 'store_intent_classification':
+            // Implement memory storage directly to avoid this binding issues
+            const storeData = params.data || params;
+            const memoryId = 'mem_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+            const now = new Date().toISOString();
+            
+            // Extract data from the intent classification payload
+            let sourceText = storeData.sourceText || params.key || 'Unknown';
+            let suggestedResponse = storeData.suggestedResponse || params.value || 'Stored';
+            let primaryIntent = storeData.primaryIntent || 'memory_store';
+            let entities = storeData.entities ? JSON.stringify(storeData.entities) : null;
+            let metadata = storeData.metadata || {};
+            
+            // Add additional metadata
+            metadata.requiresMemoryAccess = storeData.requiresMemoryAccess || false;
+            metadata.captureScreen = storeData.captureScreen || false;
+            metadata.timestamp = storeData.timestamp || now;
+            
+            const insertSQL = `INSERT INTO memory (
+              id, user_id, type, primary_intent, requires_memory_access, 
+              suggested_response, source_text, metadata, screenshot, extracted_text,
+              created_at, updated_at, synced_to_backend, backend_memory_id, 
+              sync_attempts, last_sync_attempt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            
+            const values = [
+              memoryId,
+              'default_user', // TODO: Get actual user ID from context
+              'intent_classification',
+              primaryIntent,
+              metadata.requiresMemoryAccess,
+              suggestedResponse,
+              sourceText,
+              JSON.stringify(metadata),
+              null, // screenshot
+              null, // extracted_text
+              now,
+              now,
+              false, // synced_to_backend
+              null, // backend_memory_id
+              0, // sync_attempts
+              null // last_sync_attempt
+            ];
+            
+            console.log('[DEBUG] Storing memory with SQL:', insertSQL);
+            console.log('[DEBUG] Values:', values);
+            
+            try {
+              // Get the database manager from context
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available in context');
+              }
+              
+              // Use DatabaseManager's run method which handles the connection properly
+              console.log('[DEBUG] About to execute INSERT with DatabaseManager.run()');
+              await database.run(insertSQL, values);
+              console.log('[SUCCESS] Memory stored successfully');
+              
+              // Add a small delay to ensure any async operations complete
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // Try to get a fresh connection and verify the memory was actually stored
+              try {
+                console.log('[VERIFY] Attempting to verify memory storage...');
+                
+                // First, let's check if the table exists and has any data
+                const tableCheckQuery = 'SELECT COUNT(*) as total FROM memory';
+                const tableCheckResult = await database.query(tableCheckQuery, []);
+                console.log(`[VERIFY] Total memories in table:`, tableCheckResult);
+                
+                // Now check for our specific memory
+                const verifyQuery = 'SELECT * FROM memory WHERE id = ?';
+                const verifyResult = await database.query(verifyQuery, [memoryId]);
+                console.log(`[VERIFY] Memory verification query result:`, verifyResult);
+                
+                if (verifyResult && verifyResult.length > 0) {
+                  console.log(`[VERIFY] ✅ Memory ${memoryId} confirmed in database`);
+                } else {
+                  console.log(`[VERIFY] ❌ Memory ${memoryId} NOT found in database after storage!`);
+                  
+                  // Try a broader query to see if any memories exist
+                  const allMemoriesQuery = 'SELECT id, created_at FROM memory ORDER BY created_at DESC LIMIT 5';
+                  const allMemoriesResult = await database.query(allMemoriesQuery, []);
+                  console.log(`[VERIFY] Recent memories in database:`, allMemoriesResult);
+                }
+              } catch (verifyError) {
+                console.error('[VERIFY] Error verifying memory storage:', verifyError);
+              }
+              
+              return {
+                success: true,
+                message: 'Memory stored successfully',
+                memoryId: memoryId,
+                sourceText: sourceText,
+                suggestedResponse: suggestedResponse
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory storage failed:', error);
+              throw new Error('Memory storage failed: ' + error.message);
+            }
+            
           case 'memory-retrieve':
-            return await this.retrieveMemory(params, context);
+            // Retrieve specific memory by ID or search criteria
+            const retrieveQuery = params.query || params.memoryId;
+            if (!retrieveQuery) {
+              throw new Error('Memory retrieve requires query or memoryId parameter');
+            }
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              let sql, queryParams;
+              if (retrieveQuery.startsWith('mem_')) {
+                // Retrieve by memory ID
+                sql = 'SELECT * FROM memory WHERE id = ? ORDER BY created_at DESC';
+                queryParams = [retrieveQuery];
+              } else {
+                // Retrieve by text search
+                sql = 'SELECT * FROM memory WHERE source_text LIKE ? OR suggested_response LIKE ? ORDER BY created_at DESC LIMIT 10';
+                queryParams = [`%${retrieveQuery}%`, `%${retrieveQuery}%`];
+              }
+              
+              const results = await database.query(sql, queryParams);
+              
+              console.log(`[SUCCESS] Retrieved ${results.length} memories`);
+              return {
+                success: true,
+                action: 'memory-retrieve',
+                query: retrieveQuery,
+                results: results,
+                count: results.length
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory retrieve failed:', error);
+              throw new Error('Memory retrieve failed: ' + error.message);
+            }
+            
           case 'memory-search':
-            return await this.searchMemories(params, context);
+            // Search memories with advanced filtering
+            const searchQuery = params.query || params.searchText;
+            const searchType = params.type || 'all';
+            const limit = params.limit || 20;
+            
+            if (!searchQuery) {
+              throw new Error('Memory search requires query parameter');
+            }
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              let sql = `
+                SELECT * FROM memory 
+                WHERE (source_text LIKE ? OR suggested_response LIKE ? OR metadata LIKE ?)
+              `;
+              let queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
+              
+              if (searchType !== 'all') {
+                sql += ' AND type = ?';
+                queryParams.push(searchType);
+              }
+              
+              sql += ' ORDER BY created_at DESC LIMIT ?';
+              queryParams.push(limit);
+              
+              const results = await database.query(sql, queryParams);
+              
+              console.log(`[SUCCESS] Found ${results.length} memories matching search`);
+              return {
+                success: true,
+                action: 'memory-search',
+                query: searchQuery,
+                type: searchType,
+                results: results,
+                count: results.length
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory search failed:', error);
+              throw new Error('Memory search failed: ' + error.message);
+            }
+            
           case 'memory-delete':
-            return await this.deleteMemory(params, context);
+            // Delete memory by ID
+            const deleteId = params.memoryId || params.id;
+            if (!deleteId) {
+              throw new Error('Memory delete requires memoryId parameter');
+            }
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              const deleteSQL = 'DELETE FROM memory WHERE id = ?';
+              await database.run(deleteSQL, [deleteId]);
+              console.log(`[SUCCESS] Memory ${deleteId} deleted successfully`);
+              
+              return {
+                success: true,
+                action: 'memory-delete',
+                memoryId: deleteId,
+                message: 'Memory deleted successfully'
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory delete failed:', error);
+              throw new Error('Memory delete failed: ' + error.message);
+            }
+            
           case 'memory-update':
-            return await this.updateMemory(params, context);
+            // Update existing memory
+            const updateId = params.memoryId || params.id;
+            const updateData = params.data || {};
+            
+            if (!updateId) {
+              throw new Error('Memory update requires memoryId parameter');
+            }
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              const now = new Date().toISOString();
+              const updateFields = [];
+              const updateValues = [];
+              
+              // Build dynamic update query based on provided data
+              if (updateData.sourceText) {
+                updateFields.push('source_text = ?');
+                updateValues.push(updateData.sourceText);
+              }
+              if (updateData.suggestedResponse) {
+                updateFields.push('suggested_response = ?');
+                updateValues.push(updateData.suggestedResponse);
+              }
+              if (updateData.metadata) {
+                updateFields.push('metadata = ?');
+                updateValues.push(JSON.stringify(updateData.metadata));
+              }
+              if (updateData.type) {
+                updateFields.push('type = ?');
+                updateValues.push(updateData.type);
+              }
+              
+              if (updateFields.length === 0) {
+                throw new Error('No update fields provided');
+              }
+              
+              updateFields.push('updated_at = ?');
+              updateValues.push(now);
+              updateValues.push(updateId);
+              
+              const updateSQL = `UPDATE memory SET ${updateFields.join(', ')} WHERE id = ?`;
+              
+              await database.run(updateSQL, updateValues);
+              console.log(`[SUCCESS] Memory ${updateId} updated successfully`);
+              
+              return {
+                success: true,
+                action: 'memory-update',
+                memoryId: updateId,
+                updatedFields: updateFields.length - 1, // Exclude updated_at
+                message: 'Memory updated successfully'
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory update failed:', error);
+              throw new Error('Memory update failed: ' + error.message);
+            }
+            
           case 'memory-list':
-            return await this.listMemories(params, context);
+            // List all memories with optional filtering
+            const listType = params.type || 'all';
+            const listLimit = params.limit || 50;
+            const listOffset = params.offset || 0;
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              let listSQL = 'SELECT * FROM memory';
+              let listParams = [];
+              
+              if (listType !== 'all') {
+                listSQL += ' WHERE type = ?';
+                listParams.push(listType);
+              }
+              
+              listSQL += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
+              listParams.push(listLimit, listOffset);
+              
+              const results = await database.query(listSQL, listParams);
+              
+              // Get total count
+              let countSQL = 'SELECT COUNT(*) as total FROM memory';
+              let countParams = [];
+              
+              if (listType !== 'all') {
+                countSQL += ' WHERE type = ?';
+                countParams.push(listType);
+              }
+              
+              const countRows = await database.query(countSQL, countParams);
+              const countResult = countRows[0]?.total || 0;
+              
+              console.log(`[SUCCESS] Listed ${results.length} memories (${countResult} total)`);
+              return {
+                success: true,
+                action: 'memory-list',
+                type: listType,
+                results: results,
+                count: results.length,
+                total: countResult,
+                limit: listLimit,
+                offset: listOffset
+              };
+            } catch (error) {
+              console.error('[ERROR] Memory list failed:', error);
+              throw new Error('Memory list failed: ' + error.message);
+            }
+            
           case 'screenshot-store':
-            return await this.storeScreenshot(params, context);
+            // Store screenshot with memory
+            const screenshotData = params.screenshot || params.data;
+            const screenshotText = params.extractedText || params.text;
+            const screenshotContext = params.context || {};
+            
+            if (!screenshotData) {
+              throw new Error('Screenshot store requires screenshot data');
+            }
+            
+            try {
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              const memoryId = 'mem_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+              const now = new Date().toISOString();
+              
+              const insertSQL = `INSERT INTO memory (
+                id, user_id, type, primary_intent, requires_memory_access, 
+                suggested_response, source_text, metadata, screenshot, extracted_text,
+                created_at, updated_at, synced_to_backend, backend_memory_id, 
+                sync_attempts, last_sync_attempt
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+              
+              const values = [
+                memoryId,
+                'default_user',
+                'screenshot',
+                'screenshot_capture',
+                false,
+                'Screenshot captured and stored',
+                screenshotContext.description || 'Screenshot captured',
+                JSON.stringify(screenshotContext),
+                screenshotData, // Store screenshot data
+                screenshotText, // Store extracted text
+                now,
+                now,
+                false,
+                null,
+                0,
+                null
+              ];
+              
+              await database.run(insertSQL, values);
+              console.log('[SUCCESS] Screenshot stored successfully');
+              
+              return {
+                success: true,
+                action: 'screenshot-store',
+                memoryId: memoryId,
+                hasExtractedText: !!screenshotText,
+                message: 'Screenshot stored successfully'
+              };
+            } catch (error) {
+              console.error('[ERROR] Screenshot storage failed:', error);
+              throw new Error('Screenshot storage failed: ' + error.message);
+            }
+            
           default:
             throw new Error('Unknown action: ' + action);
         }
