@@ -26,6 +26,14 @@ export class AgentOrchestrator {
         orchestratorPath: __dirname,
         timestamp: new Date().toISOString()
       };
+      
+      // Ensure database is available in context for agents
+      if (config.database) {
+        this.context.database = config.database;
+        console.log('✅ Database connection added to orchestrator context');
+      } else {
+        console.warn('⚠️ No database connection provided to orchestrator');
+      }
 
       // Register default agents
       await this.registerDefaultAgents();
@@ -460,27 +468,15 @@ export class AgentOrchestrator {
       // First try to load from DuckDB database
       console.log(`🔍 DEBUG: Attempting to load ${agentName} from database...`);
       let agentData = await this.loadAgentFromDatabase(agentName);
-      console.log(`🔍 DEBUG: Database load result for ${agentName}: ${!!agentData}`);
-      
       // If not found in database, try legacy file-based loading
       if (!agentData) {
-        console.log(`🔍 DEBUG: Agent ${agentName} not found in database, trying file-based loading...`);
         agentData = await this.loadAgentFromFile(agentName);
-        console.log(`🔍 DEBUG: File-based load result for ${agentName}: ${!!agentData}`);
       }
       
       if (!agentData) {
         console.error(`❌ DEBUG: Agent ${agentName} not found in database or file system`);
         throw new Error(`Agent ${agentName} not found in database or file system`);
       }
-      
-      console.log(`🔍 DEBUG: Agent data for ${agentName}:`, {
-        hasCode: !!agentData.code,
-        codeLength: agentData.code ? agentData.code.length : 0,
-        hasFilePath: !!agentData.filePath,
-        hasBootstrap: !!agentData.bootstrap,
-        dependencies: agentData.dependencies
-      });
 
       // Create agent instance
       let agentInstance;
