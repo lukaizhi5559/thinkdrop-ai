@@ -1411,6 +1411,7 @@ export class AgentOrchestrator {
         };
         
       case 'memory_retrieve':
+      case 'memory-retrieve':
       case 'memory_search':
         return {
           action: 'memory-retrieve',
@@ -1506,11 +1507,30 @@ export class AgentOrchestrator {
           memoryId: processedPayload.memoryId || entities.find(e => e.type === 'memoryId')?.value,
           timestamp: new Date().toISOString()
         };
+      case 'memory-retrieve':
+      case 'memory_retrieve':
+      case 'memory_search':
+        // Extract pagination parameters from entities or processedPayload
+        const limitEntity = entities.find(e => e.type === 'limit');
+        const offsetEntity = entities.find(e => e.type === 'offset');
+        const searchQueryEntity = entities.find(e => e.type === 'searchQuery');
+        
+        return {
+          action: 'memory-retrieve',
+          searchQuery: processedPayload.searchQuery || searchQueryEntity?.value || null,
+          pagination: processedPayload.pagination || {
+            limit: limitEntity?.value || 50,
+            offset: offsetEntity?.value || 0
+          },
+          limit: limitEntity?.value || 50,
+          offset: offsetEntity?.value || 0,
+          timestamp: new Date().toISOString()
+        };
       case 'command':
       case 'appointment':
       case 'task':
       case 'question':
-      case 'greeting':                                                  
+      case 'greeting':
         return {
           action: 'store_context',
           data: {

@@ -118,6 +118,8 @@ const MemoryDebugger = () => {
           requiresMemoryAccess: true,
           sourceText: 'MemoryDebugger requesting stored memories'
         });
+
+        console.log('THE MEMORY RESULTS:', result)
         
         if (result.success && result.data?.intentsProcessed) {
           const memoryIntent = result.data.intentsProcessed.find((intent: any) => 

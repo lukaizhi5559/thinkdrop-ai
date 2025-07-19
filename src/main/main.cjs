@@ -5,6 +5,36 @@ const fs = require('fs');
 const os = require('os');
 require('dotenv').config(); // Load .env variables
 
+// Handle EPIPE errors gracefully to prevent process crashes
+process.stdout.on('error', (err) => {
+  if (err.code === 'EPIPE') {
+    // Ignore EPIPE errors - they happen when output pipe is broken
+    return;
+  }
+  console.error('stdout error:', err);
+});
+
+process.stderr.on('error', (err) => {
+  if (err.code === 'EPIPE') {
+    // Ignore EPIPE errors - they happen when output pipe is broken
+    return;
+  }
+  console.error('stderr error:', err);
+});
+
+// Handle uncaught exceptions that might be related to logging
+process.on('uncaughtException', (err) => {
+  if (err.code === 'EPIPE') {
+    // Ignore EPIPE errors
+    return;
+  }
+  console.error('Uncaught Exception:', err);
+  // Don't exit the process for EPIPE errors
+  if (err.code !== 'EPIPE') {
+    process.exit(1);
+  }
+});
+
 // Import modularized IPC handlers
 const { initializeIPCHandlers } = require('./handlers/ipc-handlers.cjs');
 const { setupMemoryHandlers } = require('./handlers/ipc-handlers-memory.cjs');
