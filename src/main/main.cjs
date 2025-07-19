@@ -468,7 +468,7 @@ async function initializeServices() {
       
       // Import and initialize DatabaseManager
       const { default: databaseManager } = await import('./services_new/utils/DatabaseManager.js');
-      const database = await databaseManager.initialize(dbPath);
+      await databaseManager.initialize(dbPath);
       
       console.log('✅ DatabaseManager connection established');
       
@@ -477,7 +477,7 @@ async function initializeServices() {
       // Initialize the CoreAgent
       await coreAgent.initialize({
         llmClient: null, // Will be set when needed
-        database: database, // Pass the initialized database
+        database: databaseManager, // Pass the DatabaseManager instance
         apiConfig: {
           baseURL: process.env.BIBSCRIP_BASE_URL || 'http://localhost:3001',
           apiKey: process.env.BIBSCRIP_API_KEY

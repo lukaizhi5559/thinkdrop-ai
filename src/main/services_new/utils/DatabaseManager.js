@@ -115,46 +115,72 @@ class DatabaseManager {
    * Execute query via wrapper
    * @param {string} sql - SQL query
    * @param {Array} params - Query parameters
-   * @returns {Promise<Array>} - Query results
+   * @param {Function} callback - Optional callback function
+   * @returns {Promise<Array>} - Query results (if no callback) or void (if callback)
    */
-  async query(sql, params = []) {
+  async query(sql, params = [], callback = null) {
+    // Handle callback-style calls
+    if (typeof params === 'function') {
+      callback = params;
+      params = [];
+    }
+    
     const connection = await this.ensureConnection();
     
-    console.log('[DEBUG] DatabaseManager.query() called with sql:', sql.substring(0, 100) + '...');
-    console.log('[DEBUG] DatabaseManager.query() params:', params);
-    console.log('[DEBUG] DatabaseManager.query() connection type:', typeof connection);
-    console.log('[DEBUG] DatabaseManager.query() connection.query type:', typeof connection.query);
-    
-    return new Promise((resolve, reject) => {
+   
+    if (callback) {
+      // Callback-style call
+      console.log('[DEBUG] DatabaseManager.query() using callback-style');
       connection.query(sql, params, (err, rows) => {
-        console.log('[DEBUG] DatabaseManager.query() callback called with err:', err, 'rows:', rows);
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
-        }
+        console.log('[DEBUG] DatabaseManager.query() callback rows length:', rows?.length);
+        callback(err, rows);
       });
-    });
+    } else {
+      // Promise-style call
+      return new Promise((resolve, reject) => {
+        connection.query(sql, params, (err, rows) => {
+          console.log('[DEBUG] DatabaseManager.query() callback called with err:', err);
+          if (err) {
+            reject(err);
+          } else {
+            resolve(rows);
+          }
+        });
+      });
+    }
   }
 
   /**
    * Execute statement via wrapper
    * @param {string} sql - SQL statement
    * @param {Array} params - Statement parameters
-   * @returns {Promise<void>}
+   * @param {Function} callback - Optional callback function
+   * @returns {Promise<void>} - (if no callback) or void (if callback)
    */
-  async run(sql, params = []) {
+  async run(sql, params = [], callback = null) {
+    // Handle callback-style calls
+    if (typeof params === 'function') {
+      callback = params;
+      params = [];
+    }
+    
     const connection = await this.ensureConnection();
     
-    return new Promise((resolve, reject) => {
-      connection.run(sql, params, (err) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
+    if (callback) {
+      // Callback-style call
+      connection.run(sql, params, callback);
+    } else {
+      // Promise-style call
+      return new Promise((resolve, reject) => {
+        connection.run(sql, params, (err) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
       });
-    });
+    }
   }
 }
 

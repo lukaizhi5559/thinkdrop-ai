@@ -1488,6 +1488,13 @@ export class AgentOrchestrator {
             timestamp: new Date().toISOString()
           }
         };
+      case 'memory-delete':
+      case 'memory_delete':
+        return {
+          action: 'memory-delete',
+          memoryId: processedPayload.memoryId || entities.find(e => e.type === 'memoryId')?.value,
+          timestamp: new Date().toISOString()
+        };
       case 'command':
       case 'appointment':
       case 'task':
@@ -1633,6 +1640,8 @@ export class AgentOrchestrator {
       'memory_search': ['UserMemoryAgent'],
       'memory-list': ['UserMemoryAgent'],
       'memory_list': ['UserMemoryAgent'],
+      'memory-delete': ['UserMemoryAgent'],
+      'memory_delete': ['UserMemoryAgent'],
       
       // Multi-agent intents
       'command': ['UserMemoryAgent', 'DynamicAgent'], // Commands need memory + dynamic execution
@@ -1704,6 +1713,91 @@ export class AgentOrchestrator {
   async reloadAgent(agentName) {
     await this.unloadAgent(agentName);
     return await this.loadAgent(agentName);
+  }
+
+  /**
+   * Clear all loaded agents cache to force reload
+   */
+  clearAgentCache() {
+    const agentNames = Array.from(this.loadedAgents.keys());
+    this.loadedAgents.clear();
+    console.log(`🗑️ Cleared agent cache for: [${agentNames.join(', ')}]`);
+    return agentNames;
+  }
+
+  /**
+   * Force re-registration of an agent from file to update database with latest code
+   */
+  async forceReregisterAgent(agentName) {
+    const { database } = this.context;
+    if (!database) {
+      throw new Error('Database connection not available');
+    }
+
+    try {
+      console.log(`🔄 Force re-registering agent: ${agentName}`);
+      
+      // First, delete existing agent from database
+      await database.run('DELETE FROM agents WHERE name = ?', [agentName]);
+      console.log(`🗑️ Deleted existing ${agentName} from database`);
+      
+      // Clear from cache
+      this.loadedAgents.delete(agentName);
+      
+      // Find agent in default agents list
+      const agentsDir = __dirname;
+      const defaultAgents = [
+        {
+          name: 'ScreenCaptureAgent',
+          description: 'Captures screenshots and performs OCR text extraction',
+          dependencies: ['screenshot-desktop', 'tesseract.js', 'path', 'fs', 'url'],
+          execution_target: 'frontend',
+          requires_database: false,
+          database_type: null,
+          filePath: `${agentsDir}/ScreenCaptureAgent.cjs`
+        },
+        {
+          name: 'UserMemoryAgent',
+          description: 'Manages user memory storage and retrieval',
+          dependencies: ['path', 'fs'],
+          execution_target: 'frontend',
+          requires_database: true,
+          database_type: 'duckdb',
+          filePath: `${agentsDir}/UserMemoryAgent.cjs`
+        }
+      ];
+      
+      const agentData = defaultAgents.find(a => a.name === agentName);
+      if (!agentData) {
+        throw new Error(`Agent ${agentName} not found in default agents list`);
+      }
+      
+      // Read fresh code from file
+      const fs = await import('fs');
+      const agentCode = fs.readFileSync(agentData.filePath, 'utf-8');
+      console.log(`📖 Read fresh code for ${agentName} (${agentCode.length} characters)`);
+      
+      // Extract bootstrap function if it exists
+      let bootstrap = null;
+      const bootstrapMatch = agentCode.match(/async\s+bootstrap\s*\([^)]*\)\s*\{[\s\S]*?\n\s*\}/m);
+      if (bootstrapMatch) {
+        bootstrap = bootstrapMatch[0];
+      }
+      
+      // Update agentData with fresh code
+      agentData.code = agentCode;
+      agentData.bootstrap = bootstrap;
+      
+      // Re-register with fresh code
+      await this.registerAgent(agentData.name, agentData);
+      console.log(`✅ Successfully re-registered ${agentName} with updated code`);
+      
+      return { success: true, message: `Agent ${agentName} re-registered successfully` };
+      
+    } catch (error) {
+      console.error(`❌ Failed to re-register agent ${agentName}:`, error);
+      throw error;
+    }
   }
 
 }

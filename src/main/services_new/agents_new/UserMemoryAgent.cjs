@@ -44,15 +44,57 @@ const AGENT_FORMAT = {
       try {
         console.log('[INFO] UserMemoryAgent: Setting up DuckDB connection...');
         
-        // Import path module - needed for all path operations
-        const { duckdb, path, fs, url } = context;
-        
+        const { duckdb } = context;
+
+        // Use connection from coreAgent.context.database if available
+        if (context?.database) {
+          console.log('[INFO] Using database from coreAgent.context.database');
+          this.connection = context.database;
+          this.db = context.database; // Store database instance
+          
+          // Test the connection to make sure it's working
+          try {
+            let testResult;
+            if (typeof this.connection.query === 'function') {
+              testResult = await new Promise((resolve, reject) => {
+                this.connection.query('SELECT 1 as test', [], (err, result) => {
+                  if (err) reject(err);
+                  else resolve(result);
+                });
+              });
+            } else if (typeof this.connection.all === 'function') {
+              testResult = await new Promise((resolve, reject) => {
+                this.connection.all('SELECT 1 as test', (err, result) => {
+                  if (err) reject(err);
+                  else resolve(result);
+                });
+              });
+            } else {
+              throw new Error('Unsupported database connection interface');
+            }
+            
+            console.log('[SUCCESS] Database connection from context tested successfully');
+            
+            // Skip the rest of the bootstrap and just ensure memory table exists
+            await this.ensureMemoryTable();
+            console.log('[SUCCESS] UserMemoryAgent bootstrap completed using context database');
+            return { success: true, source: 'context_database' };
+          } catch (err) {
+            console.warn('[WARN] Context database connection test failed:', err.message);
+            // Continue with fallback connection setup below
+            this.connection = null;
+            this.db = null;
+          }
+        }
+
+        // If no connection from context, establish a new one
+        const { path, fs, url } = context;
+
         // Calculate database path from config or default location
         let dbPath;
         if (config.dbPath) {
           dbPath = config.dbPath;
         } else {
-            // Use path directly without fileURLToPath in CommonJS
           const __dirname = path.dirname(__filename);
           const projectRoot = path.dirname(path.dirname(path.dirname(path.dirname(__dirname))));
           dbPath = path.join(projectRoot, 'data', 'agent_memory.duckdb');
@@ -111,10 +153,8 @@ const AGENT_FORMAT = {
           while (retries < MAX_RETRIES) {
             try {
               this.db = new duckdb.Database(this.dbPath);
-              console.log('[SUCCESS] DuckDB database instance created');
               
               this.connection = this.db.connect();
-              console.log('[SUCCESS] DuckDB connection established');
               
               // Test the connection
               const result = await new Promise((resolve, reject) => {
@@ -129,7 +169,7 @@ const AGENT_FORMAT = {
                 });
               });
               
-              console.log('[DEBUG] Connection test result:', result);
+              console.log('[DEBUG] Connection established and test result:', result);
               break;
               
             } catch (err) {
@@ -324,6 +364,11 @@ const AGENT_FORMAT = {
           case 'memory-store':
           case 'store_context':
           case 'store_intent_classification':
+            // Use direct connection for queries
+            const directDbConnection = context?.connection || this.connection;
+            if (!directDbConnection) {
+              throw new Error('No direct database connection available');
+            }
             // Implement memory storage directly to avoid this binding issues
             const storeData = params.data || params;
             const memoryId = 'mem_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
@@ -367,7 +412,6 @@ const AGENT_FORMAT = {
               null // last_sync_attempt
             ];
             
-            console.log('[DEBUG] Storing memory with SQL:', insertSQL);
             console.log('[DEBUG] Values:', values);
             
             try {
@@ -378,7 +422,6 @@ const AGENT_FORMAT = {
               }
               
               // Use DatabaseManager's run method which handles the connection properly
-              console.log('[DEBUG] About to execute INSERT with DatabaseManager.run()');
               await database.run(insertSQL, values);
               console.log('[SUCCESS] Memory stored successfully');
               
@@ -1037,12 +1080,6 @@ const AGENT_FORMAT = {
           JSON.stringify(metadata)
         ];
         
-        console.log('[DEBUG] Executing SQL:', insertSQL);
-        console.log('[DEBUG] With values:', values);
-        console.log('[DEBUG] Values count:', values.length);
-        console.log('[DEBUG] Connection type:', typeof connection);
-        console.log('[DEBUG] Connection methods:', Object.getOwnPropertyNames(connection));
-        
         await new Promise((resolve, reject) => {
           // Check if it's a DatabaseManager-style connection (has .run method)
           if (typeof connection.run === 'function') {
@@ -1254,7 +1291,7 @@ const AGENT_FORMAT = {
         const db = context?.db || this.db;
         const connection = context?.connection || this.connection;
         
-        const checkQuery = "SELECT backend_memory_id FROM memory WHERE backend_memory_id = ? LIMIT 1";
+        const checkQuery = "SELECT * FROM memory WHERE id = ? LIMIT 1";
         const existingRecord = await new Promise((resolve, reject) => {
           // Check if it's a DatabaseManager-style connection (has .query method)
           if (typeof connection.query === 'function') {

@@ -167,121 +167,68 @@ function setupMemoryHandlers(ipcMain, coreAgent) {
   // Direct memory delete handler for fast MemoryDebugger delete operations
   ipcMain.handle('delete-memory-direct', async (event, memoryId) => {
     try {
-      console.log('🗑️ Direct memory delete requested for ID:', memoryId);
+      console.log('🗑️ Memory delete requested for ID:', memoryId);
       
       // Check if coreAgent is initialized
       if (!coreAgent || !coreAgent.initialized) {
         console.log('❌ CoreAgent not initialized for delete operation');
-        // Return a more graceful response to avoid UI breaking
         return { 
-          success: true, 
-          warning: 'CoreAgent not initialized, delete operation skipped',
-          affectedRows: 0
+          success: false, 
+          error: 'CoreAgent not initialized'
         };
       }
       
-      // Get database connection
-      let db = null;
+      // Create intent payload for memory-delete
+      const intentPayload = {
+        intents: [{ intent: 'memory-delete', confidence: 0.8 }],
+        primaryIntent: 'memory-delete',
+        entities: [{ type: 'memoryId', value: memoryId }],
+        requiresMemoryAccess: true,
+        captureScreen: false,
+        sourceText: `Delete memory with ID: ${memoryId}`,
+        memoryId: memoryId
+      };
       
-      // Try to get database connection from various possible locations
-      if (coreAgent.database) {
-        db = coreAgent.database;
-        console.log('✅ Using database from coreAgent.database');
-      } else if (coreAgent.context && coreAgent.context.database) {
-        // This is the correct location based on AgentOrchestrator.js implementation
-        db = coreAgent.context.database;
-        console.log('✅ Using database from coreAgent.context.database');
-      } else if (coreAgent.orchestrator && coreAgent.orchestrator.db) {
-        db = coreAgent.orchestrator.db;
-        console.log('✅ Using database from coreAgent.orchestrator.db');
-      } else if (coreAgent.db) {
-        db = coreAgent.db;
-        console.log('✅ Using database from coreAgent.db');
-      } else {
-        console.log('❌ No database connection found in coreAgent');
+      console.log('🎯 Passing memory-delete intent to coreAgent.ask():', intentPayload);
+      
+      // Use coreAgent.ask() pipeline: handler -> ask() -> UserMemoryAgent
+      const result = await coreAgent.ask(intentPayload, {
+        sessionId: `delete-${Date.now()}`,
+        source: 'ipc-handler',
+        operation: 'memory-delete'
+      });
+      
+      console.log('🔍 CoreAgent.ask() result:', result);
+      
+      // Extract success information from the orchestration result
+      if (result && result.success) {
+        // Check if any step results indicate successful deletion
+        const deleteResult = result.intentsProcessed?.find(r => 
+          r.agent === 'UserMemoryAgent' && 
+          r.action === 'memory-delete' && 
+          r.success
+        );
         
-        if (coreAgent.orchestrator) {
-          console.log('CoreAgent.orchestrator keys:', Object.keys(coreAgent.orchestrator));
+        if (deleteResult) {
+          console.log('✅ Memory successfully deleted via orchestration pipeline');
+          return { 
+            success: true, 
+            deletedCount: 1,
+            message: 'Memory deleted successfully'
+          };
         }
-        return { success: false, error: 'Database connection not available' };
       }
       
-      // Test database connection with a simple query first
-      try {
-        const testQuery = 'SELECT 1 as test';
-        const testResult = await db.query(testQuery);
-        console.log('🔍 Database connection test successful:', testResult);
-      } catch (testError) {
-        console.error('❌ Database connection test failed:', testError.message);
-        return { success: false, error: 'Database connection not working' };
-      }
-      
-      // First, verify the specific record exists before delete
-      const recordExistsQuery = `SELECT backend_memory_id, source_text FROM memory WHERE backend_memory_id = '${memoryId}' LIMIT 1`;
-      const recordBefore = await db.query(recordExistsQuery);
-      console.log('🔍 Record before delete:', recordBefore.length > 0 ? 'EXISTS' : 'NOT FOUND');
-      if (recordBefore.length > 0) {
-        console.log('📝 Record details:', { id: recordBefore[0].backend_memory_id, text: recordBefore[0].source_text?.substring(0, 50) + '...' });
-      } else {
-        console.log('⚠️ WARNING: Record to delete does not exist in database!');
-        return { success: false, error: 'Record not found in database' };
-      }
-      
-      // Check total count before delete
-      const countBeforeQuery = `SELECT COUNT(*) as total FROM memory`;
-      const countBefore = await db.query(countBeforeQuery);
-      console.log('📊 Count query result:', countBefore);
-      const totalBefore = countBefore && countBefore[0] ? Number(countBefore[0].total) : 0;
-      console.log('📊 Total records before delete:', totalBefore);
-      
-      // Delete from memory table using the correct ID column
-      const deleteQuery = `DELETE FROM memory WHERE backend_memory_id = '${memoryId}'`;
-      console.log('🔍 Executing delete query:', deleteQuery);
-      
-      // Use DatabaseManager API for delete operations
-      const result = await db.run(deleteQuery);
-      console.log('🔍 Delete query result:', result);
-      
-      // Try to commit the transaction explicitly (DuckDB might need this)
-      try {
-        await db.run('COMMIT;');
-        console.log('🔍 Transaction committed');
-      } catch (commitErr) {
-        console.log('🔍 No explicit transaction to commit (auto-commit mode)');
-      }
-      
-      // Check total count after delete
-      const countAfterQuery = `SELECT COUNT(*) as total FROM memory`;
-      const countAfter = await db.query(countAfterQuery);
-      const totalAfter = countAfter && countAfter[0] ? Number(countAfter[0].total) : 0;
-      console.log('📊 Total records after delete:', totalAfter);
-      
-      // For DuckDB DELETE operations, we need to check if the record still exists
-      const checkQuery = `SELECT COUNT(*) as count FROM memory WHERE backend_memory_id = '${memoryId}'`;
-      const checkResult = await db.query(checkQuery);
-      const recordExists = checkResult && checkResult[0] ? Number(checkResult[0].count) > 0 : false;
-      
-      console.log(`🔍 Record check after delete - exists: ${recordExists}`);
-      console.log(`📊 Records deleted: ${totalBefore - totalAfter}`);
-      console.log(`📊 Remaining records: ${totalAfter}`);
-      
-      // Show which record was actually deleted for debugging
-      if (!recordExists && totalBefore > totalAfter) {
-        console.log(`✅ Confirmed: Memory ${memoryId} was successfully deleted from database`);
-      }
-      
-      const deletedCount = recordExists ? 0 : 1; // If record doesn't exist, it was deleted
-      
-      if (deletedCount > 0) {
-        console.log(`✅ Successfully deleted memory with ID: ${memoryId}`);
-        return { success: true, deletedCount: deletedCount };
-      } else {
-        console.log(`⚠️ No memory found with ID: ${memoryId}`);
-        return { success: false, error: 'Memory not found' };
-      }
+      // Handle failure cases
+      const errorMessage = result?.error || 'Memory deletion failed';
+      console.log('❌ Memory deletion failed:', errorMessage);
+      return { 
+        success: false, 
+        error: errorMessage 
+      };
       
     } catch (error) {
-      console.error('❌ Direct memory delete error:', error);
+      console.error('❌ Memory delete error:', error);
       return { success: false, error: error.message };
     }
   });

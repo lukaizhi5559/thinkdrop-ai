@@ -76,10 +76,27 @@ function query(sql, params = [], cb) {
     return cb(new Error('Connection not ready'));
   }
   
+  console.log('[DUCKDB-WRAPPER] Executing query:', sql.substring(0, 100) + '...');
+  console.log('[DUCKDB-WRAPPER] With params:', params);
+  
+  // Wrap the callback to ensure we always return results
+  const wrappedCallback = (err, rows) => {
+    console.log('[DUCKDB-WRAPPER] Query callback called with err:', err, 'rows type:', typeof rows, 'rows length:', rows?.length);
+    if (err) {
+      console.error('[DUCKDB-WRAPPER] Query failed with error:', err);
+      cb(err);
+    } else {
+      // Ensure we always return an array, even if rows is undefined
+      const result = Array.isArray(rows) ? rows : (rows ? [rows] : []);
+      console.log('[DUCKDB-WRAPPER] Query succeeded, returning:', result.length, 'rows');
+      cb(null, result);
+    }
+  };
+  
   if (params.length > 0) {
-    connection.all(sql, ...params, cb);
+    connection.all(sql, ...params, wrappedCallback);
   } else {
-    connection.all(sql, cb);
+    connection.all(sql, wrappedCallback);
   }
 }
 
@@ -149,5 +166,5 @@ module.exports = {
   run,
   close,
   isConnected,
-  getDbPath: () => dbPath
+getDbPath: () => currentDbPath
 };

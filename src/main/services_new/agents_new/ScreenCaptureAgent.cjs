@@ -117,12 +117,146 @@ const AGENT_FORMAT = {
             return await this.extractText(params, context);
           case 'save-screenshot':
             return await this.saveScreenshot(params, context);
+          case 'capture_and_extract':
+            // Fully self-contained inline implementation to avoid method binding issues
+            try {
+              console.log('📸🔍 Capturing screen and extracting text...');
+              
+              // Get dependencies from context (they are spread directly into context)
+              const { screenshotDesktop, tesseractJs, path, fs } = context;
+              
+              if (!screenshotDesktop) {
+                throw new Error('Screenshot desktop dependency not available');
+              }
+              
+              // Step 1: Capture screenshot (inline implementation)
+              console.log('📸 Taking screenshot...');
+              let screenshotData;
+              try {
+                screenshotData = await screenshotDesktop({ format: 'png' });
+                console.log('📸 Screenshot captured successfully');
+              } catch (screenshotError) {
+                throw new Error(`Screenshot capture failed: ${screenshotError.message}`);
+              }
+              
+              // Step 2: Extract text using OCR (inline implementation)
+              let extractedText = '';
+              try {
+                if (tesseractJs) {
+                  console.log('🔍 Starting OCR text extraction...');
+                  const { createWorker } = tesseractJs;
+                  const worker = await createWorker('eng');
+                  const { data: { text } } = await worker.recognize(screenshotData);
+                  await worker.terminate();
+                  extractedText = text.trim();
+                  console.log('🔍 OCR text extraction completed');
+                } else {
+                  extractedText = 'OCR not available - tesseract.js dependency missing';
+                  console.warn('⚠️ OCR extraction skipped: tesseract.js not available');
+                }
+              } catch (ocrError) {
+                console.warn('⚠️ OCR extraction failed:', ocrError.message);
+                extractedText = 'OCR extraction failed: ' + ocrError.message;
+              }
+              
+              // Step 3: Save screenshot to file (optional)
+              let filePath = null;
+              try {
+                if (path && fs) {
+                  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                  const filename = `screenshot-${timestamp}.png`;
+                  filePath = path.join(process.cwd(), 'screenshots', filename);
+                  
+                  // Ensure screenshots directory exists
+                  const screenshotsDir = path.dirname(filePath);
+                  if (!fs.existsSync(screenshotsDir)) {
+                    fs.mkdirSync(screenshotsDir, { recursive: true });
+                  }
+                  
+                  // Save screenshot
+                  fs.writeFileSync(filePath, screenshotData);
+                  console.log(`💾 Screenshot saved to: ${filePath}`);
+                }
+              } catch (saveError) {
+                console.warn('⚠️ Failed to save screenshot:', saveError.message);
+              }
+              
+              // Step 4: Return combined result
+              const result = {
+                success: true,
+                action: 'capture_and_extract',
+                screenshot: {
+                  data: screenshotData.toString('base64'),
+                  format: 'png',
+                  dimensions: { width: 'unknown', height: 'unknown' },
+                  timestamp: new Date().toISOString(),
+                  filePath: filePath
+                },
+                extractedText: extractedText,
+                timestamp: new Date().toISOString()
+              };
+              
+              console.log('✅ Combined capture and extract completed successfully');
+              console.log(`📊 Extracted text length: ${extractedText.length} characters`);
+              return result;
+              
+            } catch (error) {
+              console.error('❌ Capture and extract failed:', error);
+              return {
+                success: false,
+                action: 'capture_and_extract',
+                error: error.message,
+                timestamp: new Date().toISOString()
+              };
+            }
           default:
             throw new Error('Unknown action: ' + action);
         }
       } catch (error) {
         console.error('[ERROR] ScreenCaptureAgent execution failed:', error);
         throw error;
+      }
+    },
+
+    async captureAndExtract(params, context) {
+      // Inline implementation to avoid method binding issues
+      try {
+        console.log('📸🔍 Capturing screen and extracting text...');
+        
+        // First capture the screen
+        const captureResult = await this.captureScreen(params, context);
+        
+        if (!captureResult.success) {
+          throw new Error('Screen capture failed: ' + captureResult.error);
+        }
+        
+        // Extract text from the captured screenshot
+        let extractedText = null;
+        if (captureResult.screenshot && captureResult.screenshot.data) {
+          console.log('🔍 Extracting text from captured screenshot...');
+          extractedText = await this.performOCR(captureResult.screenshot.data);
+          console.log('📝 Extracted ' + (extractedText?.length || 0) + ' characters of text');
+        }
+        
+        // Return combined result
+        return {
+          success: true,
+          action: 'capture_and_extract',
+          screenshot: captureResult.screenshot,
+          extractedText: extractedText,
+          ocrText: extractedText, // Alias for compatibility
+          timestamp: new Date().toISOString(),
+          message: 'Screen captured and text extracted successfully'
+        };
+        
+      } catch (error) {
+        console.error('❌ Capture and extract failed:', error);
+        return {
+          success: false,
+          action: 'capture_and_extract',
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
       }
     },
   
@@ -364,6 +498,47 @@ const AGENT_FORMAT = {
       const filename = 'screenshot-' + timestamp + '.' + format;
       const path = require('path');
       return path.join(this.screenshotDir, filename);
+    },
+
+    async captureAndExtract(params, context) {
+      try {
+        console.log('📸🔍 Capturing screen and extracting text...');
+        
+        // First capture the screen
+        const captureResult = await this.captureScreen(params, context);
+        
+        if (!captureResult.success) {
+          throw new Error('Screen capture failed: ' + captureResult.error);
+        }
+        
+        // Extract text from the captured screenshot
+        let extractedText = null;
+        if (captureResult.screenshot && captureResult.screenshot.data) {
+          console.log('🔍 Extracting text from captured screenshot...');
+          extractedText = await this.performOCR(captureResult.screenshot.data);
+          console.log('📝 Extracted ' + (extractedText?.length || 0) + ' characters of text');
+        }
+        
+        // Return combined result
+        return {
+          success: true,
+          action: 'capture_and_extract',
+          screenshot: captureResult.screenshot,
+          extractedText: extractedText,
+          ocrText: extractedText, // Alias for compatibility
+          timestamp: new Date().toISOString(),
+          message: 'Screen captured and text extracted successfully'
+        };
+        
+      } catch (error) {
+        console.error('❌ Capture and extract failed:', error);
+        return {
+          success: false,
+          action: 'capture_and_extract',
+          error: error.message,
+          timestamp: new Date().toISOString()
+        };
+      }
     }
   };
   
