@@ -311,6 +311,15 @@ const AGENT_FORMAT = {
     },
   
     // Object-based execute method - no string parsing needed
+safeJsonStringify(obj, space = null) {
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'bigint') {
+        return value.toString();
+      }
+      return value;
+    }, space);
+  },
+
     async execute(params, context) {
       try {
         const { action } = params;
@@ -440,7 +449,7 @@ const AGENT_FORMAT = {
                 // Now check for our specific memory
                 const verifyQuery = 'SELECT * FROM memory WHERE id = ?';
                 const verifyResult = await database.query(verifyQuery, [memoryId]);
-                console.log(`[VERIFY] Memory verification query result:`, verifyResult);
+console.log(`[VERIFY] Memory verification query result:`, this.safeJsonStringify(verifyResult));
                 
                 if (verifyResult && verifyResult.length > 0) {
                   console.log(`[VERIFY] ✅ Memory ${memoryId} confirmed in database`);
@@ -468,39 +477,88 @@ const AGENT_FORMAT = {
               throw new Error('Memory storage failed: ' + error.message);
             }
             
+          case 'query_memories':
           case 'memory-retrieve':
-            // Retrieve specific memory by ID or search criteria
-            const retrieveQuery = params.query || params.memoryId;
-            if (!retrieveQuery) {
-              throw new Error('Memory retrieve requires query or memoryId parameter');
-            }
-            
+            // Retrieve memories with pagination support
             try {
               const database = context.database;
               if (!database) {
                 throw new Error('No database connection available');
               }
               
-              let sql, queryParams;
-              if (retrieveQuery.startsWith('mem_')) {
-                // Retrieve by memory ID
-                sql = 'SELECT * FROM memory WHERE id = ? ORDER BY created_at DESC';
-                queryParams = [retrieveQuery];
+              // Extract parameters from the intent payload
+              const searchQuery = params.searchQuery || null;
+              const limit = params.pagination?.limit || params.limit || 50;
+              const offset = params.pagination?.offset || params.offset || 0;
+              
+              console.log(`[INFO] Memory retrieve - searchQuery: ${searchQuery}, limit: ${limit}, offset: ${offset}`);
+              
+              let sql, queryParams, countSql, countParams;
+              
+              if (searchQuery) {
+                // Search with query
+                sql = `SELECT * FROM memory WHERE (source_text LIKE ? OR suggested_response LIKE ? OR id LIKE ?) ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+                queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit, offset];
+                countSql = `SELECT COUNT(*) as total FROM memory WHERE (source_text LIKE ? OR suggested_response LIKE ? OR id LIKE ?)`;
+                countParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
               } else {
-                // Retrieve by text search
-                sql = 'SELECT * FROM memory WHERE source_text LIKE ? OR suggested_response LIKE ? ORDER BY created_at DESC LIMIT 10';
-                queryParams = [`%${retrieveQuery}%`, `%${retrieveQuery}%`];
+                // Retrieve all memories with pagination
+                sql = `SELECT * FROM memory ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+                queryParams = [limit, offset];
+                countSql = `SELECT COUNT(*) as total FROM memory`;
+                countParams = [];
               }
               
-              const results = await database.query(sql, queryParams);
+              console.log(`[DEBUG] Executing SQL: ${sql}`);
+console.log(`[DEBUG] Query params: ${this.safeJsonStringify(queryParams)}`);
               
-              console.log(`[SUCCESS] Retrieved ${results.length} memories`);
+              // Execute queries
+              const memories = await database.query(sql, queryParams);
+              const countResult = await database.query(countSql, countParams);
+              
+              const totalCount = countResult && countResult[0] ? countResult[0].total : memories.length;
+              
+              console.log(`[SUCCESS] Retrieved ${memories.length} memories (${offset}-${offset + memories.length} of ${totalCount})`);
+              
+              // Process memories to ensure screenshot and extracted_text are properly handled
+              const processedMemories = memories.map(memory => {
+                // Parse metadata if it's a string
+                let metadata = memory.metadata;
+                if (typeof metadata === 'string') {
+                  try {
+                    metadata = JSON.parse(metadata);
+                  } catch (e) {
+                    metadata = {};
+                  }
+                }
+                
+                return {
+                  ...memory,
+                  metadata: metadata,
+                  // Ensure screenshot and extracted_text are included
+                  screenshot: memory.screenshot || null,
+                  extracted_text: memory.extracted_text || null,
+                  // Add computed fields for frontend compatibility
+                  hasScreenshot: !!memory.screenshot,
+                  hasExtractedText: !!memory.extracted_text
+                };
+              });
+              
               return {
                 success: true,
                 action: 'memory-retrieve',
-                query: retrieveQuery,
-                results: results,
-                count: results.length
+                data: {
+                  memories: processedMemories,
+                  pagination: {
+                    total: totalCount,
+                    limit: limit,
+                    offset: offset,
+                    hasMore: offset + memories.length < totalCount
+                  }
+                },
+                searchQuery: searchQuery,
+                count: memories.length,
+                totalCount: totalCount
               };
             } catch (error) {
               console.error('[ERROR] Memory retrieve failed:', error);

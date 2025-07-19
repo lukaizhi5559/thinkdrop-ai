@@ -894,29 +894,28 @@ export class AgentOrchestrator {
       const agent = await this.loadAgent(agentName);
       const dependencies = {};
 
-      // Bootstrap agent if needed
-      if (agent.bootstrap && !agent._bootstrapped) {
-        console.log(`🔧 Bootstrapping ${agentName}...`);
-        
-        // Process dependencies if they exist
-        if (agent.dependencies && Array.isArray(agent.dependencies)) {
-          for (const dependency of agent.dependencies) {
-            try {
-              let module;
-              const dependencyCamelcase = this.toCamelCase(dependency);
-            
-              // Standard import for other dependencies
-              module = await import(dependency);
-              dependencies[dependencyCamelcase] = module.default || module;
-            } catch (error) {
-              console.warn(`⚠️ Failed to import dependency ${dependency}:`, error.message);
-            }
+      // Always load dependencies for execution context (not just during bootstrap)
+      if (agent.dependencies && Array.isArray(agent.dependencies)) {
+        for (const dependency of agent.dependencies) {
+          try {
+            let module;
+            const dependencyCamelcase = this.toCamelCase(dependency);
+          
+            // Standard import for other dependencies
+            module = await import(dependency);
+            dependencies[dependencyCamelcase] = module.default || module;
+          } catch (error) {
+            console.warn(`⚠️ Failed to import dependency ${dependency}:`, error.message);
           }
         }
-        
-        console.log(`🔍 Dependencies being passed to ${agentName}:`, Object.keys(dependencies));
-        console.log(`🔍 screenshotDesktop available:`, !!dependencies.screenshotDesktop);
-        
+      }
+      
+      console.log(`🔍 Dependencies being passed to ${agentName}:`, Object.keys(dependencies));
+      console.log(`🔍 screenshotDesktop available:`, !!dependencies.screenshotDesktop);
+
+      // Bootstrap agent if needed (using the same dependencies)
+      if (agent.bootstrap && !agent._bootstrapped) {
+        console.log(`🔧 Bootstrapping ${agentName}...`);
         await agent.bootstrap(this.context, { ...this.context, ...context, ...dependencies });
         agent._bootstrapped = true;
         console.log(`✅ ${agentName} bootstrapped successfully`);
@@ -1138,6 +1137,18 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Safe JSON stringify that handles BigInt values
+   */
+  safeJsonStringify(obj, space = null) {
+    return JSON.stringify(obj, (key, value) => {
+      if (typeof value === 'bigint') {
+        return value.toString();
+      }
+      return value;
+    }, space);
+  }
+
+  /**
    * Main orchestration method - processes intent classification payloads from backend
    * Maps intents to agents and uses executeWorkflow for orchestration
    */
@@ -1149,11 +1160,11 @@ export class AgentOrchestrator {
     try {
       console.log('🎯 AgentOrchestrator.ask() called');
       console.log('📥 Intent payload type:', typeof intentPayload);
-      console.log('📥 Intent payload:', JSON.stringify(intentPayload, null, 2));
+      console.log('📥 Intent payload:', this.safeJsonStringify(intentPayload, 2));
       
       // Parse intent payload
       let processedPayload = this.parseIntentPayload(intentPayload);
-      console.log('🔍 Processed payload:', JSON.stringify(processedPayload, null, 2));
+      console.log('🔍 Processed payload:', this.safeJsonStringify(processedPayload, 2));
       
       // Extract intents and create workflow
       const workflow = this.createWorkflowFromIntents(processedPayload, context);
@@ -1178,7 +1189,7 @@ export class AgentOrchestrator {
       });
       
       console.log('✅ Workflow execution completed');
-      console.log('📊 Workflow result:', JSON.stringify(workflowResult, null, 2));
+      console.log('📊 Workflow result:', this.safeJsonStringify(workflowResult, 2));
       
       // Format response for main.cjs compatibility
       return {
@@ -1402,7 +1413,7 @@ export class AgentOrchestrator {
       case 'memory_retrieve':
       case 'memory_search':
         return {
-          action: 'query_memories',
+          action: 'memory-retrieve',
           query: sourceText || 'recent memories',
           limit: 10
         };
