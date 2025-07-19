@@ -1189,7 +1189,6 @@ export class AgentOrchestrator {
       });
       
       console.log('✅ Workflow execution completed');
-      console.log('📊 Workflow result:', this.safeJsonStringify(workflowResult, 2));
       
       // Format response for main.cjs compatibility
       return {

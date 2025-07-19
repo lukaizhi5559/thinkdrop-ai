@@ -59,19 +59,6 @@ function setupMemoryHandlers(ipcMain, coreAgent) {
       // Use AgentOrchestrator.ask() to route to UserMemoryAgent
       const result = await coreAgent.ask(intentPayload);
       
-      console.log('📊 Agent orchestration result:', {
-        success: result.success,
-        hasData: !!result.data,
-        hasMemories: !!(result.data && result.data.memories),
-        memoriesCount: result.data && result.data.memories ? result.data.memories.length : 0,
-        resultKeys: Object.keys(result || {}),
-        resultType: typeof result,
-        hasResults: !!(result.results),
-        resultsLength: result.results ? result.results.length : 0,
-        hasIntentsProcessed: !!(result.intentsProcessed),
-        intentsProcessedLength: result.intentsProcessed ? result.intentsProcessed.length : 0
-      });
-      
       // Debug intentsProcessed structure
       if (result.intentsProcessed && result.intentsProcessed.length > 0) {
         console.log('🔍 IntentsProcessed details:');

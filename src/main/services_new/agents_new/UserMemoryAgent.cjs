@@ -514,6 +514,111 @@ safeJsonStringify(obj, space = null) {
             metadata.captureScreen = storeData.captureScreen || false;
             metadata.timestamp = storeData.timestamp || now;
             
+            // Extract screenshot and extracted_text from various sources
+            let screenshot = null;
+            let extractedText = null;
+            
+            console.log('[DEBUG] Available context keys:', Object.keys(context));
+            
+            // Check storeData first
+            if (storeData.screenshot) {
+              screenshot = storeData.screenshot;
+              console.log('[DEBUG] Found screenshot in storeData');
+            }
+            if (storeData.extracted_text || storeData.extractedText) {
+              extractedText = storeData.extracted_text || storeData.extractedText;
+              console.log('[DEBUG] Found extracted text in storeData');
+            }
+            
+            // Check workflow context for ScreenCaptureAgent results (agent_result pattern)
+            if (context.ScreenCaptureAgent_result && !screenshot) {
+              const screenResult = context.ScreenCaptureAgent_result;
+              console.log('[DEBUG] Found ScreenCaptureAgent_result:', !!screenResult.result);
+              
+              if (screenResult.result && screenResult.result.screenshot) {
+                screenshot = screenResult.result.screenshot;
+                console.log('[DEBUG] Extracted screenshot from ScreenCaptureAgent_result');
+              }
+              if (screenResult.result && (screenResult.result.extracted_text || screenResult.result.extractedText)) {
+                extractedText = screenResult.result.extracted_text || screenResult.result.extractedText;
+                console.log('[DEBUG] Extracted text from ScreenCaptureAgent_result');
+              }
+            }
+            
+            // Check step results (step_X_result pattern)
+            for (let i = 0; i < 10; i++) { // Check first 10 steps
+              const stepKey = `step_${i}_result`;
+              if (context[stepKey] && context[stepKey].result) {
+                const stepResult = context[stepKey].result;
+                console.log(`[DEBUG] Checking ${stepKey}:`, !!stepResult);
+                
+                if (stepResult.screenshot && !screenshot) {
+                  screenshot = stepResult.screenshot;
+                  console.log(`[DEBUG] Found screenshot in ${stepKey}`);
+                }
+                if ((stepResult.extracted_text || stepResult.extractedText) && !extractedText) {
+                  extractedText = stepResult.extracted_text || stepResult.extractedText;
+                  console.log(`[DEBUG] Found extracted text in ${stepKey}`);
+                }
+              }
+            }
+            
+            // Check previousResults array
+            if (context.previousResults && Array.isArray(context.previousResults)) {
+              console.log('[DEBUG] Checking previousResults array, length:', context.previousResults.length);
+              for (const prevResult of context.previousResults) {
+                if (prevResult.result) {
+                  if (prevResult.result.screenshot && !screenshot) {
+                    screenshot = prevResult.result.screenshot;
+                    console.log('[DEBUG] Found screenshot in previousResults');
+                  }
+                  if ((prevResult.result.extracted_text || prevResult.result.extractedText) && !extractedText) {
+                    extractedText = prevResult.result.extracted_text || prevResult.result.extractedText;
+                    console.log('[DEBUG] Found extracted text in previousResults');
+                  }
+                }
+              }
+            }
+            
+            // Check context for workflow results
+            if (context.workflowResults && Array.isArray(context.workflowResults)) {
+              for (const result of context.workflowResults) {
+                if (result.screenshot && !screenshot) {
+                  screenshot = result.screenshot;
+                }
+                if ((result.extracted_text || result.extractedText) && !extractedText) {
+                  extractedText = result.extracted_text || result.extractedText;
+                }
+              }
+            }
+            
+            // Check context.extractedData (from AgentOrchestrator workflow extraction)
+            if (context.extractedData) {
+              if (context.extractedData.screenshot && !screenshot) {
+                screenshot = context.extractedData.screenshot;
+              }
+              if (context.extractedData.extractedText && !extractedText) {
+                extractedText = context.extractedData.extractedText;
+              }
+            }
+            
+            // Check if context has direct screenshot/extracted_text fields
+            if (context.screenshot && !screenshot) {
+              screenshot = context.screenshot;
+            }
+            if ((context.extracted_text || context.extractedText) && !extractedText) {
+              extractedText = context.extracted_text || context.extractedText;
+            }
+            
+            console.log('[DEBUG] Screenshot data available:', !!screenshot);
+            console.log('[DEBUG] Extracted text available:', !!extractedText);
+            if (screenshot) {
+              console.log('[DEBUG] Screenshot length:', screenshot.length);
+            }
+            if (extractedText) {
+              console.log('[DEBUG] Extracted text preview:', extractedText.substring(0, 100) + '...');
+            }
+            
             const insertSQL = `INSERT INTO memory (
               id, user_id, type, primary_intent, requires_memory_access, 
               suggested_response, source_text, metadata, screenshot, extracted_text,
@@ -530,8 +635,8 @@ safeJsonStringify(obj, space = null) {
               suggestedResponse,
               sourceText,
               JSON.stringify(metadata),
-              null, // screenshot
-              null, // extracted_text
+              screenshot, // Now properly extracted from context/storeData
+              extractedText, // Now properly extracted from context/storeData
               now,
               now,
               false, // synced_to_backend
