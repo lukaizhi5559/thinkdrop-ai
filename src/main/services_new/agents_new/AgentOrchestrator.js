@@ -207,7 +207,7 @@ export class AgentOrchestrator {
       {
         name: 'ScreenCaptureAgent',
         description: 'Captures screenshots and performs OCR text extraction',
-        dependencies: ['screenshot-desktop', 'tesseract.js', 'path', 'fs', 'url'],
+        dependencies: ['screenshot-desktop', 'node-screenshots', 'tesseract.js', 'path', 'fs', 'url'],
         execution_target: 'frontend',
         requires_database: false,
         config: { screenshot_dir: 'screenshots', ocr_enabled: true },
@@ -1306,7 +1306,7 @@ export class AgentOrchestrator {
     
     // Determine if we need screenshot capture
     const shouldCaptureScreen = captureScreen === true || (requiresMemoryAccess && captureScreen !== false);
-    
+  
     console.log('🔍 Should capture screen:', shouldCaptureScreen);
     console.log('🔍 Processing intents:', intents?.map(i => i.intent) || [primaryIntent]);
     
@@ -1673,12 +1673,12 @@ export class AgentOrchestrator {
       'memory-delete': ['UserMemoryAgent'],
       'memory_delete': ['UserMemoryAgent'],
       
-      // Multi-agent intents
-      'command': ['UserMemoryAgent', 'DynamicAgent'], // Commands need memory + dynamic execution
-      'appointment': ['UserMemoryAgent', 'SchedulingAgent'], // Appointments need memory + scheduling
-      'task': ['UserMemoryAgent', 'TaskAgent'], // Tasks need memory + task management
-      'reminder': ['UserMemoryAgent', 'ReminderAgent'], // Reminders need memory + reminder system
-      'automation': ['UserMemoryAgent', 'AutomationAgent'], // Automation needs memory + execution
+      // Multi-agent intents (only include agents that exist)
+      'command': ['UserMemoryAgent'], // Commands need memory storage (DynamicAgent removed - doesn't exist)
+      'appointment': ['UserMemoryAgent'], // Appointments need memory
+      'task': ['UserMemoryAgent'], // Tasks need memory
+      'reminder': ['UserMemoryAgent'], // Reminders need memory
+      'automation': ['UserMemoryAgent'], // Automation needs memory
       
       // Context-aware intents
       'question': ['UserMemoryAgent'], // Questions may need memory context
@@ -1780,7 +1780,7 @@ export class AgentOrchestrator {
         {
           name: 'ScreenCaptureAgent',
           description: 'Captures screenshots and performs OCR text extraction',
-          dependencies: ['screenshot-desktop', 'tesseract.js', 'path', 'fs', 'url'],
+          dependencies: ['screenshot-desktop', 'node-screenshots', 'tesseract.js', 'path', 'fs', 'url'],
           execution_target: 'frontend',
           requires_database: false,
           database_type: null,

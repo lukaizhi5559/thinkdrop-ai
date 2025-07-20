@@ -9376,6 +9376,95 @@ __metadata:
   languageName: node
   linkType: hard
 
+"node-screenshots-darwin-arm64@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-darwin-arm64@npm:0.2.4"
+  conditions: os=darwin & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"node-screenshots-darwin-universal@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-darwin-universal@npm:0.2.4"
+  conditions: os=darwin
+  languageName: node
+  linkType: hard
+
+"node-screenshots-darwin-x64@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-darwin-x64@npm:0.2.4"
+  conditions: os=darwin & cpu=x64
+  languageName: node
+  linkType: hard
+
+"node-screenshots-linux-x64-gnu@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-linux-x64-gnu@npm:0.2.4"
+  conditions: os=linux & cpu=x64 & libc=glibc
+  languageName: node
+  linkType: hard
+
+"node-screenshots-linux-x64-musl@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-linux-x64-musl@npm:0.2.4"
+  conditions: os=linux & cpu=x64 & libc=musl
+  languageName: node
+  linkType: hard
+
+"node-screenshots-win32-arm64-msvc@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-win32-arm64-msvc@npm:0.2.4"
+  conditions: os=win32 & cpu=arm64
+  languageName: node
+  linkType: hard
+
+"node-screenshots-win32-ia32-msvc@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-win32-ia32-msvc@npm:0.2.4"
+  conditions: os=win32 & cpu=ia32
+  languageName: node
+  linkType: hard
+
+"node-screenshots-win32-x64-msvc@npm:0.2.4":
+  version: 0.2.4
+  resolution: "node-screenshots-win32-x64-msvc@npm:0.2.4"
+  conditions: os=win32 & cpu=x64
+  languageName: node
+  linkType: hard
+
+"node-screenshots@npm:^0.2.1":
+  version: 0.2.4
+  resolution: "node-screenshots@npm:0.2.4"
+  dependencies:
+    node-screenshots-darwin-arm64: 0.2.4
+    node-screenshots-darwin-universal: 0.2.4
+    node-screenshots-darwin-x64: 0.2.4
+    node-screenshots-linux-x64-gnu: 0.2.4
+    node-screenshots-linux-x64-musl: 0.2.4
+    node-screenshots-win32-arm64-msvc: 0.2.4
+    node-screenshots-win32-ia32-msvc: 0.2.4
+    node-screenshots-win32-x64-msvc: 0.2.4
+  dependenciesMeta:
+    node-screenshots-darwin-arm64:
+      optional: true
+    node-screenshots-darwin-universal:
+      optional: true
+    node-screenshots-darwin-x64:
+      optional: true
+    node-screenshots-linux-x64-gnu:
+      optional: true
+    node-screenshots-linux-x64-musl:
+      optional: true
+    node-screenshots-win32-arm64-msvc:
+      optional: true
+    node-screenshots-win32-ia32-msvc:
+      optional: true
+    node-screenshots-win32-x64-msvc:
+      optional: true
+  checksum: 163acb0c45b0a324505678ececd1f58c11de5d0183aecc7a97daed487491cbe762742da18bbbafa7da2087d2a29a660e540a7cd41b8047fd4bb8582d2a1f0eed
+  languageName: node
+  linkType: hard
+
 "nodemon@npm:^3.0.0":
   version: 3.1.10
   resolution: "nodemon@npm:3.1.10"
@@ -11979,6 +12068,7 @@ __metadata:
     marked: ^9.1.0
     node-cron: ^3.0.0
     node-record-lpcm16: ^1.0.1
+    node-screenshots: ^0.2.1
     nodemon: ^3.0.0
     openai: ^4.20.0
     playwright: ^1.54.0

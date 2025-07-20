@@ -534,10 +534,47 @@ safeJsonStringify(obj, space = null) {
             if (context.ScreenCaptureAgent_result && !screenshot) {
               const screenResult = context.ScreenCaptureAgent_result;
               console.log('[DEBUG] Found ScreenCaptureAgent_result:', !!screenResult.result);
+              console.log('[DEBUG] ScreenCaptureAgent_result structure:', safeJsonStringify(screenResult, 2));
               
               if (screenResult.result && screenResult.result.screenshot) {
-                screenshot = screenResult.result.screenshot;
-                console.log('[DEBUG] Extracted screenshot from ScreenCaptureAgent_result');
+                const screenshotData = screenResult.result.screenshot;
+                console.log('[DEBUG] Screenshot data type:', typeof screenshotData);
+                console.log('[DEBUG] Screenshot data keys (if object):', typeof screenshotData === 'object' ? Object.keys(screenshotData) : 'N/A');
+                
+                // Handle different screenshot data formats
+                if (typeof screenshotData === 'string') {
+                  screenshot = screenshotData;
+                  console.log('[DEBUG] Using screenshot as string directly');
+                } else if (typeof screenshotData === 'object' && screenshotData !== null) {
+                  // Check for common screenshot object properties
+                  if (screenshotData.data) {
+                    screenshot = screenshotData.data;
+                    console.log('[DEBUG] Extracted screenshot from .data property');
+                  } else if (screenshotData.base64) {
+                    screenshot = screenshotData.base64;
+                    console.log('[DEBUG] Extracted screenshot from .base64 property');
+                  } else if (screenshotData.image) {
+                    screenshot = screenshotData.image;
+                    console.log('[DEBUG] Extracted screenshot from .image property');
+                  } else if (screenshotData.buffer) {
+                    screenshot = screenshotData.buffer;
+                    console.log('[DEBUG] Extracted screenshot from .buffer property');
+                  } else {
+                    // Try to stringify properly or get first property
+                    const keys = Object.keys(screenshotData);
+                    if (keys.length > 0) {
+                      screenshot = screenshotData[keys[0]];
+                      console.log(`[DEBUG] Using first property '${keys[0]}' as screenshot data`);
+                    } else {
+                      console.log('[DEBUG] Screenshot object is empty, skipping');
+                    }
+                  }
+                } else {
+                  console.log('[DEBUG] Screenshot data is not string or object, skipping');
+                }
+                
+                console.log('[DEBUG] Final screenshot type:', typeof screenshot);
+                console.log('[DEBUG] Final screenshot length:', screenshot ? screenshot.length : 0);
               }
               if (screenResult.result && (screenResult.result.extracted_text || screenResult.result.extractedText)) {
                 extractedText = screenResult.result.extracted_text || screenResult.result.extractedText;
