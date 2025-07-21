@@ -358,7 +358,19 @@ function initializeIPCHandlers({
       
       console.log('🎯 Unified agent orchestration received:', intentPayload);
       
-      // Route all requests through AgentOrchestrator.ask()
+      // Check if this is a local LLM fallback request
+      if (intentPayload.intent === 'local_llm_fallback' || intentPayload.context?.source === 'local_fallback') {
+        console.log('🤖 Routing to local LLM fallback orchestration');
+        const result = await coreAgent.handleLocalOrchestration(
+          intentPayload.message, 
+          intentPayload.context || {},
+          false // Backend is disconnected
+        );
+        console.log('✅ Local LLM orchestration completed:', result);
+        return result; // Return result directly (already has success/error structure)
+      }
+      
+      // Route all other requests through AgentOrchestrator.ask()
       // AgentOrchestrator will handle:
       // 1. Agent validation and security checks
       // 2. Intent routing via switch statement (greeting, memory_store, command, question)

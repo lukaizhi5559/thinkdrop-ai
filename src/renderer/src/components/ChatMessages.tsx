@@ -90,6 +90,10 @@ export default function ChatMessages() {
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const isStreamingEndedRef = useRef<boolean>(false);
   
+  // Local LLM processing state
+  const [isProcessingLocally, setIsProcessingLocally] = useState(false);
+  const [localLLMError, setLocalLLMError] = useState<string | null>(null);
+  
   // Input state from ChatWindow
   const [currentMessage, setCurrentMessage] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -328,74 +332,185 @@ export default function ChatMessages() {
   };
 
   // Message sending functionality from ChatWindow
-  const handleSendMessage = async () => {
-    if (!currentMessage.trim() || isLoading) return;
+  const handleSendMessage = useCallback(async () => {
+    console.log('📤 [DEBUG] handleSendMessage called', {
+      currentMessage: currentMessage.substring(0, 50) + '...',
+      isLoading,
+      isProcessingLocally,
+      wsStateConnected: wsState.isConnected
+    });
+    
+    if (!currentMessage.trim() || isLoading || isProcessingLocally) {
+      console.log('🚫 [DEBUG] Message sending blocked:', {
+        noMessage: !currentMessage.trim(),
+        isLoading,
+        isProcessingLocally
+      });
+      return;
+    }
     
     const messageText = currentMessage.trim();
     setCurrentMessage('');
     setIsLoading(true);
+    setLocalLLMError(null);
     
-    // Reset textarea height
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-    }
+    // Clear any previous error states
+    setProcessedMessageIds(new Set());
+    setCurrentStreamingMessage('');
+    setStreamingMessageId(null);
+    isStreamingEndedRef.current = false;
     
-    // Create and display user message immediately
+    // Add user message immediately
     const userMessage: ChatMessage = {
-      id: `user_${Date.now()}`,
+      id: `user-${Date.now()}`,
       text: messageText,
       sender: 'user',
       timestamp: new Date()
     };
     
-    // Add user message to chat display
-    console.log('📝 Adding user message:', userMessage);
     setChatMessages(prev => {
-      const newMessages = [...prev, userMessage];
-      console.log('📊 Messages after adding user message:', newMessages.length);
-      return newMessages;
+      const updated = [...prev, userMessage];
+      // Save to localStorage
+      localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+      return updated;
     });
     
-    // Scroll to bottom and wait for completion before making backend call
-    console.log('📜 Triggering scroll-to-bottom for new user message');
-    scrollToBottom({ 
-      smooth: true, 
-      force: true, 
-      onComplete: async () => {
-        console.log('✅ Scroll completed, now making backend call');
-        
-        try {
-          // Note: Agent orchestration is now handled only when backend sends intent_classification
-          // This eliminates double processing and ensures proper intent classification
-          console.log('📤 Skipping raw user input orchestration - waiting for backend intent classification');
+    try {
+      console.log('🔍 [DEBUG] Connection state check:', {
+        isConnected: wsState.isConnected,
+        reconnectCount: wsState.reconnectCount,
+        activeRequests: wsState.activeRequests,
+        messageText: messageText.substring(0, 50) + '...'
+      });
       
-      // Send to WebSocket for streaming response
-      if (wsState.isConnected && sendLLMRequest) {
-        console.log('📤 Sending message to WebSocket:', messageText);
+      if (!wsState.isConnected) {
+        console.warn('⚠️ WebSocket not connected, using local LLM fallback');
+        await handleLocalLLMFallback(messageText);
+        return;
+      }
+      
+      // Send message via WebSocket for backend processing
+      await sendLLMRequest({
+        prompt: messageText,
+        provider: 'openai',
+        options: {
+          taskType: 'ask',
+          stream: true,
+          temperature: 0.7
+        }
+      });
+      
+    } catch (error) {
+      console.error('❌ Failed to send message:', error);
+      setIsLoading(false);
+      setLocalLLMError('Failed to process message. Please try again.');
+    }
+    
+    // Auto-focus back to textarea after sending
+    setTimeout(() => {
+      if (textareaRef.current) {
+        textareaRef.current.focus();
+      }
+    }, 100);
+  }, [currentMessage, isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
+
+  // Handle local LLM fallback when backend is disconnected
+  const handleLocalLLMFallback = useCallback(async (messageText: string) => {
+    try {
+      console.log('🤖 Starting local LLM processing...');
+      setIsProcessingLocally(true);
+      setIsLoading(false); // Stop main loading, show local processing instead
+      
+      // Call the AgentOrchestrator's local LLM fallback via Electron API
+      if (!window.electronAPI?.agentOrchestrate) {
+        throw new Error('Electron API not available');
+      }
+      
+      const result = await window.electronAPI.agentOrchestrate({
+        message: messageText,
+        intent: 'local_llm_fallback',
+        context: {
+          source: 'local_fallback',
+          userContext: {},
+          sessionId: `session-${Date.now()}`
+        }
+      });
+      
+      if (result.success) {
+        // Add AI response message
+        const aiMessage: ChatMessage = {
+          id: `ai-${Date.now()}`,
+          text: result.response || 'I processed your request using local capabilities.',
+          sender: 'ai',
+          timestamp: new Date()
+        };
         
-        await sendLLMRequest({
-          prompt: messageText,
-          provider: 'openai',
-          options: {
-            taskType: 'ask', // Always use 'ask' - orchestration handled by backend intent classification
-            stream: true,
-            temperature: 0.7
-          }
+        setChatMessages(prev => {
+          const updated = [...prev, aiMessage];
+          localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+          return updated;
         });
         
-        console.log('✅ Message sent to WebSocket successfully');
+        console.log('✅ Local LLM processing completed successfully');
       } else {
-        console.warn('⚠️ WebSocket not connected or sendLLMRequest not available');
-        setIsLoading(false);
+        throw new Error(result.error || 'Local LLM processing failed');
       }
       
-        } catch (error) {
-          console.error('❌ Error sending message:', error);
-          setIsLoading(false);
-        }
-      }
+    } catch (error) {
+      console.error('❌ Local LLM fallback failed:', error);
+      setLocalLLMError('Local processing failed. Please check if Ollama is running.');
+      
+      // Add error message to chat
+      const errorMessage: ChatMessage = {
+        id: `ai-error-${Date.now()}`,
+        text: 'I\'m having trouble processing your request locally. Please ensure Ollama is running or try again when connected to the backend.',
+        sender: 'ai',
+        timestamp: new Date()
+      };
+      
+      setChatMessages(prev => {
+        const updated = [...prev, errorMessage];
+        localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+        return updated;
+      });
+    } finally {
+      setIsProcessingLocally(false);
+      setIsLoading(false);
+    }
+  }, []);
+
+  // Clear local LLM error when connection is restored
+  useEffect(() => {
+    if (wsState.isConnected && localLLMError) {
+      setLocalLLMError(null);
+    }
+  }, [wsState.isConnected, localLLMError]);
+
+  // Handle WebSocket toggle for testing local LLM fallback
+  const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
+    
+    console.log('🔍 [DEBUG] WebSocket toggle clicked!', {
+      currentState: wsState.isConnected,
+      reconnectCount: wsState.reconnectCount,
+      activeRequests: wsState.activeRequests
     });
-  };
+    
+    try {
+      if (wsState.isConnected) {
+        console.log('🔌 Manually disconnecting WebSocket for local LLM testing...');
+        await disconnectWebSocket();
+        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
+      } else {
+        console.log('🔌 Reconnecting WebSocket...');
+        await connectWebSocket();
+        console.log('✅ WebSocket reconnected - backend streaming will be used');
+      }
+    } catch (error) {
+      console.error('❌ Error toggling WebSocket connection:', error);
+    }
+  }, [wsState.isConnected, connectWebSocket, disconnectWebSocket]);
   
   // Input handlers from ChatWindow
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -699,18 +814,28 @@ export default function ChatMessages() {
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
           <div 
-            className="relative group w-6 h-6 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center cursor-pointer"
+            className={`relative group w-6 h-6 rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 ${
+              wsState.isConnected 
+                ? 'bg-gradient-to-br from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
+                : 'bg-gradient-to-br from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+            }`}
             title={wsState.isConnected 
-              ? `WebSocket: Connected${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
-              : 'WebSocket: Disconnected'
+              ? `WebSocket: Connected (Click to disconnect for local LLM testing)${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
+              : 'WebSocket: Disconnected (Click to reconnect)'
             }
+            onClick={handleWebSocketToggle}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
-            <Droplet className="w-3 h-3 text-white" />
+            {wsState.isConnected ? (
+              <Droplet className="w-3 h-3 text-white" />
+            ) : (
+              <Unplug className="w-3 h-3 text-white" />
+            )}
             {/* Custom tooltip */}
             <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
               {wsState.isConnected 
-                ? `WebSocket: Connected${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
-                : 'WebSocket: Disconnected'
+                ? `Connected (Click to test local LLM)${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
+                : 'Disconnected (Click to reconnect)'
               }
               {/* Arrow */}
               <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
@@ -832,19 +957,35 @@ export default function ChatMessages() {
             <Tooltip>
               <TooltipTrigger asChild>
                 <div 
-                  className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer ${
+                  className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 ${
                     wsState.isConnected 
-                      ? 'from-teal-400 to-blue-500' 
-                      : 'from-gray-500 to-gray-600'
+                      ? 'from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
+                      : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
                   }`}
-                  onClick={() => {
-                    if (wsState.isConnected) return;
-
-                    console.log('🔄 Manual reconnection requested');
-                    connectWebSocket().catch(error => {
-                      console.error('❌ Manual reconnection failed:', error);
+                  onClick={async () => {
+                    console.log('🔍 [DEBUG] WebSocket toggle clicked in input area!', {
+                      currentState: wsState.isConnected,
+                      reconnectCount: wsState.reconnectCount
                     });
+                    
+                    try {
+                      if (wsState.isConnected) {
+                        console.log('🔌 Disconnecting WebSocket for local LLM testing...');
+                        await disconnectWebSocket();
+                        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
+                      } else {
+                        console.log('🔌 Reconnecting WebSocket...');
+                        await connectWebSocket();
+                        console.log('✅ WebSocket reconnected - backend streaming will be used');
+                      }
+                    } catch (error) {
+                      console.error('❌ Error toggling WebSocket connection:', error);
+                    }
                   }}
+                  title={wsState.isConnected 
+                    ? 'Connected - Click to disconnect and test local LLM' 
+                    : 'Disconnected - Click to reconnect to backend'
+                  }
                 >
                   {wsState.isConnected ? <Droplet className="w-4 h-4 text-white" /> : <Unplug className="w-4 h-4 text-white" />}
                   {/* WebSocket Connection Status Indicator */}

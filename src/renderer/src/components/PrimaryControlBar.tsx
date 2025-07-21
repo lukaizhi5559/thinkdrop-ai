@@ -45,7 +45,7 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
 }) => {
   return (
     <div 
-      className="rounded-2xl bg-gray-900/95 backdrop-blur-sm px-6 py-2 min-w-[400px]"
+      className="rounded-2xl bg-gray-900/95 backdrop-blur-sm px-6 py-2 min-w-[200px]"
       style={{
         WebkitAppRegion: 'drag',
         boxShadow: 'none',
@@ -53,55 +53,44 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
         // background: 'rgba(0, 0, 0, 0.35)'
       } as React.CSSProperties}
     >
-      <div className="flex items-center justify-between">
+     
+      <div className="flex items-center justify-center space-x-3">
         {/* Left - ThinkDrop Branding */}
         {/* Chat Button */}
         <Button
             variant="ghost"
-            size="lg"
-            className={`text-white/80 hover:text-white hover:bg-white/10 rounded-xl p-2 transition-all duration-200 ${
-              isChatOpen ? 'bg-white/10 text-white' : ''
+            size="sm"
+            className={`text-white/70 hover:text-white hover:bg-white/10  w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
+              isChatOpen ? 'bg-blue-500/20 text-blue-400' : ''
             }`}
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             onClick={handleToggleChat}
           >
-            <div className="flex items-center space-x-3">
-              <span className="text-white/90 text-base font-medium">
-                {isChatOpen ? 'Ask?' : 'Ask?'}
-              </span>
-              <div className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center ${
-                isChatOpen ? 'from-teal-300 to-blue-400' : 'from-teal-400 to-blue-500'
-              }`}>
-                <Droplet className="w-4 h-4 text-white" />
-              </div>
-            </div>
+            <Droplet className="w-5 h-5" />
           </Button>
         
-        {/* Center - Main Listen Button */}
-        <Button
-          onClick={toggleListening}
-          className={`w-24 h-10 rounded-xl transition-all duration-300 font-medium ${
-            isListening
-              ? 'bg-red-500 hover:bg-red-600 text-white'
-              : 'bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white'
-          }`}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {isListening ? (
-            <div className="flex items-center space-x-2">
-              <MicOff className="w-4 h-4" />
-              {/* <span className="text-sm">Stop</span> */}
-            </div>
-          ) : (
-            <div className="flex items-center space-x-2">
-              <Mic className="w-4 h-4" />
-              {/* <span className="text-sm">Listen</span> */}
-            </div>
-          )}
-        </Button>
+        {/* Right - Mic and Action Buttons */}
+        <div className="flex items-center space-x-3">
+          {/* Main Listen Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleListening}
+            className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
+              isListening ? 'bg-red-500/20 text-red-400' : ''
+            }`}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            title={isListening ? 'Stop Listening' : 'Start Listening'}
+          >
+            {isListening ? (
+              <MicOff className="w-5 h-5" />
+            ) : (
+              <Mic className="w-5 h-5" />
+            )}
+          </Button>
 
-        {/* Right - Action Buttons */}
-        <div className="flex items-center space-x-2">
+          {/* Action Buttons */}
+          <div className="flex items-center space-x-2">
           {/* Insight Button */}
           <Button
             variant="ghost"
@@ -144,6 +133,7 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
           >
             <EyeOff className="w-5 h-5" />
           </Button>
+          </div>
         </div>
       </div>
     </div>

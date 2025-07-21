@@ -1220,6 +1220,304 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Local LLM fallback orchestration - handles local intent parsing with Phi3 when backend is disconnected
+   * @param {string} userMessage - User message to process
+   * @param {Object} context - Additional context for processing
+   * @param {boolean} isBackendConnected - Whether backend is connected
+   * @returns {Object} Orchestration result
+   */
+  async handleLocalOrchestration(userMessage, context = {}, isBackendConnected = false) {
+    if (!this.initialized) {
+      throw new Error('AgentOrchestrator not initialized. Call initialize() first.');
+    }
+
+    try {
+      console.log('🔄 Local LLM orchestration started');
+      console.log('📝 User message:', userMessage);
+      console.log('🌐 Backend connected:', isBackendConnected);
+      
+      // If backend is connected, use normal backend orchestration
+      if (isBackendConnected) {
+        console.log('✅ Backend connected - using normal orchestration flow');
+        // This would typically call the backend API for intent classification
+        // For now, we'll fall back to local processing
+      }
+      
+      // Use local Phi3-based intent parsing
+      console.log('🤖 Using local Phi3-based intent parsing...');
+      const intentResult = await this.executeLocalIntentParsing(userMessage, context);
+      
+      if (!intentResult.success) {
+        console.warn('⚠️ Local intent parsing failed, using fallback response');
+        return {
+          success: true,
+          response: 'I\'m having trouble understanding your request right now. Could you please rephrase it?',
+          handledBy: 'fallback',
+          method: 'error_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      // Process the intent result and create appropriate response
+      const orchestrationResult = await this.processLocalIntentResult(intentResult, userMessage, context);
+      
+      console.log('✅ Local LLM orchestration completed');
+      return orchestrationResult;
+      
+    } catch (error) {
+      console.error('❌ Local LLM orchestration failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I encountered an error processing your request. Please try again.',
+        handledBy: 'error_handler',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Execute local intent parsing using Phi3Agent via IntentParserAgent_phi3_embedded
+   */
+  async executeLocalIntentParsing(userMessage, context = {}) {
+    try {
+      console.log('🧠 Executing local intent parsing with Phi3...');
+      
+      // Use IntentParserAgent_phi3_embedded for local intent parsing
+      const intentResult = await this.executeAgent('IntentParserAgent_phi3_embedded', {
+        action: 'parse-intent-enhanced',
+        message: userMessage,
+        userContext: context.userContext || {}
+      }, {
+        ...context,
+        executeAgent: this.executeAgent.bind(this) // Provide agent-to-agent communication
+      });
+      
+      if (!intentResult.success) {
+        console.warn('⚠️ IntentParserAgent_phi3_embedded failed:', intentResult.error);
+        return { success: false, error: intentResult.error };
+      }
+      
+      console.log('✅ Local intent parsing successful:', intentResult.result);
+      return {
+        success: true,
+        intent: intentResult.result.intent,
+        confidence: intentResult.result.confidence,
+        entities: intentResult.result.entities || [],
+        category: intentResult.result.category || 'general',
+        method: intentResult.metadata?.method || 'local',
+        requiresContext: intentResult.result.requiresContext || false
+      };
+      
+    } catch (error) {
+      console.error('❌ Local intent parsing execution failed:', error);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * Process local intent result and generate appropriate response
+   */
+  async processLocalIntentResult(intentResult, userMessage, context = {}) {
+    try {
+      const { intent, confidence, entities, category, method } = intentResult;
+      
+      console.log(`🎯 Processing intent: ${intent} (confidence: ${confidence}, method: ${method})`);
+      
+      // Handle different intent types with local processing
+      switch (intent) {
+        case 'memory_store':
+          return await this.handleLocalMemoryStore(userMessage, entities, context);
+          
+        case 'memory_retrieve':
+          return await this.handleLocalMemoryRetrieve(userMessage, entities, context);
+          
+        case 'greeting':
+          return this.handleLocalGreeting(userMessage, context);
+          
+        case 'question':
+        default:
+          return await this.handleLocalQuestion(userMessage, intentResult, context);
+      }
+      
+    } catch (error) {
+      console.error('❌ Local intent result processing failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I had trouble processing your request. Please try again.',
+        handledBy: 'error_handler',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Handle local memory storage operations
+   */
+  async handleLocalMemoryStore(userMessage, entities, context = {}) {
+    try {
+      console.log('💾 Handling local memory store operation...');
+      
+      const memoryResult = await this.executeAgent('UserMemoryAgent', {
+        action: 'memory-store',
+        key: 'user_input_' + Date.now(),
+        value: userMessage,
+        metadata: {
+          entities,
+          timestamp: new Date().toISOString(),
+          source: 'local_orchestration'
+        }
+      }, context);
+      
+      if (memoryResult.success) {
+        return {
+          success: true,
+          response: 'I\'ve stored that information for you.',
+          handledBy: 'UserMemoryAgent',
+          method: 'local_memory_store',
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        return {
+          success: true,
+          response: 'I noted your information, though I had some trouble storing it persistently.',
+          handledBy: 'fallback',
+          method: 'memory_store_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+    } catch (error) {
+      console.error('❌ Local memory store failed:', error);
+      return {
+        success: true,
+        response: 'I\'ll remember that for our conversation.',
+        handledBy: 'fallback',
+        method: 'memory_store_error',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Handle local memory retrieval operations
+   */
+  async handleLocalMemoryRetrieve(userMessage, entities, context = {}) {
+    try {
+      console.log('🔍 Handling local memory retrieve operation...');
+      
+      const memoryResult = await this.executeAgent('UserMemoryAgent', {
+        action: 'memory-search',
+        query: userMessage,
+        limit: 5
+      }, context);
+      
+      if (memoryResult.success && memoryResult.result?.memories?.length > 0) {
+        const memories = memoryResult.result.memories;
+        const responseText = `I found this information: ${memories.map(m => m.value).join(', ')}`;
+        
+        return {
+          success: true,
+          response: responseText,
+          handledBy: 'UserMemoryAgent',
+          method: 'local_memory_retrieve',
+          timestamp: new Date().toISOString()
+        };
+      } else {
+        return {
+          success: true,
+          response: 'I don\'t have that information stored. Could you provide more details?',
+          handledBy: 'UserMemoryAgent',
+          method: 'memory_not_found',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+    } catch (error) {
+      console.error('❌ Local memory retrieve failed:', error);
+      return {
+        success: true,
+        response: 'I\'m having trouble accessing my memory right now. Could you remind me?',
+        handledBy: 'fallback',
+        method: 'memory_retrieve_error',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Handle local greeting responses
+   */
+  handleLocalGreeting(userMessage, context = {}) {
+    const greetings = [
+      'Hello! How can I help you today?',
+      'Hi there! What can I do for you?',
+      'Hey! I\'m here to assist you.',
+      'Good to see you! What\'s on your mind?'
+    ];
+    
+    const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
+    
+    return {
+      success: true,
+      response: randomGreeting,
+      handledBy: 'local_greeting',
+      method: 'pattern_greeting',
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  /**
+   * Handle local question responses with basic LLM fallback
+   */
+  async handleLocalQuestion(userMessage, intentResult, context = {}) {
+    try {
+      console.log('❓ Handling local question...');
+      
+      // For now, provide a helpful response acknowledging the limitation
+      const responses = [
+        'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
+        'I understand you\'re asking about that. My local processing is somewhat limited right now.',
+        'I see what you\'re asking. In local mode, I can help with basic tasks and information storage.',
+        'That\'s a good question. I\'m operating locally right now, so my responses may be more basic.'
+      ];
+      
+      const baseResponse = responses[Math.floor(Math.random() * responses.length)];
+      
+      // Add helpful suggestions based on what we can do locally
+      const suggestions = [
+        'I can help you store and retrieve information, though.',
+        'Feel free to ask me to remember things for you.',
+        'I can take notes and help you recall information later.',
+        'Try asking me to remember something or recall what you\'ve told me.'
+      ];
+      
+      const suggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
+      const fullResponse = `${baseResponse} ${suggestion}`;
+      
+      return {
+        success: true,
+        response: fullResponse,
+        handledBy: 'local_question_handler',
+        method: 'local_fallback',
+        confidence: intentResult.confidence,
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ Local question handling failed:', error);
+      return {
+        success: true,
+        response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
+        handledBy: 'fallback',
+        method: 'question_error',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
    * Main orchestration method - processes intent classification payloads from backend
    * Maps intents to agents and uses executeWorkflow for orchestration
    */

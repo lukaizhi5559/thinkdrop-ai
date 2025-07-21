@@ -69,7 +69,7 @@ function createOverlayWindow() {
 
 
   overlayWindow = new BrowserWindow({
-    width: Math.min(width - 40, 400), // Responsive width with max limit
+    width: Math.min(width - 40, 300), // Responsive width with max limit
     height: windowHeight, // Proper height for toolbar with padding
     minHeight: 30, // Minimum height for toolbar
     maxHeight: 40,
