@@ -66,14 +66,14 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
             onClick={handleToggleChat}
           >
             <div className="flex items-center space-x-3">
+              <span className="text-white/90 text-base font-medium">
+                {isChatOpen ? 'Ask?' : 'Ask?'}
+              </span>
               <div className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center ${
                 isChatOpen ? 'from-teal-300 to-blue-400' : 'from-teal-400 to-blue-500'
               }`}>
                 <Droplet className="w-4 h-4 text-white" />
               </div>
-              <span className="text-white/90 text-base font-medium">
-                {isChatOpen ? 'Ask?' : 'Ask?'}
-              </span>
             </div>
           </Button>
         
@@ -90,12 +90,12 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
           {isListening ? (
             <div className="flex items-center space-x-2">
               <MicOff className="w-4 h-4" />
-              <span className="text-sm">Stop</span>
+              {/* <span className="text-sm">Stop</span> */}
             </div>
           ) : (
             <div className="flex items-center space-x-2">
               <Mic className="w-4 h-4" />
-              <span className="text-sm">Listen</span>
+              {/* <span className="text-sm">Listen</span> */}
             </div>
           )}
         </Button>

@@ -365,28 +365,9 @@ export default function ChatMessages() {
         console.log('✅ Scroll completed, now making backend call');
         
         try {
-          // Check if this is a complex request that needs agent orchestration
-          const needsOrchestration = /\b(screenshot|capture|screen|email|analyze|remember|save|store)\b/i.test(messageText);
-      
-      if (needsOrchestration) {
-        console.log('🤖 Complex request detected - running agent orchestration first');
-        
-        // Run agent orchestration for complex requests
-        if (window.electronAPI?.agentOrchestrate) {
-          try {
-            const orchestrationResult = await window.electronAPI.agentOrchestrate({
-              message: messageText,
-              context: {
-                timestamp: new Date().toISOString(),
-                source: 'chat_input'
-              }
-            });
-            console.log('🎯 Agent orchestration completed:', orchestrationResult);
-          } catch (orchestrationError) {
-            console.error('❌ Agent orchestration failed:', orchestrationError);
-          }
-        }
-      }
+          // Note: Agent orchestration is now handled only when backend sends intent_classification
+          // This eliminates double processing and ensures proper intent classification
+          console.log('📤 Skipping raw user input orchestration - waiting for backend intent classification');
       
       // Send to WebSocket for streaming response
       if (wsState.isConnected && sendLLMRequest) {
@@ -396,7 +377,7 @@ export default function ChatMessages() {
           prompt: messageText,
           provider: 'openai',
           options: {
-            taskType: needsOrchestration ? 'orchestrate' : 'ask',
+            taskType: 'ask', // Always use 'ask' - orchestration handled by backend intent classification
             stream: true,
             temperature: 0.7
           }

@@ -1375,6 +1375,7 @@ export class AgentOrchestrator {
       }
     }
     
+
     return {
       intents: [{ intent: 'question', confidence: 0.8 }],
       primaryIntent: payload.primaryIntent || 'question',
@@ -1779,7 +1780,7 @@ export class AgentOrchestrator {
       
       // Utility intents
       'parse-intent': ['IntentParserAgent'],
-      'enrich-memory': ['MemoryEnrichmentAgent']
+      'enrich-memory': ['MemoryEnrichmentAgent'],
     };
     
     const agents = intentMap[intent] || [];
