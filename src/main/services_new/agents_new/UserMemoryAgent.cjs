@@ -278,7 +278,6 @@ const AGENT_FORMAT = {
                 });
               });
               
-              console.log('[DEBUG] Connection established and test result:', result);
               break;
               
             } catch (err) {
@@ -501,10 +500,43 @@ safeJsonStringify(obj, space = null) {
             const storeData = params.data || params;
             const memoryId = 'mem_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             const now = new Date().toISOString();
+            console.log('SUGGESTED RESPONSE:', storeData, params)
             
             // Extract data from the intent classification payload
             let sourceText = storeData.sourceText || params.key || 'Unknown';
-            let suggestedResponse = storeData.suggestedResponse || params.value || 'Stored';
+            
+            // Validation: Check if sourceText is a stringified object and reject it
+            if (typeof sourceText === 'string' && sourceText.startsWith('{') && sourceText.includes('"message"')) {
+              try {
+                const parsed = JSON.parse(sourceText);
+                if (typeof parsed === 'object' && parsed !== null) {
+                  console.log('[SKIP] Rejecting stringified object sourceText:', sourceText.substring(0, 100) + '...');
+                  return {
+                    success: false,
+                    error: 'Rejected stringified object as sourceText',
+                    skipped: true,
+                    reason: 'sourceText appears to be a stringified JSON object'
+                  };
+                }
+              } catch (e) {
+                // If it's not valid JSON, continue with storage
+              }
+            }
+            
+            // Additional check for system-generated sourceText
+            if (sourceText && sourceText.startsWith('[System Generated]')) {
+              console.log('[SKIP] Rejecting system-generated sourceText:', sourceText.substring(0, 100) + '...');
+              return {
+                success: false,
+                error: 'Rejected system-generated sourceText',
+                skipped: true,
+                reason: 'sourceText is system-generated and not user content'
+              };
+            }
+            
+            // Fix: Properly extract suggested response without hardcoded fallback
+            let suggestedResponse = storeData.suggestedResponse || params.suggestedResponse || params.value || null;
+            
             let primaryIntent = storeData.primaryIntent || 'memory_store';
             let entities = storeData.entities ? JSON.stringify(storeData.entities) : null;
             let metadata = storeData.metadata || {};
@@ -533,14 +565,9 @@ safeJsonStringify(obj, space = null) {
             // Check workflow context for ScreenCaptureAgent results (agent_result pattern)
             if (context.ScreenCaptureAgent_result && !screenshot) {
               const screenResult = context.ScreenCaptureAgent_result;
-              console.log('[DEBUG] Found ScreenCaptureAgent_result:', !!screenResult.result);
-              console.log('[DEBUG] ScreenCaptureAgent_result structure:', safeJsonStringify(screenResult, 2));
-              
+            
               if (screenResult.result && screenResult.result.screenshot) {
                 const screenshotData = screenResult.result.screenshot;
-                console.log('[DEBUG] Screenshot data type:', typeof screenshotData);
-                console.log('[DEBUG] Screenshot data keys (if object):', typeof screenshotData === 'object' ? Object.keys(screenshotData) : 'N/A');
-                
                 // Handle different screenshot data formats
                 if (typeof screenshotData === 'string') {
                   screenshot = screenshotData;
@@ -572,9 +599,6 @@ safeJsonStringify(obj, space = null) {
                 } else {
                   console.log('[DEBUG] Screenshot data is not string or object, skipping');
                 }
-                
-                console.log('[DEBUG] Final screenshot type:', typeof screenshot);
-                console.log('[DEBUG] Final screenshot length:', screenshot ? screenshot.length : 0);
               }
               if (screenResult.result && (screenResult.result.extracted_text || screenResult.result.extractedText)) {
                 extractedText = screenResult.result.extracted_text || screenResult.result.extractedText;
@@ -587,7 +611,6 @@ safeJsonStringify(obj, space = null) {
               const stepKey = `step_${i}_result`;
               if (context[stepKey] && context[stepKey].result) {
                 const stepResult = context[stepKey].result;
-                console.log(`[DEBUG] Checking ${stepKey}:`, !!stepResult);
                 
                 if (stepResult.screenshot && !screenshot) {
                   screenshot = stepResult.screenshot;
@@ -602,7 +625,6 @@ safeJsonStringify(obj, space = null) {
             
             // Check previousResults array
             if (context.previousResults && Array.isArray(context.previousResults)) {
-              console.log('[DEBUG] Checking previousResults array, length:', context.previousResults.length);
               for (const prevResult of context.previousResults) {
                 if (prevResult.result) {
                   if (prevResult.result.screenshot && !screenshot) {
@@ -647,8 +669,6 @@ safeJsonStringify(obj, space = null) {
               extractedText = context.extracted_text || context.extractedText;
             }
             
-            console.log('[DEBUG] Screenshot data available:', !!screenshot);
-            console.log('[DEBUG] Extracted text available:', !!extractedText);
             if (screenshot) {
               console.log('[DEBUG] Screenshot length:', screenshot.length);
             }
@@ -682,8 +702,6 @@ safeJsonStringify(obj, space = null) {
               null // last_sync_attempt
             ];
             
-            console.log('[DEBUG] Values:', values);
-            
             try {
               // Get the database manager from context
               const database = context.database;
@@ -691,40 +709,45 @@ safeJsonStringify(obj, space = null) {
                 throw new Error('No database connection available in context');
               }
               
-              // Use DatabaseManager's run method which handles the connection properly
-              await database.run(insertSQL, values);
-              console.log('[SUCCESS] Memory stored successfully');
+              const insertResult = await database.run(insertSQL, values);
+
+              // Immediately verify what was actually inserted
+              // console.log('[DEBUG] Immediately querying inserted record...');
+              // const verifyQuery = 'SELECT id, suggested_response FROM memory WHERE id = ?';
+              // const verifyResult = await database.query(verifyQuery, [memoryId]);
+              // console.log('[DEBUG] Verification query result:', verifyResult);
+              // console.log('[DEBUG] Inserted suggested_response value:', verifyResult[0]?.suggested_response);
               
               // Add a small delay to ensure any async operations complete
               await new Promise(resolve => setTimeout(resolve, 100));
               
               // Try to get a fresh connection and verify the memory was actually stored
-              try {
-                console.log('[VERIFY] Attempting to verify memory storage...');
+              // try {
+              //   console.log('[VERIFY] Attempting to verify memory storage...');
                 
-                // First, let's check if the table exists and has any data
-                const tableCheckQuery = 'SELECT COUNT(*) as total FROM memory';
-                const tableCheckResult = await database.query(tableCheckQuery, []);
-                console.log(`[VERIFY] Total memories in table:`, tableCheckResult);
+              //   // First, let's check if the table exists and has any data
+              //   const tableCheckQuery = 'SELECT COUNT(*) as total FROM memory';
+              //   const tableCheckResult = await database.query(tableCheckQuery, []);
+              //   // console.log(`[VERIFY] Total memories in table:`, tableCheckResult);
                 
-                // Now check for our specific memory
-                const verifyQuery = 'SELECT * FROM memory WHERE id = ?';
-                const verifyResult = await database.query(verifyQuery, [memoryId]);
-console.log(`[VERIFY] Memory verification query result:`, safeJsonStringify(verifyResult));
+              //   // Now check for our specific memory
+              //   const verifyQuery = 'SELECT * FROM memory WHERE id = ?';
+              //   const verifyResult = await database.query(verifyQuery, [memoryId]);
+              //   // console.log(`[VERIFY] Memory verification query result:`, safeJsonStringify(verifyResult));
                 
-                if (verifyResult && verifyResult.length > 0) {
-                  console.log(`[VERIFY] ✅ Memory ${memoryId} confirmed in database`);
-                } else {
-                  console.log(`[VERIFY] ❌ Memory ${memoryId} NOT found in database after storage!`);
+              //   if (verifyResult && verifyResult.length > 0) {
+              //     console.log(`[VERIFY] ✅ Memory ${memoryId} confirmed in database`);
+              //   } else {
+              //     console.log(`[VERIFY] ❌ Memory ${memoryId} NOT found in database after storage!`);
                   
-                  // Try a broader query to see if any memories exist
-                  const allMemoriesQuery = 'SELECT id, created_at FROM memory ORDER BY created_at DESC LIMIT 5';
-                  const allMemoriesResult = await database.query(allMemoriesQuery, []);
-                  console.log(`[VERIFY] Recent memories in database:`, allMemoriesResult);
-                }
-              } catch (verifyError) {
-                console.error('[VERIFY] Error verifying memory storage:', verifyError);
-              }
+              //     // Try a broader query to see if any memories exist
+              //     const allMemoriesQuery = 'SELECT id, created_at FROM memory ORDER BY created_at DESC LIMIT 5';
+              //     const allMemoriesResult = await database.query(allMemoriesQuery, []);
+              //     console.log(`[VERIFY] Recent memories in database:`, allMemoriesResult);
+              //   }
+              // } catch (verifyError) {
+              //   console.error('[VERIFY] Error verifying memory storage:', verifyError);
+              // }
               
               return {
                 success: true,
@@ -769,9 +792,6 @@ console.log(`[VERIFY] Memory verification query result:`, safeJsonStringify(veri
                 countSql = `SELECT COUNT(*) as total FROM memory`;
                 countParams = [];
               }
-              
-              console.log(`[DEBUG] Executing SQL: ${sql}`);
-console.log(`[DEBUG] Query params: ${safeJsonStringify(queryParams)}`);
               
               // Execute queries
               const memories = await database.query(sql, queryParams);

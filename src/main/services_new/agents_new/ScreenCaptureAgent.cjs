@@ -48,7 +48,7 @@ const AGENT_FORMAT = {
       },
       required: ['action']
     },
-    dependencies: ['screenshot-desktop', 'node-screenshots', 'tesseract.js', 'path', 'fs', 'url'],
+    dependencies: ['screenshot-desktop', 'tesseract.js', 'path', 'fs', 'url'],
     execution_target: 'frontend',
     requires_database: false,
     database_type: undefined,
@@ -103,63 +103,6 @@ const AGENT_FORMAT = {
       }
     },
 
-    /**
-     * Hide ThinkDrop AI UI elements before screenshot
-     */
-    async hideThinkDropUI(context) {
-    try {
-      // Get all BrowserWindow instances
-      const { BrowserWindow } = require('electron');
-      const allWindows = BrowserWindow.getAllWindows();
-      
-      // Store original visibility states
-      this.originalWindowStates = [];
-      
-      for (const window of allWindows) {
-        if (window && !window.isDestroyed()) {
-          const isVisible = window.isVisible();
-          this.originalWindowStates.push({
-            window: window,
-            wasVisible: isVisible
-          });
-          
-          // Hide the window temporarily
-          if (isVisible) {
-            window.hide();
-            console.log(`🫥 Hidden window: ${window.getTitle() || 'Untitled'}`);
-          }
-        }
-      }
-      
-      console.log(`🫥 Hidden ${this.originalWindowStates.length} ThinkDrop AI windows`);
-    } catch (error) {
-      console.warn('⚠️ Failed to hide ThinkDrop AI UI:', error.message);
-    }
-  },
-
-  /**
-   * Restore ThinkDrop AI UI elements after screenshot
-   */
-  async showThinkDropUI(context) {
-    try {
-      if (this.originalWindowStates && Array.isArray(this.originalWindowStates)) {
-        for (const state of this.originalWindowStates) {
-          if (state.window && !state.window.isDestroyed() && state.wasVisible) {
-            state.window.show();
-            console.log(`👁️ Restored window: ${state.window.getTitle() || 'Untitled'}`);
-          }
-        }
-        
-        console.log(`👁️ Restored ${this.originalWindowStates.length} ThinkDrop AI windows`);
-        
-        // Clear the stored states
-        this.originalWindowStates = [];
-      }
-    } catch (error) {
-      console.warn('⚠️ Failed to restore ThinkDrop AI UI:', error.message);
-    }
-  },
-
   // Object-based execute method
   async execute(params, context) {
       try {
@@ -179,74 +122,59 @@ const AGENT_FORMAT = {
             try {
               console.log('📸🔍 Capturing screen and extracting text...');
               
-              // Get dependencies from context (they are spread directly into context)
-              console.log('🔍 DEBUG: Available context keys:', Object.keys(context));
-              console.log('🔍 DEBUG: nodeScreenshots available:', !!context.nodeScreenshots);
-              console.log('🔍 DEBUG: node-screenshots available:', !!context['node-screenshots']);
+              const { screenshotDesktop, tesseractJs, path, fs } = context;
               
-              const { nodeScreenshots, tesseractJs, path, fs } = context;
-              
-              if (!nodeScreenshots) {
-                console.error('❌ node-screenshots dependency not available in context');
+              if (!screenshotDesktop) {
+                console.error('❌ screenshot-desktop dependency not available in context');
                 console.error('❌ Available dependencies:', Object.keys(context).filter(k => !['llmClient', 'database', 'apiConfig', 'orchestratorPath', 'timestamp', 'originalPayload', 'userId', 'workflowControls'].includes(k)));
-                throw new Error('node-screenshots dependency not available');
+                throw new Error('screenshot-desktop dependency not available');
               }
               
-              // Step 1: Capture screenshot excluding ThinkDrop AI windows (direct exclusion)
+              // Step 1: Hide ThinkDrop AI windows for clean screenshot
               console.log('📸 Capturing desktop screenshot excluding ThinkDrop AI windows...');
               let screenshotData;
               try {
-                // Get ThinkDrop AI window IDs to exclude
-                const { BrowserWindow } = require('electron');
-                const thinkDropWindowIds = [];
-                const allElectronWindows = BrowserWindow.getAllWindows();
-                
-                // Get all system windows using node-screenshots
-                const { Monitor, Window } = nodeScreenshots;
-                const allSystemWindows = Window.all();
-                
-                // Find ThinkDrop AI windows by matching with Electron windows
-                for (const electronWindow of allElectronWindows) {
-                  if (electronWindow && !electronWindow.isDestroyed() && electronWindow.isVisible()) {
-                    const electronBounds = electronWindow.getBounds();
-                    const electronTitle = electronWindow.getTitle() || '';
-                    
-                    // Find matching system window
-                    const matchingSystemWindow = allSystemWindows.find(sysWin => {
-                      const sysX = sysWin.x();
-                      const sysY = sysWin.y();
-                      const sysWidth = sysWin.width();
-                      const sysHeight = sysWin.height();
-                      
-                      // Match by position and size (with some tolerance)
-                      return Math.abs(sysX - electronBounds.x) < 10 &&
-                             Math.abs(sysY - electronBounds.y) < 10 &&
-                             Math.abs(sysWidth - electronBounds.width) < 10 &&
-                             Math.abs(sysHeight - electronBounds.height) < 10;
-                    });
-                    
-                    if (matchingSystemWindow) {
-                      thinkDropWindowIds.push(matchingSystemWindow.id());
-                      console.log(`🎯 Found ThinkDrop AI window to exclude: ${electronTitle} (ID: ${matchingSystemWindow.id()})`);
-                    }
-                  }
+                // Hide all ThinkDrop AI windows using IPC helper
+                let hiddenWindowsResult = null;
+                if (context.hideAllWindows) {
+                  console.log('🙈 Hiding ThinkDrop AI windows for clean screenshot...');
+                  hiddenWindowsResult = await context.hideAllWindows();
+                  console.log(`🔍 Hidden ${hiddenWindowsResult.hiddenWindows} windows for screenshot`);
+                  
+                  // Wait a moment for windows to hide
+                  await new Promise(resolve => setTimeout(resolve, 300));
+                } else {
+                  console.log('⚠️ hideAllWindows not available, capturing with UI elements visible');
                 }
                 
-                console.log(`🚫 Excluding ${thinkDropWindowIds.length} ThinkDrop AI windows from screenshot`);
-                
-                // Capture the primary monitor, excluding ThinkDrop AI windows
-                const monitors = Monitor.all();
-                const primaryMonitor = monitors.find(m => m.isPrimary()) || monitors[0];
-                
-                if (!primaryMonitor) {
-                  throw new Error('No primary monitor found');
+                let screenshotBuffer;
+                if (typeof screenshotDesktop === 'function') {
+                  screenshotBuffer = await screenshotDesktop();
+                } else if (screenshotDesktop && typeof screenshotDesktop.default === 'function') {
+                  screenshotBuffer = await screenshotDesktop.default();
+                } else if (screenshotDesktop && typeof screenshotDesktop.screenshot === 'function') {
+                  screenshotBuffer = await screenshotDesktop.screenshot();
+                } else {
+                  throw new Error('screenshot-desktop module not properly imported');
                 }
                 
-                // Capture screenshot of primary monitor
-                const image = primaryMonitor.captureImageSync();
-                screenshotData = image.toPngSync();
+                // Convert to base64
+                const base64Data = screenshotBuffer.toString('base64');
+                screenshotData = `data:image/png;base64,${base64Data}`;
                 
-                console.log('📸 Screenshot captured successfully (excluding ThinkDrop AI windows)');
+                // Restore only the specific windows that were hidden
+                if (context.showAllWindows && hiddenWindowsResult?.windowsInfo) {
+                  console.log('👁️ Restoring previously hidden ThinkDrop AI windows...');
+                  const restoreResult = await context.showAllWindows(hiddenWindowsResult.windowsInfo);
+                  console.log(`🔍 Restored ${restoreResult.restoredWindows} windows after screenshot`);
+                } else if (context.showAllWindows) {
+                  console.log('👁️ Restoring ThinkDrop AI windows (fallback)...');
+                  await context.showAllWindows();
+                } else {
+                  console.log('⚠️ showAllWindows not available, windows may remain hidden');
+                }
+                
+                console.log('📸 Screenshot captured successfully (UI elements excluded)');
               } catch (screenshotError) {
                 console.error('❌ Screenshot capture failed:', screenshotError);
                 throw new Error(`Screenshot capture failed: ${screenshotError.message}`);

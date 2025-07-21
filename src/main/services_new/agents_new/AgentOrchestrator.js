@@ -452,13 +452,10 @@ export class AgentOrchestrator {
    * Load an agent from DuckDB database or fallback to file
    */
   async loadAgent(agentName) {
-    console.log(`🔍 DEBUG: loadAgent called for ${agentName}`);
     
     // Check if agent is already loaded
     if (this.loadedAgents.has(agentName)) {
-      console.log(`🔄 DEBUG: Agent ${agentName} already loaded, returning cached instance`);
       const cachedAgent = this.loadedAgents.get(agentName);
-      console.log(`🔄 DEBUG: Cached agent has bootstrap: ${!!cachedAgent.bootstrap}, execute: ${!!cachedAgent.execute}`);
       return cachedAgent;
     }
 
@@ -466,7 +463,6 @@ export class AgentOrchestrator {
       console.log(`📦 Loading agent: ${agentName}`);
       
       // First try to load from DuckDB database
-      console.log(`🔍 DEBUG: Attempting to load ${agentName} from database...`);
       let agentData = await this.loadAgentFromDatabase(agentName);
       // If not found in database, try legacy file-based loading
       if (!agentData) {
@@ -483,25 +479,15 @@ export class AgentOrchestrator {
       
       if (agentData.code) {
         // Database-stored agent with code
-        console.log(`🔍 DEBUG: Creating ${agentName} from code (${agentData.code.length} bytes)`);
         agentInstance = await this.createAgentFromCode(agentData);
       } else if (agentData.filePath) {
         // File-based agent (legacy)
-        console.log(`🔍 DEBUG: Creating ${agentName} from file: ${agentData.filePath}`);
         agentInstance = await this.createAgentFromFile(agentData);
       } else {
         console.error(`❌ DEBUG: Agent ${agentName} has no code or file path`);
         throw new Error(`Agent ${agentName} has no code or file path`);
       }
-      
-      console.log(`🔍 DEBUG: Created agent instance for ${agentName}:`, {
-        hasBootstrap: !!agentInstance.bootstrap,
-        bootstrapType: typeof agentInstance.bootstrap,
-        hasExecute: !!agentInstance.execute,
-        executeType: typeof agentInstance.execute,
-        dependencies: agentInstance.dependencies
-      });
-
+                
       this.loadedAgents.set(agentName, agentInstance);
       console.log(`✅ Agent ${agentName} loaded successfully`);
       
@@ -901,11 +887,33 @@ export class AgentOrchestrator {
             let module;
             const dependencyCamelcase = this.toCamelCase(dependency);
           
-            // Standard import for other dependencies
-            module = await import(dependency);
-            dependencies[dependencyCamelcase] = module.default || module;
+            // Handle native modules that require CommonJS require()
+            if (dependency === 'node-screenshots') {
+              const { createRequire } = await import('module');
+              const require = createRequire(import.meta.url);
+              module = require(dependency);
+              dependencies[dependencyCamelcase] = module;
+              console.log(`✅ Loaded native module ${dependency} via require()`);
+            } else {
+              // Standard import for other dependencies
+              module = await import(dependency);
+              dependencies[dependencyCamelcase] = module.default || module;
+            }
           } catch (error) {
             console.warn(`⚠️ Failed to import dependency ${dependency}:`, error.message);
+            // Try fallback with require() for native modules
+            if (dependency.includes('-') || dependency.includes('_')) {
+              try {
+                const { createRequire } = await import('module');
+                const require = createRequire(import.meta.url);
+                const module = require(dependency);
+                const dependencyCamelcase = this.toCamelCase(dependency);
+                dependencies[dependencyCamelcase] = module;
+                console.log(`✅ Fallback: Loaded ${dependency} via require()`);
+              } catch (requireError) {
+                console.warn(`⚠️ Fallback also failed for ${dependency}:`, requireError.message);
+              }
+            }
           }
         }
       }
@@ -928,12 +936,75 @@ export class AgentOrchestrator {
         ...dependencies, // Dependencies must come after context to avoid being overridden
         orchestrator: this, // Allow agents to call other agents
         executeAgent: this.executeAgent.bind(this), // Direct method access
-        getAgent: this.getAgent.bind(this) // Access to other agents
+        getAgent: this.getAgent.bind(this), // Access to other agents
+        
+        // Add IPC helpers for UI management (needed for screenshot capture)
+        hideAllWindows: async () => {
+          try {
+            // Get the BrowserWindow instances from the main process
+            const { BrowserWindow } = await import('electron');
+            const allWindows = BrowserWindow.getAllWindows();
+            const hiddenWindowsInfo = [];
+            
+            // Track and hide only visible ThinkDrop AI windows
+            for (const window of allWindows) {
+              if (window && !window.isDestroyed() && window.isVisible()) {
+                const windowInfo = {
+                  id: window.id,
+                  title: window.getTitle() || 'Untitled',
+                  bounds: window.getBounds()
+                };
+                hiddenWindowsInfo.push(windowInfo);
+                window.hide();
+                console.log('🙈 Hidden window:', windowInfo.title);
+              }
+            }
+            
+            // Store the hidden windows info in the context for restoration
+            context.hiddenWindowsInfo = hiddenWindowsInfo;
+            
+            return { success: true, hiddenWindows: hiddenWindowsInfo.length, windowsInfo: hiddenWindowsInfo };
+          } catch (error) {
+            console.error('❌ Failed to hide windows:', error);
+            return { success: false, error: error.message };
+          }
+        },
+        
+        showAllWindows: async (hiddenWindowsInfo) => {
+          try {
+            // Use the stored hidden windows info or get from context
+            const windowsToRestore = hiddenWindowsInfo || context.hiddenWindowsInfo || [];
+            
+            if (windowsToRestore.length === 0) {
+              console.log('⚠️ No hidden windows info available, skipping restoration');
+              return { success: true, restoredWindows: 0 };
+            }
+            
+            // Get the BrowserWindow instances from the main process
+            const { BrowserWindow } = await import('electron');
+            const allWindows = BrowserWindow.getAllWindows();
+            let restoredCount = 0;
+            
+            // Restore only the specific windows that were hidden
+            for (const windowInfo of windowsToRestore) {
+              const window = allWindows.find(w => w.id === windowInfo.id);
+              if (window && !window.isDestroyed() && !window.isVisible()) {
+                window.show();
+                console.log('👁️ Restored window:', windowInfo.title);
+                restoredCount++;
+              }
+            }
+            
+            // Clear the stored hidden windows info
+            delete context.hiddenWindowsInfo;
+            
+            return { success: true, restoredWindows: restoredCount };
+          } catch (error) {
+            console.error('❌ Failed to show windows:', error);
+            return { success: false, error: error.message };
+          }
+        },
       };
-      
-      console.log(`🔍 DEBUG: About to execute ${agentName}.execute with params:`, params);
-      console.log(`🔍 DEBUG: Agent execute type: ${typeof agent.execute}`);
-      console.log(`🔍 DEBUG: Agent execute code:`, agent.execute ? agent.execute.toString().substring(0, 100) + '...' : 'undefined');
       
       if (!agent.execute || typeof agent.execute !== 'function') {
         throw new Error('No valid execute code provided');
@@ -1202,7 +1273,8 @@ export class AgentOrchestrator {
         context: {
           requiresMemoryAccess: processedPayload.requiresMemoryAccess,
           captureScreen: processedPayload.captureScreen,
-          sourceText: processedPayload.sourceText?.substring(0, 100) + '...' || 'No source text'
+          sourceText: processedPayload.sourceText?.substring(0, 100) + '...' || 'No source text',
+          suggestedResponse: processedPayload.suggestedResponse
         }
       };
       
@@ -1285,13 +1357,32 @@ export class AgentOrchestrator {
     
     // Fallback structure
     console.log('🔄 Using fallback structure for unknown payload format');
+    
+    // Determine appropriate sourceText - avoid stringifying objects
+    let sourceText = payload.sourceText;
+    if (!sourceText) {
+      // Try to extract meaningful text from common payload properties
+      if (payload.message && typeof payload.message === 'string') {
+        sourceText = payload.message;
+      } else if (payload.query && typeof payload.query === 'string') {
+        sourceText = payload.query;
+      } else if (payload.text && typeof payload.text === 'string') {
+        sourceText = payload.text;
+      } else {
+        // Only stringify as last resort and mark it clearly
+        sourceText = '[System Generated] ' + JSON.stringify(payload);
+        console.log('⚠️ Warning: Using stringified payload as sourceText');
+      }
+    }
+    
     return {
       intents: [{ intent: 'question', confidence: 0.8 }],
       primaryIntent: payload.primaryIntent || 'question',
       entities: payload.entities || [],
       requiresMemoryAccess: payload.requiresMemoryAccess || false,
       captureScreen: payload.captureScreen || false,
-      sourceText: payload.sourceText || JSON.stringify(payload)
+      sourceText: sourceText,
+      suggestedResponse: payload.suggestedResponse || payload.response || null
     };
   }
 
@@ -1533,6 +1624,7 @@ export class AgentOrchestrator {
         return {
           action: 'store_context',
           data: {
+            ...processedPayload,
             intent: intent,
             sourceText: sourceText,
             entities: entities,
