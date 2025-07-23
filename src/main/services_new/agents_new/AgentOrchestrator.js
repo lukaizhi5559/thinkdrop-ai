@@ -223,6 +223,24 @@ export class AgentOrchestrator {
         config: { memory_retention_days: 30, max_memories: 10000 },
         orchestrator_metadata: { category: 'memory', priority: 'critical' }
       },
+      {
+        name: 'IntentParserAgent_phi3_embedded',
+        description: 'Parses user intents using local Phi3 LLM with embedded prompts for offline processing',
+        dependencies: ['path', 'fs'],
+        execution_target: 'frontend',
+        requires_database: false,
+        config: { confidence_threshold: 0.7, use_phi3: true },
+        orchestrator_metadata: { category: 'nlp', priority: 'high' }
+      },
+      {
+        name: 'Phi3Agent',
+        description: 'Local Phi3 LLM agent using Ollama for offline natural language processing',
+        dependencies: ['child_process', 'path'],
+        execution_target: 'frontend',
+        requires_database: false,
+        config: { model: 'phi3:mini', timeout: 30000, max_tokens: 100 },
+        orchestrator_metadata: { category: 'llm', priority: 'high' }
+      },
       // {
       //   name: 'IntentParserAgent',
       //   description: 'Parses user intents and determines appropriate actions',
@@ -881,19 +899,21 @@ export class AgentOrchestrator {
       const dependencies = {};
 
       // Always load dependencies for execution context (not just during bootstrap)
+      console.log(`🔍 DEBUG: Agent ${agentName} has dependencies:`, agent.dependencies);
       if (agent.dependencies && Array.isArray(agent.dependencies)) {
         for (const dependency of agent.dependencies) {
           try {
             let module;
             const dependencyCamelcase = this.toCamelCase(dependency);
           
-            // Handle native modules that require CommonJS require()
-            if (dependency === 'node-screenshots') {
+            // Handle built-in Node.js modules and native modules that require CommonJS require()
+            const builtInModules = ['child_process', 'fs', 'path', 'url', 'crypto', 'os', 'util'];
+            if (builtInModules.includes(dependency) || dependency === 'node-screenshots') {
               const { createRequire } = await import('module');
               const require = createRequire(import.meta.url);
               module = require(dependency);
               dependencies[dependencyCamelcase] = module;
-              console.log(`✅ Loaded native module ${dependency} via require()`);
+              console.log(`✅ Loaded built-in/native module ${dependency} via require()`);
             } else {
               // Standard import for other dependencies
               module = await import(dependency);
@@ -926,7 +946,12 @@ export class AgentOrchestrator {
         console.log(`🔧 Bootstrapping ${agentName}...`);
         await agent.bootstrap(this.context, { ...this.context, ...context, ...dependencies });
         agent._bootstrapped = true;
+        
+        // Update the cached agent with bootstrap flag
+        this.loadedAgents.set(agentName, agent);
         console.log(`✅ ${agentName} bootstrapped successfully`);
+      } else if (agent._bootstrapped) {
+        console.log(`🔄 Using already bootstrapped ${agentName}`);
       }
       
       // Execute agent with orchestrator reference for agent-to-agent communication
@@ -1299,14 +1324,22 @@ export class AgentOrchestrator {
       }
       
       console.log('✅ Local intent parsing successful:', intentResult.result);
+      console.log('🔍 DEBUG: intentResult structure:', JSON.stringify(intentResult, null, 2));
+      
+      // Fix: Access the correct nested level - intentResult.result.result contains the actual intent data
+      const actualResult = intentResult.result.result;
+      const actualMetadata = intentResult.result.metadata;
+      
+      console.log('🔍 DEBUG: actualResult.intent:', actualResult.intent);
+      
       return {
         success: true,
-        intent: intentResult.result.intent,
-        confidence: intentResult.result.confidence,
-        entities: intentResult.result.entities || [],
-        category: intentResult.result.category || 'general',
-        method: intentResult.metadata?.method || 'local',
-        requiresContext: intentResult.result.requiresContext || false
+        intent: actualResult.intent,
+        confidence: actualResult.confidence,
+        entities: actualResult.entities || [],
+        category: actualResult.category || 'general',
+        method: actualMetadata?.method || 'local',
+        requiresContext: actualResult.requiresContext || false
       };
       
     } catch (error) {
@@ -1322,6 +1355,7 @@ export class AgentOrchestrator {
     try {
       const { intent, confidence, entities, category, method } = intentResult;
       
+      console.log('🔍 DEBUG: intentResult in processLocalIntentResult:', JSON.stringify(intentResult, null, 2));
       console.log(`🎯 Processing intent: ${intent} (confidence: ${confidence}, method: ${method})`);
       
       // Handle different intent types with local processing
@@ -1469,13 +1503,40 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Handle local question responses with basic LLM fallback
+   * Handle local question responses using Phi3 LLM
    */
   async handleLocalQuestion(userMessage, intentResult, context = {}) {
     try {
-      console.log('❓ Handling local question...');
+      console.log('❓ Handling local question with Phi3...');
       
-      // For now, provide a helpful response acknowledging the limitation
+      // Try to use Phi3 for actual response generation
+      try {
+        console.log('🤖 Querying Phi3 for question response...');
+        const phi3Result = await this.executeAgent('Phi3Agent', {
+          action: 'query-phi3',
+          prompt: `Please answer this question helpfully and concisely: ${userMessage}`,
+          options: { timeout: 10000 }
+        }, {
+          ...context,
+          executeAgent: this.executeAgent.bind(this)
+        });
+        
+        if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
+          console.log('✅ Phi3 provided response for question');
+          return {
+            success: true,
+            response: phi3Result.result.response,
+            handledBy: 'phi3_question_handler',
+            method: 'phi3_response',
+            confidence: intentResult.confidence,
+            timestamp: new Date().toISOString()
+          };
+        }
+      } catch (phi3Error) {
+        console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
+      }
+      
+      // Fallback to generic responses if Phi3 fails
       const responses = [
         'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
         'I understand you\'re asking about that. My local processing is somewhat limited right now.',
