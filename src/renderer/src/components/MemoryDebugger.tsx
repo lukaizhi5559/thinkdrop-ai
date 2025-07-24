@@ -611,11 +611,28 @@ const MemoryDebugger = () => {
                     <div className="mb-2">
                       <div className="text-xs text-gray-400 mb-1">Entities:</div>
                       <div className="flex flex-wrap gap-1">
-                        {memory.entities.map((entity: string, idx: number) => (
-                          <span key={idx} className="text-xs bg-purple-900/30 text-purple-200 px-2 py-1 rounded">
-                            {entity}
-                          </span>
-                        ))}
+                        {memory.entities.map((entity: any, idx: number) => {
+                          // Handle both old string format and new object format
+                          const entityValue = typeof entity === 'string' ? entity : entity.value || entity;
+                          const entityType = typeof entity === 'object' ? entity.type : null;
+                          const normalizedValue = typeof entity === 'object' ? entity.normalized_value : null;
+                          
+                          return (
+                            <div key={idx} className="text-xs bg-purple-900/30 text-purple-200 px-2 py-1 rounded flex flex-col">
+                              <div className="flex items-center gap-1">
+                                <span>{entityValue}</span>
+                                {entityType && (
+                                  <span className="text-purple-300 text-[10px] opacity-70">({entityType})</span>
+                                )}
+                              </div>
+                              {normalizedValue && normalizedValue !== entityValue && (
+                                <div className="text-purple-300 text-[10px] opacity-70 mt-0.5">
+                                  → {normalizedValue}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
                   )}

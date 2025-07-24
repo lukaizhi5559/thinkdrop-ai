@@ -161,6 +161,25 @@ const AGENT_FORMAT = {
                 )
               `;
               
+              // Also create memory_entities table for normalized entity storage
+              const createEntitiesTableSQL = `
+                CREATE TABLE IF NOT EXISTS memory_entities (
+                  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+                  memory_id TEXT NOT NULL,
+                  entity TEXT NOT NULL,
+                  entity_type TEXT,
+                  normalized_value TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (memory_id) REFERENCES memory(id)
+                )
+              `;
+              
+              // Create index for better query performance
+              const createEntitiesIndexSQL = `
+                CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+                ON memory_entities(memory_id)
+              `;
+              
               await new Promise((resolve, reject) => {
                 // Check if it's a DatabaseManager-style connection (has .run method)
                 if (typeof this.connection.run === 'function') {
@@ -181,11 +200,139 @@ const AGENT_FORMAT = {
                 }
               });
               
+              // Create memory_entities table
+              await new Promise((resolve, reject) => {
+                if (typeof this.connection.run === 'function') {
+                  this.connection.run(createEntitiesTableSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                }
+                else {
+                  reject(new Error('Unsupported database connection interface for entities table creation'));
+                }
+              });
+              
+              // Create index for memory_entities
+              await new Promise((resolve, reject) => {
+                if (typeof this.connection.run === 'function') {
+                  this.connection.run(createEntitiesIndexSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                }
+                else {
+                  reject(new Error('Unsupported database connection interface for index creation'));
+                }
+              });
+              
               console.log('[SUCCESS] Memory table created successfully');
+            };
+            
+            // Add migration function to ensure memory_entities table exists
+            const ensureMemoryEntitiesTable = async () => {
+              try {
+                console.log('[INFO] Checking if memory_entities table exists...');
+                
+                // Check if memory_entities table exists
+                let tableExists = false;
+                try {
+                  if (typeof this.connection.query === 'function') {
+                    await new Promise((resolve, reject) => {
+                      this.connection.query('SELECT 1 FROM memory_entities LIMIT 1', [], (err, result) => {
+                        if (err) {
+                          tableExists = false;
+                          resolve();
+                        } else {
+                          tableExists = true;
+                          resolve();
+                        }
+                      });
+                    });
+                  } else if (typeof this.connection.all === 'function') {
+                    await new Promise((resolve, reject) => {
+                      this.connection.all('SELECT 1 FROM memory_entities LIMIT 1', (err, result) => {
+                        if (err) {
+                          tableExists = false;
+                          resolve();
+                        } else {
+                          tableExists = true;
+                          resolve();
+                        }
+                      });
+                    });
+                  }
+                } catch (err) {
+                  tableExists = false;
+                }
+                
+                if (!tableExists) {
+                  console.log('[INFO] memory_entities table does not exist, creating it...');
+                  
+                  // Create memory_entities table
+                  const createEntitiesTableSQL = `
+                    CREATE TABLE IF NOT EXISTS memory_entities (
+                      id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+                      memory_id TEXT NOT NULL,
+                      entity TEXT NOT NULL,
+                      entity_type TEXT,
+                      normalized_value TEXT,
+                      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                      FOREIGN KEY (memory_id) REFERENCES memory(id) ON DELETE CASCADE
+                    )
+                  `;
+                  
+                  await new Promise((resolve, reject) => {
+                    if (typeof this.connection.run === 'function') {
+                      this.connection.run(createEntitiesTableSQL, (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                      });
+                    } else if (typeof this.connection.exec === 'function') {
+                      this.connection.exec(createEntitiesTableSQL, (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                      });
+                    } else {
+                      reject(new Error('Unsupported database connection interface for table creation'));
+                    }
+                  });
+                  
+                  // Create index for better query performance
+                  const createEntitiesIndexSQL = `
+                    CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+                    ON memory_entities(memory_id)
+                  `;
+                  
+                  await new Promise((resolve, reject) => {
+                    if (typeof this.connection.run === 'function') {
+                      this.connection.run(createEntitiesIndexSQL, (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                      });
+                    } else if (typeof this.connection.exec === 'function') {
+                      this.connection.exec(createEntitiesIndexSQL, (err) => {
+                        if (err) reject(err);
+                        else resolve();
+                      });
+                    } else {
+                      reject(new Error('Unsupported database connection interface for index creation'));
+                    }
+                  });
+                  
+                  console.log('[SUCCESS] memory_entities table and index created successfully');
+                } else {
+                  console.log('[INFO] memory_entities table already exists');
+                }
+              } catch (err) {
+                console.error('[ERROR] Failed to ensure memory_entities table:', err);
+                throw err;
+              }
             };
             
             // Skip the rest of the bootstrap and just ensure memory table exists
             await ensureMemoryTable();
+            await ensureMemoryEntitiesTable();
             console.log('[SUCCESS] UserMemoryAgent bootstrap completed using context database');
             return { success: true, source: 'context_database' };
           } catch (err) {
@@ -361,6 +508,105 @@ const AGENT_FORMAT = {
             throw error;
           }
         };
+
+        const ensureMemoryEntitiesTableExists = async () => {
+          try {
+            console.log('[INFO] Checking if memory_entities table exists...');
+            
+            // Check if memory_entities table exists
+            let tableExists = false;
+            try {
+              if (typeof this.connection.query === 'function') {
+                await new Promise((resolve, reject) => {
+                  this.connection.query('SELECT 1 FROM memory_entities LIMIT 1', [], (err, result) => {
+                    if (err) {
+                      tableExists = false;
+                      resolve();
+                    } else {
+                      tableExists = true;
+                      resolve();
+                    }
+                  });
+                });
+              } else if (typeof this.connection.all === 'function') {
+                await new Promise((resolve, reject) => {
+                  this.connection.all('SELECT 1 FROM memory_entities LIMIT 1', (err, result) => {
+                    if (err) {
+                      tableExists = false;
+                      resolve();
+                    } else {
+                      tableExists = true;
+                      resolve();
+                    }
+                  });
+                });
+              }
+            } catch (err) {
+              tableExists = false;
+            }
+            
+            if (!tableExists) {
+              console.log('[INFO] memory_entities table does not exist, creating it...');
+              
+              // Create memory_entities table (removed FOREIGN KEY for DuckDB compatibility)
+              const createEntitiesTableSQL = `
+                CREATE TABLE IF NOT EXISTS memory_entities (
+                  id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+                  memory_id TEXT NOT NULL,
+                  entity TEXT NOT NULL,
+                  entity_type TEXT,
+                  normalized_value TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+              `;
+              
+              await new Promise((resolve, reject) => {
+                if (typeof this.connection.run === 'function') {
+                  this.connection.run(createEntitiesTableSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                } else if (typeof this.connection.exec === 'function') {
+                  this.connection.exec(createEntitiesTableSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                } else {
+                  reject(new Error('Unsupported database connection interface for table creation'));
+                }
+              });
+              
+              // Create index for better query performance
+              const createEntitiesIndexSQL = `
+                CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+                ON memory_entities(memory_id)
+              `;
+              
+              await new Promise((resolve, reject) => {
+                if (typeof this.connection.run === 'function') {
+                  this.connection.run(createEntitiesIndexSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                } else if (typeof this.connection.exec === 'function') {
+                  this.connection.exec(createEntitiesIndexSQL, (err) => {
+                    if (err) reject(err);
+                    else resolve();
+                  });
+                } else {
+                  reject(new Error('Unsupported database connection interface for index creation'));
+                }
+              });
+              
+              console.log('[SUCCESS] memory_entities table and index created successfully');
+            } else {
+              console.log('[INFO] memory_entities table already exists');
+            }
+          } catch (err) {
+            console.error('[ERROR] Failed to ensure memory_entities table:', err);
+            throw err;
+          }
+        };
         
         const createMemoryTable = async () => {
           const createTableSQL = `
@@ -384,16 +630,28 @@ const AGENT_FORMAT = {
             )
           `;
           
+          // Also create memory_entities table for normalized entity storage
+          const createEntitiesTableSQL = `
+            CREATE TABLE IF NOT EXISTS memory_entities (
+              id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+              memory_id TEXT NOT NULL,
+              entity TEXT NOT NULL,
+              entity_type TEXT,
+              normalized_value TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              FOREIGN KEY (memory_id) REFERENCES memory(id)
+            )
+          `;
+          
+          // Create index for better query performance
+          const createEntitiesIndexSQL = `
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+            ON memory_entities(memory_id)
+          `;
+          
           await new Promise((resolve, reject) => {
-            // Check if it's a DatabaseManager-style connection (has .run method)
-            if (typeof this.connection.run === 'function') {
-              this.connection.run(createTableSQL, (err) => {
-                if (err) reject(err);
-                else resolve();
-              });
-            }
             // Check if it's a direct DuckDB connection (has .run method)
-            else if (typeof this.connection.run === 'function') {
+            if (typeof this.connection.run === 'function') {
               this.connection.run(createTableSQL, (err) => {
                 if (err) reject(err);
                 else resolve();
@@ -404,10 +662,94 @@ const AGENT_FORMAT = {
             }
           });
           
-          console.log('[SUCCESS] Memory table created successfully');
+          // Create memory_entities table
+          await new Promise((resolve, reject) => {
+            if (typeof this.connection.run === 'function') {
+              this.connection.run(createEntitiesTableSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            }
+            else {
+              reject(new Error('Unsupported database connection interface for entities table creation'));
+            }
+          });
+          
+          // Create index for memory_entities
+          await new Promise((resolve, reject) => {
+            if (typeof this.connection.run === 'function') {
+              this.connection.run(createEntitiesIndexSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            }
+            else {
+              reject(new Error('Unsupported database connection interface for index creation'));
+            }
+          });
+          
+          console.log('[SUCCESS] Memory and memory_entities tables created successfully');
         };
         
         await ensureMemoryTable();
+        
+        // Create memory_entities table directly in bootstrap
+        console.log('[INFO] Creating memory_entities table in bootstrap...');
+        try {
+          const createEntitiesTableSQL = `
+            CREATE TABLE IF NOT EXISTS memory_entities (
+              id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+              memory_id TEXT NOT NULL,
+              entity TEXT NOT NULL,
+              entity_type TEXT,
+              normalized_value TEXT,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+          `;
+          
+          await new Promise((resolve, reject) => {
+            if (typeof this.connection.run === 'function') {
+              this.connection.run(createEntitiesTableSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            } else if (typeof this.connection.exec === 'function') {
+              this.connection.exec(createEntitiesTableSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            } else {
+              reject(new Error('Unsupported database connection interface for table creation'));
+            }
+          });
+          
+          // Create index
+          const createEntitiesIndexSQL = `
+            CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+            ON memory_entities(memory_id)
+          `;
+          
+          await new Promise((resolve, reject) => {
+            if (typeof this.connection.run === 'function') {
+              this.connection.run(createEntitiesIndexSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            } else if (typeof this.connection.exec === 'function') {
+              this.connection.exec(createEntitiesIndexSQL, (err) => {
+                if (err) reject(err);
+                else resolve();
+              });
+            } else {
+              reject(new Error('Unsupported database connection interface for index creation'));
+            }
+          });
+          
+          console.log('[SUCCESS] memory_entities table and index created in bootstrap');
+        } catch (entitiesError) {
+          console.error('[ERROR] Failed to create memory_entities table in bootstrap:', entitiesError.message);
+          // Don't throw - continue with bootstrap even if entities table fails
+        }
         
         console.log('[SUCCESS] UserMemoryAgent bootstrap completed');
         return { success: true, dbPath: this.dbPath };
@@ -418,29 +760,22 @@ const AGENT_FORMAT = {
       }
     },
   
+    // Migration function to ensure memory_entities table exists
+    
+
     // Object-based execute method - no string parsing needed
-safeJsonStringify(obj, space = null) {
-    return JSON.stringify(obj, (key, value) => {
-      if (typeof value === 'bigint') {
-        return value.toString();
-      }
-      return value;
-    }, space);
-  },
+    safeJsonStringify(obj, space = null) {
+      return JSON.stringify(obj, (key, value) => {
+        if (typeof value === 'bigint') {
+          return value.toString();
+        }
+        return value;
+      }, space);
+    },
 
     async execute(params, context) {
       try {
         const { action } = params;
-        
-        // Define safeJsonStringify locally to avoid context issues
-        const safeJsonStringify = (obj, space = null) => {
-          return JSON.stringify(obj, (key, value) => {
-            if (typeof value === 'bigint') {
-              return value.toString();
-            }
-            return value;
-          }, space);
-        };
         
         // Use connection from context if available
         if (context.connection) {
@@ -487,6 +822,78 @@ safeJsonStringify(obj, space = null) {
         await validateConnection();
         console.log(`[INFO] Connection validated, executing ${action}`);
         
+        // Ensure memory_entities table exists before any operations
+        // const ensureMemoryEntitiesTableExists = async () => {
+        //   try {
+        //     console.log('[INFO] Checking if memory_entities table exists...');
+        //     console.log('[DEBUG] Using database interface for table operations');
+            
+        //     // Check if memory_entities table exists using the database interface
+        //     let tableExists = false;
+            
+        //     try {
+        //       // Try to query the table - if it exists, this will succeed
+        //       const testQuery = 'SELECT COUNT(*) as count FROM memory_entities LIMIT 1';
+        //       await database.query(testQuery, []);
+        //       tableExists = true;
+        //       console.log('[INFO] memory_entities table exists');
+        //     } catch (err) {
+        //       if (err.message && err.message.includes('does not exist')) {
+        //         console.log('[INFO] memory_entities table does not exist, will create it');
+        //         tableExists = false;
+        //       } else {
+        //         console.error('[ERROR] Unexpected error checking table existence:', err.message);
+        //         throw err;
+        //       }
+        //     }
+            
+        //     if (!tableExists) {
+        //       console.log('[INFO] memory_entities table does not exist, creating it...');
+              
+        //       // Create memory_entities table using database interface
+        //       const createEntitiesTableSQL = `
+        //         CREATE TABLE memory_entities (
+        //           id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+        //           memory_id TEXT NOT NULL,
+        //           entity TEXT NOT NULL,
+        //           entity_type TEXT,
+        //           normalized_value TEXT,
+        //           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        //           FOREIGN KEY (memory_id) REFERENCES memory(id)
+        //         )
+        //       `;
+              
+        //       await database.query(createEntitiesTableSQL, []);
+        //       console.log('[SUCCESS] memory_entities table created');
+              
+        //       // Create index for better query performance
+        //       const createEntitiesIndexSQL = `
+        //         CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+        //         ON memory_entities(memory_id)
+        //       `;
+              
+        //       await database.query(createEntitiesIndexSQL, []);
+        //       console.log('[SUCCESS] memory_entities index created');
+              
+        //       // Verify table was actually created by querying it
+        //       console.log('[INFO] Verifying memory_entities table creation...');
+        //       try {
+        //         const verifyQuery = 'SELECT COUNT(*) as count FROM memory_entities';
+        //         await database.query(verifyQuery, []);
+        //         console.log('[SUCCESS] memory_entities table verified and accessible');
+        //       } catch (verifyErr) {
+        //         console.error('[ERROR] Table verification failed:', verifyErr.message);
+        //         throw new Error('Table creation verification failed: ' + verifyErr.message);
+        //       }
+        //     } else {
+        //       console.log('[INFO] memory_entities table already exists');
+        //     }
+        //   } catch (err) {
+        //     console.error('[ERROR] Failed to ensure memory_entities table:', err);
+        //     throw err;
+        //   }
+        // };
+         
         switch (action) {
           case 'memory-store':
           case 'store_context':
@@ -710,14 +1117,47 @@ safeJsonStringify(obj, space = null) {
               }
               
               const insertResult = await database.run(insertSQL, values);
-
-              // Immediately verify what was actually inserted
-              // console.log('[DEBUG] Immediately querying inserted record...');
-              // const verifyQuery = 'SELECT id, suggested_response FROM memory WHERE id = ?';
-              // const verifyResult = await database.query(verifyQuery, [memoryId]);
-              // console.log('[DEBUG] Verification query result:', verifyResult);
-              // console.log('[DEBUG] Inserted suggested_response value:', verifyResult[0]?.suggested_response);
               
+              // Store entities in memory_entities table if they exist
+              if (storeData.entities && Array.isArray(storeData.entities) && storeData.entities.length > 0) {
+                console.log(`[INFO] Storing ${storeData.entities.length} entities for memory ${memoryId}`);
+                
+                for (const entity of storeData.entities) {
+                  let entityText, entityType;
+                  
+                  if (typeof entity === 'string') {
+                    entityText = entity;
+                    entityType = 'general';
+                  } else if (typeof entity === 'object' && entity !== null) {
+                    entityText = entity.entity || entity.value || entity.text || JSON.stringify(entity);
+                    entityType = entity.type || entity.entity_type || 'general';
+                  } else {
+                    entityText = String(entity);
+                    entityType = 'general';
+                  }
+                  
+                  const entityInsertSQL = `INSERT INTO memory_entities (
+                    memory_id, entity, entity_type, normalized_value, created_at
+                  ) VALUES (?, ?, ?, ?, ?)`;
+                  
+                  // Extract normalized_value if available
+                  let normalizedValue = null;
+                  if (typeof entity === 'object' && entity.normalized_value) {
+                    normalizedValue = entity.normalized_value;
+                  }
+                  
+                  const entityValues = [memoryId, entityText, entityType, normalizedValue, now];
+                  
+                  try {
+                    await database.run(entityInsertSQL, entityValues);
+                    console.log(`[SUCCESS] Stored entity: ${entityText} (${entityType})`);
+                  } catch (entityError) {
+                    console.error(`[ERROR] Failed to store entity ${entityText}:`, entityError);
+                    // Continue with other entities even if one fails
+                  }
+                }
+              }
+
               // Add a small delay to ensure any async operations complete
               await new Promise(resolve => setTimeout(resolve, 100));
               
@@ -780,14 +1220,29 @@ safeJsonStringify(obj, space = null) {
               let sql, queryParams, countSql, countParams;
               
               if (searchQuery) {
-                // Search with query
-                sql = `SELECT * FROM memory WHERE (source_text LIKE ? OR suggested_response LIKE ? OR id LIKE ?) ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-                queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit, offset];
-                countSql = `SELECT COUNT(*) as total FROM memory WHERE (source_text LIKE ? OR suggested_response LIKE ? OR id LIKE ?)`;
-                countParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
+                // Search with query - join with entities table
+                sql = `SELECT m.*, 
+                       GROUP_CONCAT(e.entity) as entity_list,
+                       GROUP_CONCAT(e.entity_type) as entity_type_list
+                       FROM memory m 
+                       LEFT JOIN memory_entities e ON m.id = e.memory_id 
+                       WHERE (m.source_text LIKE ? OR m.suggested_response LIKE ? OR m.id LIKE ? OR e.entity LIKE ?) 
+                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access 
+                       ORDER BY m.created_at DESC LIMIT ? OFFSET ?`;
+                queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit, offset];
+                countSql = `SELECT COUNT(DISTINCT m.id) as total FROM memory m 
+                           LEFT JOIN memory_entities e ON m.id = e.memory_id 
+                           WHERE (m.source_text LIKE ? OR m.suggested_response LIKE ? OR m.id LIKE ? OR e.entity LIKE ?)`;
+                countParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
               } else {
-                // Retrieve all memories with pagination
-                sql = `SELECT * FROM memory ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+                // Retrieve all memories with pagination - join with entities table
+                sql = `SELECT m.*, 
+                       GROUP_CONCAT(e.entity) as entity_list,
+                       GROUP_CONCAT(e.entity_type) as entity_type_list
+                       FROM memory m 
+                       LEFT JOIN memory_entities e ON m.id = e.memory_id 
+                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access 
+                       ORDER BY m.created_at DESC LIMIT ? OFFSET ?`;
                 queryParams = [limit, offset];
                 countSql = `SELECT COUNT(*) as total FROM memory`;
                 countParams = [];
@@ -813,15 +1268,26 @@ safeJsonStringify(obj, space = null) {
                   }
                 }
                 
+                // Process entities from the joined query
+                let entities = [];
+                if (memory.entity_list && memory.entity_list.trim()) {
+                  // Split the concatenated entities and filter out empty strings
+                  entities = memory.entity_list.split(',').filter(entity => entity && entity.trim()).map(entity => entity.trim());
+                }
+                
                 return {
                   ...memory,
                   metadata: metadata,
+                  entities: entities, // Add entities array for frontend
                   // Ensure screenshot and extracted_text are included
                   screenshot: memory.screenshot || null,
                   extracted_text: memory.extracted_text || null,
                   // Add computed fields for frontend compatibility
                   hasScreenshot: !!memory.screenshot,
-                  hasExtractedText: !!memory.extracted_text
+                  hasExtractedText: !!memory.extracted_text,
+                  // Remove the concatenated fields as they're not needed by frontend
+                  entity_list: undefined,
+                  entity_type_list: undefined
                 };
               });
               
@@ -863,29 +1329,61 @@ safeJsonStringify(obj, space = null) {
               }
               
               let sql = `
-                SELECT * FROM memory 
-                WHERE (source_text LIKE ? OR suggested_response LIKE ? OR metadata LIKE ?)
+                SELECT m.*, 
+                       GROUP_CONCAT(e.entity) as entity_list,
+                       GROUP_CONCAT(e.entity_type) as entity_type_list
+                FROM memory m 
+                LEFT JOIN memory_entities e ON m.id = e.memory_id 
+                WHERE (m.source_text LIKE ? OR m.suggested_response LIKE ? OR m.metadata LIKE ? OR e.entity LIKE ?)
               `;
-              let queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
+              let queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`];
               
               if (searchType !== 'all') {
-                sql += ' AND type = ?';
+                sql += ' AND m.type = ?';
                 queryParams.push(searchType);
               }
               
-              sql += ' ORDER BY created_at DESC LIMIT ?';
+              sql += ' GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access ORDER BY m.created_at DESC LIMIT ?';
               queryParams.push(limit);
               
               const results = await database.query(sql, queryParams);
               
-              console.log(`[SUCCESS] Found ${results.length} memories matching search`);
+              // Process search results to include entities
+              const processedResults = results.map(memory => {
+                // Parse metadata if it's a string
+                let metadata = memory.metadata;
+                if (typeof metadata === 'string') {
+                  try {
+                    metadata = JSON.parse(metadata);
+                  } catch (e) {
+                    metadata = {};
+                  }
+                }
+                
+                // Process entities from the joined query
+                let entities = [];
+                if (memory.entity_list && memory.entity_list.trim()) {
+                  entities = memory.entity_list.split(',').filter(entity => entity && entity.trim()).map(entity => entity.trim());
+                }
+                
+                return {
+                  ...memory,
+                  metadata: metadata,
+                  entities: entities,
+                  // Remove the concatenated fields
+                  entity_list: undefined,
+                  entity_type_list: undefined
+                };
+              });
+              
+              console.log(`[SUCCESS] Found ${processedResults.length} memories matching search`);
               return {
                 success: true,
                 action: 'memory-search',
                 query: searchQuery,
                 type: searchType,
-                results: results,
-                count: results.length
+                results: processedResults,
+                count: processedResults.length
               };
             } catch (error) {
               console.error('[ERROR] Memory search failed:', error);
@@ -1224,6 +1722,25 @@ safeJsonStringify(obj, space = null) {
         )
       `;
       
+      // Also create memory_entities table for normalized entity storage
+      const createEntitiesTableSQL = `
+        CREATE TABLE IF NOT EXISTS memory_entities (
+          id TEXT PRIMARY KEY DEFAULT (gen_random_uuid()),
+          memory_id TEXT NOT NULL,
+          entity TEXT NOT NULL,
+          entity_type TEXT,
+          normalized_value TEXT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (memory_id) REFERENCES memory(id)
+        )
+      `;
+      
+      // Create index for better query performance
+      const createEntitiesIndexSQL = `
+        CREATE INDEX IF NOT EXISTS idx_memory_entities_memory_id 
+        ON memory_entities(memory_id)
+      `;
+      
       await new Promise((resolve, reject) => {
         // Check if it's a DatabaseManager-style connection (has .run method)
         if (typeof this.connection.run === 'function') {
@@ -1254,7 +1771,65 @@ safeJsonStringify(obj, space = null) {
         }
       });
       
-      console.log('[SUCCESS] Memory table created');
+      // Create memory_entities table
+      await new Promise((resolve, reject) => {
+        if (typeof this.connection.run === 'function') {
+          this.connection.run(createEntitiesTableSQL, [], (err) => {
+            if (err) {
+              console.error('[ERROR] Failed to create memory_entities table:', err);
+              reject(err);
+            } else {
+              console.log('[SUCCESS] Memory_entities table created successfully');
+              resolve();
+            }
+          });
+        }
+        else if (typeof this.connection.exec === 'function') {
+          this.connection.exec(createEntitiesTableSQL, (err) => {
+            if (err) {
+              console.error('[ERROR] Failed to create memory_entities table:', err);
+              reject(err);
+            } else {
+              console.log('[SUCCESS] Memory_entities table created successfully');
+              resolve();
+            }
+          });
+        }
+        else {
+          reject(new Error('Unsupported database connection interface for entities table creation'));
+        }
+      });
+      
+      // Create index for memory_entities
+      await new Promise((resolve, reject) => {
+        if (typeof this.connection.run === 'function') {
+          this.connection.run(createEntitiesIndexSQL, [], (err) => {
+            if (err) {
+              console.error('[ERROR] Failed to create memory_entities index:', err);
+              reject(err);
+            } else {
+              console.log('[SUCCESS] Memory_entities index created successfully');
+              resolve();
+            }
+          });
+        }
+        else if (typeof this.connection.exec === 'function') {
+          this.connection.exec(createEntitiesIndexSQL, (err) => {
+            if (err) {
+              console.error('[ERROR] Failed to create memory_entities index:', err);
+              reject(err);
+            } else {
+              console.log('[SUCCESS] Memory_entities index created successfully');
+              resolve();
+            }
+          });
+        }
+        else {
+          reject(new Error('Unsupported database connection interface for index creation'));
+        }
+      });
+      
+      console.log('[SUCCESS] Memory and memory_entities tables created');
     },
   
     async verifyTableSchema(context) {
