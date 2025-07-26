@@ -56,9 +56,6 @@ const AGENT_FORMAT = {
       const { child_process } = context;
       AGENT_FORMAT.spawn = child_process?.spawn;
       
-      console.log('🔍 DEBUG: child_process available:', !!child_process);
-      console.log('🔍 DEBUG: child_process.spawn available:', !!child_process?.spawn);
-      
       // Auto-start Ollama service if not running
       console.log('🚀 DEBUG: Ensuring Ollama service is running...');
       try {
@@ -71,7 +68,6 @@ const AGENT_FORMAT = {
       
       // Test Phi3 availability after service startup
       try {
-        console.log('🔍 DEBUG: Testing Phi3 availability after service startup...');
         const testResult = await AGENT_FORMAT.executeOllamaQuery('Hello', { timeout: 3000 });
         AGENT_FORMAT.isAvailable = testResult && testResult.length > 0;
         console.log('🔍 DEBUG: Phi3 availability test result:', AGENT_FORMAT.isAvailable);
@@ -79,8 +75,7 @@ const AGENT_FORMAT = {
         console.warn('🚫 Phi3 availability test failed:', error.message);
         AGENT_FORMAT.isAvailable = false;
       }
-      
-      console.log(`🤖 Phi3 availability: ${AGENT_FORMAT.isAvailable ? '✅ Available' : '❌ Not available'}`);
+
       console.log('✅ Phi3Agent: Setup complete');
       
       return { 
@@ -104,6 +99,8 @@ const AGENT_FORMAT = {
       switch (action) {
         case 'query-phi3':
           return await AGENT_FORMAT.queryPhi3(params, context);
+        case 'classify-intent':
+          return await AGENT_FORMAT.classifyIntent(params, context);
         case 'check-availability':
           return await AGENT_FORMAT.checkAvailabilityAction(params, context);
         case 'get-model-info':
@@ -163,6 +160,217 @@ const AGENT_FORMAT = {
       }
     } catch (error) {
       console.error('❌ Phi3 query failed:', error);
+      throw error;
+    }
+  },
+
+  async classifyIntent(params, context) {
+    try {
+      const { message, options = {} } = params;
+      
+      if (!message) {
+        throw new Error('Message is required for classify-intent action');
+      }
+      
+      if (!AGENT_FORMAT.isAvailable) {
+        throw new Error('Phi3 is not available');
+      }
+      
+      console.log(`🎯 Classifying intent for message: "${message.substring(0, 50)}${message.length > 50 ? '...' : ''}"`);
+      
+      // Get current date for context
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
+      
+      // Simplified and focused intent classification prompt
+      const systemPrompt = `You are ThinkDrop AI's intent classifier. Analyze the message and classify into exactly one primary intent from these 7 types:
+
+**Intent Types:**
+- memory_store: User shares personal info/experiences/needs/plans to remember
+- memory_retrieve: User wants to recall stored information  
+- memory_update: User wants to modify existing stored info
+- memory_delete: User wants to remove stored info
+- greeting: User says hello/starts conversation
+- question: User asks for information/guidance/explanations
+- command: User gives instruction to perform action
+
+**Key Rules:**
+1. ONLY use these 7 types - no others
+2. Memory store = sharing personal info ("I lost my keys", "I have appointment at 3pm")
+3. Question = asking for info ("How do I get a title?", "What should I do?")
+4. Command = direct instruction ("take screenshot", "capture this", "do something")
+
+**Entity Types:** time, date, date_range, event, person, channel, location, object, task, command
+**Date Context:** Today is ${today}. Use ISO format YYYY-MM-DD for dates. Times in 24-hour format.
+
+**Quick Examples:**
+- "I need a new car title" → memory_store (sharing personal need)
+- "How do I get a car title?" → question (asking for info)
+- "Take a screenshot" → command (direct instruction)
+- "Hello there" → greeting (starting conversation)
+- "What did I say about my car?" → memory_retrieve (recalling info)
+
+Examples:
+- "Take a screenshot" → command (captureScreen: true)
+- "I have a meeting at 3pm" → memory_store
+- "What did I say about my car?" → memory_retrieve
+- "Hello there" → greeting
+- "How do I do this?" → question
+
+Rules:
+- Use ONLY these 7 intent types
+- Set captureScreen=true for screenshot/screen capture requests
+- Set requiresMemoryAccess=true for memory operations
+- Provide a helpful suggestedResponse
+
+Respond with ONLY this JSON format:
+{
+  "primaryIntent": "intent_name",
+  "intents": [
+    {
+      "intent": "greeting",
+      "confidence": 0.95,
+      "reasoning": "Message starts with greeting"
+    },
+    {
+      "intent": "memory_store",
+      "confidence": 0.90,
+      "reasoning": "User wants to store appointment information"
+    },
+    {
+      "intent": "command",
+      "confidence": 0.85,
+      "reasoning": "User requests email action to be performed"
+    }
+  ],
+  "captureScreen": false,
+  "requiresMemoryAccess": false,
+  "requiresExternalData": false,
+  "suggestedResponse": "helpful response",
+  "entities": [
+    { "value": "extracted_text", "type": "entity_type", "normalized_value": "standardized_value_or_null" }
+  ],
+  "sourceText": "${message}"
+}
+
+Message: "${message}"`.trim();
+      
+      const result = await AGENT_FORMAT.executeOllamaQuery(systemPrompt, {
+        ...options,
+        temperature: 0.1, // Low temperature for consistent classification
+        maxTokens: 300 // Reduced for focused JSON response
+      });
+      
+      console.log('🎯 Raw Phi3 intent classification result:', result);
+      
+      // Parse JSON response with robust extraction
+      let intentData;
+      try {
+        let jsonStr = result.trim();
+        
+        // Remove markdown code blocks if present
+        if (jsonStr.includes('```json')) {
+          const jsonMatch = jsonStr.match(/```json\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            jsonStr = jsonMatch[1].trim();
+          }
+        } else if (jsonStr.includes('```')) {
+          const jsonMatch = jsonStr.match(/```\s*([\s\S]*?)```/);
+          if (jsonMatch) {
+            jsonStr = jsonMatch[1].trim();
+          }
+        }
+        
+        // Extract JSON object with proper bracket matching
+        if (!jsonStr.startsWith('{')) {
+          const startIndex = jsonStr.indexOf('{');
+          if (startIndex !== -1) {
+            let braceCount = 0;
+            let endIndex = startIndex;
+            
+            for (let i = startIndex; i < jsonStr.length; i++) {
+              if (jsonStr[i] === '{') braceCount++;
+              if (jsonStr[i] === '}') braceCount--;
+              if (braceCount === 0) {
+                endIndex = i;
+                break;
+              }
+            }
+            
+            jsonStr = jsonStr.substring(startIndex, endIndex + 1);
+          }
+        }
+        
+        console.log('🔍 Extracted JSON string:', jsonStr.substring(0, 200) + '...');
+        intentData = JSON.parse(jsonStr);
+        
+        // Ensure primaryIntent is set based on content if missing
+        if (!intentData.primaryIntent) {
+          const message = params.message.toLowerCase();
+          if (message.includes('screenshot') || message.includes('capture') || message.includes('screen')) {
+            intentData.primaryIntent = 'command';
+            intentData.captureScreen = true;
+          } else if (message.includes('remember') || message.includes('store') || message.includes('save')) {
+            intentData.primaryIntent = 'memory_store';
+          } else if (message.includes('recall') || message.includes('what did') || message.includes('retrieve')) {
+            intentData.primaryIntent = 'memory_retrieve';
+          } else if (message.includes('hello') || message.includes('hi ') || message.includes('hey')) {
+            intentData.primaryIntent = 'greeting';
+          } else {
+            intentData.primaryIntent = 'question';
+          }
+          console.log('🔧 Added missing primaryIntent:', intentData.primaryIntent);
+        }
+        
+      } catch (parseError) {
+        console.warn('⚠️ Failed to parse intent JSON, using fallback:', parseError.message);
+        console.warn('🔍 Raw response causing error:', result.substring(0, 300) + '...');
+        
+        // Smart fallback based on message content
+        const message = params.message.toLowerCase();
+        let fallbackIntent = 'question';
+        let fallbackCapture = false;
+        
+        if (message.includes('screenshot') || message.includes('capture') || message.includes('screen')) {
+          fallbackIntent = 'command';
+          fallbackCapture = true;
+        } else if (message.includes('remember') || message.includes('store') || message.includes('save')) {
+          fallbackIntent = 'memory_store';
+        } else if (message.includes('recall') || message.includes('what did') || message.includes('retrieve')) {
+          fallbackIntent = 'memory_retrieve';
+        } else if (message.includes('hello') || message.includes('hi ') || message.includes('hey')) {
+          fallbackIntent = 'greeting';
+        }
+        
+        intentData = {
+          primaryIntent: fallbackIntent,
+          confidence: 0.6,
+          reasoning: `JSON parse failed, smart fallback to ${fallbackIntent} based on keywords`,
+          captureScreen: fallbackCapture,
+          suggestedResponse: fallbackCapture ? 
+            'I\'ll take a screenshot for you.' : 
+            'I\'ll help you with that using my local capabilities.'
+        };
+      }
+      
+      // Validate intent type
+      const validIntents = ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'greeting', 'question', 'command'];
+      if (!validIntents.includes(intentData.primaryIntent)) {
+        console.warn('⚠️ Invalid intent type, defaulting to question:', intentData.primaryIntent);
+        intentData.primaryIntent = 'question';
+        intentData.reasoning = 'Invalid intent type, defaulted to question';
+      }
+      
+      console.log('✅ Intent classification successful:', intentData);
+      
+      return {
+        success: true,
+        action: 'classify-intent',
+        intentData,
+        rawResponse: result,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error('❌ Intent classification failed:', error);
       throw error;
     }
   },

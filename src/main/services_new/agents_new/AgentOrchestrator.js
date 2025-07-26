@@ -1221,11 +1221,11 @@ export class AgentOrchestrator {
   /**
    * Local LLM fallback orchestration - handles local intent parsing with Phi3 when backend is disconnected
    * @param {string} userMessage - User message to process
+   * @param {Object} intentDataOrContext - Pre-classified intent data OR context object (for backward compatibility)
    * @param {Object} context - Additional context for processing
-   * @param {boolean} isBackendConnected - Whether backend is connected
    * @returns {Object} Orchestration result
    */
-  async handleLocalOrchestration(userMessage, context = {}, isBackendConnected = false) {
+  async handleLocalOrchestration(userMessage, intentDataOrContext = {}, context = {}) {
     if (!this.initialized) {
       throw new Error('AgentOrchestrator not initialized. Call initialize() first.');
     }
@@ -1233,18 +1233,38 @@ export class AgentOrchestrator {
     try {
       console.log('🔄 Local LLM orchestration started');
       console.log('📝 User message:', userMessage);
-      console.log('🌐 Backend connected:', isBackendConnected);
       
-      // If backend is connected, use normal backend orchestration
-      if (isBackendConnected) {
-        console.log('✅ Backend connected - using normal orchestration flow');
-        // This would typically call the backend API for intent classification
-        // For now, we'll fall back to local processing
+      // Check if we received pre-classified intent data
+      const hasPreClassifiedIntent = intentDataOrContext && 
+        (intentDataOrContext.primaryIntent || intentDataOrContext.intents);
+      
+      let intentResult;
+      
+      if (hasPreClassifiedIntent) {
+        console.log('✅ Using pre-classified intent data (avoiding redundant classification)');
+        console.log('🎯 Pre-classified intent:', intentDataOrContext.primaryIntent);
+        
+        // Use the pre-classified intent data directly
+        intentResult = {
+          success: true,
+          result: {
+            intent: intentDataOrContext.primaryIntent,
+            confidence: intentDataOrContext.confidence || 0.8,
+            entities: intentDataOrContext.entities || [],
+            category: 'general',
+            requiresContext: false,
+            method: 'pre_classified',
+            captureScreen: intentDataOrContext.captureScreen === true,
+            requiresMemoryAccess: intentDataOrContext.requiresMemoryAccess === true,
+            suggestedResponse: intentDataOrContext.suggestedResponse || null
+          }
+        };
+      } else {
+        console.log('🤖 No pre-classified intent data, using local Phi3-based intent parsing...');
+        // Backward compatibility: treat intentDataOrContext as context
+        const mergedContext = { ...intentDataOrContext, ...context };
+        intentResult = await this.executeLocalIntentParsing(userMessage, mergedContext);
       }
-      
-      // Use local Phi3-based intent parsing
-      console.log('🤖 Using local Phi3-based intent parsing...');
-      const intentResult = await this.executeLocalIntentParsing(userMessage, context);
       
       if (!intentResult.success) {
         console.warn('⚠️ Local intent parsing failed, using fallback response');
@@ -1327,19 +1347,24 @@ export class AgentOrchestrator {
    */
   async processLocalIntentResult(intentResult, userMessage, context = {}) {
     try {
-      const { intent, confidence, entities, category, method } = intentResult;
+      const { intent, confidence, entities, category, method } = intentResult?.result;
       
       console.log('🔍 DEBUG: intentResult in processLocalIntentResult:', JSON.stringify(intentResult, null, 2));
       console.log(`🎯 Processing intent: ${intent} (confidence: ${confidence}, method: ${method})`);
       
       // Handle different intent types with local processing
       switch (intent) {
+        case 'command':
+          // Route command intents through unified orchestration for proper agent selection
+          console.log('🎯 Routing command intent through unified orchestration...');
+          return await this.processUnifiedOrchestration(userMessage, intentResult.result, context);
+          
         case 'memory_store':
           return await this.handleLocalMemoryStore(userMessage, entities, context);
           
         case 'memory_retrieve':
           return await this.handleLocalMemoryRetrieve(userMessage, entities, context);
-          
+
         case 'greeting':
           return this.handleLocalGreeting(userMessage, context);
           
@@ -1355,6 +1380,73 @@ export class AgentOrchestrator {
         error: error.message,
         response: 'I had trouble processing your request. Please try again.',
         handledBy: 'error_handler',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Process command intents through unified orchestration for proper agent routing
+   */
+  async processUnifiedOrchestration(userMessage, intentData, context = {}) {
+    try {
+      console.log('🎯 Processing unified orchestration for command intent...');
+      console.log('📋 Intent data:', { 
+        intent: intentData.intent, 
+        captureScreen: intentData.captureScreen,
+        entities: intentData.entities 
+      });
+      
+      // Create intent payload for unified orchestration
+      const intentPayload = {
+        type: intentData.intent,
+        message: userMessage,
+        intents: [{
+          intent: intentData.intent,
+          confidence: intentData.confidence || 0.8,
+          reasoning: 'Local Phi3 classification'
+        }],
+        primaryIntent: intentData.intent,
+        entities: intentData.entities || [],
+        requiresMemoryAccess: intentData.requiresMemoryAccess === true,
+        requiresExternalData: intentData.requiresExternalData === true,
+        captureScreen: intentData.captureScreen === true,
+        suggestedResponse: intentData.suggestedResponse,
+        sourceText: userMessage,
+        timestamp: new Date().toISOString(),
+        context: {
+          source: 'local_unified_orchestration',
+          sessionId: `unified-session-${Date.now()}`,
+          ...context
+        }
+      };
+      
+      console.log('🚀 Executing unified orchestration with payload:', {
+        type: intentPayload.type,
+        captureScreen: intentPayload.captureScreen,
+        primaryIntent: intentPayload.primaryIntent
+      });
+      
+      // Use the unified orchestration system
+      const result = await this.ask(intentPayload);
+      
+      return {
+        success: true,
+        response: result.response || intentData.suggestedResponse || 'Command processed successfully.',
+        handledBy: 'UnifiedOrchestration',
+        method: 'unified_command_processing',
+        timestamp: new Date().toISOString(),
+        orchestrationResult: result
+      };
+      
+    } catch (error) {
+      console.error('❌ Unified orchestration failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I had trouble processing that command. Please try again.',
+        handledBy: 'error_handler',
+        method: 'unified_orchestration_error',
         timestamp: new Date().toISOString()
       };
     }
@@ -1562,13 +1654,10 @@ export class AgentOrchestrator {
     }
 
     try {
-      console.log('🎯 AgentOrchestrator.ask() called');
       console.log('📥 Intent payload type:', typeof intentPayload);
-      console.log('📥 Intent payload:', this.safeJsonStringify(intentPayload, 2));
       
       // Parse intent payload
       let processedPayload = this.parseIntentPayload(intentPayload);
-      console.log('🔍 Processed payload:', this.safeJsonStringify(processedPayload, 2));
       
       // Extract intents and create workflow
       const workflow = this.createWorkflowFromIntents(processedPayload, context);
@@ -1657,7 +1746,7 @@ export class AgentOrchestrator {
    * Extract intent data from parsed payload
    */
   extractIntentData(payload) {
-    console.log('🔍 Extracting intent data from payload...');
+    console.log('🔍 Extracting intent data from payload... LUKAIZHI', payload);
     
     // Handle nested payload structures
     if (payload.payload && payload.payload.intents) {

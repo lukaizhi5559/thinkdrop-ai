@@ -310,37 +310,119 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
     }
   });
 
-  // Fast local LLM query handler - direct path to Phi3Agent
+  // Fast local LLM query handler with intent classification - returns both response and intentClassificationPayload
   ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {
     try {
       if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
-      console.log('🚀 [FAST PATH] Direct local LLM query:', prompt.substring(0, 50) + '...');
+      console.log('🚀 [FAST PATH] Local LLM with intent classification:', prompt.substring(0, 50) + '...');
       
-      // Create a simple intent result for handleLocalQuestion
-      const intentResult = {
-        intent: 'question',
-        confidence: 0.9,
-        entities: [],
-        requiresMemoryAccess: false
-      };
-      
-      // Call handleLocalQuestion directly for fast Phi3Agent response
-      const result = await coreAgent.handleLocalQuestion(prompt, intentResult, {
-        source: 'fast_local_llm',
-        options: options,
+      // Step 1: Classify intent and get suggested response from Phi3Agent
+      console.log('🎯 Step 1: Classifying intent and generating response...');
+      const intentResult = await coreAgent.executeAgent('Phi3Agent', {
+        action: 'classify-intent',
+        message: prompt,
+        options: {
+          temperature: 0.1,
+          maxTokens: 500
+        }
+      }, {
+        source: 'fast_local_llm_intent',
         timestamp: new Date().toISOString()
       });
       
-      if (result.success) {
-        console.log('✅ [FAST PATH] Local LLM response generated successfully');
-        return { success: true, data: result.response };
+      let intentClassificationPayload;
+      let quickResponse;
+      
+      if (intentResult.success && intentResult.result && intentResult.result.intentData) {
+        const { intentData } = intentResult.result;
+        console.log('✅ Intent classification successful:', intentData.primaryIntent);
+        
+        // Extract suggested response from Phi3 classification
+        quickResponse = intentData.suggestedResponse || 'I\'ll help you with that using my local capabilities.';
+        
+        // Build full intentClassificationPayload like online mode
+        intentClassificationPayload = {
+          chainOfThought: intentData.chainOfThought || {
+            step1_analysis: 'Local Phi3 classification completed',
+            step2_reasoning: `Classified as ${intentData.primaryIntent}`,
+            step3_consistency: 'Classification confidence acceptable'
+          },
+          intents: intentData.intents || [
+            {
+              intent: intentData.primaryIntent,
+              confidence: intentData.confidence || 0.8,
+              reasoning: intentData.reasoning || 'Local Phi3 classification'
+            }
+          ],
+          primaryIntent: intentData.primaryIntent,
+          entities: intentData.entities || [],
+          requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(intentData.primaryIntent),
+          requiresExternalData: intentData.requiresExternalData || false,
+          captureScreen: intentData.captureScreen === true,
+          suggestedResponse: quickResponse,
+          sourceText: prompt,
+          timestamp: new Date().toISOString(),
+          context: {
+            source: 'local_phi3_classification',
+            sessionId: `local-session-${Date.now()}`,
+            model: 'phi3:mini'
+          }
+        };
       } else {
-        console.warn('⚠️ [FAST PATH] Local LLM failed, using fallback');
-        return { success: true, data: 'I processed your request using local capabilities.' };
+        console.warn('⚠️ Intent classification failed, using fallback');
+        quickResponse = 'I\'ll help you with that question using my local capabilities.';
+        
+        // Fallback intent classification with comprehensive structure
+        intentClassificationPayload = {
+          chainOfThought: {
+            step1_analysis: 'Intent classification failed, analyzing message as general user input',
+            step2_reasoning: 'Defaulting to question intent as safest fallback for user queries',
+            step3_consistency: 'Question intent allows for helpful response without assumptions'
+          },
+          intents: [
+            {
+              intent: 'question',
+              confidence: 0.7,
+              reasoning: 'Fallback classification when Phi3 intent detection fails'
+            }
+          ],
+          primaryIntent: 'question',
+          entities: [],
+          requiresMemoryAccess: false,
+          requiresExternalData: false,
+          captureScreen: false,
+          suggestedResponse: quickResponse,
+          sourceText: prompt,
+          timestamp: new Date().toISOString(),
+          context: {
+            source: 'local_phi3_fallback',
+            sessionId: `local-session-${Date.now()}`,
+            model: 'phi3:mini'
+          }
+        };
       }
+      
+      // Step 2: Trigger background orchestration (non-blocking)
+      console.log('🔄 Step 2: Triggering background orchestration...');
+      // Don't await this - let it run in background
+      coreAgent.handleLocalOrchestration(prompt, intentClassificationPayload, {
+        source: 'fast_local_llm_background',
+        timestamp: new Date().toISOString()
+      }).catch(error => {
+        console.warn('⚠️ Background orchestration failed:', error.message);
+      });
+      
+      console.log('🎉 [FAST PATH] Complete: Response + Intent Classification ready');
+      
+      return {
+        success: true,
+        data: quickResponse, // For immediate chat display
+        intentClassificationPayload: intentClassificationPayload // For background orchestration
+      };
+      
     } catch (error) {
       console.error('❌ Fast local LLM query error:', error);
       return { success: false, error: error.message };
@@ -403,25 +485,30 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
     }
   });
 
-  // Legacy local LLM process message handler - routes to unified agent system
+  // Legacy local LLM process message handler - redirected to new fast path
   ipcMain.handle('local-llm:process-message', async (event, message) => {
     try {
-      if (!coreAgent || !coreAgent.initialized) {
-        return { success: false, error: 'CoreAgent not initialized' };
+      console.log('🔄 Legacy handler redirecting to new fast path...');
+      
+      // Extract message text
+      const messageText = message.text || message;
+      
+      // Redirect to the new llmQueryLocal handler to avoid dual processing
+      const llmQueryLocalHandler = ipcMain.listeners('llmQueryLocal')[0];
+      if (llmQueryLocalHandler) {
+        const result = await llmQueryLocalHandler(event, messageText);
+        return result;
+      } else {
+        // Fallback if new handler not found
+        console.warn('⚠️ New llmQueryLocal handler not found, using legacy fallback');
+        return { 
+          success: true, 
+          response: 'I\'ll help you with that using my local capabilities.',
+          source: 'legacy_fallback'
+        };
       }
-      
-      // Route legacy message processing through unified agent orchestration
-      const intentPayload = {
-        type: 'question',
-        message: message.text || message,
-        options: message.options || {},
-        source: 'legacy_local_llm'
-      };
-      
-      const result = await coreAgent.ask(intentPayload);
-      return { success: true, data: result };
     } catch (error) {
-      console.error('❌ Local LLM process message error:', error);
+      console.error('❌ Legacy LLM process message error:', error);
       return { success: false, error: error.message };
     }
   });

@@ -185,46 +185,42 @@ const AGENT_FORMAT = {
                 return { success: false, error: 'No executeAgent function available' };
             }
 
-            const prompt = AGENT_FORMAT.buildIntentPrompt(message, promptClassification);
-            console.log(`🤖 Querying Phi3 for intent parsing (${promptClassification?.level || 'unknown'} level)...`);
+            console.log(`🤖 Using Phi3 classify-intent for enhanced parsing (${promptClassification?.level || 'unknown'} level)...`);
 
             const phi3Result = await context.executeAgent('Phi3Agent', {
-                action: 'query-phi3',
-                prompt: prompt
+                action: 'classify-intent',
+                message: message,
+                options: {
+                    temperature: 0.1,
+                    maxTokens: 300
+                }
             }, context);
 
             if (!phi3Result.success) {
                 return { success: false, error: phi3Result.error };
             }
 
-            // Parse the JSON response from Phi3 (handle Markdown code blocks)
-            const response = phi3Result.result.response;
-            let parsedIntent;
-            
-            try {
-                // First try direct parsing
-                parsedIntent = JSON.parse(response);
-            } catch (parseError) {
-                try {
-                    // Extract JSON from Markdown code blocks
-                    const jsonMatch = response.match(/```(?:json)?\s*([\s\S]*?)```/) || 
-                                    response.match(/{[\s\S]*}/) || 
-                                    response.match(/\[[\s\S]*\]/);
-                    
-                    if (jsonMatch) {
-                        const cleanJson = jsonMatch[1] || jsonMatch[0];
-                        parsedIntent = JSON.parse(cleanJson.trim());
-                        console.log('✅ Successfully extracted JSON from Markdown code block');
-                    } else {
-                        throw new Error('No JSON found in response');
-                    }
-                } catch (secondParseError) {
-                    console.error('❌ Failed to parse Phi3 JSON response:', parseError);
-                    console.error('❌ Raw response:', response);
-                    console.error('❌ Second parse attempt failed:', secondParseError);
-                    return { success: false, error: 'Invalid JSON response from Phi3' };
-                }
+            // Extract intentData from classify-intent response
+            const intentData = phi3Result.result?.intentData;
+            if (!intentData) {
+                console.warn('⚠️ No intentData in classify-intent response, using fallback');
+                return { success: false, error: 'No intentData in response' };
             }
+
+            // Convert classify-intent response to expected format
+            const parsedIntent = {
+                message_type: intentData.primaryIntent === 'command' ? 'command' : 'query',
+                intent: intentData.primaryIntent,
+                confidence: intentData.confidence || 0.8,
+                entities: intentData.entities || [],
+                captureScreen: intentData.captureScreen || false,
+                requiresMemoryAccess: intentData.requiresMemoryAccess || false,
+                requiresExternalData: intentData.requiresExternalData || false,
+                suggestedResponse: intentData.suggestedResponse || null,
+                reasoning: intentData.reasoning || 'Phi3 classification'
+            };
+            
+            console.log('✅ Successfully processed classify-intent response:', parsedIntent.intent);
 
             return {
                 success: true,
@@ -234,7 +230,10 @@ const AGENT_FORMAT = {
                     entities: parsedIntent.entities || [],
                     category: parsedIntent.category || 'general',
                     requiresContext: parsedIntent.requiresContext || false,
-                    method: 'phi3_llm'
+                    method: 'phi3_llm',
+                    captureScreen: parsedIntent.captureScreen || false,
+                    requiresMemoryAccess: parsedIntent.requiresMemoryAccess || false,
+                    suggestedResponse: parsedIntent.suggestedResponse || null
                 }
             };
         } catch (error) {
