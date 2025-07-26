@@ -8,6 +8,7 @@ import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
 import WebSocketTest from './components/WebSocketTest';
 import PrimaryControlBar from './components/PrimaryControlBar';
+
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 import './types/electronAPI'; // Import Electron API types
 
@@ -257,7 +258,6 @@ function App() {
         )} */}
         </div>
       </div>
-
 
 
     </>

@@ -541,16 +541,7 @@ export class AgentOrchestrator {
       }
 
       const agentRow = result[0];
-    console.log(`📊 Loaded agent ${agentName} from database`);
     
-    // Log code content length and first 100 characters
-    if (agentRow.code) {
-      console.log(`📄 Agent code length: ${agentRow.code.length} bytes`);
-      console.log(`📄 Agent code snippet: ${agentRow.code.substring(0, 100)}...`);
-    } else {
-      console.log(`⚠️ No code found for agent ${agentName} in database`);
-    }
-      
       return {
         id: agentRow.id,
         name: agentRow.name,
@@ -594,14 +585,9 @@ export class AgentOrchestrator {
    * Create agent instance from database-stored code
    */
   async createAgentFromCode(agentData) {
-    console.log(`🔧 Creating agent from database code: ${agentData.name}`);
-
     // If we have code in database, create agent from stored code
     if (agentData.code) {
-      try {
-        // For object-based agents, we need to evaluate the code to get the AGENT_FORMAT object
-        console.log(`🧩 Evaluating agent code for ${agentData.name}`);
-        
+      try { 
         // Create a temporary module to evaluate the agent code
         const path = await import('path');
         const { createRequire } = await import('module');
@@ -630,9 +616,6 @@ export class AgentOrchestrator {
         // Create a new context with the sandbox
         const sandbox = vm.createContext(context);
         
-        // Log the first 200 characters of the code being evaluated
-        console.log(`🔍 Code snippet being evaluated for ${agentData.name}: ${agentData.code.substring(0, 200)}...`);
-        
         // Check if the code contains AGENT_FORMAT export
         if (agentData.code.includes('AGENT_FORMAT')) {
           console.log(`🔍 Found AGENT_FORMAT in code, using direct extraction`);
@@ -652,12 +635,7 @@ export class AgentOrchestrator {
         
         // Get the AGENT_FORMAT object from the sandbox
         const agentFormat = sandbox.module.exports.default || sandbox.module.exports || sandbox.AGENT_FORMAT;
-        
-        console.log(`✅ Successfully evaluated agent code for ${agentData.name}`);
-        console.log(`🔍 Agent format keys: ${Object.keys(agentFormat).join(', ')}`);
-        console.log(`🔍 Bootstrap type: ${typeof agentFormat.bootstrap}`);
-        console.log(`🔍 Execute type: ${typeof agentFormat.execute}`);
-        
+         
         // Check if the execute method is a dummy function or missing
         if (!agentFormat.execute) {
           console.error(`❌ Agent ${agentData.name} has no execute function!`);
@@ -693,10 +671,6 @@ export class AgentOrchestrator {
           bootstrap: agentFormat.bootstrap,
           execute: agentFormat.execute
         };
-        
-        // Log the created agent instance
-        console.log(`🔍 Created agent instance with bootstrap: ${typeof agentInstance.bootstrap}`);
-        console.log(`🔍 Created agent instance with execute: ${typeof agentInstance.execute}`);
         
         return agentInstance;
       } catch (error) {

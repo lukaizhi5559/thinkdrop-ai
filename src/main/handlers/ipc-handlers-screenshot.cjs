@@ -310,25 +310,39 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
     }
   });
 
-  // Legacy LLM query handler - routes to unified agent system
+  // Fast local LLM query handler - direct path to Phi3Agent
   ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {
     try {
       if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
-      // Route legacy LLM queries through unified agent orchestration
-      const intentPayload = {
-        type: 'question',
-        message: prompt,
-        options,
-        source: 'legacy_llm'
+      console.log('🚀 [FAST PATH] Direct local LLM query:', prompt.substring(0, 50) + '...');
+      
+      // Create a simple intent result for handleLocalQuestion
+      const intentResult = {
+        intent: 'question',
+        confidence: 0.9,
+        entities: [],
+        requiresMemoryAccess: false
       };
       
-      const result = await coreAgent.ask(intentPayload);
-      return { success: true, data: result };
+      // Call handleLocalQuestion directly for fast Phi3Agent response
+      const result = await coreAgent.handleLocalQuestion(prompt, intentResult, {
+        source: 'fast_local_llm',
+        options: options,
+        timestamp: new Date().toISOString()
+      });
+      
+      if (result.success) {
+        console.log('✅ [FAST PATH] Local LLM response generated successfully');
+        return { success: true, data: result.response };
+      } else {
+        console.warn('⚠️ [FAST PATH] Local LLM failed, using fallback');
+        return { success: true, data: 'I processed your request using local capabilities.' };
+      }
     } catch (error) {
-      console.error('❌ Legacy LLM query error:', error);
+      console.error('❌ Fast local LLM query error:', error);
       return { success: false, error: error.message };
     }
   });

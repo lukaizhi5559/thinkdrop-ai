@@ -129,8 +129,6 @@ class DatabaseManager {
     
    
     if (callback) {
-      // Callback-style call
-      console.log('[DEBUG] DatabaseManager.query() using callback-style');
       connection.query(sql, params, (err, rows) => {
         console.log('[DEBUG] DatabaseManager.query() callback rows length:', rows?.length);
         callback(err, rows);

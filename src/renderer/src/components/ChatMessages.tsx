@@ -13,6 +13,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import useWebSocket from '../hooks/useWebSocket';
+import { ThinkingIndicator } from './AnalyzingIndicator';
 // import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 interface ChatMessage {
@@ -24,7 +25,34 @@ interface ChatMessage {
 }
 
 // Simple markdown renderer component (memoized for performance)
-const MarkdownRenderer: React.FC<{ content: string }> = React.memo(({ content }) => {
+const MarkdownRenderer: React.FC<{ content: any }> = React.memo(({ content }) => {
+  // Ensure content is always a string
+  const safeContent = React.useMemo(() => {
+    if (typeof content === 'string') {
+      return content;
+    }
+    if (content === null || content === undefined) {
+      return '';
+    }
+    if (typeof content === 'object') {
+      // If it's an object, try to extract text or stringify it
+      if (content.text && typeof content.text === 'string') {
+        return content.text;
+      }
+      if (content.content && typeof content.content === 'string') {
+        return content.content;
+      }
+      // Last resort: stringify the object
+      try {
+        return JSON.stringify(content, null, 2);
+      } catch {
+        return '[Invalid content object]';
+      }
+    }
+    // Convert other types to string
+    return String(content);
+  }, [content]);
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks]}
@@ -37,30 +65,45 @@ const MarkdownRenderer: React.FC<{ content: string }> = React.memo(({ content })
               style={oneDark as any}
               language={match[1]}
               PreTag="div"
-              className="rounded-md text-sm"
+              {...props}
             >
               {String(children).replace(/\n$/, '')}
             </SyntaxHighlighter>
           ) : (
-            <code className="bg-white/10 px-1 py-0.5 rounded text-sm" {...props}>
+            <code className={className} {...props}>
               {children}
             </code>
           );
         },
-        p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-        ul: ({ children }) => <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>,
-        ol: ({ children }) => <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>,
+        p: ({ children }) => (
+          <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>
+        ),
+        ul: ({ children }) => (
+          <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>
+        ),
+        ol: ({ children }) => (
+          <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>
+        ),
+        li: ({ children }) => (
+          <li className="leading-relaxed">{children}</li>
+        ),
         blockquote: ({ children }) => (
-          <blockquote className="border-l-4 border-white/20 pl-4 italic text-white/80 mb-2">
+          <blockquote className="border-l-4 border-white/20 pl-4 italic mb-2">
             {children}
           </blockquote>
         ),
-        h1: ({ children }) => <h1 className="text-xl font-bold mb-2">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-lg font-bold mb-2">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-base font-bold mb-2">{children}</h3>,
+        h1: ({ children }) => (
+          <h1 className="text-lg font-bold mb-2">{children}</h1>
+        ),
+        h2: ({ children }) => (
+          <h2 className="text-base font-bold mb-2">{children}</h2>
+        ),
+        h3: ({ children }) => (
+          <h3 className="text-sm font-bold mb-1">{children}</h3>
+        ),
       }}
     >
-      {content}
+      {safeContent}
     </ReactMarkdown>
   );
 });
@@ -421,26 +464,21 @@ export default function ChatMessages() {
       setIsProcessingLocally(true);
       setIsLoading(false); // Stop main loading, show local processing instead
       
-      // Call the AgentOrchestrator's local LLM fallback via Electron API
-      if (!window.electronAPI?.agentOrchestrate) {
+      // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
+      if (!window.electronAPI?.llmQueryLocal) {
         throw new Error('Electron API not available');
       }
       
-      const result = await window.electronAPI.agentOrchestrate({
-        message: messageText,
-        intent: 'local_llm_fallback',
-        context: {
-          source: 'local_fallback',
-          userContext: {},
-          sessionId: `session-${Date.now()}`
-        }
+      const result = await window.electronAPI.llmQueryLocal(messageText, {
+        temperature: 0.0,
+        maxTokens: 50
       });
       
       if (result.success) {
-        // Add AI response message
+        // Add AI response message immediately
         const aiMessage: ChatMessage = {
           id: `ai-${Date.now()}`,
-          text: result.response || 'I processed your request using local capabilities.',
+          text: result.data || 'I processed your request using local capabilities.',
           sender: 'ai',
           timestamp: new Date()
         };
@@ -452,6 +490,47 @@ export default function ChatMessages() {
         });
         
         console.log('✅ Local LLM processing completed successfully');
+        
+        // 🧠 BACKGROUND: Asynchronously trigger memory storage (non-blocking)
+        setTimeout(async () => {
+          try {
+            console.log('🧠 [BACKGROUND] Starting async memory storage for local LLM...');
+            
+            // Create intent classification payload similar to online LLM
+            const intentClassificationPayload = {
+              primaryIntent: 'conversation', // Default to conversation intent
+              requiresMemoryAccess: true,
+              requiresExternalData: false,
+              entities: [],
+              sourceText: messageText,
+              suggestedResponse: typeof result.data === 'string' ? result.data : JSON.stringify(result.data),
+              captureScreen: false,
+              timestamp: new Date().toISOString(),
+              context: {
+                source: 'local_llm',
+                sessionId: `local-session-${Date.now()}`
+              }
+            };
+            
+            // Trigger AgentOrchestrator for memory storage (same as online LLM)
+            if (window.electronAPI?.agentOrchestrate) {
+              const orchestrationResult = await window.electronAPI.agentOrchestrate({
+                message: JSON.stringify(intentClassificationPayload),
+                intent: intentClassificationPayload.primaryIntent,
+                context: { source: 'local_llm_memory_storage' }
+              });
+              
+              if (orchestrationResult.success) {
+                console.log('✅ [BACKGROUND] Local LLM memory storage completed successfully');
+              } else {
+                console.warn('⚠️ [BACKGROUND] Local LLM memory storage failed:', orchestrationResult.error);
+              }
+            }
+          } catch (memoryError) {
+            console.warn('⚠️ [BACKGROUND] Local LLM memory storage error (non-critical):', memoryError);
+          }
+        }, 100); // Small delay to ensure UI response is rendered first
+        
       } else {
         throw new Error(result.error || 'Local LLM processing failed');
       }
@@ -747,9 +826,20 @@ export default function ChatMessages() {
     }
   }, [processedMessageIds, wsState.isConnected, connectWebSocket]);
 
+  // TEMPORARILY DISABLED: Height adjustment causing chat window to disappear
   useEffect(() => {
     if (window.electronAPI?.adjustChatMessagesHeight) {
-      const contentHeight = Math.min(chatMessages.length * 80 + 100, 400); // Max height of 400px
+      // Calculate content height with better logic
+      const baseHeight = 200; // Minimum window height
+      const messageHeight = 60; // Height per message (reduced from 80)
+      const padding = 100; // Extra padding for UI elements
+      
+      const contentHeight = Math.max(
+        baseHeight, 
+        Math.min(chatMessages.length * messageHeight + padding, 500) // Max height of 500px
+      );
+      
+      console.log(`📏 Adjusting chat window height: ${contentHeight}px for ${chatMessages.length} messages`);
       window.electronAPI.adjustChatMessagesHeight(contentHeight);
     }
   }, [chatMessages.length]);
@@ -798,6 +888,7 @@ export default function ChatMessages() {
   // Always show the window, even when empty
 
   return (
+    <>
     <TooltipProvider>
       <div 
         className="w-full flex flex-col bg-gray-900/95"
@@ -905,8 +996,13 @@ export default function ChatMessages() {
           </>
         )}
         
-        {/* Loading indicator */}
-        {isLoading && (
+        {/* Thinking indicator for local LLM processing */}
+        {(isLoading && !wsState.isConnected) || isProcessingLocally ? (
+          <ThinkingIndicator 
+            isVisible={true} 
+            message="Thinking" 
+          />
+        ) : isLoading && wsState.isConnected ? (
           <div className="flex justify-start">
             <div className="bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2">
               <div className="flex items-center space-x-2">
@@ -916,7 +1012,7 @@ export default function ChatMessages() {
               </div>
             </div>
           </div>
-        )}
+        ) : null}
         
         {/* Invisible element to scroll to */}
         <div ref={messagesEndRef} />
@@ -1038,5 +1134,8 @@ export default function ChatMessages() {
       </div>
     </div>
     </TooltipProvider>
+    
+
+    </>
   );
 }

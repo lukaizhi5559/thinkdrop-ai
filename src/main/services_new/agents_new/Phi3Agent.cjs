@@ -26,10 +26,10 @@ const AGENT_FORMAT = {
         type: 'object',
         description: 'Additional options for the query',
         properties: {
-          timeout: { type: 'integer', description: 'Query timeout in milliseconds', default: 30000 },
-          maxRetries: { type: 'integer', description: 'Maximum retry attempts', default: 2 },
-          temperature: { type: 'number', description: 'Model temperature', default: 0.1 },
-          maxTokens: { type: 'integer', description: 'Maximum tokens to generate', default: 200 }
+          timeout: { type: 'integer', description: 'Query timeout in milliseconds', default: 8000 },
+          maxRetries: { type: 'integer', description: 'Maximum retry attempts', default: 1 },
+          temperature: { type: 'number', description: 'Model temperature', default: 0.0 },
+          maxTokens: { type: 'integer', description: 'Maximum tokens to generate', default: 50 }
         }
       }
     },
@@ -47,9 +47,9 @@ const AGENT_FORMAT = {
       
       // Store configuration on AGENT_FORMAT so it's accessible during execution
       AGENT_FORMAT.config = {
-        timeout: config.timeout || 30000,
+        timeout: config.timeout || 8000,
         model: config.model || 'phi3:mini',
-        maxRetries: config.maxRetries || 2
+        maxRetries: config.maxRetries || 1
       };
       
       // Store child_process dependency (using original name as shown in debug logs)
@@ -72,7 +72,7 @@ const AGENT_FORMAT = {
       // Test Phi3 availability after service startup
       try {
         console.log('🔍 DEBUG: Testing Phi3 availability after service startup...');
-        const testResult = await AGENT_FORMAT.executeOllamaQuery('Hello', { timeout: 5000 });
+        const testResult = await AGENT_FORMAT.executeOllamaQuery('Hello', { timeout: 3000 });
         AGENT_FORMAT.isAvailable = testResult && testResult.length > 0;
         console.log('🔍 DEBUG: Phi3 availability test result:', AGENT_FORMAT.isAvailable);
       } catch (error) {
@@ -281,7 +281,14 @@ const AGENT_FORMAT = {
         body: JSON.stringify({
           model: AGENT_FORMAT.config.model,
           prompt: prompt,
-          stream: false
+          stream: false,
+          options: {
+            temperature: options.temperature || 0.0,
+            num_predict: options.maxTokens || 50,
+            top_k: 10,
+            top_p: 0.9,
+            num_ctx: 512
+          }
         })
       });
       
@@ -309,7 +316,7 @@ const AGENT_FORMAT = {
           
           // Wait a bit for service to be ready
           console.log('⏳ DEBUG: Waiting for service to be ready...');
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          await new Promise(resolve => setTimeout(resolve, 1500));
           
           // Retry the request ONCE
           console.log('🔄 DEBUG: Retrying request after service start...');
