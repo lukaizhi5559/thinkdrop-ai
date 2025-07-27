@@ -1550,98 +1550,139 @@ export class AgentOrchestrator {
    * Handle local greeting responses
    */
   handleLocalGreeting(userMessage, context = {}) {
-    const greetings = [
-      'Hello! How can I help you today?',
-      'Hi there! What can I do for you?',
-      'Hey! I\'m here to assist you.',
-      'Good to see you! What\'s on your mind?'
-    ];
-    
-    const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
-    
+    const normalized = userMessage.trim().toLowerCase();
+  
+    const timeBasedGreeting = () => {
+      const hour = new Date().getHours();
+      if (hour < 12) return 'Good morning! How can I help you today?';
+      if (hour < 18) return 'Good afternoon! What can I do for you?';
+      return 'Good evening! Need any assistance?';
+    };
+  
+    const greetingsMap = {
+      general: [
+        'Hello! How can I help you today?',
+        'Hi there! What can I do for you?',
+        'Hey! I\'m here to assist you.',
+        'What’s up? Ready when you are.',
+        'Howdy! Need something?',
+        'Greetings! Let me know how I can assist.'
+      ],
+      casual: [
+        'Yo! What’s up?',
+        'Hey hey! Need anything?',
+        'Sup? I’m here to help.',
+        'Hey there! How’s it going?'
+      ]
+    };
+  
+    const matchedCategory = (() => {
+      if (/yo|sup|what'?s up|hey hey|hiya|howdy/.test(normalized)) return 'casual';
+      if (/good (morning|afternoon|evening)/.test(normalized)) return 'time';
+      if (/hi|hello|hey|greetings/.test(normalized)) return 'general';
+      return 'general';
+    })();
+  
+    let response;
+    if (matchedCategory === 'time') {
+      response = timeBasedGreeting();
+    } else {
+      const options = greetingsMap[matchedCategory] || greetingsMap.general;
+      response = options[Math.floor(Math.random() * options.length)];
+    }
+  
     return {
       success: true,
-      response: randomGreeting,
-      handledBy: 'local_greeting',
-      method: 'pattern_greeting',
+      response,
+      action: 'local-greeting',
+      method: 'pattern-greeting',
       timestamp: new Date().toISOString()
     };
-  }
+  }  
 
   /**
    * Handle local question responses using Phi3 LLM
    */
   async handleLocalQuestion(userMessage, intentResult, context = {}) {
-    try {
-      console.log('❓ Handling local question with Phi3...');
+    return {
+      success: true,
+      response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
+      handledBy: 'fallback',
+      method: 'question_error',
+      timestamp: new Date().toISOString()
+    };
+    // try {
+    //   console.log('❓ Handling local question with Phi3...');
+
       
-      // Try to use Phi3 for actual response generation
-      try {
-        console.log('🤖 Querying Phi3 for question response...');
-        const phi3Result = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3',
-          prompt: `Please answer this question helpfully and concisely: ${userMessage}`,
-          options: { timeout: 10000 }
-        }, {
-          ...context,
-          executeAgent: this.executeAgent.bind(this)
-        });
+      
+    //   // Try to use Phi3 for actual response generation
+    //   try {
+    //     console.log('🤖 Querying Phi3 for question response...');
+    //     const phi3Result = await this.executeAgent('Phi3Agent', {
+    //       action: 'query-phi3',
+    //       prompt: userMessage,
+    //       options: { timeout: 10000 }
+    //     }, {
+    //       ...context,
+    //       executeAgent: this.executeAgent.bind(this)
+    //     });
         
-        if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
-          console.log('✅ Phi3 provided response for question');
-          return {
-            success: true,
-            response: phi3Result.result.response,
-            handledBy: 'phi3_question_handler',
-            method: 'phi3_response',
-            confidence: intentResult.confidence,
-            timestamp: new Date().toISOString()
-          };
-        }
-      } catch (phi3Error) {
-        console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
-      }
+    //     if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
+    //       console.log('✅ Phi3 provided response for question');
+    //       return {
+    //         success: true,
+    //         response: phi3Result.result.response,
+    //         handledBy: 'phi3_question_handler',
+    //         method: 'phi3_response',
+    //         confidence: intentResult.confidence,
+    //         timestamp: new Date().toISOString()
+    //       };
+    //     }
+    //   } catch (phi3Error) {
+    //     console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
+    //   }
       
-      // Fallback to generic responses if Phi3 fails
-      const responses = [
-        'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
-        'I understand you\'re asking about that. My local processing is somewhat limited right now.',
-        'I see what you\'re asking. In local mode, I can help with basic tasks and information storage.',
-        'That\'s a good question. I\'m operating locally right now, so my responses may be more basic.'
-      ];
+    //   // Fallback to generic responses if Phi3 fails
+    //   const responses = [
+    //     'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
+    //     'I understand you\'re asking about that. My local processing is somewhat limited right now.',
+    //     'I see what you\'re asking. In local mode, I can help with basic tasks and information storage.',
+    //     'That\'s a good question. I\'m operating locally right now, so my responses may be more basic.'
+    //   ];
       
-      const baseResponse = responses[Math.floor(Math.random() * responses.length)];
+    //   const baseResponse = responses[Math.floor(Math.random() * responses.length)];
       
-      // Add helpful suggestions based on what we can do locally
-      const suggestions = [
-        'I can help you store and retrieve information, though.',
-        'Feel free to ask me to remember things for you.',
-        'I can take notes and help you recall information later.',
-        'Try asking me to remember something or recall what you\'ve told me.'
-      ];
+    //   // Add helpful suggestions based on what we can do locally
+    //   const suggestions = [
+    //     'I can help you store and retrieve information, though.',
+    //     'Feel free to ask me to remember things for you.',
+    //     'I can take notes and help you recall information later.',
+    //     'Try asking me to remember something or recall what you\'ve told me.'
+    //   ];
       
-      const suggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
-      const fullResponse = `${baseResponse} ${suggestion}`;
+    //   const suggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
+    //   const fullResponse = `${baseResponse} ${suggestion}`;
       
-      return {
-        success: true,
-        response: fullResponse,
-        handledBy: 'local_question_handler',
-        method: 'local_fallback',
-        confidence: intentResult.confidence,
-        timestamp: new Date().toISOString()
-      };
+    //   return {
+    //     success: true,
+    //     response: fullResponse,
+    //     handledBy: 'local_question_handler',
+    //     method: 'local_fallback',
+    //     confidence: intentResult.confidence,
+    //     timestamp: new Date().toISOString()
+    //   };
       
-    } catch (error) {
-      console.error('❌ Local question handling failed:', error);
-      return {
-        success: true,
-        response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
-        handledBy: 'fallback',
-        method: 'question_error',
-        timestamp: new Date().toISOString()
-      };
-    }
+    // } catch (error) {
+    //   console.error('❌ Local question handling failed:', error);
+    //   return {
+    //     success: true,
+    //     response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
+    //     handledBy: 'fallback',
+    //     method: 'question_error',
+    //     timestamp: new Date().toISOString()
+    //   };
+    // }
   }
 
   /**

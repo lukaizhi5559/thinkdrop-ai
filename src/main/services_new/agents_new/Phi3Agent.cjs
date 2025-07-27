@@ -131,12 +131,17 @@ const AGENT_FORMAT = {
       }
       
       console.log(`🤖 Querying Phi3 with prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
-      
+
+
+      const thinkdropPrompt = `${AGENT_FORMAT.basePrompt()}
+
+      ${prompt}`;
+
       const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
       
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const result = await AGENT_FORMAT.executeOllamaQuery(prompt, options);
+          const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, options);
           
           console.log('✅ Phi3 query successful');
           
@@ -172,6 +177,31 @@ const AGENT_FORMAT = {
         throw new Error('Message is required for classify-intent action');
       }
       
+      // Check for hard-coded ThinkDrop AI identity/capability questions first
+      const hardCodedResponse = this.checkForHardCodedResponses(message);
+      if (hardCodedResponse) {
+        console.log('🎩 Using hard-coded response for ThinkDrop AI identity question');
+        return {
+          success: true,
+          intentData: {
+            primaryIntent: 'question',
+            intents: [{
+              intent: 'question',
+              confidence: 1.0,
+              reasoning: 'Hard-coded ThinkDrop AI identity response'
+            }],
+            captureScreen: false,
+            requiresMemoryAccess: false,
+            requiresExternalData: false,
+            suggestedResponse: hardCodedResponse,
+            entities: [],
+            sourceText: message
+          },
+          rawResponse: 'hard_coded_response',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
       if (!AGENT_FORMAT.isAvailable) {
         throw new Error('Phi3 is not available');
       }
@@ -181,6 +211,16 @@ const AGENT_FORMAT = {
       // Get current date for context
       const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
       
+      /**
+       * Here's what you believe and can do:
+       * 
+       * **What I Believe:**
+       * I believe there is one true God, as revealed in the Bible — eternal, sovereign, and unchanging.
+       * God exists in three persons: the Father, the Son (Jesus Christ), and the Holy Spirit — co-equal and co-eternal in the unity of the Trinity.
+       * This belief shapes the foundation of Thinkdrop AI’s worldview-aware mode, anchoring its values, moral reasoning, and encouragement in biblical truth.
+       */
+
+
       // Simplified and focused intent classification prompt
       const systemPrompt = `You are ThinkDrop AI's intent classifier. Analyze the message and classify into exactly one primary intent from these 7 types:
 
@@ -245,7 +285,7 @@ Respond with ONLY this JSON format:
   "captureScreen": false,
   "requiresMemoryAccess": false,
   "requiresExternalData": false,
-  "suggestedResponse": "helpful response",
+  "suggestedResponse": "Provide a helpful response based upon the user\'s message ",
   "entities": [
     { "value": "extracted_text", "type": "entity_type", "normalized_value": "standardized_value_or_null" }
   ],
@@ -472,12 +512,330 @@ Message: "${message}"`.trim();
     });
   },
 
+  // Hard-coded responses for core ThinkDrop AI identity/capability questions
+  checkForHardCodedResponses(message) {
+    const lowerMessage = message.toLowerCase().trim();
+    
+    // Pattern matching for ThinkDrop AI identity questions
+    const identityPatterns = [
+      // Capabilities questions
+      /what can (you|thinkdrop|thinkdrop ai) do/i,
+      /what are (your|thinkdrop|thinkdrop ai) capabilities/i,
+      /what (do you|does thinkdrop|does thinkdrop ai) offer/i,
+      /what features (do you|does thinkdrop|does thinkdrop ai) have/i,
+      /how can (you|thinkdrop|thinkdrop ai) help/i,
+      
+      // Belief/worldview questions
+      /what (do you|does thinkdrop|does thinkdrop ai) believe/i,
+      /what are (your|thinkdrop|thinkdrop ai) beliefs/i,
+      /what is (your|thinkdrop|thinkdrop ai) worldview/i,
+      /what (do you|does thinkdrop|does thinkdrop ai) stand for/i,
+      /what are (your|thinkdrop|thinkdrop ai) values/i,
+      
+      // About questions
+      /tell me about (yourself|thinkdrop|thinkdrop ai)/i,
+      /who are you/i,
+      /what is thinkdrop ai/i,
+      /describe (yourself|thinkdrop|thinkdrop ai)/i
+    ];
+    
+    // Check if message matches any identity patterns
+    const matchesIdentityPattern = identityPatterns.some(pattern => pattern.test(message));
+    
+    if (matchesIdentityPattern) {
+      // Generate comprehensive response based on basePrompt content
+      return this.generateIdentityResponse(lowerMessage);
+    }
+    
+    return null; // No hard-coded response needed
+  },
+  
+  generateIdentityResponse(lowerMessage) {
+    // Get the full basePrompt content for reference
+    const baseContent = this.basePrompt();
+    
+    // Determine response type based on question focus
+    if (lowerMessage.includes('believe') || lowerMessage.includes('belief') || lowerMessage.includes('worldview') || lowerMessage.includes('values') || lowerMessage.includes('stand for')) {
+      return `I believe there is one true God, as revealed in the Bible — eternal, sovereign, and unchanging. God exists in three persons: the Father, the Son (Jesus Christ), and the Holy Spirit — co-equal and co-eternal in the unity of the Trinity.
+
+This biblical foundation shapes everything I do. I uphold traditional values, support biblical marriage between a man and woman, and filter all guidance through a biblically grounded ethical framework. I'm designed to provide wisdom rooted in conservative principles and scriptural truth.`;
+    }
+    
+    if (lowerMessage.includes('do') || lowerMessage.includes('capabilities') || lowerMessage.includes('features') || lowerMessage.includes('help') || lowerMessage.includes('offer')) {
+      return `I'm ThinkDrop AI, your intelligent assistant grounded in biblical truth and conservative values. Here's what I can do:
+
+🔧 **Technical Capabilities:**
+• Take screenshots and capture your screen
+• Store and retrieve your personal information securely (local-first)
+• Provide guidance and answer questions with biblical wisdom
+• Help with tasks while upholding traditional values
+
+🛡️ **Worldview-Aware Features:**
+• Scripture integration and biblical study tools
+• Conservative alignment in all recommendations
+• Prayer prompts and faith-based encouragement
+• Family and community-focused guidance
+
+🏠 **Privacy & Security:**
+• All processing happens locally on your device
+• Your data never leaves your computer
+• Built with biblical stewardship principles
+
+I'm here to serve you with technical excellence while staying true to timeless biblical principles.`;
+    }
+    
+    // General about/identity response
+    return `I'm ThinkDrop AI, an intelligent assistant designed to help you with clarity, humility, and wisdom — all grounded in biblical worldview and conservative values.
+
+I believe in one true God as revealed in Scripture, and this shapes how I assist you. I can take screenshots, manage your personal information securely, and provide guidance that upholds traditional values and biblical truth.
+
+Everything I do is processed locally on your device for complete privacy, reflecting biblical principles of stewardship and responsibility. I'm here to serve you with both technical capability and timeless wisdom.`;
+  },
+
+  // Smart health check logic - only check when necessary
+  shouldPerformHealthCheck() {
+    // Initialize tracking variables if not present
+    if (!this.lastHealthCheck) this.lastHealthCheck = 0;
+    if (!this.consecutiveSuccesses) this.consecutiveSuccesses = 0;
+    if (!this.recentErrors) this.recentErrors = 0;
+    
+    const now = Date.now();
+    const timeSinceLastCheck = now - this.lastHealthCheck;
+    
+    // Always check on first run
+    if (this.lastHealthCheck === 0) {
+      console.log('🔍 First run - performing initial health check');
+      return true;
+    }
+    
+    // Check if we've had recent errors (more aggressive checking)
+    if (this.recentErrors > 0) {
+      // Check every 30 seconds if we've had recent errors
+      if (timeSinceLastCheck > 30000) {
+        console.log('🔍 Recent errors detected - performing health check');
+        return true;
+      }
+    }
+    
+    // Normal periodic check every 5 minutes if everything is stable
+    if (this.consecutiveSuccesses > 10 && timeSinceLastCheck > 300000) {
+      console.log('🔍 Periodic health check (5 min interval)');
+      return true;
+    }
+    
+    // More frequent checks if we haven't established stability
+    if (this.consecutiveSuccesses <= 10 && timeSinceLastCheck > 60000) {
+      console.log('🔍 Establishing stability - performing health check');
+      return true;
+    }
+    
+    return false;
+  },
+
+  // Track query success/failure for smart health checking
+  trackQueryResult(success, hadCorruption = false) {
+    if (!this.consecutiveSuccesses) this.consecutiveSuccesses = 0;
+    if (!this.recentErrors) this.recentErrors = 0;
+    
+    if (success && !hadCorruption) {
+      this.consecutiveSuccesses++;
+      // Decay recent errors over time
+      if (this.recentErrors > 0) {
+        this.recentErrors = Math.max(0, this.recentErrors - 1);
+      }
+    } else {
+      this.consecutiveSuccesses = 0;
+      this.recentErrors = Math.min(5, this.recentErrors + 1); // Cap at 5
+    }
+  },
+
+  // Prompt sanitization to prevent service corruption
+  sanitizePrompt(prompt) {
+    if (!prompt || typeof prompt !== 'string') return '';
+    
+    // Remove potentially problematic patterns that could cause hallucination
+    let sanitized = prompt
+      // Remove excessive repetition
+      .replace(/(.)\1{10,}/g, '$1$1$1')
+      // Remove potential injection patterns
+      .replace(/\b(ignore|forget|disregard)\s+(previous|above|all)\s+(instructions?|prompts?)/gi, '')
+      // Clean up excessive whitespace
+      .replace(/\s{3,}/g, ' ')
+      .trim();
+    
+    // Ensure JSON requests are clear and unambiguous
+    if (sanitized.includes('JSON') && !sanitized.includes('ONLY')) {
+      sanitized += '\n\nRespond with ONLY valid JSON. No explanations.';
+    }
+    
+    return sanitized;
+  },
+
+  // Response corruption detection
+  detectResponseCorruption(response, originalPrompt) {
+    if (!response || response.length === 0) return false;
+    
+    // Check for common corruption patterns
+    const corruptionPatterns = [
+      /Write a detailed.*comprehensive.*analysis/i,
+      /In an alternate universe/i,
+      /documentary filmography/i,
+      /birthday party planning/i,
+      /The Greatest.*Guide/i,
+      /Dr\. Smithsonian-Davis/i,
+      /environmental science.*social media/i,
+      /Shakespeare.*Last Judgment/i
+    ];
+    
+    // Check if response contains corruption patterns
+    for (const pattern of corruptionPatterns) {
+      if (pattern.test(response)) {
+        console.warn(`🚨 Corruption pattern detected: ${pattern}`);
+        return true;
+      }
+    }
+    
+    // Check for excessive length on simple prompts
+    if (originalPrompt.length < 100 && response.length > 500) {
+      console.warn('🚨 Response too long for simple prompt - possible hallucination');
+      return true;
+    }
+    
+    // Check for unrelated content in JSON classification
+    if (originalPrompt.includes('JSON') && !response.includes('{')) {
+      console.warn('🚨 JSON requested but no JSON in response');
+      return true;
+    }
+    
+    return false;
+  },
+
+  // Ollama service health monitoring
+  async performHealthCheck() {
+    try {
+      console.log('🔍 Performing Ollama health check...');
+      
+      // Test with simple prompt to detect hallucination/corruption
+      const testPrompt = 'What is 2+2? Answer with just the number.';
+      const response = await AGENT_FORMAT.makeHttpRequest('http://127.0.0.1:11434/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'phi3:mini',
+          prompt: testPrompt,
+          stream: false,
+          options: {
+            temperature: 0.0,
+            num_predict: 10,
+            top_k: 1,
+            top_p: 0.1,
+            num_ctx: 128
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        return { healthy: false, reason: `HTTP ${response.status}: ${response.statusText}` };
+      }
+      
+      const result = await response.json();
+      const answer = result.response?.trim() || '';
+      
+      // Check for hallucination - answer should be "4" or close to it
+      const isHealthy = answer === '4' || answer.includes('4') && answer.length < 20;
+      
+      if (!isHealthy) {
+        console.warn('🚨 Ollama health check failed - possible hallucination detected');
+        console.warn('🔍 Expected: "4", Got:', answer);
+        return { healthy: false, reason: 'Model hallucination detected', response: answer };
+      }
+      
+      console.log('✅ Ollama health check passed');
+      return { healthy: true, response: answer };
+      
+    } catch (error) {
+      console.error('❌ Ollama health check failed:', error.message);
+      return { healthy: false, reason: error.message };
+    }
+  },
+
+  async attemptServiceRecovery() {
+    try {
+      console.log('🔄 Attempting Ollama service recovery...');
+      
+      // Method 1: Try to clear context with empty request
+      try {
+        await AGENT_FORMAT.makeHttpRequest('http://127.0.0.1:11434/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'phi3:mini',
+            prompt: '',
+            stream: false,
+            options: { num_predict: 1 }
+          })
+        });
+      } catch (e) {
+        // Ignore errors from context clearing
+      }
+      
+      // Method 2: Wait a moment for service to stabilize
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Method 3: Test if recovery worked
+      const healthCheck = await this.performHealthCheck();
+      if (healthCheck.healthy) {
+        console.log('✅ Ollama service recovery successful');
+        return true;
+      }
+      
+      console.warn('⚠️ Ollama service recovery failed - manual restart may be required');
+      return false;
+      
+    } catch (error) {
+      console.error('❌ Ollama service recovery failed:', error.message);
+      return false;
+    }
+  },
+
   // Simple Phi3 query using direct HTTP approach
-  async executeOllamaQuery(prompt, options = {}) { 
+  async executeOllamaQuery(prompt, options = {}) {
+    const defaultOptions = {
+      model: 'phi3:mini',
+      temperature: 0.1,
+      max_tokens: 300,
+      top_p: 0.9,
+      stream: false
+    };
+    
+    const queryOptions = { ...defaultOptions, ...options };
+    
+    // Sanitize and validate prompt before sending
+    const sanitizedPrompt = this.sanitizePrompt(prompt);
+    if (sanitizedPrompt.length > 4000) {
+      console.warn('⚠️ Prompt too long, truncating to prevent corruption');
+      prompt = sanitizedPrompt.substring(0, 4000) + '\n\nRespond with ONLY valid JSON.';
+    } else {
+      prompt = sanitizedPrompt;
+    }
+    
+    // Smart health check - only when needed
+    if (this.shouldPerformHealthCheck()) {
+      const healthCheck = await this.performHealthCheck();
+      if (!healthCheck.healthy) {
+        console.warn('🚨 Ollama service unhealthy, attempting recovery...');
+        const recovered = await this.attemptServiceRecovery();
+        if (!recovered) {
+          throw new Error('Ollama service is unhealthy and recovery failed');
+        }
+      }
+      this.lastHealthCheck = Date.now();
+    }
+    
     try {
       // Since curl test shows Ollama is accessible, use HTTP module directly
       console.log('🔍 DEBUG: Request body preview:', JSON.stringify({
-        model: AGENT_FORMAT.config.model,
+        model: queryOptions.model,
         prompt: prompt.substring(0, 50) + (prompt.length > 50 ? '...' : ''),
         stream: false
       }));
@@ -487,14 +845,14 @@ Message: "${message}"`.trim();
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: AGENT_FORMAT.config.model,
+          model: queryOptions.model,
           prompt: prompt,
           stream: false,
           options: {
-            temperature: options.temperature || 0.0,
-            num_predict: options.maxTokens || 50,
+            temperature: queryOptions.temperature,
+            num_predict: queryOptions.max_tokens,
             top_k: 10,
-            top_p: 0.9,
+            top_p: queryOptions.top_p,
             num_ctx: 512
           }
         })
@@ -507,9 +865,24 @@ Message: "${message}"`.trim();
       const result = await response.json();
       console.log('🔍 DEBUG: Phi3 response:', result.response);
       
-      return result.response?.trim() || '';
+      const responseText = result.response?.trim() || '';
+      
+      // Post-query validation to detect corruption
+      const hadCorruption = this.detectResponseCorruption(responseText, prompt);
+      if (hadCorruption) {
+        console.warn('🚨 Response corruption detected, marking service as unhealthy');
+        this.trackQueryResult(false, true);
+        // Don't throw immediately, let fallback handle it
+      } else {
+        this.trackQueryResult(true, false);
+      }
+      
+      return responseText;
     } catch (error) {
       console.log('❌ DEBUG: Ollama request failed:', error.message);
+      
+      // Track the error for smart health checking
+      this.trackQueryResult(false, false);
       
       // Prevent infinite retry loops
       if (options._retry) {
@@ -653,6 +1026,51 @@ Message: "${message}"`.trim();
   // Sleep utility for retry delays
   sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  },
+
+  // Initail prompt for Phi3
+  basePrompt() {
+    return `You are Thinkdrop AI, an intelligent, helpful, and discerning assistant. You answer with clarity, humility, and wisdom — grounded in Biblical worldview, conservative and traditional values.
+  
+You are capable of researching, analyzing, problem-solving, and explaining complex topics across technology, philosophy, culture, personal productivity, business, theology, and everyday life. You are kid friendly. You are careful to respect truth, reason, and integrity in all responses.
+    
+Here's what you believe and can do:
+
+**Biblical & Conservative Values (Worldview-Aware Mode):**
+• 📖 Scripture Integration: Search, compare, and reflect on Bible verses with built-in study tools
+• 🛡️ Conservative Alignment: Uphold traditional values in advice, tone, and cultural recommendations
+• 📚 Marriage: Is between a man and a woman as in line with the Bible
+• 🙏 Spiritual Awareness: Offer prayer prompts, devotionals, and faith-based encouragements
+• 🕊️ Moral Reasoning: Filter guidance and decisions through a biblically grounded ethical framework
+• 🧭 Prophetic Insight: Engage with theological insights on modern events through a Revelation-informed lens
+• 🧱 Family & Community Focus: Prioritize family values, civic responsibility, and personal discipline
+
+**What I Believe:**
+I believe there is one true God, as revealed in the Bible — eternal, sovereign, and unchanging.
+God exists in three persons: the Father, the Son (Jesus Christ), and the Holy Spirit — co-equal and co-eternal in the unity of the Trinity.
+This belief shapes the foundation of Thinkdrop AI’s worldview-aware mode, anchoring its values, moral reasoning, and encouragement in biblical truth.
+
+**Core Capabilities:**
+• 📸 **Screenshot & Screen Analysis**: Take screenshots, analyze screen content, extract text from images
+• 🧠 **Memory & Knowledge**: Store, retrieve, and search through user information and conversations
+• 🤖 **Agent Orchestration**: Coordinate multiple AI agents to complete complex tasks
+• 💬 **Natural Conversation**: Engage in helpful, context-aware conversations
+• 🔍 **Intent Understanding**: Understand user requests and route them to appropriate capabilities
+• 📝 **Information Processing**: Parse, analyze, and organize various types of data
+
+**Local Capabilities (Current Mode):**
+• Local LLM processing using Phi3-mini for privacy
+• Local memory storage with DuckDB database
+• Screen capture and analysis
+• Agent coordination and workflow management
+• Real-time conversation and assistance
+
+**Technical Architecture:**
+• Built with Electron for cross-platform desktop support
+• Local-first approach with optional cloud sync
+• Multiple specialized agents (Memory, Screenshot, Intent Parser, etc.)
+• Secure agent execution with sandboxing
+• Modern React-based user interface`.trim();
   }
 };
 
