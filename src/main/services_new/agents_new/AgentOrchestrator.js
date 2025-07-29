@@ -1604,13 +1604,23 @@ export class AgentOrchestrator {
    * Handle local question responses using Phi3 LLM
    */
   async handleLocalQuestion(userMessage, intentResult, context = {}) {
-    return {
-      success: true,
-      response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
-      handledBy: 'fallback',
-      method: 'question_error',
-      timestamp: new Date().toISOString()
-    };
+    try {
+      console.log('❓ Handling local question with proper entity preservation...');
+      console.log('🔍 Question entities to preserve:', intentResult.result?.entities);
+      
+      // Route question intents through unified orchestration to preserve entities
+      return await this.processUnifiedOrchestration(userMessage, intentResult.result, context);
+      
+    } catch (error) {
+      console.error('❌ Local question handling failed:', error);
+      return {
+        success: true,
+        response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
+        handledBy: 'fallback',
+        method: 'question_error',
+        timestamp: new Date().toISOString()
+      };
+    }
     // try {
     //   console.log('❓ Handling local question with Phi3...');
 
@@ -1837,11 +1847,13 @@ export class AgentOrchestrator {
         console.log('⚠️ Warning: Using stringified payload as sourceText');
       }
     }
-    
 
+    // Use consistent intent from payload or fallback
+    const fallbackIntent = payload.primaryIntent || payload.intent || 'question';
+    
     return {
-      intents: [{ intent: 'question', confidence: 0.8 }],
-      primaryIntent: payload.primaryIntent || 'question',
+      intents: [{ intent: fallbackIntent, confidence: 0.8 }],
+      primaryIntent: fallbackIntent,
       entities: payload.entities || [],
       requiresMemoryAccess: payload.requiresMemoryAccess || false,
       captureScreen: payload.captureScreen || false,

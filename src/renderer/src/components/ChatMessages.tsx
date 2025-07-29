@@ -490,46 +490,7 @@ export default function ChatMessages() {
         });
         
         console.log('✅ Local LLM processing completed successfully');
-        
-        // 🧠 BACKGROUND: Asynchronously trigger memory storage (non-blocking)
-        setTimeout(async () => {
-          try {
-            console.log('🧠 [BACKGROUND] Starting async memory storage for local LLM...');
-            
-            // Create intent classification payload similar to online LLM
-            const intentClassificationPayload = {
-              primaryIntent: 'conversation', // Default to conversation intent
-              requiresMemoryAccess: true,
-              requiresExternalData: false,
-              entities: [],
-              sourceText: messageText,
-              suggestedResponse: typeof result.data === 'string' ? result.data : JSON.stringify(result.data),
-              captureScreen: false,
-              timestamp: new Date().toISOString(),
-              context: {
-                source: 'local_llm',
-                sessionId: `local-session-${Date.now()}`
-              }
-            };
-            
-            // Trigger AgentOrchestrator for memory storage (same as online LLM)
-            if (window.electronAPI?.agentOrchestrate) {
-              const orchestrationResult = await window.electronAPI.agentOrchestrate({
-                message: JSON.stringify(intentClassificationPayload),
-                intent: intentClassificationPayload.primaryIntent,
-                context: { source: 'local_llm_memory_storage' }
-              });
-              
-              if (orchestrationResult.success) {
-                console.log('✅ [BACKGROUND] Local LLM memory storage completed successfully');
-              } else {
-                console.warn('⚠️ [BACKGROUND] Local LLM memory storage failed:', orchestrationResult.error);
-              }
-            }
-          } catch (memoryError) {
-            console.warn('⚠️ [BACKGROUND] Local LLM memory storage error (non-critical):', memoryError);
-          }
-        }, 100); // Small delay to ensure UI response is rendered first
+        console.log('📝 Note: Background orchestration is handled by IPC handler, no additional frontend call needed');
         
       } else {
         throw new Error(result.error || 'Local LLM processing failed');

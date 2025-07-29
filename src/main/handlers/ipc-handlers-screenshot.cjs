@@ -319,10 +319,10 @@ function setupLegacyLLMHandlers(ipcMain, coreAgent) {
       
       console.log('🚀 [FAST PATH] Local LLM with intent classification:', prompt.substring(0, 50) + '...');
       
-      // Step 1: Classify intent and get suggested response from Phi3Agent
-      console.log('🎯 Step 1: Classifying intent and generating response...');
+      // Step 1: Classify intent and extract entities using Phi3Agent
+      console.log('🎯 Step 1: Classifying intent and extracting entities...');
       const intentResult = await coreAgent.executeAgent('Phi3Agent', {
-        action: 'classify-intent',
+        action: 'classify-intent',  // ✅ Use correct action that exists
         message: prompt,
         options: {
           temperature: 0.1,
