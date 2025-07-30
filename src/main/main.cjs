@@ -133,18 +133,18 @@ function createChatMessagesWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   
-  const windowWidth = Math.min(width - 40, 375);
+  const windowWidth = Math.min(width - 40, 350);
   const windowHeight = height - 10; // Use almost full height with minimal margin
 
   const x = width - windowWidth - 10; // 10px margin from right
   const y = 5; // 5px margin from top for minimal constraint
   
   chatMessagesWindow = new BrowserWindow({
-    width: windowWidth, // Responsive width  
+    width: windowWidth - 20, // Responsive width  
     height: windowHeight, // Use calculated full height
-    minWidth: 250, // Minimum width for usability
+    minWidth: 300, // Minimum width for usability
     maxWidth: width - 20, // Maximum width with margin
-    minHeight: windowHeight - 20, // Fixed height - no height resizing
+    minHeight: 300, // Fixed height - no height resizing
     maxHeight: windowHeight, // Fixed height - no height resizing
     x: x, // Position from right edge
     y: y, // Position from top with minimal margin
@@ -177,16 +177,18 @@ function createChatMessagesWindow() {
   const fixedWidth = windowWidth; // Store the fixed width
     
   // Constrain resizing to width only (prevent height changes)
-  chatMessagesWindow.on('resize', () => {
-    if (chatMessagesWindow && !chatMessagesWindow.isDestroyed()) {
-      const [currentWidth, currentHeight] = chatMessagesWindow.getSize();
-      if (currentHeight !== fixedHeight && currentWidth !== fixedWidth) {
-        // Reset height if it changed, keep width
-        // chatMessagesWindow.setSize(currentWidth, fixedHeight);
-        chatMessagesWindow.setMinimumSize(currentWidth - 20, currentHeight - 20);
-      }
-    }
-  });
+  // chatMessagesWindow.on('resize', () => {
+  //   if (chatMessagesWindow && !chatMessagesWindow.isDestroyed()) {
+  //     const [currentWidth, currentHeight] = chatMessagesWindow.getSize();
+  //     const minWidth = currentWidth < 300 ? 300 : currentWidth - 20
+  //     const minHeight = currentHeight < 300 ? 300 : currentHeight - 20
+  //     if ((minWidth !== 300 || minHeight !== 300) && currentHeight !== fixedHeight && currentWidth !== fixedWidth) {
+  //       // Reset height if it changed, keep width
+  //       // chatMessagesWindow.setSize(currentWidth, fixedHeight);
+  //       chatMessagesWindow.setMinimumSize(minWidth, minHeight);
+  //     }
+  //   }
+  // });
   
   // Load the messages window
   const messagesUrl = process.env.NODE_ENV === 'development'

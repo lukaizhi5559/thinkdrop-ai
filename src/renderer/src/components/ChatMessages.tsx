@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Droplet, X, Send, Unplug } from 'lucide-react';
+import { Droplet, X, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Tooltip,
@@ -139,11 +139,19 @@ export default function ChatMessages() {
   
   // Input state from ChatWindow
   const [currentMessage, setCurrentMessage] = useState('');
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   
-  // Auto-scroll state and refs
+  // Inline editing state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  
+  // Copy feedback state
+  const [copiedMessageIds, setCopiedMessageIds] = useState<Set<string>>(new Set());
+  
+  // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -394,6 +402,12 @@ export default function ChatMessages() {
     
     const messageText = currentMessage.trim();
     setCurrentMessage('');
+    
+    // Reset textarea height to single line
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+    }
+    
     setIsLoading(true);
     setLocalLLMError(null);
     
@@ -463,6 +477,7 @@ export default function ChatMessages() {
       console.log('🤖 Starting local LLM processing...');
       setIsProcessingLocally(true);
       setIsLoading(false); // Stop main loading, show local processing instead
+      scrollToBottom({ smooth: true, force: true });
       
       // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
       if (!window.electronAPI?.llmQueryLocal) {
@@ -516,6 +531,7 @@ export default function ChatMessages() {
     } finally {
       setIsProcessingLocally(false);
       setIsLoading(false);
+      scrollToBottom({ smooth: true, force: true });
     }
   }, []);
 
@@ -567,13 +583,15 @@ export default function ChatMessages() {
     const value = e.target.value;
     setCurrentMessage(value);
     
-    // Debounced auto-resize to prevent lag
+    // Auto-resize textarea to fit content
     const target = e.target;
     requestAnimationFrame(() => {
-      if (target.scrollHeight !== target.clientHeight) {
-        target.style.height = 'auto';
-        target.style.height = Math.min(target.scrollHeight, 128) + 'px'; // Max height 128px
-      }
+      // Always reset height to auto first to get accurate scrollHeight
+      target.style.height = 'auto';
+      
+      // Calculate the proper height based on content
+      const newHeight = Math.max(40, Math.min(target.scrollHeight, 128)); // Min 40px, Max 128px
+      target.style.height = newHeight + 'px';
     });
   }, []);
   
@@ -587,6 +605,132 @@ export default function ChatMessages() {
       );
     }
   };
+
+  // Message action handlers
+  const handleCopyMessage = useCallback(async (messageText: string, messageId: string) => {
+    try {
+      await navigator.clipboard.writeText(messageText);
+      console.log('✅ Message copied to clipboard');
+      
+      // Show checkmark feedback
+      setCopiedMessageIds(prev => new Set(prev).add(messageId));
+      
+      // Remove checkmark after 2 seconds
+      setTimeout(() => {
+        setCopiedMessageIds(prev => {
+          const newSet = new Set(prev);
+          newSet.delete(messageId);
+          return newSet;
+        });
+      }, 2000);
+    } catch (error) {
+      console.error('❌ Failed to copy message:', error);
+    }
+  }, []);
+
+  const handleRegenerateMessage = useCallback(async (messageId: string) => {
+    // Find the user message that preceded this AI message
+    const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+    if (messageIndex > 0) {
+      const previousMessage = chatMessages[messageIndex - 1];
+      if (previousMessage.sender === 'user') {
+        console.log('🔄 Regenerating response for:', previousMessage.text);
+        // Remove the AI message and regenerate
+        setChatMessages(prev => prev.filter(m => m.id !== messageId));
+        // Set the previous message in textarea and send
+        setCurrentMessage(previousMessage.text);
+        // Use setTimeout to ensure state is updated before sending
+        setTimeout(async () => {
+          await handleSendMessage();
+        }, 0);
+      }
+    }
+  }, [chatMessages, handleSendMessage]);
+
+  const handleEditMessage = useCallback((messageId: string, messageText: string) => {
+    console.log('✏️ Edit message:', messageId, messageText);
+    // Start inline editing
+    setEditingMessageId(messageId);
+    setEditingText(messageText);
+    // Focus the edit textarea after state update
+    setTimeout(() => {
+      if (editTextareaRef.current) {
+        editTextareaRef.current.focus();
+        editTextareaRef.current.setSelectionRange(
+          editTextareaRef.current.value.length,
+          editTextareaRef.current.value.length
+        );
+      }
+    }, 0);
+  }, []);
+
+  const handleThumbsUp = useCallback((messageId: string) => {
+    console.log('👍 Thumbs up for message:', messageId);
+    // TODO: Send feedback to backend
+  }, []);
+
+  const handleThumbsDown = useCallback((messageId: string) => {
+    console.log('👎 Thumbs down for message:', messageId);
+    // TODO: Send feedback to backend
+  }, []);
+
+  const handleSaveEdit = useCallback(async (messageId: string) => {
+    if (!editingText.trim()) return;
+    
+    console.log('✅ Saving edit for message:', messageId, editingText);
+    
+    // Update the message in the chat
+    setChatMessages(prev => prev.map(msg => 
+      msg.id === messageId 
+        ? { ...msg, text: editingText.trim() }
+        : msg
+    ));
+    
+    // Remove messages from this point forward and regenerate
+    const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+    if (messageIndex !== -1) {
+      // Remove subsequent messages
+      setChatMessages(prev => prev.slice(0, messageIndex + 1));
+      
+      // Set the edited text in the main textarea and send
+      setCurrentMessage(editingText.trim());
+      setTimeout(async () => {
+        await handleSendMessage();
+      }, 0);
+    }
+    
+    // Exit edit mode
+    setEditingMessageId(null);
+    setEditingText('');
+  }, [editingText, chatMessages, handleSendMessage]);
+
+  const handleCancelEdit = useCallback(() => {
+    console.log('❌ Canceling edit');
+    setEditingMessageId(null);
+    setEditingText('');
+  }, []);
+
+  const handleEditTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setEditingText(e.target.value);
+    
+    // Auto-resize textarea
+    const target = e.target;
+    requestAnimationFrame(() => {
+      target.style.height = 'auto';
+      const newHeight = Math.max(40, Math.min(target.scrollHeight, 128));
+      target.style.height = newHeight + 'px';
+    });
+  }, []);
+
+  const handleEditKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>, messageId: string) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSaveEdit(messageId);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      handleCancelEdit();
+    }
+  }, [handleSaveEdit, handleCancelEdit]);
 
   useEffect(() => {
     // Connect WebSocket when component mounts
@@ -908,17 +1052,18 @@ export default function ChatMessages() {
       </div>
 
       {/* Messages Container - Takes up remaining space and scrolls */}
-      <div 
-        ref={messagesContainerRef}
-        className="overflow-y-auto overflow-x-hidden p-4"
-        style={{ 
-          WebkitAppRegion: 'no-drag',
-          // flex: '1 1 0%', // Explicit flex-grow with flex-basis 0
-          minHeight: 0, // Important for flex child to shrink
-          // maxHeight: '100%',
-          // height: '300vh' // Force full height
-        } as React.CSSProperties}
-      >
+      <div className="relative flex-1 flex flex-col min-h-0">
+        <div 
+          ref={messagesContainerRef}
+          className="overflow-y-auto overflow-x-hidden p-4 flex-1"
+          style={{ 
+            WebkitAppRegion: 'no-drag',
+            // flex: '1 1 0%', // Explicit flex-grow with flex-basis 0
+            minHeight: 0, // Important for flex child to shrink
+            // maxHeight: '100%',
+            // height: '300vh' // Force full height
+          } as React.CSSProperties}
+        >
         <div className="space-y-4">
         {chatMessages.length === 0 && !currentStreamingMessage ? (
           <div className="text-center py-8">
@@ -928,26 +1073,155 @@ export default function ChatMessages() {
         ) : (
           <>
             {chatMessages.map((message) => (
-              <div key={message.id} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div key={message.id} className={`group flex flex-col ${message.sender === 'user' ? 'items-end' : 'items-start'}`}>
+                {/* Message bubble */}
                 <div 
-                  className={`max-w-[85%] rounded-xl px-4 py-2 ${
+                  className={`max-w-[85%] min-w-0 rounded-xl px-4 py-2 overflow-x-auto overflow-y-hidden ${
                     message.sender === 'user'
                       ? 'bg-gradient-to-r from-teal-500 to-blue-500 text-white'
                       : 'bg-white/10 text-white/90 border border-white/10'
                   }`}
                 >
-                  <div className="text-sm leading-relaxed">
-                    <MarkdownRenderer content={message.text} />
-                  </div>
+                  {editingMessageId === message.id ? (
+                    /* Inline edit mode */
+                    <div className="space-y-2">
+                      <textarea
+                        ref={editTextareaRef}
+                        value={editingText}
+                        onChange={handleEditTextareaChange}
+                        onKeyDown={(e) => handleEditKeyDown(e, message.id)}
+                        className="w-full bg-transparent text-sm leading-relaxed resize-none outline-none border-none text-white placeholder-white/50"
+                        placeholder="Edit your message..."
+                        style={{ minHeight: '24px' }}
+                      />
+                      <div className="flex gap-2 justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs text-white/70 hover:text-white hover:bg-white/10"
+                          onClick={handleCancelEdit}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-2 text-xs text-white/70 hover:text-white hover:bg-white/10"
+                          onClick={() => handleSaveEdit(message.id)}
+                        >
+                          Save
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Normal message display */
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                      <MarkdownRenderer content={message.text} />
+                    </div>
+                  )}
                 </div>
+                
+                {/* Action buttons at bottom - hide during edit mode */}
+                {editingMessageId !== message.id && (
+                  <div className={`flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {/* Copy button for all messages */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className={`h-6 w-6 p-0 transition-colors duration-200 ${
+                          copiedMessageIds.has(message.id)
+                            ? 'text-green-400 hover:text-green-300'
+                            : 'text-white/60 hover:text-white'
+                        } hover:bg-white/10`}
+                        onClick={() => handleCopyMessage(message.text, message.id)}
+                      >
+                        {copiedMessageIds.has(message.id) ? (
+                          <Check className="h-3 w-3" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      {copiedMessageIds.has(message.id) ? 'Copied!' : 'Copy message'}
+                    </TooltipContent>
+                  </Tooltip>
+                  
+                  {/* AI-specific buttons */}
+                  {message.sender === 'ai' && (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-white/60 hover:text-white hover:bg-white/10"
+                            onClick={() => handleRegenerateMessage(message.id)}
+                          >
+                            <RotateCcw className="h-3 w-3" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Regenerate response</TooltipContent>
+                      </Tooltip>
+                      
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-white/60 hover:text-green-400 hover:bg-white/10"
+                            onClick={() => handleThumbsUp(message.id)}
+                          >
+                            <ThumbsUp className="h-3 w-3" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Good response</TooltipContent>
+                      </Tooltip>
+                      
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 w-6 p-0 text-white/60 hover:text-red-400 hover:bg-white/10"
+                            onClick={() => handleThumbsDown(message.id)}
+                          >
+                            <ThumbsDown className="h-3 w-3" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Poor response</TooltipContent>
+                      </Tooltip>
+                    </>
+                  )}
+                  
+                  {/* User-specific buttons */}
+                  {message.sender === 'user' && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 w-6 p-0 text-white/60 hover:text-white hover:bg-white/10"
+                          onClick={() => handleEditMessage(message.id, message.text)}
+                        >
+                          <Edit3 className="h-3 w-3" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>Edit message</TooltipContent>
+                    </Tooltip>
+                  )}
+                  </div>
+                )}
               </div>
             ))}
             
             {/* Streaming message display */}
             {currentStreamingMessage && (
               <div className="flex justify-start">
-                <div className="max-w-[85%] bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2">
-                  <div className="text-sm leading-relaxed">
+                <div className="max-w-[85%] min-w-0 bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2 overflow-x-auto overflow-y-hidden">
+                  <div className="text-sm leading-relaxed whitespace-pre-wrap">
                     <MarkdownRenderer content={currentStreamingMessage} />
                     <span className="inline-block w-2 h-4 bg-white/60 ml-1 animate-pulse">|</span>
                   </div>
@@ -979,35 +1253,41 @@ export default function ChatMessages() {
         <div ref={messagesEndRef} />
         </div>
         
-        {/* Scroll to bottom button */}
+        {/* Scroll to bottom button - positioned over messages area but outside scroll container */}
         {showScrollButton && (
-          <button
-            onClick={handleScrollToBottom}
-            className="absolute bottom-20 right-4 bg-gray-800/90 hover:bg-gray-700/90 text-white/90 rounded-full p-2 shadow-lg transition-all duration-200 hover:scale-105 border border-white/10"
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-            title="Scroll to bottom"
-          >
-            <svg 
-              className="w-5 h-5" 
-              fill="none" 
-              stroke="currentColor" 
-              viewBox="0 0 24 24"
+          <div className="absolute bottom-4 right-4 z-10">
+            <button
+              onClick={handleScrollToBottom}
+              className="bg-gray-800/90 hover:bg-gray-700/90 text-white/90 rounded-full p-2 shadow-lg transition-all duration-200 hover:scale-105 border border-white/10"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+              title="Scroll to bottom"
             >
-              <path 
-                strokeLinecap="round" 
-                strokeLinejoin="round" 
-                strokeWidth={2} 
-                d="M19 14l-7 7m0 0l-7-7m7 7V3" 
-              />
-            </svg>
-          </button>
+              <svg 
+                className="w-5 h-5" 
+                fill="none" 
+                stroke="currentColor" 
+                viewBox="0 0 24 24"
+              >
+                <path 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round" 
+                  strokeWidth={2} 
+                  d="M19 14l-7 7m0 0l-7-7m7 7V3" 
+                />
+              </svg>
+            </button>
+          </div>
         )}
+        
+        {/* Invisible element to scroll to */}
+        <div ref={messagesEndRef} />
+        </div>
       </div>
       
       {/* Chat Input Area - Fixed at bottom */}
-      <div className="p-3 border-t border-white/10 flex-shrink-0">
+      <div className="px-3 pt-3 pb-1 border-t border-white/10 flex-shrink-0">
         <div 
-          className="rounded-xl bg-gray-800/30 p-3"
+          className="rounded-xl bg-gray-800/30 p-3 mb-1"
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         >
           <div className="flex items-center space-x-3">
@@ -1078,7 +1358,7 @@ export default function ChatMessages() {
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               placeholder="Ask ThinkDrop AI anything..."
-              className="flex-1 bg-white/5 text-white placeholder-white/50 resize-none min-h-[24px] max-h-32 py-2 px-3 rounded-lg border border-white/10 focus:border-teal-400/50 focus:outline-none transition-colors"
+              className="flex-1 text-sm bg-white/5 text-white placeholder-white/50 resize-none min-h-[24px] max-h-32 py-2 px-3 rounded-lg border border-white/10 focus:border-teal-400/50 focus:outline-none transition-colors"
               rows={1}
               style={{ WebkitAppRegion: 'no-drag', outline: 'none', boxShadow: 'none' } as React.CSSProperties}
             />
