@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, AlertTriangle, HelpCircle, CheckCircle, Clock, ChevronDown, ChevronRight, Sparkles, Settings, Play, Pause, XCircle, Droplet, MessageSquare } from 'lucide-react';
+import { AlertTriangle, HelpCircle, CheckCircle, Clock, ChevronDown, ChevronRight, Sparkles, Settings, Play, Pause, XCircle, Droplet, MessageSquare } from 'lucide-react';
 import { OrchestrationWorkflow, OrchestrationUpdate } from '../types/orchestration';
 
 interface InsightData {
@@ -238,13 +238,7 @@ export default function InsightWindow() {
     };
   }, []); // Empty dependency array - only run once on mount
 
-  const handleClose = () => {
-    console.log('InsightWindow handleClose called - user clicked X button');
-    console.trace('InsightWindow close stack trace');
-    if (window.electronAPI?.hideInsight) {
-      window.electronAPI.hideInsight();
-    }
-  };
+  // handleClose function removed - close functionality now handled by UnifiedInterface
 
   const handleSuggestNext = async () => {
     // Simulate API call for suggestion
@@ -322,29 +316,7 @@ export default function InsightWindow() {
 
   return (
     <div className="w-full h-screen flex flex-col bg-gray-900/95">
-      {/* Draggable Header */}
-      <div
-        className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-      >
-        <div className="w-6 h-6 bg-gradient-to-br from-yellow-400 to-orange-500 rounded-lg flex items-center justify-center">
-          <Droplet className="w-3 h-3 text-white" />
-        </div>
-        <span className="text-white/90 font-medium text-sm">Live Insights</span>
-        <div className="flex-1" />
-        <span className="text-white/50 text-xs">Drag to move</span>
-        <button
-          onClick={handleClose}
-          className="h-6 w-6 p-0 text-white/50 hover:text-white/90 hover:bg-white/10 bg-transparent border-none cursor-pointer flex items-center justify-center"
-          style={{ 
-            WebkitAppRegion: 'no-drag',
-            minHeight: 0, // Important for flex child to shrink
-            maxHeight: '100%'
-          } as React.CSSProperties}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
+      {/* Insight Header removed - now rendered in UnifiedInterface */}
 
       {/* Content Container - Takes up remaining space and scrolls */}
       <div 

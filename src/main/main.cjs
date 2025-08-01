@@ -44,15 +44,14 @@ const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
 let overlayWindow = null;
-let chatWindow = null;
-let chatMessagesWindow = null;
-let insightWindow = null;
-let memoryDebuggerWindow = null;
+// Unified window approach - removed separate window variables
+// let chatWindow = null;
+// let chatMessagesWindow = null;
+// let insightWindow = null;
+// let memoryDebuggerWindow = null;
 let isGloballyVisible = true;
 let isOverlayVisible = true;
-let isChatVisible = false;
-let isInsightVisible = false;
-let isMemoryDebuggerVisible = false;
+// Window visibility states now managed by React state in unified interface
 let isOrchestrationActive = false; // Prevent window hiding during orchestration
 let visibleWindows = [];
 
@@ -64,29 +63,33 @@ function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   
-  const windowWidth = width / 2;
-  const windowHeight = Math.min(height - 40, 70); // Use almost full height with minimal margin
-
+  // Create a unified window that can expand to show different content
+  // Smaller width positioned to upper-right corner as requested
+  const windowWidth = Math.min(350, width * 0.3); // 30% of screen width, max 400px (half the previous size)
+  const windowHeight = Math.min(500, height * 0.7); // 70% of screen height, max 600px
+  const x = width - windowWidth - 20; // Position to upper-right corner with 20px margin
+  const y = 20; // Position near top with 20px margin
 
   overlayWindow = new BrowserWindow({
-    width: Math.min(width - 40, 300), // Responsive width with max limit
-    height: windowHeight, // Proper height for toolbar with padding
-    minHeight: 30, // Minimum height for toolbar
-    maxHeight: 40,
-    x: windowWidth - 200, // Small margin from left
-    y: 20, // Position at top of screen
+    width: windowWidth,
+    height: windowHeight,
+    minWidth: 350, // Minimum width for usability
+    minHeight: 350, // Minimum height for usability
+    maxWidth: 1200, // Maximum width
+    maxHeight: 900, // Maximum height
+    x: x,
+    y: y,
     frame: false, // Remove window frame completely
     transparent: true, // Transparent background
     alwaysOnTop: true, // Always stay on top
     skipTaskbar: true, // Don't show in taskbar
-    resizable: false,
+    resizable: true, // Allow resizing for better UX
     movable: true, // Allow dragging
     minimizable: false,
     maximizable: false,
     closable: false, // Prevent close button
     focusable: true,
-    // Remove titleBarStyle to ensure no macOS controls
-    hasShadow: false, // No shadow for cleaner look
+    hasShadow: true, // Add shadow for better visibility
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -127,288 +130,31 @@ function createOverlayWindow() {
   }
 }
 
-// Create chat messages window (floating window for displaying messages)
-function createChatMessagesWindow() {
-  const { screen } = require('electron');
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-  
-  const windowWidth = Math.min(width - 40, 350);
-  const windowHeight = height - 10; // Use almost full height with minimal margin
+// REMOVED: createChatMessagesWindow - now handled within unified overlayWindow
+// Chat messages functionality is now integrated into the main overlay interface
 
-  const x = width - windowWidth - 10; // 10px margin from right
-  const y = 5; // 5px margin from top for minimal constraint
-  
-  chatMessagesWindow = new BrowserWindow({
-    width: windowWidth - 20, // Responsive width  
-    height: windowHeight, // Use calculated full height
-    minWidth: 300, // Minimum width for usability
-    maxWidth: width - 20, // Maximum width with margin
-    minHeight: 300, // Fixed height - no height resizing
-    maxHeight: windowHeight, // Fixed height - no height resizing
-    x: x, // Position from right edge
-    y: y, // Position from top with minimal margin
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    alwaysOnBottom: true,
-    skipTaskbar: true,
-    resizable: true, // Allow resizing (width only due to height constraints)
-    movable: true, // Allow dragging
-    minimizable: false,
-    maximizable: false,
-    closable: false,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      enableRemoteModule: false,
-      nodeIntegration: false,
-      backgroundThrottling: false
-    }
-  });
+// REMOVED: createMemoryDebuggerWindow - now handled within unified overlayWindow
+// Memory debugger functionality is now integrated into the main overlay interface
 
-  // Set window level to float above all apps
-  chatMessagesWindow.setAlwaysOnTop(true, 'floating', 1);
-  chatMessagesWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  
-  // Constrain dragging to horizontal only (prevent vertical movement)
-  const fixedHeight = windowHeight; // Store the fixed height
-  const fixedWidth = windowWidth; // Store the fixed width
-    
-  // Constrain resizing to width only (prevent height changes)
-  // chatMessagesWindow.on('resize', () => {
-  //   if (chatMessagesWindow && !chatMessagesWindow.isDestroyed()) {
-  //     const [currentWidth, currentHeight] = chatMessagesWindow.getSize();
-  //     const minWidth = currentWidth < 300 ? 300 : currentWidth - 20
-  //     const minHeight = currentHeight < 300 ? 300 : currentHeight - 20
-  //     if ((minWidth !== 300 || minHeight !== 300) && currentHeight !== fixedHeight && currentWidth !== fixedWidth) {
-  //       // Reset height if it changed, keep width
-  //       // chatMessagesWindow.setSize(currentWidth, fixedHeight);
-  //       chatMessagesWindow.setMinimumSize(minWidth, minHeight);
-  //     }
-  //   }
-  // });
-  
-  // Load the messages window
-  const messagesUrl = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:5173?mode=messages'
-    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=messages`;
-  
-  chatMessagesWindow.loadURL(messagesUrl);
-  
-  // Hide window instead of closing
-  chatMessagesWindow.on('close', (event) => {
-    if (chatMessagesWindow && !app.isQuiting) {
-      event.preventDefault();
-      chatMessagesWindow.hide();
-    }
-  });
-  
-  // Clean up window reference when destroyed
-  chatMessagesWindow.on('closed', () => {
-    chatMessagesWindow = null;
-  });
-  
-  return chatMessagesWindow;
-}
-
-// Create memory debugger window (floating window for debugging user memories)
-function createMemoryDebuggerWindow() {
-  const { screen } = require('electron');
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-
-  const windowWidth = Math.min(width - 40, 500);
-  const windowHeight = Math.min(height - 40, 600); // Use almost full height with minimal margin
-
-  const x = 5; // 10px margin from right
-  const y = 100; // 5px margin from top for minimal constraint
-  
-  memoryDebuggerWindow = new BrowserWindow({
-    width: windowWidth, // Compact width for debugging interface
-    height: windowHeight, // Taller for memory data
-    minHeight: 400, // Minimum height for debugging interface
-    maxHeight: Math.min(height - 40, 800), // Maximum height
-    x: x, // Center horizontally
-    y: y, // Position higher on screen
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: true,
-    movable: true,
-    minimizable: false,
-    maximizable: false,
-    closable: false,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      enableRemoteModule: false,
-      nodeIntegration: false,
-      backgroundThrottling: false
-    }
-  });
-
-  // Set window level to float above all apps
-  memoryDebuggerWindow.setAlwaysOnTop(true, 'floating', 1);
-  memoryDebuggerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  
-  // Load the memory debugger window
-  const memoryUrl = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:5173?mode=memory'
-    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=memory`;
-  
-  memoryDebuggerWindow.loadURL(memoryUrl);
-  
-  // Hide window instead of closing
-  memoryDebuggerWindow.on('close', (event) => {
-    if (memoryDebuggerWindow && !app.isQuiting) {
-      event.preventDefault();
-      memoryDebuggerWindow.hide();
-    }
-  });
-  
-  // Clean up window reference when destroyed
-  memoryDebuggerWindow.on('closed', () => {
-    memoryDebuggerWindow = null;
-  });
-  
-  return memoryDebuggerWindow;
-}
-
-// Create insight window (floating window for displaying contextual insights)
-function createInsightWindow() {
-  if (insightWindow) {
-    insightWindow.show();
-    insightWindow.focus();
-    isInsightVisible = true;
-    return;
-  }
-
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.workAreaSize;
-  
-  insightWindow = new BrowserWindow({
-    width: Math.min(width - 40, 500), // Compact width for debugging interface
-    height: Math.min(height - 100, 600), // Max height 600px with margin
-    x: width - 440, // Position on the right side with margin
-    y: 50, // Position from top
-    frame: false, // Remove window frame completely
-    transparent: true, // Transparent background
-    alwaysOnTop: true, // Always stay on top
-    skipTaskbar: true, // Don't show in taskbar
-    resizable: true, // Allow resizing as specified in UI plan
-    movable: true, // Allow dragging
-    minimizable: false,
-    maximizable: false,
-    closable: false, // Prevent close button
-    focusable: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      enableRemoteModule: false,
-      nodeIntegration: false,
-      backgroundThrottling: false
-    }
-  });
-
-  // Set window level to float above all apps
-  insightWindow.setAlwaysOnTop(true, 'floating', 1);
-  insightWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  
-  // Load the insight window with mode parameter
-  const insightUrl = process.env.NODE_ENV === 'development'
-    ? 'http://localhost:5173?mode=insight'
-    : `file://${path.join(__dirname, '../../dist-renderer/index.html')}?mode=insight`;
-  
-  insightWindow.loadURL(insightUrl);
-  
-  // Hide window instead of closing
-  insightWindow.on('close', (event) => {
-    if (insightWindow && !app.isQuiting) {
-      event.preventDefault();
-      insightWindow.hide();
-      isInsightVisible = false;
-    }
-  });
-  
-  // Clean up window reference when destroyed
-  insightWindow.on('closed', () => {
-    insightWindow = null;
-  });
-  
-  // DevTools can be opened manually if needed for debugging
-  // Removed automatic opening to prevent unwanted console popup
-  
-  isInsightVisible = true;
-  return insightWindow;
-}
+// REMOVED: createInsightWindow - now handled within unified overlayWindow
+// Insight functionality is now integrated into the main overlay interface
 
 function toggleOverlay() {
   if (!overlayWindow) return;
   
   if (isGloballyVisible) {
-    // Hide all windows
+    // Hide the unified overlay window
     overlayWindow.hide();
-    if (chatWindow) {
-      chatWindow.hide();
-      visibleWindows.push('chatWindow');
-    }
-    if (chatMessagesWindow) {
-      chatMessagesWindow.hide();
-      visibleWindows.push('chatMessagesWindow');
-    }
-    if (insightWindow && !global.isOrchestrationActive) {
-      insightWindow.hide();
-      visibleWindows.push('insightWindow');
-    } else if (insightWindow && global.isOrchestrationActive) {
-      console.log('🛡️ Protecting insight window during orchestration - not hiding');
-    }
-    if (memoryDebuggerWindow) {
-      memoryDebuggerWindow.hide();
-      visibleWindows.push('memoryDebuggerWindow');
-    }
     isOverlayVisible = false;
     isChatVisible = false;
     isInsightVisible = false;
     isGloballyVisible = false;
   } else {
-    // Show overlay window (chat windows will be shown when needed)
+    // Show the unified overlay window
     overlayWindow.show();
     overlayWindow.focus();
-
-    if (visibleWindows.includes('chatMessagesWindow')) {
-      chatMessagesWindow.show();
-      visibleWindows = visibleWindows.filter((window) => window !== 'chatMessagesWindow');
-    }
-    if (visibleWindows.includes('insightWindow')) {
-      insightWindow.show();
-      visibleWindows = visibleWindows.filter((window) => window !== 'insightWindow');
-    }
-    if (visibleWindows.includes('chatWindow')) {
-      chatWindow.show();
-      visibleWindows =visibleWindows.filter((window) => window !== 'chatWindow');
-    }
-    if (visibleWindows.includes('memoryDebuggerWindow')) {
-      memoryDebuggerWindow.show();
-      visibleWindows =visibleWindows.filter((window) => window !== 'memoryDebuggerWindow');
-    }
     isOverlayVisible = true;
     isGloballyVisible = true;
-  }
-}
-
-function toggleChat() {
-  // Since ChatWindow is merged into ChatMessages, use the unified window
-  if (!chatMessagesWindow || chatMessagesWindow.isDestroyed()) {
-    createChatMessagesWindow();
-  } else if (chatMessagesWindow.isVisible()) {
-    chatMessagesWindow.hide();
-  } else {
-    chatMessagesWindow.show();
-    chatMessagesWindow.focus();
   }
 }
 
@@ -532,43 +278,30 @@ async function initializeServices() {
 
 // Setup IPC handlers using modularized files
 function setupIPCHandlers() {
-  // Window state object for passing to IPC handlers
+  // Unified window state - UI state now managed by React components
   const windowState = {
     isGloballyVisible,
     isOverlayVisible,
-    isChatVisible,
-    isInsightVisible,
-    isMemoryDebuggerVisible,
     isOrchestrationActive,
     visibleWindows
   };
 
-  // Window creators object for passing to IPC handlers
+  // Simplified window creators for unified approach
   const windowCreators = {
-    createChatMessagesWindow,
-    createInsightWindow,
-    createMemoryDebuggerWindow,
-    toggleOverlay,
-    toggleChat
+    toggleOverlay
+    // Removed separate window creators - now handled by React state
   };
   
-  // Windows object for passing to IPC handlers
+  // Unified windows object - only overlayWindow needed
   const windows = {
-    overlayWindow,
-    chatWindow,
-    chatMessagesWindow,
-    insightWindow,
-    memoryDebuggerWindow
+    overlayWindow
+    // Removed separate window references
   };
   
   // Initialize all IPC handlers from modularized files
   const { broadcastOrchestrationUpdate: broadcastUpdate, sendClarificationRequest: sendClarification } = 
     initializeIPCHandlers({
       overlayWindow,
-      chatWindow,
-      chatMessagesWindow,
-      insightWindow,
-      memoryDebuggerWindow,
       coreAgent,
       localLLMAgent,
       windowState,

@@ -367,17 +367,6 @@ const MemoryDebugger = () => {
     return String(value);
   };
 
-  const handleClose = () => {
-    console.log('🚨 handleClose called - Memory Debugger being hidden!');
-    console.trace('Stack trace for handleClose call:');
-    // Hide the memory debugger window via Electron IPC
-    if (window.electronAPI?.hideMemoryDebugger) {
-      window.electronAPI.hideMemoryDebugger();
-    } else {
-      console.log('Memory debugger window close requested - Electron API not available');
-    }
-  };
-
   // Notification component
   const NotificationItem = ({ notification }: { notification: Notification }) => {
     const icon = notification.type === 'success' ? (
@@ -411,45 +400,27 @@ const MemoryDebugger = () => {
         ))}
       </div>
 
-      {/* Draggable Header */}
-      <div
-        className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
-        style={{ 
-          WebkitAppRegion: 'drag' 
-        } as React.CSSProperties}
-      >
-        <div className="w-8 h-8 bg-gradient-to-br from-purple-400 to-blue-500 rounded-lg flex items-center justify-center">
-          <Database className="w-3 h-3 text-white" />
-        </div>
-        <span className="text-white/90 font-medium text-sm">Memory</span>
-        <div className="flex-1" />
-        <span className="text-white/50 text-xs mr-2">
-          {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
-        </span>
-        <button 
-          onClick={() => loadMemories(false, searchQuery)} 
-          disabled={loading}
-          className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
-        <span className="text-white/50 text-xs">Drag to move</span>
-        <button
-          onClick={handleClose}
-          className="h-6 w-6 p-0 text-white/50 hover:text-white/90 hover:bg-white/10 rounded transition-colors flex items-center justify-center"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <X className="h-3 w-3" />
-        </button>
-      </div>
+      {/* Memory Header removed - now rendered in UnifiedInterface */}
 
       {/* Controls Section */}
       <div 
         className="p-4 border-b border-white/10 flex-shrink-0"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <div className="flex items-center gap-4 mb-4">
+        <div className="flex items-center justify-between gap-4 mb-2">
+          <div className="flex flex-1text-white/50 text-xs mr-2">
+            {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
+          </div>
+          <button 
+            onClick={() => loadMemories(false, searchQuery)} 
+            disabled={loading}
+            className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            {loading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+        <div className="flex items-center gap-4">
           <input
             type="text"
             placeholder="Search memories..."
@@ -462,14 +433,14 @@ const MemoryDebugger = () => {
             }}
             className="flex-1 bg-thinkdrop-dark/30 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-white/20"
           />
-          <button 
+          {/* <button 
             onClick={() => loadMemories(false, searchQuery)}
             disabled={loading}
             className="px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Search
-          </button>
+          </button> */}          
         </div>
       </div>
 

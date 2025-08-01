@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Droplet, X, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
+import { Droplet, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Tooltip,
@@ -201,71 +201,6 @@ export default function ChatMessages() {
       console.error('❌ [AGENT] Error in direct agent orchestration:', error);
     }
   };
-
-  // Handle agent orchestration after streaming completes
-  // const handleAgentOrchestration = async (message: any, finalText: string) => {
-  //   try {
-  //     console.log('🧠 [AGENT] Processing intent classification for agent orchestration...', message);
-      
-  //     // Extract intent classification data from backend response
-  //     const intentClassification = message.payload?.intentClassification || message.intentClassification;
-      
-  //     if (intentClassification) {
-  //       console.log('🎯 [AGENT] Found intent classification data:', intentClassification);
-        
-  //       // Trigger AgentOrchestrator with intent classification payload directly
-  //       if (window.electronAPI) {
-  //         const orchestrationResult = await window.electronAPI.agentOrchestrate({
-  //           intentPayload: intentClassification, // Pass as object, not string
-  //           context: { source: 'chat_streaming' }
-  //         });
-  //         console.log('✅ [AGENT] AgentOrchestrator result:', orchestrationResult);
-          
-  //         if (orchestrationResult.success) {
-  //           console.log('🎉 [AGENT] Agent chain executed successfully!');
-  //           // TODO: Show success indicator in UI
-  //         } else {
-  //           console.error('❌ [AGENT] Agent orchestration failed:', orchestrationResult.error);
-  //         }
-  //       }
-  //     } else {
-  //       console.log('ℹ️ [AGENT] No intent classification data found, creating basic payload...');
-        
-  //       // Create a basic intent classification payload for memory storage
-  //       const basicIntentPayload = {
-  //         intents: [{
-  //           intent: 'general_query',
-  //           confidence: 0.8,
-  //           reasoning: 'General user query without specific intent classification'
-  //         }],
-  //         primaryIntent: 'general_query',
-  //         entities: [],
-  //         requiresMemoryAccess: true, // Always store for memory
-  //         requiresExternalData: false,
-  //         suggestedResponse: finalText,
-  //         sourceText: chatMessages[chatMessages.length - 1]?.text || 'User query',
-  //         metadata: {
-  //           timestamp: new Date().toISOString(),
-  //           source: 'chat_message',
-  //           requestId: message.requestId
-  //         }
-  //       };
-        
-  //       console.log('📝 [AGENT] Triggering with basic intent payload:', basicIntentPayload);
-        
-  //       // Trigger AgentOrchestrator with basic payload directly
-  //       if (window.electronAPI) {
-  //         const orchestrationResult = await window.electronAPI.agentOrchestrate({
-  //           intentPayload: basicIntentPayload, // Pass as object, not string
-  //           context: { source: 'chat_streaming_basic' }
-  //         });
-  //         console.log('✅ [AGENT] Basic orchestration result:', orchestrationResult);
-  //       }
-  //     }
-  //   } catch (error) {
-  //     console.error('❌ [AGENT] Error in agent orchestration:', error);
-  //   }
-  // };
 
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = (message: any) => {
@@ -542,31 +477,31 @@ export default function ChatMessages() {
     }
   }, [wsState.isConnected, localLLMError]);
 
-  // Handle WebSocket toggle for testing local LLM fallback
-  const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
-    e?.preventDefault();
-    e?.stopPropagation();
+  // // Handle WebSocket toggle for testing local LLM fallback
+  // const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
+  //   e?.preventDefault();
+  //   e?.stopPropagation();
     
-    console.log('🔍 [DEBUG] WebSocket toggle clicked!', {
-      currentState: wsState.isConnected,
-      reconnectCount: wsState.reconnectCount,
-      activeRequests: wsState.activeRequests
-    });
+  //   console.log('🔍 [DEBUG] WebSocket toggle clicked!', {
+  //     currentState: wsState.isConnected,
+  //     reconnectCount: wsState.reconnectCount,
+  //     activeRequests: wsState.activeRequests
+  //   });
     
-    try {
-      if (wsState.isConnected) {
-        console.log('🔌 Manually disconnecting WebSocket for local LLM testing...');
-        await disconnectWebSocket();
-        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
-      } else {
-        console.log('🔌 Reconnecting WebSocket...');
-        await connectWebSocket();
-        console.log('✅ WebSocket reconnected - backend streaming will be used');
-      }
-    } catch (error) {
-      console.error('❌ Error toggling WebSocket connection:', error);
-    }
-  }, [wsState.isConnected, connectWebSocket, disconnectWebSocket]);
+  //   try {
+  //     if (wsState.isConnected) {
+  //       console.log('🔌 Manually disconnecting WebSocket for local LLM testing...');
+  //       await disconnectWebSocket();
+  //       console.log('✅ WebSocket disconnected - local LLM fallback will be used');
+  //     } else {
+  //       console.log('🔌 Reconnecting WebSocket...');
+  //       await connectWebSocket();
+  //       console.log('✅ WebSocket reconnected - backend streaming will be used');
+  //     }
+  //   } catch (error) {
+  //     console.error('❌ Error toggling WebSocket connection:', error);
+  //   }
+  // }, [wsState.isConnected, connectWebSocket, disconnectWebSocket]);
   
   // Input handlers from ChatWindow
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -969,15 +904,6 @@ export default function ChatMessages() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const handleClose = () => {
-    // Hide the chat messages window via Electron IPC
-    if (window.electronAPI?.hideChatMessages) {
-      window.electronAPI.hideChatMessages();
-    } else {
-      console.log('Chat messages window close requested - Electron API not available');
-    }
-  };
-
   useEffect(() => {
     if (!currentStreamingMessage) return;
   
@@ -996,63 +922,12 @@ export default function ChatMessages() {
     <>
     <TooltipProvider>
       <div 
-        className="w-full flex flex-col bg-gray-900/95"
+        className="w-full h-full flex flex-col bg-transparent"
         style={{
-          height: '100vh',
-          minHeight: '100vh',
-          maxHeight: '100vh',
           overflow: 'hidden'
         }}
       >
-        {/* Draggable Header */}
-        <div
-          className="flex items-center space-x-2 p-4 pb-2 border-b border-white/10 cursor-move flex-shrink-0"
-          style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
-        >
-          <div 
-            className={`relative group w-6 h-6 rounded-lg flex items-center justify-center cursor-pointer transition-all duration-200 ${
-              wsState.isConnected 
-                ? 'bg-gradient-to-br from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
-                : 'bg-gradient-to-br from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
-            }`}
-            title={wsState.isConnected 
-              ? `WebSocket: Connected (Click to disconnect for local LLM testing)${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
-              : 'WebSocket: Disconnected (Click to reconnect)'
-            }
-            onClick={handleWebSocketToggle}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
-            {wsState.isConnected ? (
-              <Droplet className="w-3 h-3 text-white" />
-            ) : (
-              <Unplug className="w-3 h-3 text-white" />
-            )}
-            {/* Custom tooltip */}
-            <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-2 px-2 py-1 bg-gray-900 text-white text-xs rounded shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none whitespace-nowrap z-50">
-              {wsState.isConnected 
-                ? `Connected (Click to test local LLM)${wsState.activeRequests > 0 ? ` (${wsState.activeRequests} active)` : ''}` 
-                : 'Disconnected (Click to reconnect)'
-              }
-              {/* Arrow */}
-              <div className="absolute top-full left-1/2 transform -translate-x-1/2 border-l-4 border-r-4 border-t-4 border-transparent border-t-gray-900"></div>
-            </div>
-          </div>
-        <span className="text-white/90 font-medium text-sm">Messages</span>
-        <div className="flex-1" />
-        <span className="text-white/50 text-xs">Drag to move</span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleClose}
-          className="h-6 w-6 p-0 text-white/50 hover:text-white/90 hover:bg-white/10"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <X className="h-3 w-3" />
-        </Button>
-      </div>
-
-      {/* Messages Container - Takes up remaining space and scrolls */}
-      <div className="relative flex-1 flex flex-col min-h-0">
+        <div className="relative flex-1 flex flex-col min-h-0">
         <div 
           ref={messagesContainerRef}
           className="overflow-y-auto overflow-x-hidden p-4 flex-1"
@@ -1319,10 +1194,6 @@ export default function ChatMessages() {
                       console.error('❌ Error toggling WebSocket connection:', error);
                     }
                   }}
-                  title={wsState.isConnected 
-                    ? 'Connected - Click to disconnect and test local LLM' 
-                    : 'Disconnected - Click to reconnect to backend'
-                  }
                 >
                   {wsState.isConnected ? <Droplet className="w-4 h-4 text-white" /> : <Unplug className="w-4 h-4 text-white" />}
                   {/* WebSocket Connection Status Indicator */}
@@ -1335,20 +1206,20 @@ export default function ChatMessages() {
                   {wsState.isConnected && !isLoading && (
                     <div 
                       className="absolute -top-1 -right-1 w-3 h-3 bg-green-400 rounded-full" 
-                      title="WebSocket: Connected"
+                      title="Connected"
                     />
                   )}
                   {!wsState.isConnected && !isLoading && (
                     <div 
                       className="absolute -top-1 -right-1 w-3 h-3 bg-red-400 rounded-full" 
-                      title="WebSocket: Disconnected"
+                      title="Disconnected"
                     />
                   )}
                 </div>
               </TooltipTrigger>
               <TooltipContent>
                 <p>
-                  WebSocket: {wsState.isConnected ? 'Connected' : 'Disconnected'}
+                  {wsState.isConnected ? 'Live Mode' : 'Private Mode'}
                 </p>
               </TooltipContent>
             </Tooltip>   
@@ -1357,7 +1228,7 @@ export default function ChatMessages() {
               value={currentMessage}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
-              placeholder="Ask ThinkDrop AI anything..."
+              placeholder="Ask anything..."
               className="flex-1 text-sm bg-white/5 text-white placeholder-white/50 resize-none min-h-[24px] max-h-32 py-2 px-3 rounded-lg border border-white/10 focus:border-teal-400/50 focus:outline-none transition-colors"
               rows={1}
               style={{ WebkitAppRegion: 'no-drag', outline: 'none', boxShadow: 'none' } as React.CSSProperties}
@@ -1365,12 +1236,13 @@ export default function ChatMessages() {
             <Button
               onClick={handleSendMessage}
               disabled={!currentMessage.trim() || isLoading}
-              className="bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white w-10 h-10 p-0 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+              className="bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white w-9 h-9 p-0 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-3 h-3" />
             </Button>
           </div>
+          <div className="text-xs mt-2 text-white/60 text-center">Remember: Thinkdrop can make mistakes.</div>
         </div>
       </div>
     </div>
