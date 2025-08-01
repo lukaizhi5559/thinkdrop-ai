@@ -17,6 +17,7 @@ const AGENT_FORMAT = {
             'memory-store',
             'memory-retrieve', 
             'memory-search',
+            'memory-semantic-search',
             'memory-delete',
             'memory-update',
             'memory-list',
@@ -1390,6 +1391,122 @@ const AGENT_FORMAT = {
               throw new Error('Memory search failed: ' + error.message);
             }
             
+          case 'memory-semantic-search':
+            // Semantic search memories using embeddings
+            const semanticQuery = params.query || params.searchText;
+            const semanticLimit = params.limit || 3;
+            const timeWindow = params.timeWindow || null; // e.g., '7 days', '1 month'
+            const minSimilarity = params.minSimilarity || 0.3;
+            
+            if (!semanticQuery) {
+              throw new Error('Semantic search requires query parameter');
+            }
+            
+            try {
+              console.log(`[INFO] Performing semantic search for: "${semanticQuery}"`);
+              
+              // Generate embedding for the search query
+              let queryEmbedding = null;
+              if (context?.coreAgent) {
+                const embeddingResult = await context.coreAgent.ask({
+                  agent: 'SemanticEmbeddingAgent',
+                  action: 'generate-embedding',
+                  text: semanticQuery
+                });
+                
+                if (embeddingResult.success && embeddingResult.embedding) {
+                  queryEmbedding = embeddingResult.embedding;
+                  console.log(`[SUCCESS] Generated query embedding with ${queryEmbedding.length} dimensions`);
+                } else {
+                  throw new Error('Failed to generate query embedding: ' + embeddingResult.error);
+                }
+              } else {
+                throw new Error('CoreAgent not available for embedding generation');
+              }
+              
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              // Build SQL query with optional time filtering
+              let sql = `
+                SELECT id, backend_memory_id, source_text, suggested_response, intent, 
+                       created_at, updated_at, screenshot_path, ocr_text, metadata, embedding
+                FROM memory 
+                WHERE embedding IS NOT NULL
+              `;
+              let queryParams = [];
+              
+              if (timeWindow) {
+                sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+              }
+              
+              sql += ` ORDER BY created_at DESC`;
+              
+              const memories = await database.all(sql, queryParams);
+              console.log(`[INFO] Found ${memories.length} memories with embeddings`);
+              
+              if (memories.length === 0) {
+                return {
+                  success: true,
+                  action: 'memory-semantic-search',
+                  query: semanticQuery,
+                  results: [],
+                  count: 0,
+                  message: 'No memories with embeddings found'
+                };
+              }
+              
+              // Calculate similarities and rank results
+              const rankedResults = [];
+              
+              for (const memory of memories) {
+                try {
+                  const memoryEmbedding = JSON.parse(memory.embedding);
+                  
+                  // Calculate cosine similarity using SemanticEmbeddingAgent
+                  const similarityResult = await context.coreAgent.ask({
+                    agent: 'SemanticEmbeddingAgent',
+                    action: 'calculate-similarity',
+                    embedding1: queryEmbedding,
+                    embedding2: memoryEmbedding
+                  });
+                  
+                  if (similarityResult.success && similarityResult.similarity >= minSimilarity) {
+                    rankedResults.push({
+                      ...memory,
+                      similarity: similarityResult.similarity,
+                      embedding: undefined // Remove embedding from response to save space
+                    });
+                  }
+                } catch (error) {
+                  console.warn(`[WARN] Failed to calculate similarity for memory ${memory.id}:`, error.message);
+                }
+              }
+              
+              // Sort by similarity (highest first) and limit results
+              rankedResults.sort((a, b) => b.similarity - a.similarity);
+              const topResults = rankedResults.slice(0, semanticLimit);
+              
+              console.log(`[SUCCESS] Found ${topResults.length} semantically similar memories`);
+              
+              return {
+                success: true,
+                action: 'memory-semantic-search',
+                query: semanticQuery,
+                results: topResults,
+                count: topResults.length,
+                totalMemories: memories.length,
+                minSimilarity: minSimilarity,
+                timeWindow: timeWindow
+              };
+              
+            } catch (error) {
+              console.error('[ERROR] Semantic search failed:', error);
+              throw new Error('Semantic search failed: ' + error.message);
+            }
+            
           case 'memory-delete':
             // Delete memory by ID
             const deleteId = params.memoryId || params.id;
@@ -1718,7 +1835,8 @@ const AGENT_FORMAT = {
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           screenshot_path TEXT,
           ocr_text TEXT,
-          metadata TEXT
+          metadata TEXT,
+          embedding FLOAT[384]
         )
       `;
       
@@ -1980,7 +2098,35 @@ const AGENT_FORMAT = {
           ocrText = screenshot.ocrText || null;
         }
         
-        const insertSQL = `INSERT INTO memory (backend_memory_id, source_text, suggested_response, intent, created_at, updated_at, screenshot_path, ocr_text, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        // Generate semantic embedding for the memory content
+        let embedding = null;
+        try {
+          // Create text for embedding (combine key and value for better semantic representation)
+          const embeddingText = `${key}: ${value}`;
+          
+          // Try to use SemanticEmbeddingAgent if available in context
+          if (context?.coreAgent) {
+            console.log('[INFO] Generating semantic embedding for memory...');
+            const embeddingResult = await context.coreAgent.ask({
+              agent: 'SemanticEmbeddingAgent',
+              action: 'generate-embedding',
+              text: embeddingText
+            });
+            
+            if (embeddingResult.success && embeddingResult.embedding) {
+              embedding = embeddingResult.embedding;
+              console.log(`[SUCCESS] Generated embedding with ${embedding.length} dimensions`);
+            } else {
+              console.warn('[WARN] Failed to generate embedding:', embeddingResult.error);
+            }
+          } else {
+            console.log('[INFO] CoreAgent not available, storing memory without embedding');
+          }
+        } catch (error) {
+          console.warn('[WARN] Embedding generation failed, storing memory without embedding:', error.message);
+        }
+        
+        const insertSQL = `INSERT INTO memory (backend_memory_id, source_text, suggested_response, intent, created_at, updated_at, screenshot_path, ocr_text, metadata, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
         
         const values = [
           memoryId,
@@ -1991,7 +2137,8 @@ const AGENT_FORMAT = {
           now,
           screenshotPath,
           ocrText,
-          JSON.stringify(metadata)
+          JSON.stringify(metadata),
+          embedding ? JSON.stringify(embedding) : null
         ];
         
         await new Promise((resolve, reject) => {
