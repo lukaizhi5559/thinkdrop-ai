@@ -165,15 +165,11 @@ app.whenReady().then(() => {
   initializeServices().then(() => {
     // Verify CoreAgent is properly initialized before setting up IPC handlers
     if (!coreAgent || !coreAgent.initialized) {
-      console.log('⚠️ Warning: CoreAgent not fully initialized. Waiting 1 second before setting up IPC handlers...');
       // Add a small delay to ensure CoreAgent is ready
       return new Promise(resolve => setTimeout(() => {
-        console.log('🔔 Delayed IPC handler setup. CoreAgent status:', 
-          coreAgent ? `initialized=${coreAgent.initialized}` : 'null');
         resolve();
       }, 1000));
     } else {
-      console.log('✅ CoreAgent properly initialized, proceeding with IPC handlers setup');
       return Promise.resolve();
     }
   }).then(() => {
@@ -223,13 +219,11 @@ app.on('will-quit', () => {
 async function initializeServices() {
   try {
     // Initialize CoreAgent (AgentOrchestrator) for dynamic agent management
-    console.log('🧠 Initializing CoreAgent (AgentOrchestrator)...');
     try {
       // Dynamic import for ES module compatibility
       const { AgentOrchestrator } = await import('./services_new/agents_new/AgentOrchestrator.js');
       
       // Initialize DuckDB for agent memory storage using DatabaseManager
-      console.log('🗄️ Initializing DuckDB database for agent memory...');
       const path = require('path');
       const fs = require('fs');
       const projectRoot = path.dirname(path.dirname(__dirname)); // Go up from src/main to project root
@@ -242,13 +236,11 @@ async function initializeServices() {
         fs.mkdirSync(dataDir, { recursive: true });
       }
       
-      console.log(`📁 Database path: ${dbPath}`);
       
       // Import and initialize DatabaseManager
       const { default: databaseManager } = await import('./services_new/utils/DatabaseManager.js');
       await databaseManager.initialize(dbPath);
       
-      console.log('✅ DatabaseManager connection established');
       
       coreAgent = new AgentOrchestrator();
       
@@ -262,14 +254,12 @@ async function initializeServices() {
         }
       });
 
-      console.log('✅ CoreAgent initialized - ready for dynamic agent creation');
     } catch (error) {
       console.error('❌ Failed to initialize CoreAgent:', error);
     }
     
     // Legacy event listeners removed - functionality will be re-implemented using new agent architecture as needed
     
-    console.log('✅ All services initialized successfully');
   } catch (error) {
     console.error('❌ Service initialization error:', error);
     // Continue without services for demo mode

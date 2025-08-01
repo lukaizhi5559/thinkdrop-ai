@@ -178,7 +178,6 @@ function initializeIPCHandlers({
 
   ipcMain.handle('adjust-chat-messages-height', (event, height) => {
     // Height adjustment now handled by unified overlay React components
-    console.log('Chat height adjustment handled by unified interface');
   });
 
   ipcMain.handle('focus-chat-input', () => {

@@ -19,7 +19,6 @@ export class AgentOrchestrator {
 
   async initialize(config = {}) {
     try {
-      console.log('🎭 Initializing AgentOrchestrator-object...');
       
       this.context = {
         ...config,
@@ -30,7 +29,6 @@ export class AgentOrchestrator {
       // Ensure database is available in context for agents
       if (config.database) {
         this.context.database = config.database;
-        console.log('✅ Database connection added to orchestrator context');
       } else {
         console.warn('⚠️ No database connection provided to orchestrator');
       }
@@ -40,12 +38,10 @@ export class AgentOrchestrator {
       
       // Preload critical agents
       const criticalAgents = config.preloadAgents || ['UserMemoryAgent'];
-      console.log('🚨 Preloading critical agents:', criticalAgents);
       
       await this.preloadAgents(criticalAgents);
       
       this.initialized = true;
-      console.log(`✅ AgentOrchestrator initialized with ${this.agents.size} registered agents`);
       
       return { success: true, agentCount: this.agents.size };
       
@@ -100,7 +96,6 @@ export class AgentOrchestrator {
 
       await Promise.all(indexStatements.map(stmt => database.run(stmt)));
 
-      console.log('✅ Agents table created/verified in DuckDB');
     } catch (error) {
       console.error('❌ Failed to create agents table:', error);
       throw error;
@@ -125,7 +120,6 @@ export class AgentOrchestrator {
 
       // Safely check if existingAgent is defined and has entries
       if (existingAgent && Array.isArray(existingAgent) && existingAgent.length > 0) {
-        console.log(`🔄 Agent ${agentName} already exists in database`);
         return existingAgent[0];
       }
 
@@ -155,7 +149,6 @@ export class AgentOrchestrator {
 
       // Convert dependencies to JSON format
       const jsonDependencies = JSON.stringify(dependencies);
-      console.log(`🔧 Formatted dependencies for ${agentName}:`, jsonDependencies);
 
       await database.run(insertSQL, [
         agentData.name,
@@ -177,7 +170,6 @@ export class AgentOrchestrator {
       // Query for the inserted agent to get the ID
       const result = await database.query('SELECT id FROM agents WHERE name = ?', [agentData.name]);
 
-      console.log(`✅ Created default agent: ${agentName}`, result);
       
       // Safely handle the result which might be undefined or not an array
       if (result && Array.isArray(result) && result.length > 0) {
@@ -266,12 +258,10 @@ export class AgentOrchestrator {
     for (const agentData of defaultAgents) {
       // Read agent code from file first
       const agentPath = path.join(agentsDir, `${agentData.name}.cjs`);
-      console.log(`📖 Reading agent code from file: ${agentPath}`);
       
       try {
         // Read agent file contents
         const agentCode = fs.readFileSync(agentPath, 'utf-8');
-        console.log(`📄 Read agent code from file: ${agentPath} (${agentCode.length} bytes)`);
         
         // Extract bootstrap function if available
         let bootstrap = null;
@@ -279,7 +269,6 @@ export class AgentOrchestrator {
           const bootstrapMatch = agentCode.match(/async\s+bootstrap\s*\([^)]*\)\s*{([\s\S]*?)\s*},/m);
           if (bootstrapMatch && bootstrapMatch[0]) {
             bootstrap = bootstrapMatch[0];
-            console.log(`🔍 Extracted bootstrap function (${bootstrap.length} bytes)`);
           }
         }
         
@@ -290,7 +279,6 @@ export class AgentOrchestrator {
         
         // Register agent with full code in database (single operation)
         await this.registerAgent(agentData.name, agentData);
-        console.log(`✅ Registered agent with code: ${agentData.name}`);
         
       } catch (readError) {
         console.error(`❌ Failed to read agent file: ${agentPath}`, readError);
@@ -310,13 +298,11 @@ export class AgentOrchestrator {
     if (typeof agentData === 'string') {
       filePath = agentData;
       agentData = { name, filePath };
-      console.log(`📝 Registering agent (legacy): ${name} at ${filePath}`);
       
       // Read agent file contents to store in database
       try {
         const fs = await import('fs');
         const agentCode = fs.readFileSync(filePath, 'utf-8');
-        console.log(`📄 Read agent code from file: ${filePath} (${agentCode.length} bytes)`);
         
         // Extract bootstrap function if available
         let bootstrap = null;
@@ -324,7 +310,6 @@ export class AgentOrchestrator {
           const bootstrapMatch = agentCode.match(/async\s+bootstrap\s*\([^)]*\)\s*{([\s\S]*?)\s*},/m);
           if (bootstrapMatch && bootstrapMatch[1]) {
             bootstrap = bootstrapMatch[0];
-            console.log(`🔍 Extracted bootstrap function (${bootstrap.length} bytes)`);
           }
         }
         
@@ -343,7 +328,6 @@ export class AgentOrchestrator {
       }
     }
 
-    console.log(`📝 Registering agent in DuckDB: ${name}`);
     
     if (!database) {
       console.warn('⚠️ Database connection not available, storing in memory only');
@@ -403,7 +387,6 @@ export class AgentOrchestrator {
           name
         ]);
 
-        console.log(`🔄 Updated agent in database: ${name}`);
       } else {
         // Insert new agent
         const insertSQL = `
@@ -437,7 +420,6 @@ export class AgentOrchestrator {
         // Small delay to ensure write is flushed
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        console.log(`✅ Registered agent in database: ${name}`);
       }
 
       // Also store in memory for quick access
@@ -459,7 +441,6 @@ export class AgentOrchestrator {
     for (const agentName of agentNames) {
       try {
         await this.loadAgent(agentName);
-        console.log(`🔄 Preloaded agent: ${agentName}`);
       } catch (error) {
         console.warn(`⚠️ Failed to preload agent ${agentName}:`, error.message);
       }
@@ -478,7 +459,6 @@ export class AgentOrchestrator {
     }
 
     try {
-      console.log(`📦 Loading agent: ${agentName}`);
       
       // First try to load from DuckDB database
       let agentData = await this.loadAgentFromDatabase(agentName);
@@ -507,7 +487,6 @@ export class AgentOrchestrator {
       }
                 
       this.loadedAgents.set(agentName, agentInstance);
-      console.log(`✅ Agent ${agentName} loaded successfully`);
       
       return agentInstance;
       
@@ -618,7 +597,6 @@ export class AgentOrchestrator {
         
         // Check if the code contains AGENT_FORMAT export
         if (agentData.code.includes('AGENT_FORMAT')) {
-          console.log(`🔍 Found AGENT_FORMAT in code, using direct extraction`);
           
           // Extract AGENT_FORMAT directly from the code
           const agentFormatCode = `

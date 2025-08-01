@@ -19,7 +19,6 @@ class DatabaseManager {
    */
   async initialize(dbPath) {
     return new Promise((resolve, reject) => {
-      console.log('🔧 DatabaseManager: Initializing via CommonJS wrapper...');
       
       dbWrapper.connect(dbPath, (err, result) => {
         if (err) {
@@ -29,7 +28,6 @@ class DatabaseManager {
         }
         
         this.isInitialized = true;
-        console.log('✅ DatabaseManager: Wrapper connection established');
         resolve(dbWrapper); // Return the wrapper itself
       });
     });
@@ -130,14 +128,12 @@ class DatabaseManager {
    
     if (callback) {
       connection.query(sql, params, (err, rows) => {
-        console.log('[DEBUG] DatabaseManager.query() callback rows length:', rows?.length);
         callback(err, rows);
       });
     } else {
       // Promise-style call
       return new Promise((resolve, reject) => {
         connection.query(sql, params, (err, rows) => {
-          console.log('[DEBUG] DatabaseManager.query() callback called with err:', err);
           if (err) {
             reject(err);
           } else {

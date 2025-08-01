@@ -1219,7 +1219,7 @@ export default function ChatMessages() {
               </TooltipTrigger>
               <TooltipContent>
                 <p>
-                  {wsState.isConnected ? 'Live Mode' : 'Private Mode'}
+                  {wsState.isConnected ? 'Live: Messages sent to the server.' : 'Private: messages processed locally.'}
                 </p>
               </TooltipContent>
             </Tooltip>   
@@ -1242,7 +1242,9 @@ export default function ChatMessages() {
               <Send className="w-3 h-3" />
             </Button>
           </div>
-          <div className="text-xs mt-2 text-white/60 text-center">Remember: Thinkdrop can make mistakes.</div>
+          <div className="text-xs mt-2 text-white/60 text-center">
+            {wsState.isConnected ? 'Live Mode On' : 'Private Mode On'} | AI can make mistakes.
+          </div>
         </div>
       </div>
     </div>

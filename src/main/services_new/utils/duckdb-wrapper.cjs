@@ -16,22 +16,16 @@ function connect(dbPath, cb) {
   
   currentDbPath = dbPath;
   try {
-    console.log('🔗 Creating DuckDB database and connection...');
-    console.log('DATABASE PATH:', dbPath);
     
     // Create database with callback to handle any initialization errors
     try {
-      console.log('Creating DuckDB database at:', dbPath);
       
       // Force synchronous database creation to avoid callback issues
       db = new duckdb.Database(dbPath);
-      console.log('✅ DuckDB database created successfully');
       
       // Now connect to the database with explicit try/catch
       try {
-        console.log('Attempting to connect to database...');
         connection = db.connect();
-        console.log('✅ DuckDB connection established via CommonJS wrapper');
         
         // Test the connection with a simple query
         connection.all('SELECT 1 as test', (testErr, testResult) => {
@@ -40,7 +34,6 @@ function connect(dbPath, cb) {
             return cb(testErr);
           }
           
-          console.log('Connection test successful:', testResult);
           cb(null, { db, connection });
         });
       } catch (connErr) {
