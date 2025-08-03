@@ -21,7 +21,8 @@ const AGENT_FORMAT = {
             'memory-delete',
             'memory-update',
             'memory-list',
-            'screenshot-store'
+            'screenshot-store',
+            'migrate-embedding-column'
           ]
         },
         key: { type: 'string', description: 'Memory key for store/retrieve operations' },
@@ -1710,6 +1711,30 @@ const AGENT_FORMAT = {
               throw new Error('Screenshot storage failed: ' + error.message);
             }
             
+          case 'migrate-embedding-column':
+            // Migrate existing memory table to add embedding column
+            try {
+              console.log('[INFO] Starting embedding column migration...');
+              
+              const migrationResult = await this.migrateMemoryTableForEmbeddings(context);
+              
+              if (migrationResult.success) {
+                console.log(`[SUCCESS] Migration completed: ${migrationResult.message}`);
+                return {
+                  success: true,
+                  action: 'migrate-embedding-column',
+                  migrated: migrationResult.migrated,
+                  message: migrationResult.message
+                };
+              } else {
+                throw new Error(migrationResult.error);
+              }
+              
+            } catch (error) {
+              console.error('[ERROR] Embedding column migration failed:', error);
+              throw new Error('Migration failed: ' + error.message);
+            }
+            
           default:
             throw new Error('Unknown action: ' + action);
         }
@@ -1820,6 +1845,91 @@ const AGENT_FORMAT = {
       } catch (error) {
         console.error('[ERROR] Failed to ensure memory table:', error);
         throw error;
+      }
+    },
+  
+    // Migration function to add embedding column to existing memory tables
+    async migrateMemoryTableForEmbeddings(context) {
+      try {
+        console.log('[INFO] Checking if memory table needs embedding column migration...');
+        
+        const connection = context?.connection || this.connection;
+        const db = context?.db || this.db;
+        
+        if (!connection || !db) {
+          throw new Error('Database connection not available for migration');
+        }
+        
+        // Check if embedding column already exists
+        const checkColumnSQL = `
+          SELECT COUNT(*) as column_exists 
+          FROM pragma_table_info('memory') 
+          WHERE name = 'embedding'
+        `;
+        
+        const columnCheck = await new Promise((resolve, reject) => {
+          if (typeof connection.all === 'function') {
+            connection.all(checkColumnSQL, (err, result) => {
+              if (err) reject(err);
+              else resolve(result);
+            });
+          } else if (typeof connection.query === 'function') {
+            connection.query(checkColumnSQL, [], (err, result) => {
+              if (err) reject(err);
+              else resolve(result);
+            });
+          } else {
+            reject(new Error('Unsupported database connection interface'));
+          }
+        });
+        
+        const columnExists = columnCheck[0]?.column_exists > 0;
+        
+        if (columnExists) {
+          console.log('[INFO] Embedding column already exists, no migration needed');
+          return { success: true, migrated: false, message: 'Column already exists' };
+        }
+        
+        console.log('[INFO] Adding embedding column to memory table...');
+        
+        // Add the embedding column
+        const addColumnSQL = `ALTER TABLE memory ADD COLUMN embedding FLOAT[384]`;
+        
+        await new Promise((resolve, reject) => {
+          if (typeof connection.run === 'function') {
+            connection.run(addColumnSQL, function(err) {
+              if (err) reject(err);
+              else resolve();
+            });
+          } else if (typeof connection.exec === 'function') {
+            try {
+              const stmt = connection.prepare(addColumnSQL);
+              stmt.run();
+              stmt.finalize();
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
+          } else {
+            reject(new Error('Unsupported database connection interface'));
+          }
+        });
+        
+        console.log('[SUCCESS] Embedding column added to memory table');
+        
+        return { 
+          success: true, 
+          migrated: true, 
+          message: 'Embedding column added successfully' 
+        };
+        
+      } catch (error) {
+        console.error('[ERROR] Memory table migration failed:', error);
+        return { 
+          success: false, 
+          error: error.message,
+          message: 'Migration failed: ' + error.message
+        };
       }
     },
   

@@ -72,6 +72,12 @@ const AGENT_FORMAT = {
     try {
       const { action } = params;
       
+      // Handle bootstrap action first (doesn't require initialized model)
+      if (action === 'bootstrap') {
+        return await this.bootstrap(params, context);
+      }
+      
+      // For all other actions, check if model is initialized
       if (!this.isEmbeddingReady || !this.embedder) {
         throw new Error('Embedding model not initialized. Call bootstrap first.');
       }

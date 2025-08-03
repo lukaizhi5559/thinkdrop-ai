@@ -9,6 +9,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Define AsyncFunction constructor for dynamic async function creation
+const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
+
 export class AgentOrchestrator {
   constructor() {
     this.agents = new Map();
@@ -232,6 +235,25 @@ export class AgentOrchestrator {
         requires_database: false,
         config: { model: 'phi3:mini', timeout: 30000, max_tokens: 100 },
         orchestrator_metadata: { category: 'llm', priority: 'high' }
+      },
+      {
+        name: 'SemanticEmbeddingAgent',
+        description: 'Generates semantic embeddings using @xenova/transformers for local semantic search',
+        dependencies: ['@xenova/transformers'],
+        execution_target: 'frontend',
+        requires_database: false,
+        config: { model: 'all-MiniLM-L6-v2', embedding_dim: 384 },
+        orchestrator_metadata: { category: 'ml', priority: 'high' }
+      },
+      {
+        name: 'EmbeddingDaemonAgent',
+        description: 'Background daemon for generating embeddings for memories without them',
+        dependencies: ['SemanticEmbeddingAgent', 'UserMemoryAgent'],
+        execution_target: 'frontend',
+        requires_database: true,
+        database_type: 'duckdb',
+        config: { interval_minutes: 10, batch_size: 10 },
+        orchestrator_metadata: { category: 'daemon', priority: 'medium' }
       },
       // {
       //   name: 'IntentParserAgent',
@@ -577,9 +599,24 @@ export class AgentOrchestrator {
         
         // Create a sandbox environment for evaluating the agent code
         const vm = await import('vm');
+        
+        // Create a custom require function that handles ES modules
+        const customRequire = (modulePath) => {
+          // Check if it's the problematic ES module
+          if (modulePath.includes('NaturalLanguageIntentParser')) {
+            // Return a mock object since this isn't actually used in the agent code
+            return {
+              parseIntent: () => ({ intent: 'unknown', confidence: 0.5 }),
+              extractEntities: () => []
+            };
+          }
+          // For other modules, use the original require
+          return require(modulePath);
+        };
+        
         const context = {
           exports: {},
-          require,
+          require: customRequire,
           module: { exports: {} },
           __filename,
           __dirname,
@@ -822,28 +859,51 @@ export class AgentOrchestrator {
     // Extract function body from string (legacy support)
     if (!codeString || typeof codeString !== 'string') {
       console.warn('⚠️ Invalid code string provided to extractFunctionBody:', typeof codeString);
-      return ''; // Return empty string for invalid input
+      return 'return { success: false, error: "No code provided" };'; // Return valid function body
     }
     
     let cleanCode = codeString.trim();
     
-    // Remove async function declaration if present
-    cleanCode = cleanCode.replace(/^async\s+function\s*\([^)]*\)\s*\{/, '');
-    cleanCode = cleanCode.replace(/^async\s*\([^)]*\)\s*=>\s*\{/, '');
-    cleanCode = cleanCode.replace(/^\([^)]*\)\s*=>\s*\{/, '');
-    
-    // Remove trailing }
-    if (cleanCode.endsWith('}')) {
-      cleanCode = cleanCode.slice(0, -1);
+    // Handle method definitions like: async bootstrap(config, context) { ... }
+    const methodMatch = cleanCode.match(/^async\s+\w+\s*\([^)]*\)\s*\{([\s\S]*)\}\s*,?\s*$/);
+    if (methodMatch) {
+      return methodMatch[1].trim();
     }
     
-    return cleanCode.trim();
+    // Handle arrow functions like: async (params) => { ... }
+    const arrowMatch = cleanCode.match(/^async\s*\([^)]*\)\s*=>\s*\{([\s\S]*)\}\s*,?\s*$/);
+    if (arrowMatch) {
+      return arrowMatch[1].trim();
+    }
+    
+    // Handle function declarations like: async function name(params) { ... }
+    const funcMatch = cleanCode.match(/^async\s+function\s+\w+\s*\([^)]*\)\s*\{([\s\S]*)\}\s*$/);
+    if (funcMatch) {
+      return funcMatch[1].trim();
+    }
+    
+    // If it's already just a function body (starts with statements, not function declaration)
+    if (!cleanCode.match(/^(async\s+)?(function|\w+\s*\(|\([^)]*\)\s*=>)/)) {
+      return cleanCode;
+    }
+    
+    // Fallback: try to extract content between first { and last }
+    const firstBrace = cleanCode.indexOf('{');
+    const lastBrace = cleanCode.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && firstBrace < lastBrace) {
+      return cleanCode.substring(firstBrace + 1, lastBrace).trim();
+    }
+    
+    // If all else fails, return a safe default
+    console.warn('⚠️ Could not extract function body from:', cleanCode.substring(0, 100) + '...');
+    return 'return { success: false, error: "Could not parse function body" };';
   }
 
   /**
    * Execute an agent with proper dependency injection and bootstrap
    */
   async executeAgent(agentName, params, context = {}) {
+    // ... (rest of the code remains the same)
     try {
       console.log(`🎯 Executing ${agentName}.${params.action || 'default'}`);
       

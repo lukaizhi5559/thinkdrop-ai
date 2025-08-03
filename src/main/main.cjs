@@ -254,6 +254,33 @@ async function initializeServices() {
         }
       });
 
+      // Start the embedding daemon for automatic background embedding generation
+      try {
+        console.log('🤖 Starting embedding daemon for semantic search...');
+        
+        // Bootstrap SemanticEmbeddingAgent first
+        await coreAgent.ask({
+          agent: 'SemanticEmbeddingAgent',
+          action: 'bootstrap'
+        });
+        
+        // Start the embedding daemon with default 10-minute intervals
+        const daemonResult = await coreAgent.ask({
+          agent: 'EmbeddingDaemonAgent',
+          action: 'start-daemon'
+        });
+        
+        if (daemonResult.success) {
+          console.log('✅ Embedding daemon started successfully:', daemonResult.message);
+        } else {
+          console.warn('⚠️ Embedding daemon failed to start:', daemonResult.error);
+        }
+        
+      } catch (daemonError) {
+        console.error('❌ Failed to start embedding daemon:', daemonError);
+        // Continue without daemon - app should still work
+      }
+
     } catch (error) {
       console.error('❌ Failed to initialize CoreAgent:', error);
     }
