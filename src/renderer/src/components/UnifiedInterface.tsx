@@ -1,18 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { 
-  MessageCircle, 
-  Lightbulb, 
-  Database, 
+import {
+  MessageCircle,
+  Lightbulb,
+  Database,
+  Search,
+  Bot,
+  Network,
   MoreVertical,
   X,
-  Droplet
+  Droplet,
+  ArrowLeft
 } from 'lucide-react';
 import { Button } from './ui/button';
 import ChatMessages from './ChatMessages';
 import InsightWindow from './InsightWindow';
 import MemoryDebugger from './MemoryDebugger';
+import SemanticSearchPanel from './SemanticSearchPanel';
+import AgentStatusPanel from './AgentStatusPanel';
+import OrchestrationDashboard from './OrchestrationDashboard';
 
-type ViewType = 'chat' | 'insight' | 'memory';
+type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration';
 
 interface UnifiedInterfaceProps {
   isListening: boolean;
@@ -50,9 +57,14 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
   }, [showMenu]);
 
   // Handle view changes
-  const handleViewChange = (view: 'chat' | 'insight' | 'memory') => {
+  const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
     setShowMenu(false); // Close menu when switching views
+  };
+
+  // Handle back to chat (for new tabs)
+  const handleBackToChat = () => {
+    setCurrentView('chat');
   };
 
   // Handle close/minimize
@@ -94,6 +106,33 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
             <span className="text-white/90 font-medium text-sm">Memory</span>
           </>
         );
+      case 'search':
+        return (
+          <>
+            <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-teal-500 rounded-lg flex items-center justify-center">
+              <Search className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-white/90 font-medium text-sm">Semantic Search</span>
+          </>
+        );
+      case 'agents':
+        return (
+          <>
+            <div className="w-6 h-6 bg-gradient-to-br from-cyan-400 to-blue-500 rounded-lg flex items-center justify-center">
+              <Bot className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-white/90 font-medium text-sm">Agent Status</span>
+          </>
+        );
+      case 'orchestration':
+        return (
+          <>
+            <div className="w-6 h-6 bg-gradient-to-br from-indigo-400 to-purple-500 rounded-lg flex items-center justify-center">
+              <Network className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-white/90 font-medium text-sm">Orchestration Dashboard</span>
+          </>
+        );
       default:
         return (
           <>
@@ -116,6 +155,18 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
     >
       {/* Render branding - Start */}
       <div className="flex flex-1 items-center space-x-3">
+        {/* Back button for new tabs */}
+        {(currentView === 'search' || currentView === 'agents' || currentView === 'orchestration') && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleBackToChat}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-all"
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
+        )}
         {renderBranding()}
       </div>
       {/* Render branding - End */}
@@ -201,6 +252,12 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
         return <InsightWindow />;
       case 'memory':
         return <MemoryDebugger />;
+      case 'search':
+        return <SemanticSearchPanel />;
+      case 'agents':
+        return <AgentStatusPanel />;
+      case 'orchestration':
+        return <OrchestrationDashboard />;
       default:
         return <ChatMessages />;
     }
@@ -211,9 +268,14 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
       {/* Header - always visible */}
       {renderHeader()}
       
-      {/* Content area */}
+      {/* Content area with slide animation */}
       <div className="h-[calc(100%-60px)] overflow-hidden">
-        {renderContent()}
+        <div 
+          key={currentView}
+          className="h-full animate-in slide-in-from-right-5 fade-in duration-300"
+        >
+          {renderContent()}
+        </div>
       </div>
 
       {/* Menu overlay */}
@@ -224,7 +286,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
             className="bg-gray-800/90 backdrop-blur-lg rounded-xl border border-white/10 p-2 m-4 min-w-[100px]"
           >
             <div className="space-y-2">
-              <Button
+              {/* <Button
                 variant="ghost"
                 className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
                 onClick={() => handleViewChange('chat')}
@@ -247,6 +309,31 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
               >
                 <Database className="w-4 h-4 mr-3" />
                 Memory
+              </Button>
+              <hr className="border-white/10 my-2" /> */}
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
+                onClick={() => handleViewChange('search')}
+              >
+                <Search className="w-4 h-4 mr-3" />
+                Semantic Search
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
+                onClick={() => handleViewChange('agents')}
+              >
+                <Bot className="w-4 h-4 mr-3" />
+                Agents
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
+                onClick={() => handleViewChange('orchestration')}
+              >
+                <Network className="w-4 h-4 mr-3" />
+                Orchestration
               </Button>
               <hr className="border-white/10 my-2" />
               <Button
