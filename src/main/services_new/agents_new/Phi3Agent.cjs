@@ -1,4 +1,13 @@
-const NaturalLanguageIntentParser = require('../utils/NaturalLanguageIntentParser');
+let NaturalLanguageIntentParser;
+try {
+  NaturalLanguageIntentParser = require('../utils/IntentParser.cjs');
+  console.log('✅ DEBUG: Successfully required the module');
+  console.log('🔍 DEBUG: NaturalLanguageIntentParser import result:', NaturalLanguageIntentParser);
+  console.log('🔍 DEBUG: Constructor name:', NaturalLanguageIntentParser?.name);
+} catch (error) {
+  console.error('❌ DEBUG: Failed to require NaturalLanguageIntentParser:', error.message);
+  console.error('❌ DEBUG: Error stack:', error.stack);
+}
 
 /**
  * Phi3Agent - Object-based approach
@@ -45,8 +54,8 @@ const AGENT_FORMAT = {
   // Object-based bootstrap method
   async bootstrap(config, context) {
     try {
-      console.log('🤖 Phi3Agent: Initializing local LLM capabilities...');
-      
+      AGENT_FORMAT.nlParser = new NaturalLanguageIntentParser();
+
       // Store configuration on AGENT_FORMAT so it's accessible during execution
       AGENT_FORMAT.config = {
         timeout: config.timeout || 8000,
@@ -79,7 +88,7 @@ const AGENT_FORMAT = {
       }
 
       console.log('✅ Phi3Agent: Setup complete');
-      
+
       return { 
         success: true, 
         config: AGENT_FORMAT.config,

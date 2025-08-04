@@ -1763,7 +1763,6 @@ export class AgentOrchestrator {
       }
       
       // Execute workflow
-      console.log('🚀 Executing workflow...', workflow);
       const workflowResult = await this.executeWorkflow(workflow, {
         ...context,
         originalPayload: processedPayload,
@@ -1835,8 +1834,6 @@ export class AgentOrchestrator {
    * Extract intent data from parsed payload
    */
   extractIntentData(payload) {
-    console.log('🔍 Extracting intent data from payload... LUKAIZHI', payload);
-    
     // Handle nested payload structures
     if (payload.payload && payload.payload.intents) {
       console.log('📦 Found nested payload structure');
