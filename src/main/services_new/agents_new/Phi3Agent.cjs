@@ -150,15 +150,39 @@ const AGENT_FORMAT = {
       console.log(`🤖 Querying Phi3 with prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
 
 
-      const thinkdropPrompt = `${AGENT_FORMAT.basePrompt()}
+      // For screen analysis questions, use a shorter, more focused prompt
+      const isScreenAnalysis = prompt.toLowerCase().includes('screen content:') || 
+                              prompt.toLowerCase().includes('what do you see') ||
+                              prompt.toLowerCase().includes('describe the screen') ||
+                              prompt.toLowerCase().includes('analyze the screen');
+      
+      let thinkdropPrompt;
+      let queryOptions = {};
+      
+      if (isScreenAnalysis) {
+        thinkdropPrompt = `You are Thinkdrop AI, a helpful desktop assistant. When analyzing screen content, provide brief, clear descriptions focusing on the main elements visible. Be concise and practical.
+
+${prompt}
+
+Provide a short, helpful response (2-3 sentences max) describing what you see.`;
+        // Use regular phi3:mini model for natural language responses
+        queryOptions = {
+          model: 'phi3:mini',
+          temperature: 0.3,
+          max_tokens: 150
+        };
+      } else {
+        thinkdropPrompt = `${AGENT_FORMAT.basePrompt()}
 
       ${prompt}`;
+        // Use default options for other queries
+      }
 
       const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
       
       for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
-          const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, options);
+          const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, { ...options, ...queryOptions });
           
           console.log('✅ Phi3 query successful');
           

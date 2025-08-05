@@ -492,6 +492,7 @@ export default function ChatMessages() {
   // Handle local LLM fallback when backend is disconnected
   const handleLocalLLMFallback = useCallback(async (messageText: string) => {
     let isMemoryRetrieve = false;
+    let isQuestionIntent = false;
     try {
       console.log('🤖 Starting local LLM processing...');
       setIsProcessingLocally(true);
@@ -510,7 +511,7 @@ export default function ChatMessages() {
       });
       
       if (result.success) {
-        // For memory_retrieve intents, use the initial response in ThinkingIndicator
+        // For memory_retrieve and question intents, use the initial response in ThinkingIndicator
         // and wait for the orchestration update for the final result
         if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
           isMemoryRetrieve = true;
@@ -522,6 +523,21 @@ export default function ChatMessages() {
           
           // Ensure we stay in processing state to keep ThinkingIndicator visible
           console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
+          // Don't add the AI message yet - wait for orchestration update
+          return;
+        }
+        
+        // For question intents, show suggested response in ThinkingIndicator while processing
+        if (result.intentClassificationPayload?.primaryIntent === 'question') {
+          isQuestionIntent = true;
+          // Set the thinking message to the suggested response
+          const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
+          console.log('🎯 [THINKING] Setting thinking message for question:', thinkingMsg);
+          console.log('🎯 [THINKING] States - isProcessingLocally:', isProcessingLocally, 'isLoading:', isLoading, 'wsConnected:', wsState.isConnected);
+          setInitialThinkingMessage(thinkingMsg);
+          
+          // Ensure we stay in processing state to keep ThinkingIndicator visible
+          console.log('🎯 [THINKING] Keeping processing state active for question');
           // Don't add the AI message yet - wait for orchestration update
           return;
         }
@@ -565,13 +581,13 @@ export default function ChatMessages() {
         return updated;
       });
     } finally {
-      // Only clear processing state if not waiting for memory retrieve orchestration
-      if (!isMemoryRetrieve) {
+      // Only clear processing state if not waiting for memory retrieve or question orchestration
+      if (!isMemoryRetrieve && !isQuestionIntent) {
         console.log('🎯 [THINKING] Clearing processing state in finally block');
         setIsProcessingLocally(false);
         setIsLoading(false);
       } else {
-        console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve orchestration');
+        console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory:', isMemoryRetrieve, 'question:', isQuestionIntent);
       }
       scrollToBottom({ smooth: true, force: true });
     }

@@ -23,6 +23,10 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       intentParser.initializeEmbeddings().catch(err => {
         console.warn('⚠️ IntentParser embeddings initialization failed:', err.message);
       });
+      
+      // Zero-shot classification will be initialized on-demand when needed
+      console.log('✅ Zero-shot classification will be loaded when ambiguous cases are detected');
+      
       console.log('✅ IntentParser initialized for fast path classification');
     } catch (error) {
       console.error('❌ Failed to initialize IntentParser:', error.message);
@@ -68,8 +72,28 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           const highestScore = Math.max(...Object.values(patternScores));
           
           if (highestScore > 0) {
+            // Apply same smart tie-breaking logic as IntentParser
+            const intentPriority = {
+              'memory_retrieve': 4,
+              'memory_store': 3,
+              'command': 2,
+              'question': 1,
+              'greeting': 0
+            };
+            
             const bestIntent = Object.entries(patternScores)
-              .reduce((a, b) => patternScores[a[0]] > patternScores[b[0]] ? a : b)[0];
+              .sort((a, b) => {
+                const scoreA = patternScores[a[0]];
+                const scoreB = patternScores[b[0]];
+                
+                // If scores are different, pick higher score
+                if (scoreA !== scoreB) {
+                  return scoreB - scoreA;
+                }
+                
+                // If scores are equal, use priority (memory_retrieve > question)
+                return (intentPriority[b[0]] || 0) - (intentPriority[a[0]] || 0);
+              })[0][0];
             
             console.log(`✅ ULTRA-FAST: Pattern match found - ${bestIntent} (score: ${highestScore})`);
             
@@ -83,7 +107,8 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
                   entities: [],
                   requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(bestIntent),
                   requiresExternalData: false,
-                  captureScreen: bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase()),
+                  captureScreen: (bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
+                                (bestIntent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
                   suggestedResponse: intentParser.getFallbackResponse(bestIntent, prompt),
                   sourceText: prompt,
                   chainOfThought: {

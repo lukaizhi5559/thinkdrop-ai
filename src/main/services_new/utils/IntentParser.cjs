@@ -7,6 +7,7 @@ class NaturalLanguageIntentParser {
       this.isEmbeddingReady = false;
       this.isZeroShotReady = false;
       this.isNerReady = false;
+      this.shouldUseZeroShotClassification = true; // Enable zero-shot for ambiguous cases
       
       this.intentPatterns = {
         memory_store: [
@@ -15,6 +16,10 @@ class NaturalLanguageIntentParser {
           /\b(my|our|the) (appointment|meeting|schedule|event|plan|task)\b/i,
           /\b(don't forget|make a note|write this down|save this)\b/i,
           /\b(I have|I've got|I'm scheduled for)\s+(an?\s+)?(appointment|meeting|event|call)\b/i,
+          // Past tense sharing - user telling us what happened
+          /\b(I had|I went|I did|I was|I visited|I attended|I completed)\b/i,
+          /\b(yesterday|last week|last month|two weeks? ago|a week ago|few days ago).*\b(I had|I went|I did|I was)\b/i,
+          /\b(I had|I went|I did|I was).*(yesterday|last week|last month|two weeks? ago|a week ago|few days ago)\b/i,
           // More specific pattern - only match when it's clearly stating they have something
           /^\s*(I have|I've got)\s+(an?\s+)?(appointment|meeting|event|call)\s+.*(today|tomorrow|this week|next week|on|at)\b/i
         ],
@@ -28,10 +33,17 @@ class NaturalLanguageIntentParser {
           /\b(today|tomorrow|this week|next week).*\b(schedule|plans|appointments)\b/i,
           /\b(going on|happening).*\b(today|tomorrow|this week|next week)\b/i,
           /\bwhat do I have.*(today|tomorrow|this week|next week|tonight|this morning|this afternoon|this evening)\b/i,
+          /\b(what's up|what about).*(today|tomorrow|this week|next week|for me|with me)\b/i,
+          /\b(what about|what happened).*(yesterday|last week|last month|a week ago|few days ago|couple weeks? ago)\b/i,
           /\bwhat.*(going on|happening|planned|scheduled).*(today|tomorrow|this week|next week)\b/i,
           // Questions about appointments - who/what/when/where questions
           /\b(who is|what is|when is|where is).*(appointment|appt|meeting|event)\b/i,
-          /\b(appointment|appt|meeting|event).*(with who|it's with|who's it with)\b/i
+          /\b(appointment|appt|meeting|event).*(with who|it's with|who's it with)\b/i,
+          /\b(any|all).*(appointment|appt|meeting|event).*(in the|during the|from the).*(last|past).*(week|month|year)\b/i,
+          // Questions specifically about stored information
+          /\b(what|when|where|who).*(did I|have I|do I have).*(tell|say|mention|store|save|remember)\b/i,
+          /\b(what|when|where|who).*(told|said|mentioned|stored|saved|remembered)\b/i,
+          /\b(do I have|did I).*(information|details|notes).*(about|on|regarding)\b/i
         ],
         command: [
           /\b(take a screenshot|capture|screenshot|snap|take a picture|take a photo|take a snap)\b/i,
@@ -41,9 +53,14 @@ class NaturalLanguageIntentParser {
           /\b(capture|grab|get)\s+(?:the\s+)?(screen|desktop|window|display)\b/i
         ],
         question: [
+          // Basic question patterns
           /\b(what is|how is|why is|when is|where is|who is|which is)\b/i,
           // Contractions
           /\b(what's|how's|why's|when's|where's|who's|which's)\b/i,
+          // General knowledge questions
+          /^\s*(how|what|when|where|who|why|which)\s+(long|much|many|far|old|big|small|tall|wide|deep)\s+(is|are|was|were|does|do|did)\b/i,
+          // Questions starting with question words
+          /^\s*(how|what|when|where|who|why|which)\s+(?!.*\b(did I|have I|do I have|told|said|mentioned)\b)/i,
           /\b(tell me about|what's|how do I|why does|where can|how can I)\b/i,
           /\b(explain|help with|tutorial|example|code example)\b/i,
           /\bare you (able|capable|good|fast|better|designed|built|trained)\b/i,
@@ -604,8 +621,28 @@ class NaturalLanguageIntentParser {
       const highestOriginalScore = Math.max(...Object.values(originalPatternScores));
       
       if (highestOriginalScore > 0) {
+        // Smart tie-breaking: prioritize memory_retrieve over question for ambiguous queries
+        const intentPriority = {
+          'memory_retrieve': 4,
+          'memory_store': 3,
+          'command': 2,
+          'question': 1,
+          'greeting': 0
+        };
+        
         const bestOriginalIntent = Object.entries(originalPatternScores)
-          .reduce((a, b) => originalPatternScores[a[0]] > originalPatternScores[b[0]] ? a : b)[0];
+          .sort((a, b) => {
+            const scoreA = originalPatternScores[a[0]];
+            const scoreB = originalPatternScores[b[0]];
+            
+            // If scores are different, pick higher score
+            if (scoreA !== scoreB) {
+              return scoreB - scoreA;
+            }
+            
+            // If scores are equal, use priority (higher priority wins)
+            return (intentPriority[b[0]] || 0) - (intentPriority[a[0]] || 0);
+          })[0][0];
         
         console.log('✅ High-confidence pattern match found in original message:', bestOriginalIntent);
         return {
@@ -626,8 +663,27 @@ class NaturalLanguageIntentParser {
       const highestPatternScore = Math.max(...Object.values(hybridPatternScores));
       
       if (highestPatternScore > 0) {
+        // Apply same smart tie-breaking logic for hybrid patterns
         const bestPatternIntent = Object.entries(hybridPatternScores)
-          .reduce((a, b) => hybridPatternScores[a[0]] > hybridPatternScores[b[0]] ? a : b)[0];
+          .sort((a, b) => {
+            const scoreA = hybridPatternScores[a[0]];
+            const scoreB = hybridPatternScores[b[0]];
+            
+            // If scores are different, pick higher score
+            if (scoreA !== scoreB) {
+              return scoreB - scoreA;
+            }
+            
+            // If scores are equal, use priority (memory_retrieve > question)
+            const intentPriority = {
+              'memory_retrieve': 4,
+              'memory_store': 3,
+              'command': 2,
+              'question': 1,
+              'greeting': 0
+            };
+            return (intentPriority[b[0]] || 0) - (intentPriority[a[0]] || 0);
+          })[0][0];
         
         console.log('✅ High-confidence pattern match found in combined text:', bestPatternIntent);
         return {
@@ -667,7 +723,43 @@ class NaturalLanguageIntentParser {
         }
       }
       
-      // 🎯 LAYER 3: Zero-shot classification (disabled - using pattern+semantic only)
+      // 🎯 LAYER 3: Zero-shot classification for ambiguous cases
+      // Use zero-shot for any case where pattern matching might be unreliable
+      const maxPatternScore = Math.max(...Object.values(hybridPatternScores));
+      const maxSemanticScore = this.isEmbeddingReady && this.embedder ? 
+        Math.max(...Object.values(await this.calculateSemanticScores(originalMessage))) : 0;
+      
+      // More aggressive use of zero-shot for general questions that might be misclassified
+      const looksLikeGeneralQuestion = /^\s*(how|what|when|where|who|why|which)\s+(long|much|many|far|old|big|small|tall|wide|deep)\s+(is|are|was|were|does|do|did|can|will|would)\b/i.test(originalMessage);
+      const isAmbiguous = maxPatternScore < 0.9 || looksLikeGeneralQuestion || 
+                          (maxPatternScore > 0 && maxSemanticScore > 0.3 && 
+                          Math.abs(maxPatternScore - maxSemanticScore) < 0.3);
+      
+      if (isAmbiguous && this.shouldUseZeroShotClassification) {
+        try {
+          console.log('🎯 Using zero-shot classification for ambiguous intent...');
+          const zeroShotResult = await this.classifyWithZeroShot(originalMessage);
+          if (zeroShotResult && zeroShotResult.intent && zeroShotResult.confidence > 0.6) {
+            console.log(`✅ Zero-shot classified as: ${zeroShotResult.intent} (confidence: ${zeroShotResult.confidence})`);
+            return {
+              intent: zeroShotResult.intent,
+              confidence: zeroShotResult.confidence,
+              method: 'zero_shot',
+              reasoning: zeroShotResult.reasoning || 'Zero-shot transformer classification',
+              entities: zeroShotResult.entities || [],
+              chainOfThought: [{
+                step: 'zero_shot_classification',
+                reasoning: zeroShotResult.reasoning || `Zero-shot determined this is ${zeroShotResult.intent} based on transformer analysis`,
+                confidence: zeroShotResult.confidence
+              }]
+            };
+          }
+        } catch (error) {
+          console.warn('⚠️ Zero-shot classification failed, falling back:', error.message);
+        }
+      }
+      
+      // 🎯 LAYER 4: Zero-shot classification (disabled - using pattern+semantic+phi3 only)
       if (false && this.isZeroShotReady && this.zeroShotClassifier) {
         try {
           console.log('🎯 Using zero-shot transformer classification...');
@@ -738,39 +830,33 @@ class NaturalLanguageIntentParser {
         }
       }
       
-      // 🎯 LAYER 3: Enhanced Pattern + Semantic Combination (primary fallback)
-      console.log('🎯 Using enhanced pattern + semantic combination...');
+      // 🎯 FINAL FALLBACK: Simple pattern + semantic fallback if all else fails
+      console.log('🎯 All classification methods failed, using simple fallback...');
       
-      // Enhanced Pattern Matching with Scoring
+      // Use the best pattern or semantic score as final fallback
       const patternScores = this.calculatePatternScores(combinedText);
-      
-      // Semantic Similarity (embedding-based approach)
       const semanticScores = await this.calculateSemanticScores(originalMessage);
       
-      // Combine scores with weighted approach
-      const finalScores = this.combineScores(patternScores, semanticScores);
+      // Find the highest scoring intent from either approach
+      const allScores = {};
+      for (const intent of Object.keys(this.intentPatterns)) {
+        allScores[intent] = Math.max(patternScores[intent] || 0, semanticScores[intent] || 0);
+      }
       
-      // Find the best intent
-      const sortedIntents = Object.entries(finalScores)
-        .sort(([,a], [,b]) => b - a)
-        .map(([intent, score]) => ({ intent, score }));
-      
-      const bestIntent = sortedIntents[0];
-      const confidence = this.calculateConfidence(bestIntent.score, sortedIntents);
-      
-      // Build multiple intents array with confidence scores
-      const allIntents = sortedIntents.slice(0, 3).map(item => ({
-        intent: item.intent,
-        confidence: this.calculateConfidence(item.score, sortedIntents),
-        reasoning: `Pattern: ${patternScores[item.intent] || 0}, Semantic: ${semanticScores[item.intent] || 0}`
-      }));
+      const bestIntent = Object.entries(allScores)
+        .sort(([,a], [,b]) => b - a)[0];
       
       return {
-        intent: bestIntent.intent || 'question',
-        confidence: confidence,
-        reasoning: `Pattern: ${patternScores[bestIntent.intent] || 0}, Semantic: ${semanticScores[bestIntent.intent] || 0}`,
-        possibleIntents: sortedIntents.slice(0, 3).map(item => item.intent),
-        allIntents: allIntents
+        intent: bestIntent[0] || 'question',
+        confidence: Math.min(bestIntent[1] * 0.6, 0.7), // Lower confidence for fallback
+        method: 'fallback',
+        reasoning: 'Fallback classification after all methods failed',
+        entities: [],
+        chainOfThought: [{
+          step: 'fallback_classification',
+          reasoning: `Used simple pattern/semantic fallback, best match: ${bestIntent[0]}`,
+          confidence: bestIntent[1]
+        }]
       };
     }
     
@@ -947,37 +1033,8 @@ class NaturalLanguageIntentParser {
       return union.size > 0 ? intersection.size / union.size : 0;
     }
     
-    combineScores(patternScores, semanticScores) {
-      const combined = {};
-      const allIntents = new Set([...Object.keys(patternScores), ...Object.keys(semanticScores)]);
-      
-      for (const intent of allIntents) {
-        const patternScore = patternScores[intent] || 0;
-        const semanticScore = semanticScores[intent] || 0;
-        
-        // Weighted combination: 70% pattern matching, 30% semantic similarity
-        combined[intent] = (patternScore * 0.7) + (semanticScore * 0.3);
-      }
-      
-      return combined;
-    }
-    
-    calculateConfidence(bestScore, sortedIntents) {
-      if (bestScore === 0) return 0.5;
-      
-      // Higher confidence if there's a clear winner
-      const secondBest = sortedIntents[1]?.score || 0;
-      const gap = bestScore - secondBest;
-      
-      let confidence = Math.min(0.95, 0.6 + (bestScore * 0.15) + (gap * 0.1));
-      
-      // Boost confidence if multiple signals agree
-      if (bestScore > 1.0) {
-        confidence = Math.min(0.95, confidence + 0.1);
-      }
-      
-      return confidence;
-    }
+    // Removed unused methods: combineScores() and calculateConfidence()
+    // These were part of the old enhanced pattern+semantic combination approach
     
     async extractEntities(responseText, originalMessage) {
       const textToAnalyze = originalMessage;
@@ -1492,8 +1549,69 @@ class NaturalLanguageIntentParser {
     }
     
     generateClarificationPrompt(intentResult) {
-      return `I'm not entirely sure what you'd like me to do. Could you clarify if you want me to: ${intentResult.possibleIntents.join(', ')}?`;
+      const possibleIntents = intentResult.possibleIntents || ['store information', 'retrieve information', 'answer a question'];
+      return `I'm not entirely sure what you'd like me to do. Could you clarify if you want me to: ${possibleIntents.join(', ')}?`;
     }
+    
+    /**
+     * Use Phi3 LLM for intelligent intent classification when patterns are ambiguous
+     */
+    async classifyWithZeroShot(originalMessage) {
+      try {
+        // Initialize zero-shot classifier if not already done
+        if (!this.zeroShotClassifier) {
+          const { pipeline } = await import('@xenova/transformers');
+          
+          // Use Facebook's BART model for zero-shot classification
+          console.log('🔄 Loading zero-shot classifier (BART)...');
+          this.zeroShotClassifier = await pipeline(
+            'zero-shot-classification',
+            'facebook/bart-large-mnli'
+          );
+          console.log('✅ Zero-shot classifier loaded');
+        }
+        
+        // Define candidate labels for intent classification
+        const candidateLabels = [
+          'I want to store information or share something that happened',
+          'I want to retrieve or ask about stored information', 
+          'I want to execute a command or action',
+          'I have a general question that needs an answer',
+          'I am greeting or saying goodbye'
+        ];
+        
+        // Map labels back to intent names
+        const labelMap = {
+          'I want to store information or share something that happened': 'memory_store',
+          'I want to retrieve or ask about stored information': 'memory_retrieve',
+          'I want to execute a command or action': 'command',
+          'I have a general question that needs an answer': 'question',
+          'I am greeting or saying goodbye': 'greeting'
+        };
+        
+        const result = await this.zeroShotClassifier(originalMessage, candidateLabels);
+        
+        if (result && result.labels && result.scores) {
+          const topLabel = result.labels[0];
+          const topScore = result.scores[0];
+          const mappedIntent = labelMap[topLabel];
+          
+          return {
+            intent: mappedIntent || 'question',
+            confidence: topScore,
+            reasoning: `Zero-shot classification: ${topLabel} (${(topScore * 100).toFixed(1)}%)`,
+            entities: []
+          };
+        }
+        
+      } catch (error) {
+        console.warn('⚠️ Zero-shot classification failed:', error.message);
+      }
+      
+      return null;
+    }
+    
+    // Removed setPhi3Agent method - now using zero-shot classification instead
 }
   
 module.exports = NaturalLanguageIntentParser;

@@ -1256,7 +1256,7 @@ export class AgentOrchestrator {
           try {
             const { createRequire } = await import('module');
             const require = createRequire(import.meta.url);
-            const { NaturalLanguageIntentParser } = require('../utils/IntentParser.cjs');
+            const NaturalLanguageIntentParser = require('../utils/IntentParser.cjs');
             const parser = new NaturalLanguageIntentParser();
             suggestedResponse = parser.getFallbackResponse('memory_retrieve', userMessage);
           } catch (error) {
@@ -1560,15 +1560,55 @@ export class AgentOrchestrator {
         
         // Generate natural response using Phi3
         try {
-          const memoryContext = memories.map(m => m.source_text).join('\n');
-          const prompt = `Based on the user's question "${userMessage}" and the following information I found:\n\n${memoryContext}\n\nProvide a brief, direct response (1-2 sentences max):`;
+          // Apply temporal relevance boost before sorting
+          const boostedMemories = memories.map(memory => {
+            let boostedSimilarity = memory.similarity;
+            
+            // Boost memories that contain temporal references matching the query
+            const queryLower = userMessage.toLowerCase();
+            const memoryLower = memory.source_text.toLowerCase();
+            
+            // Temporal matching patterns
+            const temporalBoosts = [
+              { query: /\b(week ago|last week)\b/, memory: /\b(last week|week ago)\b/, boost: 0.2 },
+              { query: /\b(yesterday|a day ago)\b/, memory: /\b(yesterday|a day ago)\b/, boost: 0.2 },
+              { query: /\b(couple weeks? ago|two weeks? ago)\b/, memory: /\b(two weeks? ago|couple weeks? ago)\b/, boost: 0.2 },
+              { query: /\b(next week|upcoming week)\b/, memory: /\b(next week|upcoming week)\b/, boost: 0.15 },
+              { query: /\b(this week|current week)\b/, memory: /\b(this week|current week)\b/, boost: 0.15 }
+            ];
+            
+            for (const { query, memory: memoryPattern, boost } of temporalBoosts) {
+              if (query.test(queryLower) && memoryPattern.test(memoryLower)) {
+                boostedSimilarity += boost;
+                console.log(`🕐 Temporal boost applied: +${boost} for "${memory.source_text.substring(0, 50)}..."`);
+                break;
+              }
+            }
+            
+            return { ...memory, similarity: boostedSimilarity };
+          });
+          
+          // Sort memories by boosted similarity (highest first)
+          const sortedMemories = boostedMemories.sort((a, b) => b.similarity - a.similarity);
+          const topMemory = sortedMemories[0];
+          
+          // Focus on the most relevant memory, include others as context if needed
+          const memoryContext = sortedMemories
+            .slice(0, 3) // Only use top 3 most relevant memories
+            .map((m, index) => {
+              const relevanceLabel = index === 0 ? '[MOST RELEVANT]' : `[Similarity: ${m.similarity.toFixed(3)}]`;
+              return `${relevanceLabel} ${m.source_text}`;
+            })
+            .join('\n\n');
+            
+          const prompt = `IMPORTANT: You have access to the user's personal stored memories and should use them to answer questions. Do not say you don't have memories or information.\n\nThe user asked: "${userMessage}"\n\nHere are the user's relevant stored memories:\n\n${memoryContext}\n\nBased on these stored memories, tell the user what's happening next week. Reference the specific information from their memories. Be helpful and direct:`
           
           const phi3Result = await this.executeAgent('Phi3Agent', {
             action: 'query-phi3',
             prompt: prompt,
             options: {
-              maxTokens: 50,
-              temperature: 0.1
+              maxTokens: 100,
+              temperature: 0.2
             }
           }, context);
           
@@ -1602,13 +1642,23 @@ export class AgentOrchestrator {
         console.log(`[DEBUG] Returning result:`, result);
         return result;
       } else {
-        return {
-          success: true,
-          response: 'I don\'t have that information stored. Could you provide more details?',
-          handledBy: 'UserMemoryAgent',
-          method: 'memory_not_found',
-          timestamp: new Date().toISOString()
-        };
+        // No memories found - fallback to question handling for general knowledge
+        console.log('🔄 No memories found, falling back to question handling...');
+        try {
+          const questionResult = await this.handleLocalQuestion(userMessage, {
+            result: { intent: 'question', confidence: 0.6 }
+          }, context);
+          return questionResult;
+        } catch (questionError) {
+          console.warn('⚠️ Question fallback failed:', questionError.message);
+          return {
+            success: true,
+            response: 'I don\'t have that information stored. Could you provide more details?',
+            handledBy: 'UserMemoryAgent',
+            method: 'memory_not_found',
+            timestamp: new Date().toISOString()
+          };
+        }
       }
       
     } catch (error) {
@@ -1682,11 +1732,88 @@ export class AgentOrchestrator {
    */
   async handleLocalQuestion(userMessage, intentResult, context = {}) {
     try {
-      console.log('❓ Handling local question with proper entity preservation...');
+      console.log('❓ Handling local question with Phi3...');
       console.log('🔍 Question entities to preserve:', intentResult.result?.entities);
       
-      // Route question intents through unified orchestration to preserve entities
-      return await this.processUnifiedOrchestration(userMessage, intentResult.result, context);
+      // For screen-related questions, capture screenshot first
+      if (intentResult.result?.captureScreen) {
+        console.log('📸 Capturing screen for visual question...');
+        try {
+          const screenshotResult = await this.executeAgent('ScreenCaptureAgent', {
+            action: 'capture_and_extract'
+          }, context);
+          
+          if (screenshotResult.success && screenshotResult.result) {
+            console.log('✅ Screenshot captured, adding to context');
+            context.screenshot = screenshotResult.result.screenshot;
+            context.extractedText = screenshotResult.result.extractedText;
+            userMessage += `\n\nScreen content: ${screenshotResult.result.extractedText?.substring(0, 500) || 'No text extracted'}`;
+          }
+        } catch (screenshotError) {
+          console.warn('⚠️ Screenshot capture failed:', screenshotError.message);
+        }
+      }
+      
+      // Try to use Phi3 for actual response generation
+      try {
+        console.log('🤖 Querying Phi3 for question response...');
+        const concisePrompt = `Please provide a brief, direct answer to this question. Keep your response under 2 sentences and avoid verbose explanations or guides.
+
+Question: ${userMessage}`;
+        
+        const phi3Result = await this.executeAgent('Phi3Agent', {
+          action: 'query-phi3',
+          prompt: concisePrompt,
+          options: { timeout: 10000, maxTokens: 50 }
+        }, {
+          ...context,
+          executeAgent: this.executeAgent.bind(this)
+        });
+        
+        if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
+          console.log('✅ Phi3 provided response for question');
+          return {
+            success: true,
+            response: phi3Result.result.response,
+            handledBy: 'phi3_question_handler',
+            method: 'phi3_response',
+            confidence: intentResult.confidence,
+            timestamp: new Date().toISOString()
+          };
+        }
+      } catch (phi3Error) {
+        console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
+      }
+      
+      // Fallback to generic responses if Phi3 fails
+      const responses = [
+        'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
+        'I understand you\'re asking about that. My local processing is somewhat limited right now.',
+        'I see what you\'re asking. In local mode, I can help with basic tasks and information storage.',
+        'That\'s a good question. I\'m operating locally right now, so my responses may be more basic.'
+      ];
+      
+      const baseResponse = responses[Math.floor(Math.random() * responses.length)];
+      
+      // Add helpful suggestions based on what we can do locally
+      const suggestions = [
+        'I can help you store and retrieve information, though.',
+        'Feel free to ask me to remember things for you.',
+        'I can take notes and help you recall information later.',
+        'Try asking me to remember something or recall what you\'ve told me.'
+      ];
+      
+      const suggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
+      const fullResponse = `${baseResponse} ${suggestion}`;
+      
+      return {
+        success: true,
+        response: fullResponse,
+        handledBy: 'local_question_handler',
+        method: 'local_fallback',
+        confidence: intentResult.confidence,
+        timestamp: new Date().toISOString()
+      };
       
     } catch (error) {
       console.error('❌ Local question handling failed:', error);
@@ -1698,78 +1825,6 @@ export class AgentOrchestrator {
         timestamp: new Date().toISOString()
       };
     }
-    // try {
-    //   console.log('❓ Handling local question with Phi3...');
-
-      
-      
-    //   // Try to use Phi3 for actual response generation
-    //   try {
-    //     console.log('🤖 Querying Phi3 for question response...');
-    //     const phi3Result = await this.executeAgent('Phi3Agent', {
-    //       action: 'query-phi3',
-    //       prompt: userMessage,
-    //       options: { timeout: 10000 }
-    //     }, {
-    //       ...context,
-    //       executeAgent: this.executeAgent.bind(this)
-    //     });
-        
-    //     if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
-    //       console.log('✅ Phi3 provided response for question');
-    //       return {
-    //         success: true,
-    //         response: phi3Result.result.response,
-    //         handledBy: 'phi3_question_handler',
-    //         method: 'phi3_response',
-    //         confidence: intentResult.confidence,
-    //         timestamp: new Date().toISOString()
-    //       };
-    //     }
-    //   } catch (phi3Error) {
-    //     console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
-    //   }
-      
-    //   // Fallback to generic responses if Phi3 fails
-    //   const responses = [
-    //     'That\'s an interesting question. I\'m currently running in local mode with limited capabilities.',
-    //     'I understand you\'re asking about that. My local processing is somewhat limited right now.',
-    //     'I see what you\'re asking. In local mode, I can help with basic tasks and information storage.',
-    //     'That\'s a good question. I\'m operating locally right now, so my responses may be more basic.'
-    //   ];
-      
-    //   const baseResponse = responses[Math.floor(Math.random() * responses.length)];
-      
-    //   // Add helpful suggestions based on what we can do locally
-    //   const suggestions = [
-    //     'I can help you store and retrieve information, though.',
-    //     'Feel free to ask me to remember things for you.',
-    //     'I can take notes and help you recall information later.',
-    //     'Try asking me to remember something or recall what you\'ve told me.'
-    //   ];
-      
-    //   const suggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
-    //   const fullResponse = `${baseResponse} ${suggestion}`;
-      
-    //   return {
-    //     success: true,
-    //     response: fullResponse,
-    //     handledBy: 'local_question_handler',
-    //     method: 'local_fallback',
-    //     confidence: intentResult.confidence,
-    //     timestamp: new Date().toISOString()
-    //   };
-      
-    // } catch (error) {
-    //   console.error('❌ Local question handling failed:', error);
-    //   return {
-    //     success: true,
-    //     response: 'I\'m here to help, though I\'m running in a limited local mode right now.',
-    //     handledBy: 'fallback',
-    //     method: 'question_error',
-    //     timestamp: new Date().toISOString()
-    //   };
-    // }
   }
 
   /**
