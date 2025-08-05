@@ -160,19 +160,7 @@ const AGENT_FORMAT = {
                 
                 // Convert to base64
                 const base64Data = screenshotBuffer.toString('base64');
-                screenshotData = `data:image/png;base64,${base64Data}`;
-                
-                // Restore only the specific windows that were hidden
-                if (context.showAllWindows && hiddenWindowsResult?.windowsInfo) {
-                  console.log('👁️ Restoring previously hidden ThinkDrop AI windows...');
-                  const restoreResult = await context.showAllWindows(hiddenWindowsResult.windowsInfo);
-                  console.log(`🔍 Restored ${restoreResult.restoredWindows} windows after screenshot`);
-                } else if (context.showAllWindows) {
-                  console.log('👁️ Restoring ThinkDrop AI windows (fallback)...');
-                  await context.showAllWindows();
-                } else {
-                  console.log('⚠️ showAllWindows not available, windows may remain hidden');
-                }
+                screenshotData = `data:image/png;base64,${base64Data}`;                
                 
                 console.log('📸 Screenshot captured successfully (UI elements excluded)');
               } catch (screenshotError) {

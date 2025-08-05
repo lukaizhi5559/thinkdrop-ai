@@ -9,8 +9,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showOverlay: () => ipcRenderer.invoke('show-overlay'),
   
   // Global visibility controls
-  hideAllWindows: () => ipcRenderer.invoke('hide-all-windows'),
-  showAllWindows: () => ipcRenderer.invoke('show-all-windows'),
   getGlobalVisibility: () => ipcRenderer.invoke('get-global-visibility'),
   
   // Chat window controls

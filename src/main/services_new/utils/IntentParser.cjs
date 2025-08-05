@@ -1,21 +1,37 @@
 class NaturalLanguageIntentParser {
     constructor() {
       this.embedder = null;
+      this.zeroShotClassifier = null;
+      this.nerClassifier = null;
       this.seedEmbeddings = null;
       this.isEmbeddingReady = false;
+      this.isZeroShotReady = false;
+      this.isNerReady = false;
       
       this.intentPatterns = {
         memory_store: [
           /\b(remember|store|save|keep track of|jot down|log|record|note down)\b/i,
           /\b(remind me (?:to|about)|set a reminder)\b/i,
           /\b(my|our|the) (appointment|meeting|schedule|event|plan|task)\b/i,
-          /\b(don't forget|make a note|write this down|save this)\b/i
+          /\b(don't forget|make a note|write this down|save this)\b/i,
+          /\b(I have|I've got|I'm scheduled for)\s+(an?\s+)?(appointment|meeting|event|call)\b/i,
+          // More specific pattern - only match when it's clearly stating they have something
+          /^\s*(I have|I've got)\s+(an?\s+)?(appointment|meeting|event|call)\s+.*(today|tomorrow|this week|next week|on|at)\b/i
         ],
         memory_retrieve: [
           /\b(what did I|do you remember|recall|tell me what|what was)\b/i,
           /\b(when is|where is|show me|find my)\b/i,
           /\b(what's my next|did I forget|remind me what)\b/i,
-          /\b(what's on my|check my|look up my)\b/i
+          /\b(what's on my|check my|look up my)\b/i,
+          /\b(what do I have|what have I got|what's happening|what's going on)\b/i,
+          /\b(my schedule|my calendar|my appointments|my plans)\b/i,
+          /\b(today|tomorrow|this week|next week).*\b(schedule|plans|appointments)\b/i,
+          /\b(going on|happening).*\b(today|tomorrow|this week|next week)\b/i,
+          /\bwhat do I have.*(today|tomorrow|this week|next week|tonight|this morning|this afternoon|this evening)\b/i,
+          /\bwhat.*(going on|happening|planned|scheduled).*(today|tomorrow|this week|next week)\b/i,
+          // Questions about appointments - who/what/when/where questions
+          /\b(who is|what is|when is|where is).*(appointment|appt|meeting|event)\b/i,
+          /\b(appointment|appt|meeting|event).*(with who|it's with|who's it with)\b/i
         ],
         command: [
           /\b(take a screenshot|capture|screenshot|snap|take a picture|take a photo|take a snap)\b/i,
@@ -26,15 +42,18 @@ class NaturalLanguageIntentParser {
         ],
         question: [
           /\b(what is|how is|why is|when is|where is|who is|which is)\b/i,
+          // Contractions
+          /\b(what's|how's|why's|when's|where's|who's|which's)\b/i,
           /\b(tell me about|what's|how do I|why does|where can|how can I)\b/i,
           /\b(explain|help with|tutorial|example|code example)\b/i,
           /\bare you (able|capable|good|fast|better|designed|built|trained)\b/i,
           /\bdo you (support|have|offer|provide|know|understand)\b/i,
-          /^\s*(what|how|why|when|where|who|which)\b/i,
           /\bhow many\b/i,
           /\bhow much\b/i,
           /\bcount.*in\b/i,
-          /\bnumber of\b/i
+          /\bnumber of\b/i,
+          // More flexible pattern for question starters
+          /^\s*(what|how|why|when|where|who|which)['s]*\s+(is|are|does|do|can|will|would|should|could|the)\b/i
         ],
         greeting: [
           /^\s*(hi|hello|hey)\s*[!.?]*\s*$/i,
@@ -44,24 +63,6 @@ class NaturalLanguageIntentParser {
         ]
       };
       
-      // this.entityPatterns = {
-      //   datetime: /\b(?:\d{1,2}:\d{2}(?:am|pm)?|\d{1,2}(?:am|pm)|\b(?:tomorrow|today|yesterday|next week|next month|this week|this weekend|in \d+ (?:days|hours|minutes))\b|\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b)\b/gi,
-      
-      //   person: /\b(?:Dr\.|Mr\.|Mrs\.|Ms\.|Prof\.)?\s*[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?\b/g,
-      
-      //   location: /\b(?:office|home|downtown|clinic|hospital|school|library|cafe|airport|station|park|city|building|room \d+|[A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\b/gi,
-      
-      //   event: /\b(?:appointment|meeting|call|interview|lunch|dinner|conference|webinar|standup|demo|presentation|workshop|check-in|review)\b/gi,
-      
-      //   contact: /\b(?:\+?\d{1,2}\s*[\-\.]?\s*\(?\d{3}\)?[\-\.]?\s*\d{3}[\-\.]?\s*\d{4}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})\b/g,
-      
-      //   capability: /\b(?:semantic search|search|memory|memorize|store|save|screenshot|capture|screen|desktop|display|recognize|detect|track|code|coding|programming|javascript|typescript|python|react|svelte|vue|angular|automation|workflow|agent|intent)\b/gi,
-      
-      //   technology: /\b(?:AI|LLM|GPT|embedding|vector|transformer|neural network|machine learning|deep learning|NLP|ollama|phi3|chatbot|language model|duckdb|pgvector|sql|json|yaml|API|CLI|OCR)\b/gi,
-      
-      //   action: /\b(?:create|generate|build|make|edit|update|delete|remove|list|show|display|explain|describe|define|help|assist|sum(?:marize)?|analyze|review|plan|schedule|organize|find|search|remind)\b/gi,
-      // };
-  
       this.entityPatterns = {
         datetime: /\b(?:\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:am|pm|AM|PM))?|\d{1,2}(?:\s*(?:am|pm|AM|PM))|(?:tomorrow|today|yesterday|tonight|this\s+(?:morning|afternoon|evening|night))|(?:next|last|this)\s+(?:week|month|year|weekend|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|in\s+\d+\s+(?:days?|hours?|minutes?|weeks?|months?|years?)|\d+\s+(?:days?|hours?|minutes?|weeks?|months?|years?)\s+(?:ago|from\s+now)|(?:mon|tue|wed|thu|fri|sat|sun)(?:day)?s?|\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}|(?:january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:,\s*\d{4})?|\d{1,2}(?:st|nd|rd|th)\s+(?:of\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)|(?:at\s+)?(?:noon|midnight|dawn|dusk|sunrise|sunset)|(?:early|late)\s+(?:morning|afternoon|evening)|(?:end|beginning|start)\s+of\s+(?:week|month|year))\b/gi,
         person: /\b(?:(?:Dr\.?|Mr\.?|Mrs\.?|Ms\.?|Miss|Prof\.?|Professor|Sir|Madam|Captain|Colonel|Major|General)\s*[A-Z][a-z]+(?:\s+[A-Z][a-z']+)*|[A-Z][a-z']+(?:\s+[A-Z][a-z']+)+|(?:John|Jane|Michael|Sarah|David|Lisa|Robert|Mary|James|Jennifer|William|Elizabeth|Richard|Patricia|Charles|Barbara|Thomas|Susan|Christopher|Jessica|Daniel|Karen|Matthew|Nancy|Anthony|Mark|Betty|Donald|Helen|Steven|Sandra|Paul|Donna|Andrew|Carol|Joshua|Ruth|Kenneth|Sharon|Kevin|Michelle|Brian|Laura|George|Edward|Kimberly|Ronald|Timothy|Dorothy|Jason|Amy|Jeffrey|Angela|Ryan|Jacob|Brenda|Gary|Emma|Nicholas|Olivia|Eric|Cynthia|Jonathan|Marie))\b/g,
@@ -430,38 +431,88 @@ class NaturalLanguageIntentParser {
         ]
       };
       
-      // Initialize embeddings asynchronously
-      this.initializeEmbeddings();
+      // Note: Embeddings will be initialized explicitly via initializeEmbeddings()
+      // No automatic initialization to avoid timing issues
     }
     
     async initializeEmbeddings() {
-      if (this.embedder) {
+      if (this.embedder && this.zeroShotClassifier && this.nerClassifier) {
         return; // Already initialized
       }
       
       try {
-        console.log('🤖 Initializing embedding model for intent classification...');
+        console.log('🤖 Initializing transformer models for intent classification...');
         
         // Use dynamic import for ES modules in Electron with proper callback
         const transformers = await import('@xenova/transformers');
         
+        // Initialize embedding model for semantic search
         this.embedder = await transformers.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
           quantized: true,
           device: 'cpu',
-          progress_callback: null // Explicitly set to null to avoid callback issues
+          progress_callback: null
+        });
+        
+        // Skip zero-shot classification - using pattern + semantic hybrid approach instead
+        console.log('🚀 Skipping zero-shot classifier - using hybrid pattern+semantic approach');
+        this.zeroShotClassifier = null;
+        
+        // Initialize NER model for entity extraction
+        console.log('🏷️ Initializing NER entity classifier...');
+        this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/bert-base-NER', {
+          quantized: true,
+          device: 'cpu',
+          progress_callback: null
         });
         
         // Pre-compute embeddings for seed examples
         await this.precomputeSeedEmbeddings();
         
-        console.log('✅ Embedding model initialized successfully');
+        console.log('✅ All transformer models initialized successfully');
         this.isEmbeddingReady = true;
+        this.isZeroShotReady = false; // Disabled - using hybrid approach instead
+        this.isNerReady = true;
         
       } catch (error) {
-        console.warn('⚠️ Failed to initialize embedding model:', error.message);
-        console.log('📝 Falling back to word overlap similarity');
+        console.warn('⚠️ Failed to initialize transformer models:', error.message);
+        console.log('📝 Falling back to pattern matching and word overlap similarity');
         this.embedder = null;
+        this.zeroShotClassifier = null;
+        this.nerClassifier = null;
         this.isEmbeddingReady = false;
+        this.isZeroShotReady = false;
+        this.isNerReady = false;
+      }
+    }
+    
+    async precomputeSeedEmbeddings() {
+      if (!this.embedder) {
+        console.warn('⚠️ No embedder available for precomputing seed embeddings');
+        return;
+      }
+      
+      try {
+        console.log('🔄 Precomputing seed embeddings...');
+        this.seedEmbeddings = {};
+        
+        for (const [intent, examples] of Object.entries(this.seedExamples)) {
+          this.seedEmbeddings[intent] = [];
+          
+          for (const example of examples.slice(0, 5)) { // Limit to first 5 examples for performance
+            try {
+              const embedding = await this.embedder(example, { pooling: 'mean', normalize: true });
+              this.seedEmbeddings[intent].push(Array.from(embedding.data));
+            } catch (error) {
+              console.warn(`⚠️ Failed to compute embedding for example: ${example.substring(0, 30)}...`);
+            }
+          }
+        }
+        
+        console.log('✅ Seed embeddings precomputed successfully');
+        
+      } catch (error) {
+        console.error('❌ Failed to precompute seed embeddings:', error);
+        this.seedEmbeddings = null;
       }
     }
     
@@ -474,7 +525,7 @@ class NaturalLanguageIntentParser {
         
         // Step 2: Extract entities from both texts
         console.log('🎯 About to extract entities from message:', originalMessage);
-        const entities = this.extractEntities(responseText, originalMessage);
+        const entities = await this.extractEntities(responseText, originalMessage);
         console.log('🎯 Extracted entities result:', entities);
         
         // Step 3: Determine boolean flags
@@ -483,8 +534,9 @@ class NaturalLanguageIntentParser {
         // Step 4: Generate suggested response
         const suggestedResponse = this.generateSuggestedResponse(responseText, originalMessage, intentResult.intent);
         
-        // Step 5: Check if clarification is needed (lowered threshold to avoid rejecting valid responses)
-        if (intentResult.confidence < 0.5) {
+        // Step 5: Check if clarification is needed (lowered threshold for zero-shot results)
+        const confidenceThreshold = intentResult.reasoning?.includes('Zero-shot') ? 0.1 : 0.5;
+        if (intentResult.confidence < confidenceThreshold) {
           return {
             needsClarification: true,
             clarificationPrompt: this.generateClarificationPrompt(intentResult),
@@ -542,11 +594,157 @@ class NaturalLanguageIntentParser {
     
     async classifyIntent(responseText, originalMessage) {
       const combinedText = (responseText + ' ' + originalMessage).toLowerCase();
+      const originalLower = originalMessage.toLowerCase();
       
-      // Layer 1: Enhanced Pattern Matching with Scoring
+      console.log('🎯 Starting hybrid intent classification...');
+      
+      // 🎯 LAYER 1: Pattern-based classification (most reliable for common intents)
+      // First check original message only (more reliable for questions)
+      const originalPatternScores = this.calculatePatternScores(originalLower);
+      const highestOriginalScore = Math.max(...Object.values(originalPatternScores));
+      
+      if (highestOriginalScore > 0) {
+        const bestOriginalIntent = Object.entries(originalPatternScores)
+          .reduce((a, b) => originalPatternScores[a[0]] > originalPatternScores[b[0]] ? a : b)[0];
+        
+        console.log('✅ High-confidence pattern match found in original message:', bestOriginalIntent);
+        return {
+          intent: bestOriginalIntent,
+          confidence: 0.9,
+          reasoning: `Pattern match in original message with score: ${originalPatternScores[bestOriginalIntent]}`,
+          possibleIntents: [bestOriginalIntent],
+          allIntents: [{
+            intent: bestOriginalIntent,
+            confidence: 0.9,
+            reasoning: 'Pattern-based classification (original message)'
+          }]
+        };
+      }
+      
+      // Fallback to combined text for context-dependent patterns
+      const hybridPatternScores = this.calculatePatternScores(combinedText);
+      const highestPatternScore = Math.max(...Object.values(hybridPatternScores));
+      
+      if (highestPatternScore > 0) {
+        const bestPatternIntent = Object.entries(hybridPatternScores)
+          .reduce((a, b) => hybridPatternScores[a[0]] > hybridPatternScores[b[0]] ? a : b)[0];
+        
+        console.log('✅ High-confidence pattern match found in combined text:', bestPatternIntent);
+        return {
+          intent: bestPatternIntent,
+          confidence: 0.9,
+          reasoning: `Pattern match with score: ${hybridPatternScores[bestPatternIntent]}`,
+          possibleIntents: [bestPatternIntent],
+          allIntents: [{
+            intent: bestPatternIntent,
+            confidence: 0.9,
+            reasoning: 'Pattern-based classification'
+          }]
+        };
+      }
+      
+      // 🎯 LAYER 2: Semantic similarity with seed examples (good for variations)
+      if (this.isEmbeddingReady && this.embedder) {
+        const semanticScores = await this.calculateSemanticScores(originalMessage);
+        const highestSemanticScore = Math.max(...Object.values(semanticScores));
+        
+        if (highestSemanticScore > 0.7) {
+          const bestSemanticIntent = Object.entries(semanticScores)
+            .reduce((a, b) => semanticScores[a[0]] > semanticScores[b[0]] ? a : b)[0];
+          
+          console.log('✅ High-confidence semantic match found:', bestSemanticIntent);
+          return {
+            intent: bestSemanticIntent,
+            confidence: highestSemanticScore,
+            reasoning: `Semantic similarity with score: ${highestSemanticScore.toFixed(3)}`,
+            possibleIntents: [bestSemanticIntent],
+            allIntents: [{
+              intent: bestSemanticIntent,
+              confidence: highestSemanticScore,
+              reasoning: 'Semantic similarity classification'
+            }]
+          };
+        }
+      }
+      
+      // 🎯 LAYER 3: Zero-shot classification (disabled - using pattern+semantic only)
+      if (false && this.isZeroShotReady && this.zeroShotClassifier) {
+        try {
+          console.log('🎯 Using zero-shot transformer classification...');
+          
+          // More distinct candidate labels for better classification
+          const candidateLabels = [
+            'I want to save this new information',
+            'I want to find my saved information', 
+            'I want to update saved information',
+            'I want to delete saved information',
+            'I want you to do something',
+            'I have a question',
+            'I am greeting you',
+            'I need help',
+            'I want creative content',
+            'I want analysis of data',
+            'I want calculations',
+            'I want to know about your features'
+          ];
+          
+          // Map descriptive labels back to intent codes
+          const labelMap = {
+            'I want to save this new information': 'memory_store',
+            'I want to find my saved information': 'memory_retrieve',
+            'I want to update saved information': 'memory_update',
+            'I want to delete saved information': 'memory_delete',
+            'I want you to do something': 'command',
+            'I have a question': 'question',
+            'I am greeting you': 'greeting',
+            'I need help': 'help',
+            'I want creative content': 'creative',
+            'I want analysis of data': 'analysis',
+            'I want calculations': 'calculation',
+            'I want to know about your features': 'system_info'
+          };
+          
+          const result = await this.zeroShotClassifier(originalMessage, candidateLabels);
+          
+          console.log('✅ Zero-shot classification result:', result);
+          
+          // Handle zero-shot classification result format
+          const labels = result.labels;
+          const scores = result.scores;
+          
+          console.log('✅ Processed zero-shot results:', {
+            labels: labels.slice(0, 3),
+            scores: scores.slice(0, 3)
+          });
+          
+          // Build multiple intents array with confidence scores
+          const allIntents = labels.slice(0, 3).map((label, index) => ({
+            intent: labelMap[label] || label,
+            confidence: scores[index],
+            reasoning: `Zero-shot transformer classification`
+          }));
+          
+          return {
+            intent: labelMap[result.labels[0]] || result.labels[0],
+            confidence: result.scores[0],
+            reasoning: `Zero-shot transformer: ${result.scores[0].toFixed(3)}`,
+            possibleIntents: result.labels.slice(0, 3).map(label => labelMap[label] || label),
+            allIntents: allIntents
+          };
+          
+        } catch (error) {
+          console.warn('⚠️ Zero-shot classification failed:', error.message);
+          console.log('🔄 Falling back to pattern + semantic approach...');
+        }
+      }
+      
+      // 🎯 LAYER 3: Enhanced Pattern + Semantic Combination (primary fallback)
+      console.log('🎯 Using enhanced pattern + semantic combination...');
+      
+      // Enhanced Pattern Matching with Scoring
       const patternScores = this.calculatePatternScores(combinedText);
       
-      // Layer 2: Semantic Similarity (true embedding-based approach)
+      // Semantic Similarity (embedding-based approach)
       const semanticScores = await this.calculateSemanticScores(originalMessage);
       
       // Combine scores with weighted approach
@@ -585,10 +783,12 @@ class NaturalLanguageIntentParser {
         for (const pattern of patterns) {
           if (pattern.test(combinedText)) {
             scores[intent] += 1;
+            console.log(`🎯 [PATTERN] Matched ${intent}: ${pattern} in "${combinedText}"`);
           }
         }
       }
       
+      console.log(`🎯 [PATTERN] Final scores:`, scores);
       return scores;
     }
     
@@ -779,20 +979,147 @@ class NaturalLanguageIntentParser {
       return confidence;
     }
     
-    extractEntities(responseText, originalMessage) {
-      const entities = [];
-      
-      // Focus on the original message for entity extraction, not the analysis
+    async extractEntities(responseText, originalMessage) {
       const textToAnalyze = originalMessage;
       console.log('🔍 Entity extraction - analyzing text:', textToAnalyze);
       
-      // Extract different types of entities from the original user message only
+      // 🔍 DEBUG: Check NER readiness
+      console.log('🔍 DEBUG: NER readiness check:', {
+        isNerReady: this.isNerReady,
+        hasNerClassifier: !!this.nerClassifier
+      });
+      
+      let allEntities = [];
+      
+      // 🏷️ LAYER 1: Try NER Transformer (most accurate for complex entities)
+      if (this.isNerReady && this.nerClassifier) {
+        try {
+          console.log('🏷️ Using NER transformer for entity extraction...');
+          
+          const nerResults = await this.nerClassifier(textToAnalyze);
+          
+          if (nerResults && nerResults.length > 0) {
+            console.log('✅ NER transformer found entities:', nerResults.length);
+            
+            // Process NER results and convert to our format
+            const transformerEntities = this.processNerResults(nerResults, textToAnalyze);
+            
+            if (transformerEntities.length > 0) {
+              console.log('✅ NER transformer results:', transformerEntities);
+              allEntities.push(...transformerEntities);
+            }
+          }
+          
+        } catch (error) {
+          console.warn('⚠️ NER transformer failed:', error.message);
+        }
+      }
+      
+      // 🔄 LAYER 2: Enhanced Pattern Matching (good for dates, locations, etc.)
+      console.log('🔄 Using enhanced pattern matching for entities...');
+      const patternEntities = this.extractEntitiesWithPatterns(textToAnalyze);
+      
+      if (patternEntities.length > 0) {
+        console.log('✅ Pattern matching found entities:', patternEntities);
+        allEntities.push(...patternEntities);
+      }
+      
+      // Return combined results if we have any
+      if (allEntities.length > 0) {
+        console.log('✅ Combined entity extraction results:', allEntities);
+        return allEntities;
+      }
+      
+      // ⚡ LAYER 3: Basic Regex Fallback (last resort)
+      console.log('⚡ Using basic regex fallback for entities...');
+      return this.extractEntitiesBasic(textToAnalyze);
+    }
+    
+    processNerResults(nerResults, originalText) {
+      const entities = [];
+      const processedEntities = new Map();
+      
+      // Group consecutive tokens of the same entity type
+      let currentEntity = null;
+      
+      for (const result of nerResults) {
+        const { entity, word, score, start, end } = result;
+        
+        // Skip low-confidence results
+        if (score < 0.7) continue;
+        
+        // Remove B- and I- prefixes from entity labels
+        const cleanEntity = entity.replace(/^[BI]-/, '');
+        
+        // Handle entity grouping (B- starts new entity, I- continues)
+        if (entity.startsWith('B-') || !currentEntity || currentEntity.type !== cleanEntity) {
+          // Save previous entity if exists
+          if (currentEntity) {
+            entities.push({
+              value: currentEntity.text.trim(),
+              type: this.mapNerToOurTypes(currentEntity.type),
+              normalized_value: this.normalizeEntity(currentEntity.text.trim(), this.mapNerToOurTypes(currentEntity.type)),
+              confidence: currentEntity.confidence,
+              source: 'transformer'
+            });
+          }
+          
+          // Start new entity
+          currentEntity = {
+            type: cleanEntity,
+            text: word.replace(/^##/, ''), // Remove BERT subword markers
+            confidence: score,
+            start: start,
+            end: end
+          };
+        } else {
+          // Continue current entity
+          currentEntity.text += word.replace(/^##/, '');
+          currentEntity.confidence = Math.min(currentEntity.confidence, score);
+          currentEntity.end = end;
+        }
+      }
+      
+      // Don't forget the last entity
+      if (currentEntity) {
+        entities.push({
+          value: currentEntity.text.trim(),
+          type: this.mapNerToOurTypes(currentEntity.type),
+          normalized_value: this.normalizeEntity(currentEntity.text.trim(), this.mapNerToOurTypes(currentEntity.type)),
+          confidence: currentEntity.confidence,
+          source: 'transformer'
+        });
+      }
+      
+      return entities;
+    }
+    
+    mapNerToOurTypes(nerType) {
+      const mapping = {
+        'PER': 'person',
+        'PERSON': 'person',
+        'LOC': 'location', 
+        'LOCATION': 'location',
+        'ORG': 'organization',
+        'ORGANIZATION': 'organization',
+        'MISC': 'misc',
+        'DATE': 'datetime',
+        'TIME': 'datetime'
+      };
+      
+      return mapping[nerType.toUpperCase()] || nerType.toLowerCase();
+    }
+    
+    extractEntitiesWithPatterns(textToAnalyze) {
+      const entities = [];
+      
+      // Enhanced pattern matching with better regex
       for (const [entityType, pattern] of Object.entries(this.entityPatterns)) {
         const matches = textToAnalyze.match(pattern);
         if (matches) {
           for (const match of matches) {
             const cleanMatch = match.trim();
-            // Filter out common parsing artifacts and short meaningless matches
+            // Filter out artifacts
             if (cleanMatch.length > 2 && 
                 !cleanMatch.includes('Intent') && 
                 !cleanMatch.includes('Type') &&
@@ -801,9 +1128,39 @@ class NaturalLanguageIntentParser {
               entities.push({
                 value: cleanMatch,
                 type: entityType,
-                normalized_value: this.normalizeEntity(cleanMatch, entityType)
+                normalized_value: this.normalizeEntity(cleanMatch, entityType),
+                confidence: 0.8,
+                source: 'pattern'
               });
             }
+          }
+        }
+      }
+      
+      return entities;
+    }
+    
+    extractEntitiesBasic(textToAnalyze) {
+      const entities = [];
+      
+      // Very basic fallback patterns
+      const basicPatterns = {
+        datetime: /\b(today|tomorrow|yesterday|next week|this week|\d{1,2}:\d{2}|\d{1,2}pm|\d{1,2}am)\b/gi,
+        person: /\b[A-Z][a-z]+ [A-Z][a-z]+\b/g, // Simple "First Last" pattern
+        location: /\b(at|in) ([A-Z][a-z]+ ?)+\b/g
+      };
+      
+      for (const [entityType, pattern] of Object.entries(basicPatterns)) {
+        const matches = textToAnalyze.match(pattern);
+        if (matches) {
+          for (const match of matches) {
+            entities.push({
+              value: match.trim(),
+              type: entityType,
+              normalized_value: this.normalizeEntity(match.trim(), entityType),
+              confidence: 0.5,
+              source: 'basic'
+            });
           }
         }
       }
@@ -979,19 +1336,29 @@ class NaturalLanguageIntentParser {
     }
     
     generateSuggestedResponse(responseText, originalMessage, intent) {
-      if (!responseText || typeof responseText !== 'string') {
-        return this.getFallbackResponse(intent);
+    if (!responseText || typeof responseText !== 'string') {
+      return this.getFallbackResponse(intent);
+    }
+    
+    // For memory storage intents, return appropriate acknowledgment (not LLM response)
+    if (intent === 'memory_store') {
+      return "I'll remember that for you.";
+    }
+    
+    // For memory retrieval, wait for actual search results (no immediate response)
+    if (intent === 'memory_retrieve') {
+      return null; // Force UI to wait for background orchestration result
+    }
+    
+    // For questions and commands, prioritize using the actual LLM response
+    if (intent !== 'greeting') {
+      // Clean up the response text and use it directly if it's substantial
+      const cleanedResponse = responseText.trim();
+      if (cleanedResponse.length > 10) {
+        // Truncate if too long (keep first 200 chars for conciseness)
+        return cleanedResponse;
       }
-      
-      // For questions and commands, prioritize using the actual LLM response
-      if (intent !== 'greeting') {
-        // Clean up the response text and use it directly if it's substantial
-        const cleanedResponse = responseText.trim();
-        if (cleanedResponse.length > 10) {
-          // Truncate if too long (keep first 200 chars for conciseness)
-          return cleanedResponse;
-        }
-      }
+    }  
       
       // Extract any direct answer from the Phi3 response
       const lines = responseText.split('\n').filter(line => line.trim().length > 0);

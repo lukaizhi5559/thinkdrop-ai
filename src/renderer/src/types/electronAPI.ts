@@ -6,7 +6,6 @@ declare global {
       hideOverlay: () => Promise<void>;
       showOverlay: () => Promise<void>;
       hideAllWindows: () => Promise<void>;
-      showAllWindows: () => Promise<void>;
       getGlobalVisibility: () => Promise<boolean>;
       toggleChat: () => Promise<void>;
       showChat: () => Promise<void>;

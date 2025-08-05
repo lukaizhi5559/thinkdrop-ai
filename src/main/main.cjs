@@ -40,6 +40,7 @@ const { initializeIPCHandlers } = require('./handlers/ipc-handlers.cjs');
 const { setupMemoryHandlers } = require('./handlers/ipc-handlers-memory.cjs');
 const { initializeHandlers: initializeHandlersPart3 } = require('./handlers/ipc-handlers-screenshot.cjs');
 const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-orchestration.cjs');
+const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -335,10 +336,18 @@ function setupIPCHandlers() {
     windowState,
     windows
   });
+
+  // Initialize local LLM handlers
+  initializeLocalLLMHandlers({
+    ipcMain,
+    coreAgent,
+    windowState,
+    windows
+  });
   
   // Setup orchestration workflow handlers
   const { broadcastOrchestrationUpdate: broadcastWorkflowUpdate, sendClarificationRequest: sendWorkflowClarification } = 
-    setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);
+    setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
   
   // Store the broadcast and clarification functions for use elsewhere
   global.broadcastOrchestrationUpdate = broadcastWorkflowUpdate || broadcastUpdate;

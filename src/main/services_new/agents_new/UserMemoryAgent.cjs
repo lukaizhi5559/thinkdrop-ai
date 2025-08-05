@@ -131,8 +131,52 @@ const AGENT_FORMAT = {
                   await createMemoryTable();
                 } else {
                   console.log('Memory table exists, verifying schema...');
-                  // For now, skip schema verification to avoid more this binding issues
-                  console.log('Schema verification skipped for bootstrap');
+                  // Check if embedding column exists and add it if missing
+                  try {
+                    const columnCheckQuery = `PRAGMA table_info(memory)`;
+                    const columns = await new Promise((resolve, reject) => {
+                      if (typeof this.connection.query === 'function') {
+                        this.connection.query(columnCheckQuery, [], (err, result) => {
+                          if (err) reject(err);
+                          else resolve(result);
+                        });
+                      } else if (typeof this.connection.all === 'function') {
+                        this.connection.all(columnCheckQuery, (err, result) => {
+                          if (err) reject(err);
+                          else resolve(result);
+                        });
+                      } else {
+                        reject(new Error('Unsupported database connection interface'));
+                      }
+                    });
+                    const hasEmbeddingColumn = columns.some(col => col.name === 'embedding');
+                    
+                    if (!hasEmbeddingColumn) {
+                      console.log('[MIGRATION] Adding embedding column to memory table...');
+                      const addColumnSQL = `ALTER TABLE memory ADD COLUMN embedding FLOAT[384]`;
+                      await new Promise((resolve, reject) => {
+                        if (typeof this.connection.run === 'function') {
+                          this.connection.run(addColumnSQL, [], (err) => {
+                            if (err) reject(err);
+                            else resolve();
+                          });
+                        } else if (typeof this.connection.query === 'function') {
+                          this.connection.query(addColumnSQL, [], (err, result) => {
+                            if (err) reject(err);
+                            else resolve(result);
+                          });
+                        } else {
+                          reject(new Error('Unsupported database connection interface'));
+                        }
+                      });
+                      console.log('[SUCCESS] Added embedding column to memory table');
+                    } else {
+                      console.log('[INFO] Embedding column already exists');
+                    }
+                  } catch (migrationError) {
+                    console.warn('[WARN] Schema migration failed:', migrationError.message);
+                    // Continue anyway - the column might already exist
+                  }
                 }
                 
               } catch (error) {
@@ -154,6 +198,7 @@ const AGENT_FORMAT = {
                   metadata TEXT,
                   screenshot TEXT,
                   extracted_text TEXT,
+                  embedding FLOAT[384],
                   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                   synced_to_backend BOOLEAN DEFAULT false,
@@ -623,6 +668,7 @@ const AGENT_FORMAT = {
               metadata TEXT,
               screenshot TEXT,
               extracted_text TEXT,
+              embedding FLOAT[384],
               created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
               synced_to_backend BOOLEAN DEFAULT false,
@@ -909,7 +955,6 @@ const AGENT_FORMAT = {
             const storeData = params.data || params;
             const memoryId = 'mem_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
             const now = new Date().toISOString();
-            console.log('SUGGESTED RESPONSE:', storeData, params)
             
             // Extract data from the intent classification payload
             let sourceText = storeData.sourceText || params.key || 'Unknown';
@@ -1085,31 +1130,87 @@ const AGENT_FORMAT = {
               console.log('[DEBUG] Extracted text preview:', extractedText.substring(0, 100) + '...');
             }
             
-            const insertSQL = `INSERT INTO memory (
-              id, user_id, type, primary_intent, requires_memory_access, 
-              suggested_response, source_text, metadata, screenshot, extracted_text,
-              created_at, updated_at, synced_to_backend, backend_memory_id, 
-              sync_attempts, last_sync_attempt
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+            // Generate embedding for the source text
+            let embedding = null;
+            if (context?.executeAgent) {
+              try {
+                const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+                  action: 'generate-embedding',
+                  text: sourceText
+                }, context);
+                
+                if (embeddingResult.success && embeddingResult.result?.embedding) {
+                  embedding = embeddingResult.result.embedding; // Store as raw array for FLOAT[384] column
+                  console.log(`[SUCCESS] Generated embedding for memory storage`);
+                } else {
+                  console.warn(`[WARN] Failed to generate embedding for memory:`, embeddingResult.error);
+                }
+              } catch (embeddingError) {
+                console.warn(`[WARN] Error generating embedding for memory:`, embeddingError.message);
+              }
+            }
             
-            const values = [
-              memoryId,
-              'default_user', // TODO: Get actual user ID from context
-              'intent_classification',
-              primaryIntent,
-              metadata.requiresMemoryAccess,
-              suggestedResponse,
-              sourceText,
-              JSON.stringify(metadata),
-              screenshot, // Now properly extracted from context/storeData
-              extractedText, // Now properly extracted from context/storeData
-              now,
-              now,
-              false, // synced_to_backend
-              null, // backend_memory_id
-              0, // sync_attempts
-              null // last_sync_attempt
-            ];
+            // Fix DuckDB embedding storage: Use array literal syntax to prevent string conversion
+            let insertSQL, values;
+            
+            if (embedding && Array.isArray(embedding)) {
+              // Use array literal syntax for embedding to avoid parameter binding conversion to string
+              const embeddingLiteral = `[${embedding.join(',')}]`;
+              insertSQL = `INSERT INTO memory (
+                id, user_id, type, primary_intent, requires_memory_access, 
+                suggested_response, source_text, metadata, screenshot, extracted_text, embedding,
+                created_at, updated_at, synced_to_backend, backend_memory_id, 
+                sync_attempts, last_sync_attempt
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${embeddingLiteral}, ?, ?, ?, ?, ?, ?)`;
+              
+              values = [
+                memoryId,
+                'default_user', // TODO: Get actual user ID from context
+                'intent_classification',
+                primaryIntent,
+                metadata.requiresMemoryAccess,
+                suggestedResponse,
+                sourceText,
+                JSON.stringify(metadata),
+                screenshot, // Now properly extracted from context/storeData
+                extractedText, // Now properly extracted from context/storeData
+                // embedding is now in SQL as literal, not parameter
+                now,
+                now,
+                false, // synced_to_backend
+                null, // backend_memory_id
+                0, // sync_attempts
+                null // last_sync_attempt
+              ];
+            } else {
+              // No embedding available, use NULL
+              insertSQL = `INSERT INTO memory (
+                id, user_id, type, primary_intent, requires_memory_access, 
+                suggested_response, source_text, metadata, screenshot, extracted_text, embedding,
+                created_at, updated_at, synced_to_backend, backend_memory_id, 
+                sync_attempts, last_sync_attempt
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`;
+              
+              values = [
+                memoryId,
+                'default_user', // TODO: Get actual user ID from context
+                'intent_classification',
+                primaryIntent,
+                metadata.requiresMemoryAccess,
+                suggestedResponse,
+                sourceText,
+                JSON.stringify(metadata),
+                screenshot, // Now properly extracted from context/storeData
+                extractedText, // Now properly extracted from context/storeData
+                // embedding is NULL in SQL, not parameter
+                now,
+                now,
+                false, // synced_to_backend
+                null, // backend_memory_id
+                0, // sync_attempts
+                null // last_sync_attempt
+              ];
+            }
             
             try {
               // Get the database manager from context
@@ -1394,10 +1495,11 @@ const AGENT_FORMAT = {
             
           case 'memory-semantic-search':
             // Semantic search memories using embeddings
-            const semanticQuery = params.query || params.searchText;
-            const semanticLimit = params.limit || 3;
-            const timeWindow = params.timeWindow || null; // e.g., '7 days', '1 month'
-            const minSimilarity = params.minSimilarity || 0.3;
+            const semanticQuery = params.query || params.searchText || params.input || params.message;
+            const semanticLimit = params.limit || params.options?.limit || 3;
+            const timeWindow = params.timeWindow || params.options?.timeWindow || null; // e.g., '7 days', '1 month'
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.2; // Optimized threshold for semantic search
+            console.log(`[DEBUG] Using similarity threshold: ${minSimilarity}`);
             
             if (!semanticQuery) {
               throw new Error('Semantic search requires query parameter');
@@ -1408,21 +1510,20 @@ const AGENT_FORMAT = {
               
               // Generate embedding for the search query
               let queryEmbedding = null;
-              if (context?.coreAgent) {
-                const embeddingResult = await context.coreAgent.ask({
-                  agent: 'SemanticEmbeddingAgent',
+              if (context?.executeAgent) {
+                const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
                   action: 'generate-embedding',
                   text: semanticQuery
-                });
+                }, context);
                 
-                if (embeddingResult.success && embeddingResult.embedding) {
-                  queryEmbedding = embeddingResult.embedding;
+                if (embeddingResult.success && embeddingResult.result?.embedding) {
+                  queryEmbedding = embeddingResult.result.embedding;
                   console.log(`[SUCCESS] Generated query embedding with ${queryEmbedding.length} dimensions`);
                 } else {
-                  throw new Error('Failed to generate query embedding: ' + embeddingResult.error);
+                  throw new Error('Failed to generate query embedding: ' + (embeddingResult.error || 'Unknown error'));
                 }
               } else {
-                throw new Error('CoreAgent not available for embedding generation');
+                throw new Error('executeAgent not available for embedding generation');
               }
               
               const database = context.database;
@@ -1432,8 +1533,8 @@ const AGENT_FORMAT = {
               
               // Build SQL query with optional time filtering
               let sql = `
-                SELECT id, backend_memory_id, source_text, suggested_response, intent, 
-                       created_at, updated_at, screenshot_path, ocr_text, metadata, embedding
+                SELECT id, backend_memory_id, source_text, suggested_response, primary_intent, 
+                       created_at, updated_at, screenshot, extracted_text, metadata, embedding
                 FROM memory 
                 WHERE embedding IS NOT NULL
               `;
@@ -1445,7 +1546,7 @@ const AGENT_FORMAT = {
               
               sql += ` ORDER BY created_at DESC`;
               
-              const memories = await database.all(sql, queryParams);
+              const memories = await database.query(sql, queryParams);
               console.log(`[INFO] Found ${memories.length} memories with embeddings`);
               
               if (memories.length === 0) {
@@ -1464,22 +1565,30 @@ const AGENT_FORMAT = {
               
               for (const memory of memories) {
                 try {
-                  const memoryEmbedding = JSON.parse(memory.embedding);
+                  // Handle both raw array (FLOAT[384]) and JSON string (legacy) formats
+                  const memoryEmbedding = Array.isArray(memory.embedding) 
+                    ? memory.embedding 
+                    : JSON.parse(memory.embedding);
                   
                   // Calculate cosine similarity using SemanticEmbeddingAgent
-                  const similarityResult = await context.coreAgent.ask({
-                    agent: 'SemanticEmbeddingAgent',
+                  const similarityResult = await context.executeAgent('SemanticEmbeddingAgent', {
                     action: 'calculate-similarity',
                     embedding1: queryEmbedding,
                     embedding2: memoryEmbedding
-                  });
+                  }, context);
                   
-                  if (similarityResult.success && similarityResult.similarity >= minSimilarity) {
+                  const similarity = similarityResult.result?.similarity || similarityResult.similarity;
+                  console.log(`[DEBUG] Memory "${memory.source_text?.substring(0, 50)}..." similarity: ${similarity} (threshold: ${minSimilarity})`);
+                  
+                  if (similarityResult.success && similarity >= minSimilarity) {
+                    console.log(`[MATCH] Found similar memory with score ${similarity}`);
                     rankedResults.push({
                       ...memory,
-                      similarity: similarityResult.similarity,
+                      similarity: similarity,
                       embedding: undefined // Remove embedding from response to save space
                     });
+                  } else {
+                    console.log(`[NO MATCH] Memory similarity ${similarity} below threshold ${minSimilarity}`);
                   }
                 } catch (error) {
                   console.warn(`[WARN] Failed to calculate similarity for memory ${memory.id}:`, error.message);
@@ -1573,7 +1682,20 @@ const AGENT_FORMAT = {
                 updateValues.push(updateData.type);
               }
               
-              if (updateFields.length === 0) {
+              // Handle embedding updates with array literal syntax to prevent DuckDB conversion errors
+              let embeddingUpdateSQL = '';
+              if (updateData.embedding !== undefined) {
+                if (updateData.embedding && Array.isArray(updateData.embedding)) {
+                  // Use array literal syntax for embedding to avoid parameter binding conversion to string
+                  const embeddingLiteral = `[${updateData.embedding.join(',')}]`;
+                  embeddingUpdateSQL = `, embedding = ${embeddingLiteral}`;
+                } else {
+                  // Set to NULL if embedding is null/undefined
+                  embeddingUpdateSQL = ', embedding = NULL';
+                }
+              }
+              
+              if (updateFields.length === 0 && !embeddingUpdateSQL) {
                 throw new Error('No update fields provided');
               }
               
@@ -1581,7 +1703,7 @@ const AGENT_FORMAT = {
               updateValues.push(now);
               updateValues.push(updateId);
               
-              const updateSQL = `UPDATE memory SET ${updateFields.join(', ')} WHERE id = ?`;
+              const updateSQL = `UPDATE memory SET ${updateFields.join(', ')}${embeddingUpdateSQL} WHERE id = ?`;
               
               await database.run(updateSQL, updateValues);
               console.log(`[SUCCESS] Memory ${updateId} updated successfully`);
@@ -1940,11 +2062,11 @@ const AGENT_FORMAT = {
           backend_memory_id TEXT UNIQUE,
           source_text TEXT,
           suggested_response TEXT,
-          intent TEXT,
+          primary_intent TEXT,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          screenshot_path TEXT,
-          ocr_text TEXT,
+          screenshot TEXT,
+          extracted_text TEXT,
           metadata TEXT,
           embedding FLOAT[384]
         )
@@ -2063,7 +2185,7 @@ const AGENT_FORMAT = {
     async verifyTableSchema(context) {
       try {
         // Test if all required columns exist by running a sample query
-        const testQuery = "SELECT id, backend_memory_id, source_text, suggested_response, intent, created_at, updated_at, screenshot_path, ocr_text, metadata FROM memory LIMIT 1";
+        const testQuery = "SELECT id, backend_memory_id, source_text, suggested_response, primary_intent, created_at, updated_at, screenshot, extracted_text, metadata FROM memory LIMIT 1";
         
         await new Promise((resolve, reject) => {
           this.connection.all(testQuery, (err, rows) => {
@@ -2215,41 +2337,80 @@ const AGENT_FORMAT = {
           const embeddingText = `${key}: ${value}`;
           
           // Try to use SemanticEmbeddingAgent if available in context
-          if (context?.coreAgent) {
+          if (context?.executeAgent) {
             console.log('[INFO] Generating semantic embedding for memory...');
-            const embeddingResult = await context.coreAgent.ask({
-              agent: 'SemanticEmbeddingAgent',
+            
+            const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
               action: 'generate-embedding',
               text: embeddingText
-            });
+            }, context);
             
-            if (embeddingResult.success && embeddingResult.embedding) {
-              embedding = embeddingResult.embedding;
-              console.log(`[SUCCESS] Generated embedding with ${embedding.length} dimensions`);
+            if (embeddingResult.success && embeddingResult.result?.embedding) {
+              embedding = embeddingResult.result.embedding;
+              console.log(`[DEBUG] Embedding type: ${typeof embedding}, isArray: ${Array.isArray(embedding)}`);
+              
+              // Handle case where embedding might be serialized as string
+              if (typeof embedding === 'string') {
+                try {
+                  // Try to parse as comma-separated values
+                  embedding = embedding.split(',').map(val => parseFloat(val.trim()));
+                  console.log(`[DEBUG] Converted string embedding to array with ${embedding.length} dimensions`);
+                } catch (parseError) {
+                  console.error('[ERROR] Failed to parse string embedding:', parseError);
+                  embedding = null;
+                }
+              }
+              
+              if (embedding && Array.isArray(embedding)) {
+                console.log(`[SUCCESS] Generated embedding with ${embedding.length} dimensions`);
+              } else {
+                console.warn('[WARN] Embedding is not a valid array after processing');
+                embedding = null;
+              }
             } else {
-              console.warn('[WARN] Failed to generate embedding:', embeddingResult.error);
+              console.warn('[WARN] Failed to generate embedding:', embeddingResult.error || 'Unknown error');
             }
           } else {
-            console.log('[INFO] CoreAgent not available, storing memory without embedding');
+            console.log('[INFO] executeAgent not available, storing memory without embedding');
           }
         } catch (error) {
           console.warn('[WARN] Embedding generation failed, storing memory without embedding:', error.message);
         }
         
-        const insertSQL = `INSERT INTO memory (backend_memory_id, source_text, suggested_response, intent, created_at, updated_at, screenshot_path, ocr_text, metadata, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+        // For DuckDB FLOAT[384], we need to use array literal syntax
+        let insertSQL, values;
         
-        const values = [
-          memoryId,
-          key,
-          value,
-          'memory_store',
-          now,
-          now,
-          screenshotPath,
-          ocrText,
-          JSON.stringify(metadata),
-          embedding ? JSON.stringify(embedding) : null
-        ];
+        if (embedding && Array.isArray(embedding)) {
+          // Use array literal syntax for DuckDB
+          const embeddingLiteral = `[${embedding.join(',')}]`;
+          insertSQL = `INSERT INTO memory (backend_memory_id, source_text, suggested_response, primary_intent, created_at, updated_at, screenshot, extracted_text, metadata, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${embeddingLiteral})`;
+          values = [
+            memoryId,
+            key,
+            value,
+            'memory_store',
+            now,
+            now,
+            screenshotPath,
+            ocrText,
+            JSON.stringify(metadata)
+          ];
+          console.log(`[DEBUG] Using array literal for embedding with ${embedding.length} dimensions`);
+        } else {
+          insertSQL = `INSERT INTO memory (backend_memory_id, source_text, suggested_response, primary_intent, created_at, updated_at, screenshot, extracted_text, metadata, embedding) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`;
+          values = [
+            memoryId,
+            key,
+            value,
+            'memory_store',
+            now,
+            now,
+            screenshotPath,
+            ocrText,
+            JSON.stringify(metadata)
+          ];
+          console.log('[DEBUG] No embedding available, using NULL');
+        }
         
         await new Promise((resolve, reject) => {
           // Check if it's a DatabaseManager-style connection (has .run method)
@@ -2361,11 +2522,11 @@ const AGENT_FORMAT = {
           memoryId: result.backend_memory_id,
           key: result.source_text,
           value: result.suggested_response,
-          intent: result.intent,
+          intent: result.primary_intent,
           createdAt: result.created_at,
           updatedAt: result.updated_at,
-          screenshotPath: result.screenshot_path,
-          ocrText: result.ocr_text,
+          screenshotPath: result.screenshot,
+          ocrText: result.extracted_text,
           metadata: result.metadata ? JSON.parse(result.metadata) : {}
         };
         
@@ -2388,7 +2549,7 @@ const AGENT_FORMAT = {
   
         console.log('Searching memories for: "' + query + '"');
         
-        const searchQuery = "SELECT * FROM memory WHERE source_text LIKE ? OR suggested_response LIKE ? OR ocr_text LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?";
+        const searchQuery = "SELECT * FROM memory WHERE source_text LIKE ? OR suggested_response LIKE ? OR extracted_text LIKE ? ORDER BY created_at DESC LIMIT ? OFFSET ?";
         const searchParams = [`%${query}%`, `%${query}%`, `%${query}%`, limit, offset];
         
         // Use connection from context if available, otherwise use this.db
@@ -2419,11 +2580,11 @@ const AGENT_FORMAT = {
           id: row.backend_memory_id,
           sourceText: row.source_text,
           suggestedResponse: row.suggested_response,
-          intent: row.intent,
+          intent: row.primary_intent,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
-          screenshotPath: row.screenshot_path,
-          ocrText: row.ocr_text,
+          screenshotPath: row.screenshot,
+          ocrText: row.extracted_text,
           metadata: row.metadata ? JSON.parse(row.metadata) : {}
         }));
   
@@ -2568,11 +2729,11 @@ const AGENT_FORMAT = {
           id: row.backend_memory_id,
           sourceText: row.source_text,
           suggestedResponse: row.suggested_response,
-          intent: row.intent,
+          intent: row.primary_intent,
           createdAt: row.created_at,
           updatedAt: row.updated_at,
-          screenshotPath: row.screenshot_path,
-          ocrText: row.ocr_text,
+          screenshotPath: row.screenshot,
+          ocrText: row.extracted_text,
           metadata: row.metadata ? JSON.parse(row.metadata) : {}
         }));
   
@@ -2674,15 +2835,15 @@ const AGENT_FORMAT = {
           updateValues.push(updates.suggestedResponse);
         }
         if (updates.intent) {
-          updateFields.push('intent = ?');
+          updateFields.push('primary_intent = ?');
           updateValues.push(updates.intent);
         }
         if (updates.screenshotPath) {
-          updateFields.push('screenshot_path = ?');
+          updateFields.push('screenshot = ?');
           updateValues.push(updates.screenshotPath);
         }
         if (updates.ocrText) {
-          updateFields.push('ocr_text = ?');
+          updateFields.push('extracted_text = ?');
           updateValues.push(updates.ocrText);
         }
         if (updates.metadata) {

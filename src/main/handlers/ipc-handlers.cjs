@@ -2,9 +2,6 @@
 // Extracted from main.cjs for better code organization
 
 const { ipcMain, BrowserWindow, screen } = require('electron');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
 
 // Initialize IPC handlers with window references and state
 function initializeIPCHandlers({
@@ -19,21 +16,17 @@ function initializeIPCHandlers({
   let {
     isGloballyVisible,
     isOverlayVisible,
-    isChatVisible,
-    isInsightVisible,
-    isMemoryDebuggerVisible,
-    isOrchestrationActive,
-    visibleWindows
   } = windowState;
 
   // Destructure window creators
   const {
-    createChatMessagesWindow,
-    createInsightWindow,
-    createMemoryDebuggerWindow,
     toggleOverlay,
-    toggleChat
   } = windowCreators;
+
+  // ========================================
+  // LOCAL LLM FALLBACK HANDLERS
+  // ========================================
+
 
   // ========================================
   // OVERLAY WINDOW CONTROL HANDLERS
@@ -57,38 +50,6 @@ function initializeIPCHandlers({
       windowState.isOverlayVisible = true;
       windowState.isGloballyVisible = true;
     }
-  });
-
-  ipcMain.handle('hide-all-windows', () => {
-    // Hide all ThinkDrop AI windows
-    if (overlayWindow) {
-      overlayWindow.hide();
-    }
-    // All functionality now handled by unified overlayWindow
-    windowState.isOverlayVisible = false;
-    windowState.isChatVisible = false;
-    windowState.isInsightVisible = false;
-    windowState.isMemoryDebuggerVisible = false;
-    windowState.isGloballyVisible = false;
-  });
-
-  ipcMain.handle('show-all-windows', () => {
-    // Show overlay window (chat windows will be shown when needed)
-    if (overlayWindow) {
-      overlayWindow.show();
-      overlayWindow.focus();
-      windowState.isOverlayVisible = true;
-      windowState.isGloballyVisible = true;
-    }
-    // Restore previously visible windows
-    if (windowState.visibleWindows.includes('insightWindow') && insightWindow) {
-      insightWindow.show();
-      insightWindow.focus();
-      windowState.isInsightVisible = true;
-      windowState.visibleWindows = windowState.visibleWindows.filter((window) => window !== 'insightWindow');
-    }
-    // All window functionality now handled by unified overlayWindow
-    // Individual window state is managed by React components
   });
 
   ipcMain.handle('get-global-visibility', () => {
@@ -218,6 +179,24 @@ function initializeIPCHandlers({
           false // Backend is disconnected
         );
         console.log('✅ Local LLM orchestration completed:', result);
+        console.log('🔍 [DEBUG] Orchestration result structure:', {
+          hasResult: !!result,
+          hasResponse: !!(result && result.response),
+          resultKeys: result ? Object.keys(result) : 'null',
+          responseValue: result ? result.response : 'undefined'
+        });
+        
+        // Broadcast orchestration update to frontend if result contains response
+        if (result && result.response) {
+          broadcastOrchestrationUpdate({
+            type: 'orchestration-complete',
+            response: result.response,
+            handledBy: result.handledBy,
+            method: result.method,
+            timestamp: result.timestamp
+          }, windows);
+        }
+        
         return result; // Return result directly (already has success/error structure)
       }
       

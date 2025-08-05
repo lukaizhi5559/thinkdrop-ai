@@ -36,6 +36,9 @@ export class AgentOrchestrator {
         console.warn('⚠️ No database connection provided to orchestrator');
       }
 
+      // Initialize shared embedder for all agents
+      await this.initializeSharedEmbedder();
+
       // Register default agents
       await this.registerDefaultAgents();
       
@@ -51,6 +54,35 @@ export class AgentOrchestrator {
     } catch (error) {
       console.error('❌ AgentOrchestrator initialization failed:', error);
       throw error;
+    }
+  }
+
+  /**
+   * Initialize shared embedder for all agents to use
+   */
+  async initializeSharedEmbedder() {
+    try {
+      console.log('🔗 AgentOrchestrator: Initializing shared embedder...');
+      
+      // Use dynamic import for ES modules in Electron with proper callback
+      const transformers = await import('@xenova/transformers');
+      
+      // Initialize embedding model (same as IntentParser)
+      this.sharedEmbedder = await transformers.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        quantized: true,
+        device: 'cpu',
+        progress_callback: null
+      });
+      
+      // Add embedder to context so all agents can access it
+      this.context.embedder = this.sharedEmbedder;
+      
+      console.log('✅ AgentOrchestrator: Shared embedder initialized successfully');
+      
+    } catch (error) {
+      console.error('❌ AgentOrchestrator: Failed to initialize shared embedder:', error);
+      // Don't throw - continue without embedder, agents can handle gracefully
+      this.context.embedder = null;
     }
   }
 
@@ -974,73 +1006,6 @@ export class AgentOrchestrator {
         orchestrator: this, // Allow agents to call other agents
         executeAgent: this.executeAgent.bind(this), // Direct method access
         getAgent: this.getAgent.bind(this), // Access to other agents
-        
-        // Add IPC helpers for UI management (needed for screenshot capture)
-        hideAllWindows: async () => {
-          try {
-            // Get the BrowserWindow instances from the main process
-            const { BrowserWindow } = await import('electron');
-            const allWindows = BrowserWindow.getAllWindows();
-            const hiddenWindowsInfo = [];
-            
-            // Track and hide only visible ThinkDrop AI windows
-            for (const window of allWindows) {
-              if (window && !window.isDestroyed() && window.isVisible()) {
-                const windowInfo = {
-                  id: window.id,
-                  title: window.getTitle() || 'Untitled',
-                  bounds: window.getBounds()
-                };
-                hiddenWindowsInfo.push(windowInfo);
-                window.hide();
-                console.log('🙈 Hidden window:', windowInfo.title);
-              }
-            }
-            
-            // Store the hidden windows info in the context for restoration
-            context.hiddenWindowsInfo = hiddenWindowsInfo;
-            
-            return { success: true, hiddenWindows: hiddenWindowsInfo.length, windowsInfo: hiddenWindowsInfo };
-          } catch (error) {
-            console.error('❌ Failed to hide windows:', error);
-            return { success: false, error: error.message };
-          }
-        },
-        
-        showAllWindows: async (hiddenWindowsInfo) => {
-          try {
-            // Use the stored hidden windows info or get from context
-            const windowsToRestore = hiddenWindowsInfo || context.hiddenWindowsInfo || [];
-            
-            if (windowsToRestore.length === 0) {
-              console.log('⚠️ No hidden windows info available, skipping restoration');
-              return { success: true, restoredWindows: 0 };
-            }
-            
-            // Get the BrowserWindow instances from the main process
-            const { BrowserWindow } = await import('electron');
-            const allWindows = BrowserWindow.getAllWindows();
-            let restoredCount = 0;
-            
-            // Restore only the specific windows that were hidden
-            for (const windowInfo of windowsToRestore) {
-              const window = allWindows.find(w => w.id === windowInfo.id);
-              if (window && !window.isDestroyed() && !window.isVisible()) {
-                window.show();
-                console.log('👁️ Restored window:', windowInfo.title);
-                restoredCount++;
-              }
-            }
-            
-            // Clear the stored hidden windows info
-            delete context.hiddenWindowsInfo;
-            
-            return { success: true, restoredWindows: restoredCount };
-          } catch (error) {
-            console.error('❌ Failed to show windows:', error);
-            return { success: false, error: error.message };
-          }
-        },
       };
       
       if (!agent.execute || typeof agent.execute !== 'function') {
@@ -1282,6 +1247,24 @@ export class AgentOrchestrator {
         console.log('✅ Using pre-classified intent data (avoiding redundant classification)');
         console.log('🎯 Pre-classified intent:', intentDataOrContext.primaryIntent);
         
+        // Handle suggestedResponse for memory_retrieve with async import
+        let suggestedResponse = intentDataOrContext.suggestedResponse || null;
+        console.log(`[DEBUG] Setting suggestedResponse for ${intentDataOrContext.primaryIntent}: ${suggestedResponse}`);
+        
+        // For memory_retrieve, use IntentParser's centralized fallback response
+        if (intentDataOrContext.primaryIntent === 'memory_retrieve' && !suggestedResponse) {
+          try {
+            const { createRequire } = await import('module');
+            const require = createRequire(import.meta.url);
+            const { NaturalLanguageIntentParser } = require('../utils/IntentParser.cjs');
+            const parser = new NaturalLanguageIntentParser();
+            suggestedResponse = parser.getFallbackResponse('memory_retrieve', userMessage);
+          } catch (error) {
+            console.warn('Failed to load IntentParser, using fallback:', error);
+            suggestedResponse = "Let me check what I have stored about that.";
+          }
+        }
+        
         // Use the pre-classified intent data directly
         intentResult = {
           success: true,
@@ -1294,7 +1277,8 @@ export class AgentOrchestrator {
             method: 'pre_classified',
             captureScreen: intentDataOrContext.captureScreen === true,
             requiresMemoryAccess: intentDataOrContext.requiresMemoryAccess === true,
-            suggestedResponse: intentDataOrContext.suggestedResponse || null
+            suggestedResponse: suggestedResponse,
+            sourceText: intentDataOrContext.sourceText || userMessage
           }
         };
       } else {
@@ -1398,7 +1382,7 @@ export class AgentOrchestrator {
           return await this.processUnifiedOrchestration(userMessage, intentResult.result, context);
           
         case 'memory_store':
-          return await this.handleLocalMemoryStore(userMessage, entities, context);
+          return await this.handleLocalMemoryStore(userMessage, intentResult.result, context);
           
         case 'memory_retrieve':
           return await this.handleLocalMemoryRetrieve(userMessage, entities, context);
@@ -1449,7 +1433,7 @@ export class AgentOrchestrator {
         requiresMemoryAccess: intentData.requiresMemoryAccess === true,
         requiresExternalData: intentData.requiresExternalData === true,
         captureScreen: intentData.captureScreen === true,
-        suggestedResponse: intentData.suggestedResponse,
+        suggestedResponse: intentData.intent === 'memory_retrieve' ? null : intentData.suggestedResponse,
         sourceText: userMessage,
         timestamp: new Date().toISOString(),
         context: {
@@ -1493,16 +1477,17 @@ export class AgentOrchestrator {
   /**
    * Handle local memory storage operations
    */
-  async handleLocalMemoryStore(userMessage, entities, context = {}) {
+  async handleLocalMemoryStore(userMessage, intentResult, context = {}) {
     try {
       console.log('💾 Handling local memory store operation...');
       
       const memoryResult = await this.executeAgent('UserMemoryAgent', {
         action: 'memory-store',
-        key: 'user_input_' + Date.now(),
-        value: userMessage,
+        sourceText: intentResult.sourceText || userMessage,
+        suggestedResponse: intentResult.suggestedResponse || "I'll remember that for you.",
+        primaryIntent: 'memory_store',
+        entities: intentResult.entities || [],
         metadata: {
-          entities,
           timestamp: new Date().toISOString(),
           source: 'local_orchestration'
         }
@@ -1545,23 +1530,77 @@ export class AgentOrchestrator {
     try {
       console.log('🔍 Handling local memory retrieve operation...');
       
+      // Build search query from extracted entities if available
+      let searchQuery = userMessage;
+      
+      if (entities && entities.length > 0) {
+        // Build semantic search query from extracted entities
+        const entityValues = entities.map(e => e.value).filter(v => v && v.length > 0);
+        if (entityValues.length > 0) {
+          searchQuery = entityValues.join(' ');
+          console.log('✅ Built search query from entities:', searchQuery, 'from entities:', entities);
+        }
+      }
+      
       const memoryResult = await this.executeAgent('UserMemoryAgent', {
-        action: 'memory-search',
-        query: userMessage,
-        limit: 5
+        action: 'memory-semantic-search',
+        query: searchQuery,
+        limit: 5,
+        minSimilarity: 0.2
       }, context);
       
-      if (memoryResult.success && memoryResult.result?.memories?.length > 0) {
-        const memories = memoryResult.result.memories;
-        const responseText = `I found this information: ${memories.map(m => m.value).join(', ')}`;
+      console.log(`[DEBUG] Memory search result:`, memoryResult);
+      
+      if (memoryResult.success && memoryResult.result?.results?.length > 0) {
+        const memories = memoryResult.result.results;
+        console.log(`[DEBUG] Found ${memories.length} memories:`, memories.map(m => ({
+          source_text: m.source_text?.substring(0, 100),
+          similarity: m.similarity
+        })));
         
-        return {
+        // Generate natural response using Phi3
+        try {
+          const memoryContext = memories.map(m => m.source_text).join('\n');
+          const prompt = `Based on the user's question "${userMessage}" and the following information I found:\n\n${memoryContext}\n\nProvide a brief, direct response (1-2 sentences max):`;
+          
+          const phi3Result = await this.executeAgent('Phi3Agent', {
+            action: 'query-phi3',
+            prompt: prompt,
+            options: {
+              maxTokens: 50,
+              temperature: 0.1
+            }
+          }, context);
+          
+          if (phi3Result.success && phi3Result.result?.response) {
+            const result = {
+              success: true,
+              response: phi3Result.result.response,
+              handledBy: 'UserMemoryAgent + Phi3Agent',
+              method: 'local_memory_retrieve_with_llm',
+              timestamp: new Date().toISOString(),
+              memories: memories.length
+            };
+            console.log(`[DEBUG] Generated natural response:`, phi3Result.result.response);
+            return result;
+          }
+        } catch (error) {
+          console.warn(`[WARN] Failed to generate natural response, falling back to simple format:`, error);
+        }
+        
+        // Fallback to simple response if Phi3 fails
+        const responseText = `I found this information: ${memories.map(m => m.source_text || m.suggested_response).join(', ')}`;
+        console.log(`[DEBUG] Generated fallback response:`, responseText);
+        
+        const result = {
           success: true,
           response: responseText,
           handledBy: 'UserMemoryAgent',
           method: 'local_memory_retrieve',
           timestamp: new Date().toISOString()
         };
+        console.log(`[DEBUG] Returning result:`, result);
+        return result;
       } else {
         return {
           success: true,
@@ -2108,6 +2147,15 @@ export class AgentOrchestrator {
           memoryId: processedPayload.memoryId || entities.find(e => e.type === 'memoryId')?.value,
           timestamp: new Date().toISOString()
         };
+      case 'memory-update':
+      case 'memory_update':
+        return {
+          action: 'memory-update',
+          data: {
+            ...processedPayload,
+            timestamp: new Date().toISOString()
+          }
+        };
       case 'memory-retrieve':
       case 'memory_retrieve':
       case 'memory_search':
@@ -2116,9 +2164,21 @@ export class AgentOrchestrator {
         const offsetEntity = entities.find(e => e.type === 'offset');
         const searchQueryEntity = entities.find(e => e.type === 'searchQuery');
         
+        // Build search query from extracted entities if no explicit searchQuery
+        let searchQuery = processedPayload.searchQuery || searchQueryEntity?.value;
+        
+        if (!searchQuery && entities.length > 0) {
+          // Build semantic search query from extracted entities
+          const entityValues = entities.map(e => e.value).filter(v => v && v.length > 0);
+          if (entityValues.length > 0) {
+            searchQuery = entityValues.join(' ');
+            console.log('✅ Built search query from entities:', searchQuery, 'from entities:', entities);
+          }
+        }
+        
         return {
           action: 'memory-retrieve',
-          searchQuery: processedPayload.searchQuery || searchQueryEntity?.value || null,
+          searchQuery: searchQuery || null,
           pagination: processedPayload.pagination || {
             limit: limitEntity?.value || 50,
             offset: offsetEntity?.value || 0
@@ -2132,6 +2192,11 @@ export class AgentOrchestrator {
       case 'task':
       case 'question':
       case 'greeting':
+      case 'help':
+      case 'creative':
+      case 'analysis':
+      case 'calculation':
+      case 'system_info':
         return {
           action: 'store_context',
           data: {
@@ -2275,6 +2340,8 @@ export class AgentOrchestrator {
       'memory_list': ['UserMemoryAgent'],
       'memory-delete': ['UserMemoryAgent'],
       'memory_delete': ['UserMemoryAgent'],
+      'memory-update': ['UserMemoryAgent'],
+      'memory_update': ['UserMemoryAgent'],
       
       // Multi-agent intents (only include agents that exist)
       'command': ['UserMemoryAgent'], // Commands need memory storage (DynamicAgent removed - doesn't exist)
@@ -2287,6 +2354,13 @@ export class AgentOrchestrator {
       'question': ['UserMemoryAgent'], // Questions may need memory context
       'greeting': ['UserMemoryAgent'], // Greetings should be remembered
       'conversation': ['UserMemoryAgent'], // General conversation needs memory
+      
+      // New AI assistant intents
+      'help': ['UserMemoryAgent'], // Help requests may need context from memory
+      'creative': ['UserMemoryAgent'], // Creative requests should be stored for context
+      'analysis': ['UserMemoryAgent'], // Analysis results should be stored
+      'calculation': ['UserMemoryAgent'], // Calculations may reference stored data
+      'system_info': ['UserMemoryAgent'], // System info requests should be logged
       
       // Utility intents
       'parse-intent': ['IntentParserAgent'],

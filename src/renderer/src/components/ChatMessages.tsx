@@ -130,6 +130,7 @@ export default function ChatMessages() {
   const [isLoading, setIsLoading] = useState(false);
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
+  const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const isStreamingEndedRef = useRef<boolean>(false);
   
@@ -317,6 +318,61 @@ export default function ChatMessages() {
     }
   };
 
+  // 🎯 Semantic Search First - Try to find relevant stored memories
+  const trySemanticSearchFirst = useCallback(async (query: string) => {
+    try {
+      console.log('🔍 Performing semantic search for:', query.substring(0, 50) + '...');
+      
+      // Call semantic search via Electron API
+      const result = await window.electronAPI?.agentExecute({
+        agentName: 'UserMemoryAgent',
+        action: 'memory-semantic-search',
+        input: query,
+        options: {
+          limit: 3,
+          minSimilarity: 0.6 // Higher threshold for better relevance
+        }
+      });
+      
+      if (result?.success && result.results && result.results.length > 0) {
+        console.log(`✅ Found ${result.results.length} relevant memories`);
+        
+        // Format the response with found memories
+        const memories = result.results;
+        let response = "Based on what I remember:\n\n";
+        
+        memories.forEach((memory: any, index: number) => {
+          const similarity = Math.round(memory.similarity * 100);
+          response += `**Memory ${index + 1}** (${similarity}% match):\n`;
+          response += `${memory.source_text || memory.suggested_response}\n\n`;
+        });
+        
+        response += "Is this what you were looking for, or would you like me to help with something else?";
+        
+        return {
+          hasRelevantResults: true,
+          response: response,
+          memories: memories
+        };
+      }
+      
+      console.log('📝 No relevant memories found with sufficient similarity');
+      return {
+        hasRelevantResults: false,
+        response: '',
+        memories: []
+      };
+      
+    } catch (error) {
+      console.error('❌ Semantic search failed:', error);
+      return {
+        hasRelevantResults: false,
+        response: '',
+        memories: []
+      };
+    }
+  }, []);
+
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
     console.log('📤 [DEBUG] handleSendMessage called', {
@@ -345,6 +401,7 @@ export default function ChatMessages() {
     
     setIsLoading(true);
     setLocalLLMError(null);
+    setInitialThinkingMessage('Thinking'); // Reset to default at start of new message
     
     // Clear any previous error states
     setProcessedMessageIds(new Set());
@@ -374,6 +431,32 @@ export default function ChatMessages() {
         activeRequests: wsState.activeRequests,
         messageText: messageText.substring(0, 50) + '...'
       });
+      
+      // 🎯 STEP 1: Try semantic search first for relevant stored memories
+      console.log('🔍 Attempting semantic search first...');
+      const semanticResults = await trySemanticSearchFirst(messageText);
+      
+      if (semanticResults && semanticResults.hasRelevantResults) {
+        console.log('✅ Found relevant memories, using semantic search results');
+        // Add AI response with semantic search results
+        const aiMessage: ChatMessage = {
+          id: `ai-${Date.now()}`,
+          text: semanticResults.response,
+          sender: 'ai',
+          timestamp: new Date()
+        };
+        
+        setChatMessages(prev => {
+          const updated = [...prev, aiMessage];
+          localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+          return updated;
+        });
+        
+        setIsLoading(false);
+        return;
+      }
+      
+      console.log('📝 No relevant memories found, proceeding with LLM...', semanticResults);
       
       if (!wsState.isConnected) {
         console.warn('⚠️ WebSocket not connected, using local LLM fallback');
@@ -408,10 +491,12 @@ export default function ChatMessages() {
 
   // Handle local LLM fallback when backend is disconnected
   const handleLocalLLMFallback = useCallback(async (messageText: string) => {
+    let isMemoryRetrieve = false;
     try {
       console.log('🤖 Starting local LLM processing...');
       setIsProcessingLocally(true);
       setIsLoading(false); // Stop main loading, show local processing instead
+      // Keep current thinking message, don't reset to prevent flash
       scrollToBottom({ smooth: true, force: true });
       
       // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
@@ -425,7 +510,23 @@ export default function ChatMessages() {
       });
       
       if (result.success) {
-        // Add AI response message immediately
+        // For memory_retrieve intents, use the initial response in ThinkingIndicator
+        // and wait for the orchestration update for the final result
+        if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
+          isMemoryRetrieve = true;
+          // Set the thinking message to the initial response
+          const thinkingMsg = result.data || 'Let me check what I have stored about that.';
+          console.log('🎯 [THINKING] Setting thinking message for memory_retrieve:', thinkingMsg);
+          console.log('🎯 [THINKING] States - isProcessingLocally:', isProcessingLocally, 'isLoading:', isLoading, 'wsConnected:', wsState.isConnected);
+          setInitialThinkingMessage(thinkingMsg);
+          
+          // Ensure we stay in processing state to keep ThinkingIndicator visible
+          console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
+          // Don't add the AI message yet - wait for orchestration update
+          return;
+        }
+        
+        // For non-memory intents, add AI response message immediately
         const aiMessage: ChatMessage = {
           id: `ai-${Date.now()}`,
           text: result.data || 'I processed your request using local capabilities.',
@@ -464,8 +565,14 @@ export default function ChatMessages() {
         return updated;
       });
     } finally {
-      setIsProcessingLocally(false);
-      setIsLoading(false);
+      // Only clear processing state if not waiting for memory retrieve orchestration
+      if (!isMemoryRetrieve) {
+        console.log('🎯 [THINKING] Clearing processing state in finally block');
+        setIsProcessingLocally(false);
+        setIsLoading(false);
+      } else {
+        console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve orchestration');
+      }
       scrollToBottom({ smooth: true, force: true });
     }
   }, []);
@@ -864,6 +971,45 @@ export default function ChatMessages() {
         }
       });
     }
+
+    // Listen for orchestration updates (final results from background processing)
+    if (window.electronAPI?.onOrchestrationUpdate) {
+      window.electronAPI.onOrchestrationUpdate((_event: any, updateData: any) => {
+        console.log('🔄 Received orchestration update:', updateData);
+        
+        if (updateData.type === 'orchestration-complete' && updateData.response) {
+          console.log('🎯 [ORCHESTRATION] Received final response, clearing thinking indicator');
+          // Update the last AI message with the final response
+          setChatMessages(prev => {
+            const lastIndex = prev.length - 1;
+            if (lastIndex >= 0 && prev[lastIndex].sender === 'ai') {
+              const updatedMessages = [...prev];
+              updatedMessages[lastIndex] = {
+                ...updatedMessages[lastIndex],
+                text: updateData.response,
+                isStreaming: false
+              };
+              return updatedMessages;
+            } else {
+              // Add new AI message if none exists
+              return [...prev, {
+                id: `ai-${Date.now()}`,
+                text: updateData.response,
+                sender: 'ai' as const,
+                timestamp: new Date(),
+                isStreaming: false
+              }];
+            }
+          });
+          
+          // Clear loading and processing states
+          console.log('🎯 [ORCHESTRATION] Clearing states - setIsLoading(false), setIsProcessingLocally(false)');
+          setIsLoading(false);
+          setIsProcessingLocally(false);
+          // Don't reset thinking message here - let it disappear naturally when bubble appears
+        }
+      });
+    }
   }, [processedMessageIds, wsState.isConnected, connectWebSocket]);
 
   // TEMPORARILY DISABLED: Height adjustment causing chat window to disappear
@@ -1107,10 +1253,16 @@ export default function ChatMessages() {
         )}
         
         {/* Thinking indicator for local LLM processing */}
-        {(isLoading && !wsState.isConnected) || isProcessingLocally ? (
+        {(() => {
+          const shouldShow = (isLoading && !wsState.isConnected) || isProcessingLocally;
+          if (shouldShow) {
+            console.log('🎯 [THINKING] Showing ThinkingIndicator - isLoading:', isLoading, 'wsConnected:', wsState.isConnected, 'isProcessingLocally:', isProcessingLocally, 'message:', initialThinkingMessage);
+          }
+          return shouldShow;
+        })() ? (
           <ThinkingIndicator 
             isVisible={true} 
-            message="Thinking" 
+            message={initialThinkingMessage} 
           />
         ) : isLoading && wsState.isConnected ? (
           <div className="flex justify-start">

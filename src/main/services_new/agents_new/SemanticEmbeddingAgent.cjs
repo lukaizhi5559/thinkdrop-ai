@@ -30,39 +30,28 @@ const AGENT_FORMAT = {
   execution_target: 'frontend',
   requires_database: false,
 
-  // Bootstrap method to initialize the embedding model
+  // Bootstrap method - skip embedder initialization, do it lazily during execute
   async bootstrap(config, context) {
     try {
-      console.log('[INFO] SemanticEmbeddingAgent: Initializing embedding model...');
+      console.log('[INFO] SemanticEmbeddingAgent: Bootstrap completed (embedder will be initialized lazily)');
       
-      // Import transformers dynamically to avoid module loading issues
-      const { pipeline } = await import('@xenova/transformers');
-      
-      // Initialize the embedding model (same as used in Phi3Agent)
-      this.embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        quantized: false,
-        local_files_only: false,
-        cache_dir: './models'
-      });
-      
-      this.isEmbeddingReady = true;
-      console.log('[SUCCESS] SemanticEmbeddingAgent: Embedding model initialized successfully');
+      // Don't initialize embedder here - do it lazily during execute
+      this.isEmbeddingReady = false;
       
       return {
         success: true,
-        message: 'SemanticEmbeddingAgent initialized with all-MiniLM-L6-v2 model',
+        message: 'SemanticEmbeddingAgent bootstrap completed (lazy initialization)',
         model: 'Xenova/all-MiniLM-L6-v2',
         dimensions: 384
       };
       
     } catch (error) {
-      console.error('[ERROR] SemanticEmbeddingAgent initialization failed:', error);
-      this.isEmbeddingReady = false;
+      console.error('[ERROR] SemanticEmbeddingAgent bootstrap failed:', error);
       
       return {
         success: false,
         error: error.message,
-        message: 'Failed to initialize embedding model'
+        message: 'Failed to bootstrap SemanticEmbeddingAgent'
       };
     }
   },
@@ -77,20 +66,32 @@ const AGENT_FORMAT = {
         return await this.bootstrap(params, context);
       }
       
-      // For all other actions, check if model is initialized
+      // For all other actions, ensure embedder is ready (lazy initialization)
       if (!this.isEmbeddingReady || !this.embedder) {
-        throw new Error('Embedding model not initialized. Call bootstrap first.');
+        console.log('[INFO] SemanticEmbeddingAgent: Lazy-initializing embedder...');
+        console.log('[DEBUG] Execute context keys:', Object.keys(context || {}));
+        console.log('[DEBUG] Embedder in context:', !!context?.embedder);
+        
+        // Check if embedder is passed in context
+        if (context?.embedder) {
+          console.log('[INFO] Using embedder passed in execute context');
+          this.embedder = context.embedder;
+          this.isEmbeddingReady = true;
+        } else {
+          console.error('[ERROR] No embedder provided in execute context');
+          throw new Error('Embedding model not available. No embedder provided in context.');
+        }
       }
       
       switch (action) {
         case 'generate-embedding':
-          return await this.generateEmbedding(params, context);
+          return await AGENT_FORMAT.generateEmbedding.call(this, params, context);
           
         case 'batch-generate-embeddings':
-          return await this.batchGenerateEmbeddings(params, context);
+          return await AGENT_FORMAT.batchGenerateEmbeddings.call(this, params, context);
           
         case 'calculate-similarity':
-          return await this.calculateSimilarity(params, context);
+          return await AGENT_FORMAT.calculateSimilarity.call(this, params, context);
           
         default:
           throw new Error(`Unknown action: ${action}`);
@@ -222,7 +223,7 @@ const AGENT_FORMAT = {
       }
       
       // Calculate cosine similarity (same implementation as Phi3Agent)
-      const similarity = this.cosineSimilarity(embedding1, embedding2);
+      const similarity = AGENT_FORMAT.cosineSimilarity.call(this, embedding1, embedding2);
       
       return {
         success: true,

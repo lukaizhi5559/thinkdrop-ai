@@ -54,7 +54,13 @@ const AGENT_FORMAT = {
   // Object-based bootstrap method
   async bootstrap(config, context) {
     try {
+      console.log('🤖 Phi3Agent: Initializing local LLM capabilities...');
       AGENT_FORMAT.nlParser = new NaturalLanguageIntentParser();
+      
+      // 🔥 CRITICAL: Initialize transformers immediately during bootstrap
+      console.log('🔥 Initializing transformers during bootstrap...');
+      await AGENT_FORMAT.nlParser.initializeEmbeddings();
+      console.log('✅ Transformers initialized successfully during bootstrap');
 
       // Store configuration on AGENT_FORMAT so it's accessible during execution
       AGENT_FORMAT.config = {
@@ -315,7 +321,7 @@ ${message}<|end|>
           captureScreen: fallbackCapture,
           suggestedResponse: fallbackCapture ? 
             'I\'ll take a screenshot for you.' : 
-            'I\'ll help you with that using my local capabilities.',
+            (fallbackIntent === 'memory_retrieve' ? null : 'I\'ll help you with that using my local capabilities.'),
           sourceText: message
         };  
       }
@@ -323,13 +329,8 @@ ${message}<|end|>
       // Extract entities from the original message regardless of parsing success/failure
       console.log('🎯 About to extract entities from message:', message);
       try {
-        // Create parser instance if needed for entity extraction
-        if (!this.nlParser) {
-          this.nlParser = new NaturalLanguageIntentParser();
-        }
-        
         // Extract entities using the parser's entity extraction logic
-        const extractedEntities = this.nlParser.extractEntities('', message);
+        const extractedEntities = await this.nlParser.extractEntities('', message);
         console.log('🔍 Entity extraction - analyzing text:', message);
         console.log('✅ Extracted entities result:', extractedEntities);
         
@@ -473,14 +474,7 @@ ${message}<|end|>
         originalMessage: originalMessage.substring(0, 50) + '...'
       });
       
-      // Create parser instance if needed
-      if (!this.nlParser) {
-        console.log('🔍 DEBUG: Creating new NaturalLanguageIntentParser instance');
-        this.nlParser = new NaturalLanguageIntentParser();
-      }
-      
       // Use the rule-based parser to extract intent from natural language
-      console.log('🔍 DEBUG: About to call nlParser.parse()');
       const result = await this.nlParser.parse(responseText, originalMessage);
       console.log('🔍 DEBUG: nlParser.parse() completed, result:', result ? 'success' : 'null');
       return result;
