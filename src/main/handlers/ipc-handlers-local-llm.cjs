@@ -4,11 +4,31 @@
 // Import broadcast function from main IPC handlers
 // const { broadcastOrchestrationUpdate } = require('./ipc-handlers.cjs');
 
+// Import IntentParser for fast path classification
+const NaturalLanguageIntentParser = require('../services_new/utils/IntentParser.cjs');
+
+// Initialize IntentParser instance (will be initialized once during setup)
+let intentParser = null;
+
 // ========================================
 // LEGACY LLM COMPATIBILITY HANDLERS
 // ========================================
 
 function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
+  // Initialize IntentParser for fast path classification
+  if (!intentParser) {
+    try {
+      intentParser = new NaturalLanguageIntentParser();
+      // Initialize embeddings asynchronously (non-blocking)
+      intentParser.initializeEmbeddings().catch(err => {
+        console.warn('⚠️ IntentParser embeddings initialization failed:', err.message);
+      });
+      console.log('✅ IntentParser initialized for fast path classification');
+    } catch (error) {
+      console.error('❌ Failed to initialize IntentParser:', error.message);
+    }
+  }
+
   // Legacy LLM health check - routes to unified agent system
   ipcMain.handle('llm-get-health', async () => {
     try {
@@ -35,55 +55,56 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       }
       
       console.log('🚀 [FAST PATH] Local LLM with intent classification:', prompt.substring(0, 50) + '...');
-      
-      // Fast pattern detection for memory retrieval to skip Phi3 call
-      const memoryRetrievalPatterns = [
-        /what.*do.*i.*have.*(going on|scheduled|planned)/i,
-        /what.*my.*(schedule|calendar|appointments)/i,
-        /what.*next.*(week|month|day)/i,
-        /do.*i.*have.*anything/i,
-        /what.*am.*i.*(doing|supposed to do)/i,
-        /remind.*me.*what/i,
-        /what.*did.*i.*(tell you|say|mention)/i
-      ];
-      
-      const isMemoryRetrieval = memoryRetrievalPatterns.some(pattern => pattern.test(prompt));
-      
+
       let intentResult;
-      
-      if (isMemoryRetrieval) {
-        console.log('⚡ ULTRA-FAST PATH: Pattern-detected memory retrieval, skipping Phi3 intent classification');
-        
-        // Create mock intent result for memory retrieval
-        intentResult = {
-          success: true,
-          result: {
-            intentData: {
-              chainOfThought: {
-                step1_analysis: 'Pattern-based detection',
-                step2_reasoning: 'Detected memory retrieval pattern',
-                step3_consistency: 'High confidence pattern match'
-              },
-              intents: [{
-                intent: 'memory_retrieve',
-                confidence: 0.95,
-                reasoning: 'Pattern-based detection'
-              }],
-              primaryIntent: 'memory_retrieve',
-              entities: [],
-              requiresMemoryAccess: true,
-              requiresExternalData: false,
-              captureScreen: false,
-              suggestedResponse: null,
-              sourceText: prompt
-            }
+
+      // ULTRA-FAST PATH: Try IntentParser pattern matching first
+      if (intentParser) {
+        try {
+          console.log('⚡ ULTRA-FAST PATH: Trying IntentParser pattern matching...');
+          
+          // Use IntentParser's pattern matching directly (no LLM call)
+          const patternScores = intentParser.calculatePatternScores(prompt.toLowerCase());
+          const highestScore = Math.max(...Object.values(patternScores));
+          
+          if (highestScore > 0) {
+            const bestIntent = Object.entries(patternScores)
+              .reduce((a, b) => patternScores[a[0]] > patternScores[b[0]] ? a : b)[0];
+            
+            console.log(`✅ ULTRA-FAST: Pattern match found - ${bestIntent} (score: ${highestScore})`);
+            
+            // Create result structure matching Phi3Agent output
+            intentResult = {
+              success: true,
+              result: {
+                intentData: {
+                  primaryIntent: bestIntent,
+                  intents: [{ intent: bestIntent, confidence: 0.9, reasoning: 'Pattern-based classification' }],
+                  entities: [],
+                  requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(bestIntent),
+                  requiresExternalData: false,
+                  captureScreen: bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase()),
+                  suggestedResponse: intentParser.getFallbackResponse(bestIntent, prompt),
+                  sourceText: prompt,
+                  chainOfThought: {
+                    step1_analysis: `Pattern-based detection for ${bestIntent}`,
+                    step2_reasoning: `High-confidence pattern match (score: ${highestScore})`,
+                    step3_consistency: 'Ultra-fast pattern classification'
+                  }
+                }
+              }
+            };
           }
-        };
-      } else {
-        // Step 1: Classify intent and extract entities using Phi3Agent
-        console.log('🎯 Step 1: Classifying intent and extracting entities...');
+        } catch (error) {
+          console.warn('⚠️ IntentParser fast path failed:', error.message);
+        }
+      }
+
+      // FALLBACK PATH: Use full Phi3Agent classification if pattern matching failed
+      if (!intentResult) {
+        console.log('🎯 FALLBACK: Using full Phi3Agent classification...');
         intentResult = await coreAgent.executeAgent('Phi3Agent', {
-          action: 'classify-intent',  // ✅ Use correct action that exists
+          action: 'classify-intent',
           message: prompt,
           options: {
             temperature: 0.1,
@@ -94,38 +115,20 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           timestamp: new Date().toISOString()
         });
       }
-      
+
       let intentClassificationPayload;
       let quickResponse;
-      
+
       if (intentResult.success && intentResult.result && intentResult.result.intentData) {
+        // Phi3Agent already returns the complete intentClassificationPayload structure
         const { intentData } = intentResult.result;
         console.log('✅ Intent classification successful:', intentData.primaryIntent);
         
-        // Extract suggested response from Phi3 classification
         quickResponse = intentData.suggestedResponse || 'I\'ll help you with that using my local capabilities.';
         
-        // Build full intentClassificationPayload like online mode
+        // Use the complete structure from Phi3Agent - no manual building needed
         intentClassificationPayload = {
-          chainOfThought: intentData.chainOfThought || {
-            step1_analysis: 'Local Phi3 classification completed',
-            step2_reasoning: `Classified as ${intentData.primaryIntent}`,
-            step3_consistency: 'Classification confidence acceptable'
-          },
-          intents: intentData.intents || [
-            {
-              intent: intentData.primaryIntent,
-              confidence: intentData.confidence || 0.8,
-              reasoning: intentData.reasoning || 'Local Phi3 classification'
-            }
-          ],
-          primaryIntent: intentData.primaryIntent,
-          entities: intentData.entities || [],
-          requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(intentData.primaryIntent),
-          requiresExternalData: intentData.requiresExternalData || false,
-          captureScreen: intentData.captureScreen === true,
-          suggestedResponse: quickResponse,
-          sourceText: prompt,
+          ...intentData,
           timestamp: new Date().toISOString(),
           context: {
             source: 'local_phi3_classification',
@@ -137,21 +140,10 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         console.warn('⚠️ Intent classification failed, using fallback');
         quickResponse = 'I\'ll help you with that question using my local capabilities.';
         
-        // Fallback intent classification with comprehensive structure
+        // Simple fallback - let Phi3Agent handle this too
         intentClassificationPayload = {
-          chainOfThought: {
-            step1_analysis: 'Intent classification failed, analyzing message as general user input',
-            step2_reasoning: 'Defaulting to question intent as safest fallback for user queries',
-            step3_consistency: 'Question intent allows for helpful response without assumptions'
-          },
-          intents: [
-            {
-              intent: 'question',
-              confidence: 0.7,
-              reasoning: 'Fallback classification when Phi3 intent detection fails'
-            }
-          ],
           primaryIntent: 'question',
+          intents: [{ intent: 'question', confidence: 0.7, reasoning: 'Fallback' }],
           entities: [],
           requiresMemoryAccess: false,
           requiresExternalData: false,
@@ -166,7 +158,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           }
         };
       }
-      
+
       // Step 2: Trigger background orchestration (non-blocking)
       console.log('🔄 Step 2: Triggering background orchestration...');
       // Don't await this - let it run in background

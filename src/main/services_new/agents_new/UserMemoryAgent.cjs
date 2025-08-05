@@ -1330,7 +1330,7 @@ const AGENT_FORMAT = {
                        FROM memory m 
                        LEFT JOIN memory_entities e ON m.id = e.memory_id 
                        WHERE (m.source_text LIKE ? OR m.suggested_response LIKE ? OR m.id LIKE ? OR e.entity LIKE ?) 
-                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access 
+                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access, m.embedding 
                        ORDER BY m.created_at DESC LIMIT ? OFFSET ?`;
                 queryParams = [`%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, `%${searchQuery}%`, limit, offset];
                 countSql = `SELECT COUNT(DISTINCT m.id) as total FROM memory m 
@@ -1344,7 +1344,7 @@ const AGENT_FORMAT = {
                        GROUP_CONCAT(e.entity_type) as entity_type_list
                        FROM memory m 
                        LEFT JOIN memory_entities e ON m.id = e.memory_id 
-                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access 
+                       GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access, m.embedding 
                        ORDER BY m.created_at DESC LIMIT ? OFFSET ?`;
                 queryParams = [limit, offset];
                 countSql = `SELECT COUNT(*) as total FROM memory`;
@@ -1446,7 +1446,7 @@ const AGENT_FORMAT = {
                 queryParams.push(searchType);
               }
               
-              sql += ' GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access ORDER BY m.created_at DESC LIMIT ?';
+              sql += ' GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, m.suggested_response, m.metadata, m.screenshot, m.extracted_text, m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, m.sync_attempts, m.last_sync_attempt, m.requires_memory_access, m.embedding ORDER BY m.created_at DESC LIMIT ?';
               queryParams.push(limit);
               
               const results = await database.query(sql, queryParams);
