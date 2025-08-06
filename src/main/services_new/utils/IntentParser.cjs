@@ -1,3 +1,5 @@
+const IntentResponses = require('./IntentResponses.cjs');
+
 class NaturalLanguageIntentParser {
     constructor() {
       this.embedder = null;
@@ -1474,51 +1476,7 @@ class NaturalLanguageIntentParser {
     }
     
     getFallbackResponse(intent, originalMessage = '') {
-      const responses = {
-        memory_store: [
-          "I'll remember that for you.",
-          "Got it, I've stored that information.",
-          "I'll keep that in mind."
-        ],
-        memory_retrieve: [
-          "Let me check what I have stored about that.",
-          "I'll look up that information for you.",
-          "Let me recall what you told me about that."
-        ],
-        memory_update: [
-          "I'll update that information for you.",
-          "I'll modify what I have stored.",
-          "I'll change that in my records."
-        ],
-        memory_delete: [
-          "I'll remove that from my memory.",
-          "I'll forget that information.",
-          "I'll delete that record."
-        ],
-        command: [
-          "I'll take care of that for you.",
-          "I'll execute that command.",
-          "I'll handle that action."
-        ],
-        greeting: [
-          "Hello! How can I help you today?",
-          "Hi there! What can I assist you with?",
-          "Good to see you! How may I help?"
-        ],
-        question: [
-          "I can help you find that information.",
-          "Let me look that up for you.",
-          "I'll help you with that question."
-        ]
-      };
-      
-      const intentResponses = responses[intent] || responses.question;
-      
-      // Add some variety by choosing based on message length
-      const messageLength = originalMessage.length;
-      const index = messageLength % intentResponses.length;
-      
-      return intentResponses[index];
+      return IntentResponses.getSuggestedResponse(intent, originalMessage);
     }
     
     extractAnalysis(responseText) {

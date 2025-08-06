@@ -5,6 +5,10 @@
 
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+
+const require = createRequire(import.meta.url);
+const IntentResponses = require('../utils/IntentResponses.cjs');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1260,7 +1264,7 @@ export class AgentOrchestrator {
             suggestedResponse = parser.getFallbackResponse('memory_retrieve', userMessage);
           } catch (error) {
             console.warn('Failed to load IntentParser, using fallback:', error);
-            suggestedResponse = "Let me check what I have stored about that.";
+            suggestedResponse = IntentResponses.getSuggestedResponse('memory_retrieve', userMessage);
           }
         }
         
@@ -1494,7 +1498,7 @@ export class AgentOrchestrator {
       if (memoryResult.success) {
         return {
           success: true,
-          response: 'I\'ve stored that information for you.',
+          response: IntentResponses.getSuggestedResponse('memory_store', userMessage),
           handledBy: 'UserMemoryAgent',
           method: 'local_memory_store',
           timestamp: new Date().toISOString()
@@ -1502,7 +1506,7 @@ export class AgentOrchestrator {
       } else {
         return {
           success: true,
-          response: 'I noted your information, though I had some trouble storing it persistently.',
+          response: IntentResponses.getSuggestedResponse('memory_store', userMessage) + ' Though I had some trouble storing it persistently.',
           handledBy: 'fallback',
           method: 'memory_store_fallback',
           timestamp: new Date().toISOString()
@@ -1513,7 +1517,7 @@ export class AgentOrchestrator {
       console.error('❌ Local memory store failed:', error);
       return {
         success: true,
-        response: 'I\'ll remember that for our conversation.',
+        response: IntentResponses.getSuggestedResponse('memory_store', userMessage),
         handledBy: 'fallback',
         method: 'memory_store_error',
         timestamp: new Date().toISOString()
