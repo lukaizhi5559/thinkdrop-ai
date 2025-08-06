@@ -1,11 +1,10 @@
-let NaturalLanguageIntentParser;
+let parserFactory;
 try {
-  NaturalLanguageIntentParser = require('../utils/IntentParser.cjs');
-  console.log('✅ DEBUG: Successfully required the module');
-  console.log('🔍 DEBUG: NaturalLanguageIntentParser import result:', NaturalLanguageIntentParser);
-  console.log('🔍 DEBUG: Constructor name:', NaturalLanguageIntentParser?.name);
+  parserFactory = require('../utils/IntentParserFactory.cjs');
+  console.log('✅ DEBUG: Successfully required IntentParserFactory');
+  console.log('🔍 DEBUG: Factory info:', parserFactory.getInfo());
 } catch (error) {
-  console.error('❌ DEBUG: Failed to require NaturalLanguageIntentParser:', error.message);
+  console.error('❌ DEBUG: Failed to require IntentParserFactory:', error.message);
   console.error('❌ DEBUG: Error stack:', error.stack);
 }
 
@@ -55,12 +54,16 @@ const AGENT_FORMAT = {
   async bootstrap(config, context) {
     try {
       console.log('🤖 Phi3Agent: Initializing local LLM capabilities...');
-      AGENT_FORMAT.nlParser = new NaturalLanguageIntentParser();
+      AGENT_FORMAT.nlParser = await parserFactory.getParserForUseCase('bootstrap');
       
-      // 🔥 CRITICAL: Initialize transformers immediately during bootstrap
-      console.log('🔥 Initializing transformers during bootstrap...');
-      await AGENT_FORMAT.nlParser.initializeEmbeddings();
-      console.log('✅ Transformers initialized successfully during bootstrap');
+      // 🔥 CRITICAL: Initialize embeddings if available
+      console.log('🔥 Initializing parser during bootstrap...');
+      if (AGENT_FORMAT.nlParser && AGENT_FORMAT.nlParser.initializeEmbeddings) {
+        await AGENT_FORMAT.nlParser.initializeEmbeddings();
+        console.log('✅ Parser initialized successfully during bootstrap');
+      } else {
+        console.log('✅ Parser ready (no embeddings needed)');
+      }
 
       // Store configuration on AGENT_FORMAT so it's accessible during execution
       AGENT_FORMAT.config = {
@@ -275,14 +278,11 @@ ${message}<|end|>
       let intentData;
       try {
         const responseText = result.trim();
-        console.log('🔍 DEBUG: About to call parseNaturalLanguageResponse with:', {
-          responseText: responseText.substring(0, 100) + '...',
-          originalMessage: message.substring(0, 50) + '...'
-        });
+        // Parsing natural language response
 
         // Use new natural language parser
         const parsedData = await this.parseNaturalLanguageResponse(responseText, message);
-        console.log('🔍 DEBUG: parseNaturalLanguageResponse returned:', parsedData ? 'success' : 'null');
+        // Natural language parsing completed
         
         if (!parsedData) {
           throw new Error('Failed to parse natural language response');
@@ -370,12 +370,19 @@ ${message}<|end|>
         // Keep existing entities array (likely empty)
       }
       
-      // Validate intent type
+      // Validate intent type - check both primaryIntent and intent fields
       const validIntents = ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'greeting', 'question', 'command'];
-      if (!validIntents.includes(intentData.primaryIntent)) {
-        console.warn('⚠️ Invalid intent type, defaulting to question:', intentData.primaryIntent);
+      const currentIntent = intentData.primaryIntent || intentData.intent;
+      
+      if (!validIntents.includes(currentIntent)) {
+        console.warn('⚠️ Invalid intent type, defaulting to question:', currentIntent);
         intentData.primaryIntent = 'question';
+        intentData.intent = 'question';
         intentData.reasoning = 'Invalid intent type, defaulted to question';
+      } else {
+        // Ensure both fields are set consistently
+        intentData.primaryIntent = currentIntent;
+        intentData.intent = currentIntent;
       }
       
       console.log('✅ Intent classification successful:', intentData);
@@ -452,12 +459,6 @@ ${message}<|end|>
       const urlModule = require('url');
       const urlParts = urlModule.parse(url);
       
-      console.log('🔍 DEBUG: Parsed URL parts:', {
-        hostname: urlParts.hostname,
-        port: urlParts.port,
-        path: urlParts.path
-      });
-      
       const requestOptions = {
         hostname: urlParts.hostname,
         port: parseInt(urlParts.port) || 11434, // Default to Ollama port, not 80
@@ -465,8 +466,6 @@ ${message}<|end|>
         method: options.method || 'GET',
         headers: options.headers || {}
       };
-      
-      console.log('🔍 DEBUG: Request options:', requestOptions);
       
       const req = http.request(requestOptions, (res) => {
         let data = '';
@@ -493,14 +492,11 @@ ${message}<|end|>
   // Natural Language Intent Parser - Phase 1
   async parseNaturalLanguageResponse(responseText, originalMessage) {
     try {
-      console.log('🔍 DEBUG: parseNaturalLanguageResponse called with:', {
-        responseText: responseText.substring(0, 50) + '...',
-        originalMessage: originalMessage.substring(0, 50) + '...'
-      });
+      // Parsing natural language response
       
       // Use the rule-based parser to extract intent from natural language
       const result = await this.nlParser.parse(responseText, originalMessage);
-      console.log('🔍 DEBUG: nlParser.parse() completed, result:', result ? 'success' : 'null');
+      // Parser completed
       return result;
     } catch (error) {
       console.warn('⚠️ Natural language parser error:', error.message);
@@ -634,7 +630,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
     
     // More frequent checks if we haven't established stability
     if (this.consecutiveSuccesses <= 10 && timeSinceLastCheck > 60000) {
-      console.log('🔍 Establishing stability - performing health check');
+      // Quick health check for stability
       return true;
     }
     
@@ -842,13 +838,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
     }
     
     try {
-      // Since curl test shows Ollama is accessible, use HTTP module directly
-      console.log('🔍 DEBUG: Request body preview:', JSON.stringify({
-        model: queryOptions.model,
-        prompt: prompt.substring(0, 50) + (prompt.length > 50 ? '...' : ''),
-        stream: false
-      }));
-      console.log('🔍 DEBUG: Full prompt length:', prompt.length, 'characters');
+      // Reduced logging for performance
       
       const response = await AGENT_FORMAT.makeHttpRequest('http://127.0.0.1:11434/api/generate', {
         method: 'POST',
@@ -872,7 +862,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
       }
       
       const result = await response.json();
-      console.log('🔍 DEBUG: Phi3 response:', result.response);
+      // Response received successfully
       
       const responseText = result.response?.trim() || '';
       

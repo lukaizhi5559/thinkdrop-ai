@@ -4,33 +4,34 @@
 // Import broadcast function from main IPC handlers
 // const { broadcastOrchestrationUpdate } = require('./ipc-handlers.cjs');
 
-// Import IntentParser for fast path classification
-const NaturalLanguageIntentParser = require('../services_new/utils/IntentParser.cjs');
+// Import IntentParser factory for centralized parser management
+const parserFactory = require('../services_new/utils/IntentParserFactory.cjs');
 
-// Initialize IntentParser instance (will be initialized once during setup)
-let intentParser = null;
+// Configure parser preferences (can be changed at runtime)
+parserFactory.configure({
+  useHybrid: true,   // Best: TensorFlow.js + USE + Compromise + Natural
+  useFast: false,    // Good: Natural + Compromise only
+  useOriginal: false // Fallback: Original heavy parser
+});
+
+// Parser instance (managed by factory)
+let currentParser = null;
 
 // ========================================
 // LEGACY LLM COMPATIBILITY HANDLERS
 // ========================================
 
 function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
-  // Initialize IntentParser for fast path classification
-  if (!intentParser) {
-    try {
-      intentParser = new NaturalLanguageIntentParser();
-      // Initialize embeddings asynchronously (non-blocking)
-      intentParser.initializeEmbeddings().catch(err => {
-        console.warn('⚠️ IntentParser embeddings initialization failed:', err.message);
-      });
-      
-      // Zero-shot classification will be initialized on-demand when needed
-      console.log('✅ Zero-shot classification will be loaded when ambiguous cases are detected');
-      
-      console.log('✅ IntentParser initialized for fast path classification');
-    } catch (error) {
-      console.error('❌ Failed to initialize IntentParser:', error.message);
-    }
+  // Initialize IntentParser using factory
+  if (!currentParser) {
+    parserFactory.getParser().then(parser => {
+      currentParser = parser;
+      const config = parserFactory.getConfig();
+      const parserType = config.useHybrid ? 'Hybrid' : (config.useFast ? 'Fast' : 'Original');
+      console.log(`✅ ${parserType}IntentParser initialized via factory`);
+    }).catch(err => {
+      console.error('❌ Failed to initialize parser via factory:', err.message);
+    });
   }
 
   // Legacy LLM health check - routes to unified agent system
@@ -62,16 +63,52 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
 
       let intentResult;
 
-      // ULTRA-FAST PATH: Try IntentParser pattern matching first
-      if (intentParser) {
+      // ULTRA-FAST PATH: Try parser classification first
+      if (currentParser) {
         try {
-          console.log('⚡ ULTRA-FAST PATH: Trying IntentParser pattern matching...');
+          const config = parserFactory.getConfig();
+          const parserName = config.useDistilBert ? 'DistilBertIntentParser' : 
+                            (config.useHybrid ? 'HybridIntentParser' : 
+                            (config.useFast ? 'FastIntentParser' : 'IntentParser'));
+          console.log(`⚡ ULTRA-FAST PATH: Trying ${parserName} classification...`);
           
-          // Use IntentParser's pattern matching directly (no LLM call)
-          const patternScores = intentParser.calculatePatternScores(prompt.toLowerCase());
-          const highestScore = Math.max(...Object.values(patternScores));
+          // Handle DistilBERT parser differently (uses parse() method)
+          if (config.useDistilBert && currentParser.constructor.name === 'DistilBertIntentParser') {
+            console.log('🎯 Using DistilBERT parser.parse() method...');
+            const parseResult = await currentParser.parse(prompt);
+            
+            if (parseResult && parseResult.confidence > 0.5) {
+              console.log(`✅ ULTRA-FAST: DistilBERT classification - ${parseResult.intent} (confidence: ${(parseResult.confidence * 100).toFixed(1)}%)`);
+              
+              // Create result structure matching Phi3Agent output
+              intentResult = {
+                success: true,
+                result: {
+                  intentData: {
+                    primaryIntent: parseResult.intent,
+                    intents: [{ intent: parseResult.intent, confidence: parseResult.confidence, reasoning: parseResult.reasoning }],
+                    entities: parseResult.entities || [],
+                    requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(parseResult.intent),
+                    requiresExternalData: false,
+                    captureScreen: (parseResult.intent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
+                                  (parseResult.intent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
+                    suggestedResponse: parseResult.suggestedResponse,
+                    sourceText: prompt,
+                    chainOfThought: {
+                      step1_analysis: parseResult.reasoning,
+                      step2_reasoning: `DistilBERT confidence: ${(parseResult.confidence * 100).toFixed(1)}%`,
+                      step3_consistency: 'DistilBERT semantic classification'
+                    }
+                  }
+                }
+              };
+            }
+          } else if (currentParser.calculatePatternScores) {
+            // Use pattern matching for other parsers (Hybrid, Fast, Original)
+            const patternScores = currentParser.calculatePatternScores(prompt.toLowerCase());
+            const highestScore = Math.max(...Object.values(patternScores));
           
-          if (highestScore > 0) {
+            if (highestScore > 0) {
             // Apply same smart tie-breaking logic as IntentParser
             const intentPriority = {
               'memory_retrieve': 4,
@@ -97,6 +134,15 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
             
             console.log(`✅ ULTRA-FAST: Pattern match found - ${bestIntent} (score: ${highestScore})`);
             
+            // Extract entities using the parser
+            let extractedEntities = [];
+            try {
+              extractedEntities = currentParser.extractEntities(prompt);
+            } catch (entityError) {
+              console.warn('⚠️ Entity extraction failed in fast path:', entityError.message);
+              extractedEntities = [];
+            }
+            
             // Create result structure matching Phi3Agent output
             intentResult = {
               success: true,
@@ -104,12 +150,12 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
                 intentData: {
                   primaryIntent: bestIntent,
                   intents: [{ intent: bestIntent, confidence: 0.9, reasoning: 'Pattern-based classification' }],
-                  entities: [],
+                  entities: extractedEntities,
                   requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(bestIntent),
                   requiresExternalData: false,
                   captureScreen: (bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
                                 (bestIntent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
-                  suggestedResponse: intentParser.getFallbackResponse(bestIntent, prompt),
+                  suggestedResponse: currentParser.getFallbackResponse(bestIntent, prompt),
                   sourceText: prompt,
                   chainOfThought: {
                     step1_analysis: `Pattern-based detection for ${bestIntent}`,
@@ -119,6 +165,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
                 }
               }
             };
+            }
           }
         } catch (error) {
           console.warn('⚠️ IntentParser fast path failed:', error.message);
@@ -191,17 +238,11 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         source: 'fast_local_llm_background',
         timestamp: new Date().toISOString()
       }).then(result => {
-        console.log('✅ Background orchestration completed:', result);
-        console.log('🔍 [DEBUG] Background orchestration result structure:', {
-          hasResult: !!result,
-          hasResponse: !!(result && result.response),
-          resultKeys: result ? Object.keys(result) : 'null',
-          responseValue: result ? result.response : 'undefined'
-        });
+        // Background orchestration completed
         
         // Broadcast orchestration update to frontend if result contains response
         if (result && result.response && windows) {
-          console.log('📡 Broadcasting orchestration update to frontend...');
+          // Broadcasting update
           global.broadcastOrchestrationUpdate({
             type: 'orchestration-complete',
             response: result.response,
@@ -310,6 +351,32 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       }
     } catch (error) {
       console.error('❌ Legacy LLM process message error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+  
+  // Memory cleanup handler
+  ipcMain.handle('cleanup-contaminated-memories', async (event) => {
+    try {
+      console.log('🧹 Starting contaminated memory cleanup...');
+      
+      const result = await coreAgent.executeAgent('UserMemoryAgent', {
+        action: 'cleanup-contaminated-memories'
+      });
+      
+      if (result.success) {
+        console.log(`✅ Cleanup completed: ${result.result.deletedMemories} contaminated memories removed`);
+        return {
+          success: true,
+          deletedMemories: result.result.deletedMemories,
+          deletedEntities: result.result.deletedEntities,
+          message: result.result.message
+        };
+      } else {
+        throw new Error(result.error || 'Cleanup failed');
+      }
+    } catch (error) {
+      console.error('❌ Memory cleanup failed:', error);
       return { success: false, error: error.message };
     }
   });

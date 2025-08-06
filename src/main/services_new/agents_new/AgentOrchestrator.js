@@ -943,7 +943,6 @@ export class AgentOrchestrator {
       const dependencies = {};
 
       // Always load dependencies for execution context (not just during bootstrap)
-      console.log(`🔍 DEBUG: Agent ${agentName} has dependencies:`, agent.dependencies);
       if (agent.dependencies && Array.isArray(agent.dependencies)) {
         for (const dependency of agent.dependencies) {
           try {
@@ -957,7 +956,7 @@ export class AgentOrchestrator {
               const require = createRequire(import.meta.url);
               module = require(dependency);
               dependencies[dependencyCamelcase] = module;
-              console.log(`✅ Loaded built-in/native module ${dependency} via require()`);
+              // Loaded built-in module
             } else {
               // Standard import for other dependencies
               module = await import(dependency);
@@ -982,7 +981,7 @@ export class AgentOrchestrator {
         }
       }
       
-      console.log(`🔍 Dependencies being passed to ${agentName}:`, Object.keys(dependencies));
+      // Dependencies loaded for agent execution
       console.log(`🔍 screenshotDesktop available:`, !!dependencies.screenshotDesktop);
 
       // Bootstrap agent if needed (using the same dependencies)
@@ -1124,7 +1123,7 @@ export class AgentOrchestrator {
       const step = workflow[workflowState.currentStep];
       const { agent, params, context: stepContext = {} } = step;
       
-      console.log(`📋 Executing workflow step ${workflowState.currentStep + 1}/${workflow.length}: ${agent}.${params.action}`);
+      // Executing workflow step
       
       try {
         // Execute agent with accumulated context and previous results
@@ -1256,8 +1255,8 @@ export class AgentOrchestrator {
           try {
             const { createRequire } = await import('module');
             const require = createRequire(import.meta.url);
-            const NaturalLanguageIntentParser = require('../utils/IntentParser.cjs');
-            const parser = new NaturalLanguageIntentParser();
+            const parserFactory = require('../utils/IntentParserFactory.cjs');
+            const parser = await parserFactory.getParserForUseCase('fast-fallback');
             suggestedResponse = parser.getFallbackResponse('memory_retrieve', userMessage);
           } catch (error) {
             console.warn('Failed to load IntentParser, using fallback:', error);
@@ -1340,12 +1339,11 @@ export class AgentOrchestrator {
       }
       
       console.log('✅ Local intent parsing successful:', intentResult.result);
-      console.log('🔍 DEBUG: intentResult structure:', JSON.stringify(intentResult, null, 2));
-      
-      // Fix: Access the correct nested level - intentResult.result.result contains the actual intent data
+      // Reduced verbose logging - only log intent classification result
       const actualResult = intentResult.result.result;
       const actualMetadata = intentResult.result.metadata;
       
+      console.log(`[INFO] Intent classified as: ${actualResult.intent} (confidence: ${actualResult.confidence || 'N/A'})`);
       console.log('🔍 DEBUG: actualResult.intent:', actualResult.intent);
       
       return {
@@ -1533,12 +1531,27 @@ export class AgentOrchestrator {
       // Build search query from extracted entities if available
       let searchQuery = userMessage;
       
-      if (entities && entities.length > 0) {
-        // Build semantic search query from extracted entities
-        const entityValues = entities.map(e => e.value).filter(v => v && v.length > 0);
-        if (entityValues.length > 0) {
-          searchQuery = entityValues.join(' ');
-          console.log('✅ Built search query from entities:', searchQuery, 'from entities:', entities);
+      if (entities && Object.keys(entities).length > 0) {
+        // Enhanced query building for better semantic matching
+        const queryParts = [];
+        
+        // Add temporal context for time-based queries
+        if (entities.datetime && entities.datetime.length > 0) {
+          queryParts.push(...entities.datetime);
+          // For "what's going on" type queries, add event-related terms
+          if (userMessage.toLowerCase().includes('what') && userMessage.toLowerCase().includes('going on')) {
+            queryParts.push('events', 'appointments', 'plans', 'schedule');
+          }
+        }
+        
+        // Add other entity types
+        if (entities.person && entities.person.length > 0) queryParts.push(...entities.person);
+        if (entities.location && entities.location.length > 0) queryParts.push(...entities.location);
+        if (entities.event && entities.event.length > 0) queryParts.push(...entities.event);
+        
+        if (queryParts.length > 0) {
+          searchQuery = queryParts.join(' ');
+          console.log('✅ Enhanced search query from entities:', searchQuery);
         }
       }
       
@@ -1546,22 +1559,21 @@ export class AgentOrchestrator {
         action: 'memory-semantic-search',
         query: searchQuery,
         limit: 5,
-        minSimilarity: 0.2
+        minSimilarity: 0.2   // Optimized based on similarity testing for temporal queries
       }, context);
       
-      console.log(`[DEBUG] Memory search result:`, memoryResult);
+      console.log(`[INFO] Memory search completed: ${memoryResult.success ? 'success' : 'failed'}`);
       
-      if (memoryResult.success && memoryResult.result?.results?.length > 0) {
-        const memories = memoryResult.result.results;
-        console.log(`[DEBUG] Found ${memories.length} memories:`, memories.map(m => ({
-          source_text: m.source_text?.substring(0, 100),
-          similarity: m.similarity
-        })));
+      // Handle nested result structure from agent execution
+      const actualResults = memoryResult.result?.results || memoryResult.results;
+      
+      if (memoryResult.success && actualResults && actualResults.length > 0) {
+        console.log(`[INFO] Found ${actualResults.length} relevant memories for context`);
         
         // Generate natural response using Phi3
         try {
           // Apply temporal relevance boost before sorting
-          const boostedMemories = memories.map(memory => {
+          const boostedMemories = actualResults.map(memory => {
             let boostedSimilarity = memory.similarity;
             
             // Boost memories that contain temporal references matching the query
@@ -1574,13 +1586,15 @@ export class AgentOrchestrator {
               { query: /\b(yesterday|a day ago)\b/, memory: /\b(yesterday|a day ago)\b/, boost: 0.2 },
               { query: /\b(couple weeks? ago|two weeks? ago)\b/, memory: /\b(two weeks? ago|couple weeks? ago)\b/, boost: 0.2 },
               { query: /\b(next week|upcoming week)\b/, memory: /\b(next week|upcoming week)\b/, boost: 0.15 },
-              { query: /\b(this week|current week)\b/, memory: /\b(this week|current week)\b/, boost: 0.15 }
+              { query: /\b(this week|current week)\b/, memory: /\b(this week|current week)\b/, boost: 0.15 },
+              { query: /\b(next month|upcoming month)\b/, memory: /\b(next month|in a month|upcoming month)\b/, boost: 0.2 },
+              { query: /\b(this month|current month)\b/, memory: /\b(this month|current month)\b/, boost: 0.15 }
             ];
             
             for (const { query, memory: memoryPattern, boost } of temporalBoosts) {
               if (query.test(queryLower) && memoryPattern.test(memoryLower)) {
                 boostedSimilarity += boost;
-                console.log(`🕐 Temporal boost applied: +${boost} for "${memory.source_text.substring(0, 50)}..."`);
+                // Temporal boost applied
                 break;
               }
             }
@@ -1592,23 +1606,79 @@ export class AgentOrchestrator {
           const sortedMemories = boostedMemories.sort((a, b) => b.similarity - a.similarity);
           const topMemory = sortedMemories[0];
           
+          // Debug logging for memory selection
+          console.log(`[DEBUG] Memory selection analysis:`);
+          sortedMemories.forEach((mem, i) => {
+            console.log(`  ${i+1}. Similarity: ${mem.similarity.toFixed(4)} - "${mem.source_text.substring(0, 60)}..."`);
+          });
+          
+          // Check if the most relevant memory meets minimum similarity threshold
+          const minSimilarityThreshold = 0.2; // Match the semantic search threshold
+          console.log(`[DEBUG] Top memory similarity: ${topMemory.similarity.toFixed(4)}, threshold: ${minSimilarityThreshold}`);
+          if (topMemory.similarity < minSimilarityThreshold) {
+            return {
+              success: true,
+              response: "I don't have any relevant information stored about that.",
+              handledBy: 'UserMemoryAgent',
+              method: 'memory_retrieve_no_results',
+              timestamp: new Date().toISOString()
+            };
+          }
+          
           // Focus on the most relevant memory, include others as context if needed
           const memoryContext = sortedMemories
             .slice(0, 3) // Only use top 3 most relevant memories
+            .filter(m => m.similarity >= minSimilarityThreshold) // Only include relevant memories
             .map((m, index) => {
               const relevanceLabel = index === 0 ? '[MOST RELEVANT]' : `[Similarity: ${m.similarity.toFixed(3)}]`;
               return `${relevanceLabel} ${m.source_text}`;
             })
             .join('\n\n');
             
-          const prompt = `IMPORTANT: You have access to the user's personal stored memories and should use them to answer questions. Do not say you don't have memories or information.\n\nThe user asked: "${userMessage}"\n\nHere are the user's relevant stored memories:\n\n${memoryContext}\n\nBased on these stored memories, tell the user what's happening next week. Reference the specific information from their memories. Be helpful and direct:`
+          // Debug: Log the exact memories being passed to Phi3
+          console.log(`[DEBUG] Memory context being passed to Phi3:`);
+          console.log(`[DEBUG] ${memoryContext}`);
+          console.log(`[DEBUG] End of memory context`);
+          
+          // Additional safety check: if no relevant memories after filtering, don't call Phi3
+          if (!memoryContext || memoryContext.trim() === '') {
+            return {
+              success: true,
+              response: "I don't have any relevant information stored about that.",
+              handledBy: 'UserMemoryAgent',
+              method: 'memory_retrieve_no_context',
+              timestamp: new Date().toISOString()
+            };
+          }
+          
+          // Create a more concise prompt for memory retrieval
+          const isUpcomingQuery = /\b(coming|happening|scheduled|planned|upcoming|next|future)\b/i.test(userMessage);
+          
+          let prompt;
+          if (isUpcomingQuery) {
+            prompt = `Based on these memories, what upcoming events/items are scheduled?
+
+${memoryContext}
+
+Question: "${userMessage}"
+
+Answer briefly (1-2 sentences max). If no upcoming events found, say "I don't see any upcoming events in my memory."`;
+          } else {
+            prompt = `Answer ONLY using the information from these memories. Be concise (1-2 sentences max).
+
+${memoryContext}
+
+Question: "${userMessage}"
+
+Answer briefly using ONLY the memories above:`;
+          }
           
           const phi3Result = await this.executeAgent('Phi3Agent', {
             action: 'query-phi3',
             prompt: prompt,
             options: {
-              maxTokens: 100,
-              temperature: 0.2
+              maxTokens: 30,
+              temperature: 0.1
             }
           }, context);
           
@@ -1619,9 +1689,9 @@ export class AgentOrchestrator {
               handledBy: 'UserMemoryAgent + Phi3Agent',
               method: 'local_memory_retrieve_with_llm',
               timestamp: new Date().toISOString(),
-              memories: memories.length
+              memories: actualResults.length
             };
-            console.log(`[DEBUG] Generated natural response:`, phi3Result.result.response);
+            // Generated natural response
             return result;
           }
         } catch (error) {
@@ -1629,7 +1699,7 @@ export class AgentOrchestrator {
         }
         
         // Fallback to simple response if Phi3 fails
-        const responseText = `I found this information: ${memories.map(m => m.source_text || m.suggested_response).join(', ')}`;
+        const responseText = `I found this information: ${actualResults.map(m => m.source_text || m.suggested_response).join(', ')}`;
         console.log(`[DEBUG] Generated fallback response:`, responseText);
         
         const result = {
@@ -1651,9 +1721,15 @@ export class AgentOrchestrator {
           return questionResult;
         } catch (questionError) {
           console.warn('⚠️ Question fallback failed:', questionError.message);
+          // Check if this was a memory-related question for better fallback
+          const isMemoryQuestion = /\b(previous|last|earlier|before|discuss|conversation|chat|talk|said|mention)\b/i.test(userMessage);
+          const fallbackResponse = isMemoryQuestion 
+            ? 'I don\'t have any record of our previous conversations in my memory.'
+            : 'I don\'t have that information stored. Could you provide more details?';
+            
           return {
             success: true,
-            response: 'I don\'t have that information stored. Could you provide more details?',
+            response: fallbackResponse,
             handledBy: 'UserMemoryAgent',
             method: 'memory_not_found',
             timestamp: new Date().toISOString()
@@ -1757,9 +1833,16 @@ export class AgentOrchestrator {
       // Try to use Phi3 for actual response generation
       try {
         console.log('🤖 Querying Phi3 for question response...');
-        const concisePrompt = `Please provide a brief, direct answer to this question. Keep your response under 2 sentences and avoid verbose explanations or guides.
-
-Question: ${userMessage}`;
+        
+        // Check if this is a memory-related question
+        const isMemoryQuestion = /\b(previous|last|earlier|before|discuss|conversation|chat|talk|said|mention)\b/i.test(userMessage);
+        
+        let concisePrompt;
+        if (isMemoryQuestion) {
+          concisePrompt = `No relevant memories found. Answer briefly in 1 sentence:\n\nQuestion: ${userMessage}\n\nBrief response (don't make up details):`
+        } else {
+          concisePrompt = `Answer briefly in 1-2 sentences:\n\nQuestion: ${userMessage}\n\nBrief answer:`
+        }
         
         const phi3Result = await this.executeAgent('Phi3Agent', {
           action: 'query-phi3',
@@ -1863,7 +1946,7 @@ Question: ${userMessage}`;
         userId: context.userId || 'default_user'
       });
       
-      console.log('✅ Workflow execution completed');
+      // Workflow completed
       
       // Format response for main.cjs compatibility
       return {
@@ -2030,7 +2113,7 @@ Question: ${userMessage}`;
       const intent = intentObj.intent;
       const agentNames = this.getAgentsForIntent(intent);
       
-      console.log(`🎭 Processing intent: ${intent} -> Agents: [${agentNames.join(', ')}]`);
+      // Processing intent
       
       if (agentNames.length > 0) {
         // Create workflow step for each agent mapped to this intent

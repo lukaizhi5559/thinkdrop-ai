@@ -22,7 +22,8 @@ const AGENT_FORMAT = {
             'memory-update',
             'memory-list',
             'screenshot-store',
-            'migrate-embedding-column'
+            'migrate-embedding-column',
+            'cleanup-contaminated-memories'
           ]
         },
         key: { type: 'string', description: 'Memory key for store/retrieve operations' },
@@ -988,12 +989,55 @@ const AGENT_FORMAT = {
               };
             }
             
+            // Additional aggressive filtering for suspicious content
+            const suspiciousPatterns = [
+              /^(buy something|anything else|do I have to)/i,
+              /^(screen capture|intent parsing|purchasing items)/i,
+              /^(based on your recent|it seems you're considering)/i,
+              /^(instruction:|much more|additional constraints)/i
+            ];
+            
+            for (const pattern of suspiciousPatterns) {
+              if (pattern.test(sourceText)) {
+                console.log('[SKIP] Rejecting suspicious sourceText:', sourceText.substring(0, 100) + '...');
+                return {
+                  success: false,
+                  error: 'Rejected suspicious sourceText',
+                  skipped: true,
+                  reason: 'sourceText appears to be AI-generated or system content'
+                };
+              }
+            }
+            
             // Fix: Properly extract suggested response without hardcoded fallback
             let suggestedResponse = storeData.suggestedResponse || params.suggestedResponse || params.value || null;
             
             let primaryIntent = storeData.primaryIntent || 'memory_store';
             let entities = storeData.entities ? JSON.stringify(storeData.entities) : null;
             let metadata = storeData.metadata || {};
+            
+            // Convert entities object to array format for storage
+            let entitiesArray = [];
+            if (storeData.entities) {
+              if (Array.isArray(storeData.entities)) {
+                entitiesArray = storeData.entities;
+              } else if (typeof storeData.entities === 'object') {
+                // Convert object format {"datetime": ["next week"], "location": ["ohio"]} to array
+                for (const [entityType, entityValues] of Object.entries(storeData.entities)) {
+                  if (Array.isArray(entityValues)) {
+                    for (const value of entityValues) {
+                      if (value && value.trim()) { // Only add non-empty values
+                        entitiesArray.push({
+                          entity: value,
+                          type: entityType,
+                          entity_type: entityType
+                        });
+                      }
+                    }
+                  }
+                }
+              }
+            }
             
             // Add additional metadata
             metadata.requiresMemoryAccess = storeData.requiresMemoryAccess || false;
@@ -1222,10 +1266,10 @@ const AGENT_FORMAT = {
               const insertResult = await database.run(insertSQL, values);
               
               // Store entities in memory_entities table if they exist
-              if (storeData.entities && Array.isArray(storeData.entities) && storeData.entities.length > 0) {
-                console.log(`[INFO] Storing ${storeData.entities.length} entities for memory ${memoryId}`);
+              if (entitiesArray && entitiesArray.length > 0) {
+                console.log(`[INFO] Storing ${entitiesArray.length} entities for memory ${memoryId}`);
                 
-                for (const entity of storeData.entities) {
+                for (const entity of entitiesArray) {
                   let entityText, entityType;
                   
                   if (typeof entity === 'string') {
@@ -1498,7 +1542,7 @@ const AGENT_FORMAT = {
             const semanticQuery = params.query || params.searchText || params.input || params.message;
             const semanticLimit = params.limit || params.options?.limit || 3;
             const timeWindow = params.timeWindow || params.options?.timeWindow || null; // e.g., '7 days', '1 month'
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.2; // Optimized threshold for semantic search
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.4; // Increased threshold to prevent hallucination
             console.log(`[DEBUG] Using similarity threshold: ${minSimilarity}`);
             
             if (!semanticQuery) {
@@ -1560,38 +1604,75 @@ const AGENT_FORMAT = {
                 };
               }
               
-              // Calculate similarities and rank results
+              // Calculate similarity for all memories in batch (much faster)
               const rankedResults = [];
+              
+              // Prepare batch similarity calculation
+              const memoryEmbeddings = [];
+              const validMemories = [];
               
               for (const memory of memories) {
                 try {
-                  // Handle both raw array (FLOAT[384]) and JSON string (legacy) formats
                   const memoryEmbedding = Array.isArray(memory.embedding) 
                     ? memory.embedding 
                     : JSON.parse(memory.embedding);
                   
-                  // Calculate cosine similarity using SemanticEmbeddingAgent
-                  const similarityResult = await context.executeAgent('SemanticEmbeddingAgent', {
-                    action: 'calculate-similarity',
-                    embedding1: queryEmbedding,
-                    embedding2: memoryEmbedding
-                  }, context);
+                  memoryEmbeddings.push(memoryEmbedding);
+                  validMemories.push(memory);
+                } catch (error) {
+                  console.warn(`[WARN] Failed to parse embedding for memory ${memory.id}:`, error.message);
+                }
+              }
+              
+              // Batch calculate similarities (single agent call)
+              const batchSimilarityResult = await context.executeAgent('SemanticEmbeddingAgent', {
+                action: 'batch-calculate-similarity',
+                queryEmbedding: queryEmbedding,
+                memoryEmbeddings: memoryEmbeddings
+              }, context);
+              
+              // Handle nested result structure from agent execution
+              const actualResult = batchSimilarityResult.result?.result || batchSimilarityResult.result;
+              const similarities = actualResult?.similarities;
+              
+              if (batchSimilarityResult.success && similarities) {
+                
+                for (let i = 0; i < validMemories.length; i++) {
+                  const memory = validMemories[i];
+                  const similarity = similarities[i];
                   
-                  const similarity = similarityResult.result?.similarity || similarityResult.similarity;
-                  console.log(`[DEBUG] Memory "${memory.source_text?.substring(0, 50)}..." similarity: ${similarity} (threshold: ${minSimilarity})`);
-                  
-                  if (similarityResult.success && similarity >= minSimilarity) {
-                    console.log(`[MATCH] Found similar memory with score ${similarity}`);
+                  if (similarity >= minSimilarity) {
                     rankedResults.push({
                       ...memory,
                       similarity: similarity,
                       embedding: undefined // Remove embedding from response to save space
                     });
-                  } else {
-                    console.log(`[NO MATCH] Memory similarity ${similarity} below threshold ${minSimilarity}`);
                   }
-                } catch (error) {
-                  console.warn(`[WARN] Failed to calculate similarity for memory ${memory.id}:`, error.message);
+                }
+                
+                console.log(`[SUCCESS] Batch processed ${validMemories.length} memories, found ${rankedResults.length} matches`);
+              } else {
+                console.warn('[WARN] Batch similarity calculation failed, falling back to individual calculations');
+                
+                // Fallback to individual calculations if batch fails
+                for (let i = 0; i < validMemories.length; i++) {
+                  try {
+                    const memory = validMemories[i];
+                    const memoryEmbedding = memoryEmbeddings[i];
+                    
+                    // Calculate cosine similarity directly (avoid agent call)
+                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, memoryEmbedding);
+                    
+                    if (similarity >= minSimilarity) {
+                      rankedResults.push({
+                        ...memory,
+                        similarity: similarity,
+                        embedding: undefined
+                      });
+                    }
+                  } catch (error) {
+                    console.warn(`[WARN] Failed to calculate similarity for memory ${validMemories[i].id}:`, error.message);
+                  }
                 }
               }
               
@@ -1599,7 +1680,7 @@ const AGENT_FORMAT = {
               rankedResults.sort((a, b) => b.similarity - a.similarity);
               const topResults = rankedResults.slice(0, semanticLimit);
               
-              console.log(`[SUCCESS] Found ${topResults.length} semantically similar memories`);
+              // Found similar memories
               
               return {
                 success: true,
@@ -1831,6 +1912,70 @@ const AGENT_FORMAT = {
             } catch (error) {
               console.error('[ERROR] Screenshot storage failed:', error);
               throw new Error('Screenshot storage failed: ' + error.message);
+            }
+            
+          case 'cleanup-contaminated-memories':
+            // Clean up contaminated memories from database
+            try {
+              console.log('[INFO] Starting contaminated memory cleanup...');
+              
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              // Define patterns for contaminated memories
+              const contaminatedPatterns = [
+                '%buy something%',
+                '%anything else%',
+                '%do I have to%',
+                '%family gathering%',
+                '%community fair%',
+                '%project deadline%',
+                '%team members%',
+                '%presentations%',
+                '%screen capture%',
+                '%intent parsing%',
+                '%based on your recent%',
+                '%it seems you\'re considering%',
+                '%instruction:%',
+                '%much more%'
+              ];
+              
+              let totalDeleted = 0;
+              
+              for (const pattern of contaminatedPatterns) {
+                const deleteSQL = 'DELETE FROM memory WHERE source_text LIKE ?';
+                const result = await database.run(deleteSQL, [pattern]);
+                const deletedCount = result.changes || 0;
+                totalDeleted += deletedCount;
+                
+                if (deletedCount > 0) {
+                  console.log(`[SUCCESS] Deleted ${deletedCount} memories matching pattern: ${pattern}`);
+                }
+              }
+              
+              // Also clean up memory_entities for deleted memories
+              const orphanedEntitiesSQL = `
+                DELETE FROM memory_entities 
+                WHERE memory_id NOT IN (SELECT id FROM memory)
+              `;
+              const entitiesResult = await database.run(orphanedEntitiesSQL);
+              const deletedEntities = entitiesResult.changes || 0;
+              
+              console.log(`[SUCCESS] Cleanup completed: ${totalDeleted} contaminated memories deleted, ${deletedEntities} orphaned entities removed`);
+              
+              return {
+                success: true,
+                action: 'cleanup-contaminated-memories',
+                deletedMemories: totalDeleted,
+                deletedEntities: deletedEntities,
+                message: `Cleaned up ${totalDeleted} contaminated memories`
+              };
+              
+            } catch (error) {
+              console.error('[ERROR] Memory cleanup failed:', error);
+              throw new Error('Memory cleanup failed: ' + error.message);
             }
             
           case 'migrate-embedding-column':
@@ -2930,6 +3075,32 @@ const AGENT_FORMAT = {
         console.error('[ERROR] Screenshot storage failed:', error);
         throw error;
       }
+    },
+    
+    // Cosine similarity calculation for fallback (same as SemanticEmbeddingAgent)
+    calculateCosineSimilarity(vecA, vecB) {
+      if (vecA.length !== vecB.length) {
+        throw new Error('Vectors must have the same length');
+      }
+      
+      let dotProduct = 0;
+      let normA = 0;
+      let normB = 0;
+      
+      for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+      }
+      
+      normA = Math.sqrt(normA);
+      normB = Math.sqrt(normB);
+      
+      if (normA === 0 || normB === 0) {
+        return 0;
+      }
+      
+      return dotProduct / (normA * normB);
     }
   };
   

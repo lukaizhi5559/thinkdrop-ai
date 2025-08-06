@@ -69,8 +69,7 @@ const AGENT_FORMAT = {
       // For all other actions, ensure embedder is ready (lazy initialization)
       if (!this.isEmbeddingReady || !this.embedder) {
         console.log('[INFO] SemanticEmbeddingAgent: Lazy-initializing embedder...');
-        console.log('[DEBUG] Execute context keys:', Object.keys(context || {}));
-        console.log('[DEBUG] Embedder in context:', !!context?.embedder);
+        // Using embedder from context
         
         // Check if embedder is passed in context
         if (context?.embedder) {
@@ -92,6 +91,9 @@ const AGENT_FORMAT = {
           
         case 'calculate-similarity':
           return await AGENT_FORMAT.calculateSimilarity.call(this, params, context);
+          
+        case 'batch-calculate-similarity':
+          return await AGENT_FORMAT.batchCalculateSimilarity.call(this, params, context);
           
         default:
           throw new Error(`Unknown action: ${action}`);
@@ -235,6 +237,55 @@ const AGENT_FORMAT = {
     } catch (error) {
       console.error('[ERROR] Similarity calculation failed:', error);
       throw error;
+    }
+  },
+
+  // Batch calculate similarities between one query embedding and multiple memory embeddings
+  async batchCalculateSimilarity(params, context) {
+    try {
+      const { queryEmbedding, memoryEmbeddings } = params;
+      
+      if (!Array.isArray(queryEmbedding)) {
+        throw new Error('queryEmbedding must be an array');
+      }
+      
+      if (!Array.isArray(memoryEmbeddings)) {
+        throw new Error('memoryEmbeddings must be an array');
+      }
+      
+      const similarities = [];
+      
+      for (const memoryEmbedding of memoryEmbeddings) {
+        if (!Array.isArray(memoryEmbedding)) {
+          similarities.push(0); // Invalid embedding gets 0 similarity
+          continue;
+        }
+        
+        if (queryEmbedding.length !== memoryEmbedding.length) {
+          similarities.push(0); // Dimension mismatch gets 0 similarity
+          continue;
+        }
+        
+        // Calculate cosine similarity
+        const similarity = AGENT_FORMAT.cosineSimilarity.call(this, queryEmbedding, memoryEmbedding);
+        similarities.push(similarity);
+      }
+      
+      return {
+        success: true,
+        result: {
+          similarities: similarities,
+          count: similarities.length,
+          queryDimensions: queryEmbedding.length
+        }
+      };
+      
+    } catch (error) {
+      console.error('[ERROR] Batch similarity calculation failed:', error);
+      return {
+        success: false,
+        error: error.message
+      };
     }
   },
 
