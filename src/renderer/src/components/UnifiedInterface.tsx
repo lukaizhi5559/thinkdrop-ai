@@ -18,6 +18,7 @@ import MemoryDebugger from './MemoryDebugger';
 import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
+import { useConversation } from '../contexts/ConversationContext';
 
 type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration';
 
@@ -33,6 +34,9 @@ interface UnifiedInterfaceProps {
 const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
   const [currentView, setCurrentView] = useState<ViewType>('chat');
   const [showMenu, setShowMenu] = useState(false);
+  
+  // Conversation context for sidebar integration
+  const { toggleSidebar, isSidebarOpen } = useConversation();
   
   // Ref for the menu modal to detect clicks outside
   const menuRef = useRef<HTMLDivElement>(null);
@@ -77,14 +81,23 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
     switch (currentView) {
       case 'chat':
         return (
-          <>
-            <div className="w-6 h-6 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center">
-              <Droplet className="w-3 h-3 text-white" />
+          <button
+            onClick={() => {
+              console.log('🔍 [UnifiedInterface] Messages button clicked! Sidebar state:', isSidebarOpen);
+              toggleSidebar();
+            }}
+            className="flex items-center space-x-3 hover:bg-white/5 rounded-lg px-2 py-1 transition-colors group"
+            title={isSidebarOpen ? 'Close Conversations' : 'Open Conversations'}
+          >
+            <div className={`w-6 h-6 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform ${
+              isSidebarOpen ? 'ring-2 ring-teal-400/50' : ''
+            }`}>
+              <MessageCircle className="w-3 h-3 text-white" />
             </div>
-            <div className="text-white/90 font-medium text-sm">
-              Messages
+            <div className="text-white/90 font-medium text-sm group-hover:text-white">
+              {isSidebarOpen ? 'Close Conversations' : 'Messages'}
             </div>
-          </>
+          </button>
         );
       case 'insight':
         return (
@@ -174,16 +187,26 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
       <div className="flex items-center justify-end">
         {/* Right side - Navigation buttons */}
         <div className="flex items-center space-x-1" style={{ WebkitAppRegion: 'no-drag' } as any}>
-          {/* Chat button */}
+          {/* Chat button - also toggles sidebar when in chat view */}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => handleViewChange('chat')}
+            onClick={() => {
+              console.log('🔍 [UnifiedInterface] Chat button clicked! View:', currentView, 'Sidebar:', isSidebarOpen);
+              if (currentView === 'chat') {
+                toggleSidebar();
+              } else {
+                handleViewChange('chat');
+              }
+            }}
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
               currentView === 'chat' 
-                ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' 
+                ? `bg-teal-500/20 text-teal-400 border border-teal-500/30 ${
+                    isSidebarOpen ? 'ring-1 ring-teal-400/50' : ''
+                  }` 
                 : 'text-white/60 hover:text-white hover:bg-white/10'
             }`}
+            title={currentView === 'chat' ? (isSidebarOpen ? 'Close Conversations' : 'Open Conversations') : 'Switch to Chat'}
           >
             <MessageCircle className="w-4 h-4" />
           </Button>

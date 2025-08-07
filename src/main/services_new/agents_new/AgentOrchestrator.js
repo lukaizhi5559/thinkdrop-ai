@@ -291,6 +291,16 @@ export class AgentOrchestrator {
         config: { interval_minutes: 10, batch_size: 10 },
         orchestrator_metadata: { category: 'daemon', priority: 'medium' }
       },
+      {
+        name: 'ConversationSessionAgent',
+        description: 'Manages multi-chat conversation sessions with context awareness and auto-initiation',
+        dependencies: ['UserMemoryAgent', 'SemanticEmbeddingAgent'],
+        execution_target: 'frontend',
+        requires_database: true,
+        database_type: 'duckdb',
+        config: { max_active_sessions: 10, hibernation_timeout_minutes: 30, context_similarity_threshold: 0.7 },
+        orchestrator_metadata: { category: 'conversation', priority: 'high' }
+      },
       // {
       //   name: 'IntentParserAgent',
       //   description: 'Parses user intents and determines appropriate actions',

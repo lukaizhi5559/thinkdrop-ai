@@ -4,6 +4,9 @@
  */
 
 const IntentResponses = require('./IntentResponses.cjs');
+const trainingData = require('./training-data/thinkdrop-training-data.cjs');
+const enhancedTrainingData = require('./training-data/enhanced-training-data.cjs');
+const edgeCaseTrainingData = require('./training-data/edge-case-training-data.cjs');
 
 class DistilBertIntentParser {
   constructor() {
@@ -563,7 +566,17 @@ class DistilBertIntentParser {
    * Implements comprehensive training strategy for 100% accuracy
    */
   getTrainingData() {
-    return [
+    // Combine training data in priority order:
+    // 1. Edge cases (highest priority - addresses specific misclassification scenarios)
+    // 2. Enhanced data (high quality, manually curated real-world examples)
+    // 3. Bulk data (auto-generated for volume)
+    const edgeCases = edgeCaseTrainingData();
+    const enhanced = enhancedTrainingData();
+    const bulk = trainingData();
+    
+    console.log(`📊 Loading training data: ${edgeCases.length} edge cases + ${enhanced.length} enhanced + ${bulk.length} bulk = ${edgeCases.length + enhanced.length + bulk.length} total examples`);
+    
+    return [...edgeCases, ...enhanced, ...bulk,
       // === MEMORY STORE (High Confidence) ===
       { text: 'I had a meeting with John yesterday', intent: 'memory_store', confidence: 'high', complexity: 'simple' },
       { text: 'Remember I have an appointment tomorrow', intent: 'memory_store', confidence: 'high', complexity: 'simple' },
@@ -654,13 +667,57 @@ class DistilBertIntentParser {
       { text: 'Save this page as a PDF', intent: 'command' },
       { text: 'Start recording my screen', intent: 'command' },
       
-      // Question examples
+      // Question examples - comprehensive coverage of question types
       { text: 'What is the weather like', intent: 'question' },
       { text: 'How do I cook pasta', intent: 'question' },
       { text: 'What is the capital of France', intent: 'question' },
       { text: 'Why is the sky blue', intent: 'question' },
       { text: 'What time does the library open', intent: 'question' },
       { text: 'Where is the nearest coffee shop', intent: 'question' },
+      
+      // WHO questions (critical missing category)
+      { text: 'Who is the president of the USA', intent: 'question' },
+      { text: 'Who is the president of South Africa', intent: 'question' },
+      { text: 'Who is the current president', intent: 'question' },
+      { text: 'Who is the CEO of Apple', intent: 'question' },
+      { text: 'Who invented the telephone', intent: 'question' },
+      { text: 'Who wrote this book', intent: 'question' },
+      { text: 'Who is the author of Harry Potter', intent: 'question' },
+      { text: 'Who is the prime minister', intent: 'question' },
+      
+      // More WHAT questions
+      { text: 'What is the population of China', intent: 'question' },
+      { text: 'What is the meaning of life', intent: 'question' },
+      { text: 'What is artificial intelligence', intent: 'question' },
+      { text: 'What is the tallest mountain', intent: 'question' },
+      { text: 'What is the speed of light', intent: 'question' },
+      
+      // More HOW questions
+      { text: 'How does photosynthesis work', intent: 'question' },
+      { text: 'How old is the Earth', intent: 'question' },
+      { text: 'How many people live in Tokyo', intent: 'question' },
+      { text: 'How far is the moon', intent: 'question' },
+      { text: 'How do computers work', intent: 'question' },
+      
+      // WHEN questions
+      { text: 'When was the first computer invented', intent: 'question' },
+      { text: 'When did World War 2 end', intent: 'question' },
+      { text: 'When is the next solar eclipse', intent: 'question' },
+      
+      // WHERE questions
+      { text: 'Where is the Great Wall of China', intent: 'question' },
+      { text: 'Where is Mount Everest located', intent: 'question' },
+      { text: 'Where can I find good pizza', intent: 'question' },
+      
+      // WHY questions
+      { text: 'Why do birds migrate', intent: 'question' },
+      { text: 'Why is water wet', intent: 'question' },
+      { text: 'Why do we dream', intent: 'question' },
+      
+      // WHICH questions
+      { text: 'Which planet is closest to the sun', intent: 'question' },
+      { text: 'Which country has the most people', intent: 'question' },
+      { text: 'Which language is most spoken', intent: 'question' },
       
       // Greeting examples
       { text: 'Hello there', intent: 'greeting' },

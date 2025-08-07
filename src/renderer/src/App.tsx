@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { LocalLLMProvider } from './contexts/LocalLLMContext';
+import { ConversationProvider } from './contexts/ConversationContext';
+import UnifiedInterface from './components/UnifiedInterface';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
-import UnifiedInterface from './components/UnifiedInterface';
-
-import { LocalLLMProvider } from './contexts/LocalLLMContext';
+import { ConversationSidebar } from './components/ConversationSidebar';
+import { SidebarToggle } from './components/SidebarToggle';
 import './types/electronAPI'; // Import Electron API types
 
 function App() {
@@ -27,13 +29,14 @@ function App() {
   
   // Main unified overlay interface state
   const [isListening, setIsListening] = useState(false);
-  const [showResponse, setShowResponse] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [isGatheringInsight, setIsGatheringInsight] = useState(false);
+  const [isGatheringInsight] = useState(false);
+  const [showResponse, setShowResponse] = useState(false);
 
   // Simulate analysis and response
   useEffect(() => {
     if (isListening) {
+      console.log('Started listening...');
       const analysisTimer = setTimeout(() => {
         setIsAnalyzing(true);
       }, 3000);
@@ -48,6 +51,7 @@ function App() {
         clearTimeout(responseTimer);
       };
     } else {
+      console.log('Stopped listening...');
       setIsAnalyzing(false);
       setShowResponse(false);
     }
@@ -72,24 +76,35 @@ function App() {
 
   // Render the unified interface
   return (
-    <div className="w-full h-full">
-      <UnifiedInterface
-        isListening={isListening}
-        toggleListening={toggleListening}
-        isAnalyzing={isAnalyzing}
-        isGatheringInsight={isGatheringInsight}
-        showResponse={showResponse}
-        setShowResponse={setShowResponse}
-      />
-    </div>
+    <ConversationProvider>
+      <div className="h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white overflow-hidden relative">
+        {/* Conversation Sidebar */}
+        <ConversationSidebar />
+        
+        {/* Test Buttons */}
+        <div className="fixed top-16 left-4 z-10">
+          <SidebarToggle />
+        </div>
+        
+        {/* Main Content */}
+        <UnifiedInterface
+          isListening={isListening}
+          toggleListening={toggleListening}
+          isAnalyzing={isAnalyzing}
+          isGatheringInsight={isGatheringInsight}
+          showResponse={showResponse}
+          setShowResponse={setShowResponse}
+        />
+      </div>
+    </ConversationProvider>
   );
-}
+};
 
 // Wrap App with LocalLLMProvider for agent orchestration context
 const AppWithProvider: React.FC = () => {
   return (
     <LocalLLMProvider>
-      <App />
+    <App />
     </LocalLLMProvider>
   );
 };

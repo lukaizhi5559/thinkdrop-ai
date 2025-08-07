@@ -241,17 +241,39 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         // Background orchestration completed
         
         // Broadcast orchestration update to frontend if result contains response
+        console.log('🔍 [DEBUG] Checking broadcast conditions:');
+        console.log('  - result exists:', !!result);
+        console.log('  - result.response exists:', !!(result && result.response));
+        console.log('  - windows exists:', !!windows);
+        console.log('  - global.broadcastOrchestrationUpdate exists:', !!global.broadcastOrchestrationUpdate);
+        
         if (result && result.response && windows) {
-          // Broadcasting update
-          global.broadcastOrchestrationUpdate({
+          console.log('📡 [BROADCAST] Broadcasting orchestration update to frontend...');
+          
+          const updateData = {
             type: 'orchestration-complete',
             response: result.response,
             handledBy: result.handledBy,
             method: result.method,
             timestamp: result.timestamp
-          }, windows);
+          };
+          
+          console.log('📡 [BROADCAST] Update data:', updateData);
+          console.log('📡 [BROADCAST] Calling from LOCAL-LLM handler - Stack trace:', new Error().stack);
+          
+          if (global.broadcastOrchestrationUpdate) {
+            global.broadcastOrchestrationUpdate(updateData, windows);
+            console.log('✅ [BROADCAST] Successfully called global.broadcastOrchestrationUpdate from LOCAL-LLM');
+          } else {
+            console.error('❌ [BROADCAST] global.broadcastOrchestrationUpdate is not defined!');
+          }
+          
+          console.log('🎉 [RESULTS FOR QUERY] result', result, quickResponse);
         } else {
           console.log('⚠️ No orchestration update broadcast - missing result.response or windows');
+          if (!result) console.log('  - Missing result');
+          if (result && !result.response) console.log('  - Missing result.response');
+          if (!windows) console.log('  - Missing windows parameter');
         }
       }).catch(error => {
         console.warn('⚠️ Background orchestration failed:', error.message);

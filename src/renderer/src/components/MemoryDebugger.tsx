@@ -38,7 +38,7 @@ const MemoryDebugger = () => {
   const [memories, setMemories] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState('');
+  const [filter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [lastMemoryCount, setLastMemoryCount] = useState(0);
@@ -172,6 +172,8 @@ const MemoryDebugger = () => {
   const deleteMemory = async (memoryId: string) => {
     try {
       console.log('🗑️ Attempting to delete memory with ID:', memoryId);
+      console.log('🗑️ Memory ID type:', typeof memoryId);
+      console.log('🗑️ Memory ID length:', memoryId?.length);
       
       if (window.electronAPI?.deleteMemoryDirect) {
         // Use new direct delete method for fast deletion

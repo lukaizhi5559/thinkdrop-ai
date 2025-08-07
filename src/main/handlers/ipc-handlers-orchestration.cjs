@@ -8,14 +8,36 @@
 function setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows) {
   // Helper functions for orchestration updates
   function broadcastOrchestrationUpdate(updateData) {
-    const { overlayWindow, chatWindow, chatMessagesWindow, insightWindow, memoryDebuggerWindow } = windows;
-    const windowList = [overlayWindow, chatWindow, chatMessagesWindow, insightWindow, memoryDebuggerWindow];
+    console.log('📡 [ORCHESTRATION-BROADCAST] Broadcasting to windows...');
+    console.log('📡 [ORCHESTRATION-BROADCAST] Update data:', JSON.stringify(updateData, null, 2));
+    console.log('📡 [ORCHESTRATION-BROADCAST] Stack trace:', new Error().stack);
     
-    windowList.forEach(window => {
+    const { overlayWindow, chatWindow, chatMessagesWindow, insightWindow, memoryDebuggerWindow, mainWindow } = windows;
+    const windowList = [overlayWindow, chatWindow, chatMessagesWindow, insightWindow, memoryDebuggerWindow, mainWindow];
+    
+    console.log('📡 [ORCHESTRATION-BROADCAST] Available windows:', {
+      overlayWindow: !!overlayWindow,
+      chatWindow: !!chatWindow, 
+      chatMessagesWindow: !!chatMessagesWindow,
+      insightWindow: !!insightWindow,
+      memoryDebuggerWindow: !!memoryDebuggerWindow,
+      mainWindow: !!mainWindow
+    });
+    
+    let sentCount = 0;
+    windowList.forEach((window, index) => {
+      const windowNames = ['overlayWindow', 'chatWindow', 'chatMessagesWindow', 'insightWindow', 'memoryDebuggerWindow', 'mainWindow'];
       if (window && !window.isDestroyed()) {
+        console.log(`📡 [ORCHESTRATION-BROADCAST] Sending to ${windowNames[index]}`);
         window.webContents.send('orchestration-update', updateData);
+        sentCount++;
+        console.log(`✅ [ORCHESTRATION-BROADCAST] Successfully sent to ${windowNames[index]}`);
+      } else {
+        console.warn(`⚠️ [ORCHESTRATION-BROADCAST] ${windowNames[index]} is null or destroyed`);
       }
     });
+    
+    console.log(`📡 [ORCHESTRATION-BROADCAST] Total messages sent: ${sentCount}/${windowList.length}`);
   }
 
   // Function to send clarification requests to the frontend

@@ -1701,25 +1701,84 @@ const AGENT_FORMAT = {
           case 'memory-delete':
             // Delete memory by ID
             const deleteId = params.memoryId || params.id;
+            console.log(`[DEBUG] Memory delete requested - deleteId: ${deleteId}`);
+            console.log(`[DEBUG] Params received:`, params);
+            
             if (!deleteId) {
+              console.error('[ERROR] No memory ID provided for deletion');
               throw new Error('Memory delete requires memoryId parameter');
             }
             
             try {
               const database = context.database;
               if (!database) {
+                console.error('[ERROR] No database connection available');
                 throw new Error('No database connection available');
               }
               
+              console.log(`[DEBUG] Attempting to delete memory with ID: ${deleteId}`);
+              
+              // First check if the memory exists
+              const checkSQL = 'SELECT id FROM memory WHERE id = ?';
+              const existingMemory = await database.query(checkSQL, [deleteId]);
+              console.log(`[DEBUG] Memory exists check result:`, existingMemory);
+              
+              if (!existingMemory || existingMemory.length === 0) {
+                console.warn(`[WARNING] Memory with ID ${deleteId} not found`);
+                return {
+                  success: false,
+                  action: 'memory-delete',
+                  memoryId: deleteId,
+                  error: 'Memory not found',
+                  message: 'Memory not found'
+                };
+              }
+              
+              // Cascading delete: Remove foreign key references first
+              console.log(`[DEBUG] Starting cascading delete for memory: ${deleteId}`);
+              
+              let totalReferencesDeleted = 0;
+              
+              // Delete from memory_entities table first (foreign key reference)
+              try {
+                const deleteEntitiesSQL = 'DELETE FROM memory_entities WHERE memory_id = ?';
+                const entitiesResult = await database.run(deleteEntitiesSQL, [deleteId]);
+                const entitiesDeleted = entitiesResult?.changes || 0;
+                totalReferencesDeleted += entitiesDeleted;
+                console.log(`[DEBUG] Deleted ${entitiesDeleted} entities for memory ${deleteId}`);
+              } catch (entitiesError) {
+                console.warn(`[WARNING] Failed to delete entities for memory ${deleteId}:`, entitiesError.message);
+                // Continue anyway - the entities table might not exist or have different structure
+              }
+              
+              // Delete any other foreign key references if they exist
+              // Check for other tables that might reference this memory
+              try {
+                // Try to delete from conversation_memories if it exists
+                const deleteConvMemSQL = 'DELETE FROM conversation_memories WHERE memory_id = ?';
+                const convMemResult = await database.run(deleteConvMemSQL, [deleteId]);
+                const convMemDeleted = convMemResult?.changes || 0;
+                totalReferencesDeleted += convMemDeleted;
+                console.log(`[DEBUG] Deleted ${convMemDeleted} conversation memory references`);
+              } catch (convError) {
+                // Table might not exist, that's okay
+                console.log(`[DEBUG] conversation_memories table not found or no references: ${convError.message}`);
+              }
+              
+              console.log(`[DEBUG] Total foreign key references deleted: ${totalReferencesDeleted}`);
+              
+              // Now delete the main memory record
               const deleteSQL = 'DELETE FROM memory WHERE id = ?';
-              await database.run(deleteSQL, [deleteId]);
-              console.log(`[SUCCESS] Memory ${deleteId} deleted successfully`);
+              const deleteResult = await database.run(deleteSQL, [deleteId]);
+              console.log(`[DEBUG] Delete SQL result:`, deleteResult);
+              console.log(`[SUCCESS] Memory ${deleteId} and all references deleted successfully`);
               
               return {
                 success: true,
                 action: 'memory-delete',
                 memoryId: deleteId,
-                message: 'Memory deleted successfully'
+                message: 'Memory deleted successfully',
+                deletedCount: deleteResult?.changes || 1
               };
             } catch (error) {
               console.error('[ERROR] Memory delete failed:', error);

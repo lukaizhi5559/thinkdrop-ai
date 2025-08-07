@@ -292,13 +292,14 @@ function setupMemoryHandlers(ipcMain, coreAgent) {
       });
       
       console.log('🔍 CoreAgent.ask() result:', result);
+      console.log('🔍 IntentsProcessed:', result?.intentsProcessed);
       
-      // Extract success information from the orchestration result
+      // Check for successful deletion in multiple ways
       if (result && result.success) {
-        // Check if any step results indicate successful deletion
+        // Method 1: Check intentsProcessed for UserMemoryAgent success
         const deleteResult = result.intentsProcessed?.find(r => 
           r.agent === 'UserMemoryAgent' && 
-          r.action === 'memory-delete' && 
+          (r.action === 'memory-delete' || r.intent === 'memory-delete') && 
           r.success
         );
         
@@ -310,10 +311,20 @@ function setupMemoryHandlers(ipcMain, coreAgent) {
             message: 'Memory deleted successfully'
           };
         }
+        
+        // Method 2: Check if the result itself indicates success
+        if (result.message && result.message.includes('deleted')) {
+          console.log('✅ Memory deletion confirmed via result message');
+          return { 
+            success: true, 
+            deletedCount: 1,
+            message: 'Memory deleted successfully'
+          };
+        }
       }
       
       // Handle failure cases
-      const errorMessage = result?.error || 'Memory deletion failed';
+      const errorMessage = result?.error || result?.message || 'Memory deletion failed';
       console.log('❌ Memory deletion failed:', errorMessage);
       return { 
         success: false, 

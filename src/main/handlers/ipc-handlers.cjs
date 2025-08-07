@@ -225,14 +225,27 @@ function initializeIPCHandlers({
 
 // Helper functions for orchestration updates
 function broadcastOrchestrationUpdate(updateData, windows) {
-  const { overlayWindow } = windows;
-  const windowList = [overlayWindow];
+  console.log('📡 [BROADCAST-FUNC] Broadcasting to windows:', Object.keys(windows || {}));
   
-  windowList.forEach(window => {
+  // Send to all available windows, not just overlayWindow
+  const { overlayWindow, mainWindow } = windows;
+  const windowList = [overlayWindow, mainWindow].filter(Boolean);
+  
+  console.log('📡 [BROADCAST-FUNC] Valid windows found:', windowList.length);
+  
+  windowList.forEach((window, index) => {
     if (window && !window.isDestroyed()) {
+      console.log(`📡 [BROADCAST-FUNC] Sending to window ${index + 1}:`, window.constructor.name);
       window.webContents.send('orchestration-update', updateData);
+      console.log(`✅ [BROADCAST-FUNC] Successfully sent to window ${index + 1}`);
+    } else {
+      console.warn(`⚠️ [BROADCAST-FUNC] Window ${index + 1} is destroyed or null`);
     }
   });
+  
+  if (windowList.length === 0) {
+    console.error('❌ [BROADCAST-FUNC] No valid windows found to broadcast to!');
+  }
 }
 
 function sendClarificationRequest(clarificationData, windows) {

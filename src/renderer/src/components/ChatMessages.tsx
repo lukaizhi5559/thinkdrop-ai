@@ -14,6 +14,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
+import { useConversation } from '../contexts/ConversationContext';
 // import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 interface ChatMessage {
@@ -109,6 +110,30 @@ const MarkdownRenderer: React.FC<{ content: any }> = React.memo(({ content }) =>
 });
 
 export default function ChatMessages() {
+  // Conversation context for multi-chat support
+  const { 
+    activeSessionId, 
+    getSessionMessages, 
+    addMessage: addConversationMessage, 
+    sessions,
+    createSession,
+    switchToSession 
+  } = useConversation();
+  
+  // Ensure we have an active session
+  React.useEffect(() => {
+    if (!activeSessionId && sessions.length === 0) {
+      // Create a default session if none exists
+      createSession('user-initiated', {
+        title: 'Chat Session'
+      }).then(sessionId => {
+        switchToSession(sessionId);
+      }).catch(error => {
+        console.error('Failed to create default session:', error);
+      });
+    }
+  }, [activeSessionId, sessions, createSession, switchToSession]);
+  
   // Load chat messages from localStorage on component mount (memoized)
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
@@ -128,6 +153,29 @@ export default function ChatMessages() {
   const [isLoading, setIsLoading] = useState(false);
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
+  
+  // Get messages for the active session, fallback to local messages if no active session
+  const displayMessages = React.useMemo(() => {
+    if (activeSessionId) {
+      const sessionMessages = getSessionMessages(activeSessionId);
+      console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
+      console.log('📝 [DISPLAY] Session messages:', sessionMessages);
+      
+      // Convert conversation messages to ChatMessage format
+      const converted = sessionMessages.map(msg => ({
+        id: msg.id,
+        text: msg.text,
+        sender: msg.sender,
+        timestamp: new Date(msg.timestamp),
+        isStreaming: false
+      }));
+      
+      console.log('📝 [DISPLAY] Converted messages:', converted);
+      return converted;
+    }
+    console.log('📝 [DISPLAY] No active session, using chatMessages:', chatMessages.length, 'messages');
+    return chatMessages;
+  }, [activeSessionId, getSessionMessages, chatMessages]);
   const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const isStreamingEndedRef = useRef<boolean>(false);
@@ -154,7 +202,6 @@ export default function ChatMessages() {
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
   const currentMessageRef = useRef<string>('');
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const lastHeightRef = useRef<number>(40);
   const resizeTimeoutRef = useRef<number | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
@@ -386,6 +433,25 @@ export default function ChatMessages() {
       return;
     }
     
+    // Ensure we have an active session before sending message
+    let currentSessionId = activeSessionId;
+    if (!currentSessionId) {
+      console.log('⚠️ [SESSION] No active session, creating one...');
+      try {
+        const newSessionId = await createSession('user-initiated', {
+          title: 'Chat Session'
+        });
+        switchToSession(newSessionId);
+        currentSessionId = newSessionId; // Use the new session ID directly
+        console.log('✅ [SESSION] Created and switched to session:', newSessionId);
+        // Wait a bit for the session to be fully active
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (error) {
+        console.error('❌ [SESSION] Failed to create session:', error);
+        // Continue anyway, will fall back to localStorage
+      }
+    }
+    
     const messageText = currentMsg.trim();
     setCurrentMessage('');
     setDisplayMessage('');
@@ -416,12 +482,35 @@ export default function ChatMessages() {
       timestamp: new Date()
     };
     
-    setChatMessages(prev => {
-      const updated = [...prev, userMessage];
-      // Save to localStorage
-      localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-      return updated;
-    });
+    // Add to conversation context if we have an active session
+    // Use the currentSessionId from session creation above
+    console.log('🔍 [DEBUG] Session check - currentSessionId:', currentSessionId);
+    console.log('🔍 [DEBUG] addConversationMessage function:', typeof addConversationMessage);
+    
+    if (currentSessionId) {
+      console.log('📝 [USER-MESSAGE] Adding user message to session:', currentSessionId);
+      console.log('📝 [USER-MESSAGE] Message text:', messageText);
+      
+      try {
+        addConversationMessage(currentSessionId, {
+          text: messageText,
+          sender: 'user',
+          sessionId: currentSessionId,
+          metadata: {}
+        });
+        console.log('✅ [USER-MESSAGE] User message added to session successfully');
+      } catch (error) {
+        console.error('❌ [USER-MESSAGE] Error adding user message to session:', error);
+      }
+    } else {
+      // Fallback to local storage
+      setChatMessages(prev => {
+        const updated = [...prev, userMessage];
+        // Save to localStorage
+        localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+        return updated;
+      });
+    }
     
     try {
       console.log('🔍 [DEBUG] Connection state check:', {
@@ -510,19 +599,37 @@ export default function ChatMessages() {
       });
       
       if (result.success) {
-        // For memory_retrieve and question intents, use the initial response in ThinkingIndicator
-        // and wait for the orchestration update for the final result
+        // Extract the actual AI response from the result
+        // The backend logs show: "Raw Phi3 natural language result: The current President of the USA is Joe Biden..."
+        let aiResponseText = '';
+        
+        // Try to extract from intentClassificationPayload first (this contains the actual Phi3 response)
+        if (result.intentClassificationPayload?.reasoning && result.intentClassificationPayload.reasoning.includes('Raw Phi3 natural language result:')) {
+          // Extract the actual response from the reasoning field
+          const match = result.intentClassificationPayload.reasoning.match(/Raw Phi3 natural language result: (.+)/);
+          if (match) {
+            aiResponseText = match[1].trim();
+          }
+        }
+        
+        // Fallback to result.data or suggestedResponse
+        if (!aiResponseText) {
+          aiResponseText = result.data || result.intentClassificationPayload?.suggestedResponse || 'I processed your request using local capabilities.';
+        }
+        
+        console.log('🎯 [RESPONSE] Extracted AI response:', aiResponseText);
+        console.log('🎯 [RESPONSE] Intent classification:', result.intentClassificationPayload?.primaryIntent);
+        
+        // For memory_retrieve intents, use the response in ThinkingIndicator and wait for orchestration
         if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
           isMemoryRetrieve = true;
           // Set the thinking message to the initial response
           const thinkingMsg = result.data || 'Let me check what I have stored about that.';
           console.log('🎯 [THINKING] Setting thinking message for memory_retrieve:', thinkingMsg);
-          console.log('🎯 [THINKING] States - isProcessingLocally:', isProcessingLocally, 'isLoading:', isLoading, 'wsConnected:', wsState.isConnected);
           setInitialThinkingMessage(thinkingMsg);
           
-          // Ensure we stay in processing state to keep ThinkingIndicator visible
+          // Keep processing state active to show ThinkingIndicator
           console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
-          // Don't add the AI message yet - wait for orchestration update
           return;
         }
         
@@ -544,16 +651,27 @@ export default function ChatMessages() {
         // For non-memory intents, add AI response message immediately
         const aiMessage: ChatMessage = {
           id: `ai-${Date.now()}`,
-          text: result.data || 'I processed your request using local capabilities.',
+          text: aiResponseText,
           sender: 'ai',
           timestamp: new Date()
         };
         
-        setChatMessages(prev => {
-          const updated = [...prev, aiMessage];
-          localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-          return updated;
-        });
+        // Add to conversation context if we have an active session
+        if (activeSessionId) {
+          addConversationMessage(activeSessionId, {
+            text: aiResponseText,
+            sender: 'ai',
+            sessionId: activeSessionId,
+            metadata: { intent: result.intentClassificationPayload?.primaryIntent }
+          });
+        } else {
+          // Fallback to local storage
+          setChatMessages(prev => {
+            const updated = [...prev, aiMessage];
+            localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
+            return updated;
+          });
+        }
         
         console.log('✅ Local LLM processing completed successfully');
         console.log('📝 Note: Background orchestration is handled by IPC handler, no additional frontend call needed');
@@ -582,9 +700,9 @@ export default function ChatMessages() {
     } finally {
       // Only clear processing state if not waiting for memory retrieve or question orchestration
       if (!isMemoryRetrieve && !isQuestionIntent) {
-        console.log('🎯 [THINKING] Clearing processing state in finally block');
-        setIsProcessingLocally(false);
-        setIsLoading(false);
+      console.log('🎯 [THINKING] Clearing processing state in finally block');
+      setIsProcessingLocally(false);
+      setIsLoading(false);
       } else {
         console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory:', isMemoryRetrieve, 'question:', isQuestionIntent);
       }
@@ -1021,34 +1139,88 @@ export default function ChatMessages() {
     }
 
     // Listen for orchestration updates (final results from background processing)
+    console.log('🔍 [DEBUG] Setting up orchestration update listener...');
+    console.log('🔍 [DEBUG] window.electronAPI exists:', !!window.electronAPI);
+    console.log('🔍 [DEBUG] onOrchestrationUpdate exists:', !!(window.electronAPI?.onOrchestrationUpdate));
+    
     if (window.electronAPI?.onOrchestrationUpdate) {
+      console.log('✅ [DEBUG] Successfully setting up onOrchestrationUpdate listener');
+      
+      // Track processed updates to prevent duplicates
+      const processedUpdates = new Set<string>();
+      
       window.electronAPI.onOrchestrationUpdate((_event: any, updateData: any) => {
-        console.log('🔄 Received orchestration update:', updateData);
+        console.log('📡 [FRONTEND] Received orchestration update:', updateData);
+        console.log('📡 [FRONTEND] Update type:', updateData?.type);
+        console.log('📡 [FRONTEND] Has response:', !!updateData?.response);
+        
+        // Create unique key for this update
+        const updateKey = `${updateData.type}-${updateData.timestamp}-${updateData.response?.substring(0, 50)}`;
+        
+        if (processedUpdates.has(updateKey)) {
+          console.warn('⚠️ [FRONTEND] Duplicate orchestration update ignored:', updateKey);
+          return;
+        }
+        
+        processedUpdates.add(updateKey);
+        console.log('✅ [FRONTEND] Processing unique orchestration update:', updateKey);
         
         if (updateData.type === 'orchestration-complete' && updateData.response) {
           console.log('🎯 [ORCHESTRATION] Received final response, clearing thinking indicator');
-          // Update the last AI message with the final response
-          setChatMessages(prev => {
-            const lastIndex = prev.length - 1;
-            if (lastIndex >= 0 && prev[lastIndex].sender === 'ai') {
-              const updatedMessages = [...prev];
-              updatedMessages[lastIndex] = {
-                ...updatedMessages[lastIndex],
-                text: updateData.response,
-                isStreaming: false
-              };
-              return updatedMessages;
-            } else {
-              // Add new AI message if none exists
-              return [...prev, {
-                id: `ai-${Date.now()}`,
-                text: updateData.response,
-                sender: 'ai' as const,
-                timestamp: new Date(),
-                isStreaming: false
-              }];
-            }
-          });
+          
+          // Add AI response to conversation session (this is what gets displayed)
+          if (activeSessionId && addConversationMessage) {
+            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', activeSessionId);
+            addConversationMessage(activeSessionId, {
+              text: updateData.response,
+              sender: 'ai',
+              sessionId: activeSessionId,
+              metadata: {
+                handledBy: updateData.handledBy,
+                method: updateData.method,
+                originalTimestamp: updateData.timestamp
+              }
+            });
+            console.log('✅ [ORCHESTRATION] AI response added to session successfully');
+          } else {
+            console.warn('⚠️ [ORCHESTRATION] No active session or addConversationMessage function available');
+            
+            // Fallback: Update local chatMessages state
+            setChatMessages(prev => {
+              console.log('🔍 [ORCHESTRATION] Fallback - Current messages:', prev.length);
+              console.log('🔍 [ORCHESTRATION] Fallback - Last message:', prev[prev.length - 1]);
+              
+              const lastIndex = prev.length - 1;
+              const hasExistingAIMessage = lastIndex >= 0 && prev[lastIndex].sender === 'ai';
+              
+              console.log('🔍 [ORCHESTRATION] Fallback - Has existing AI message:', hasExistingAIMessage);
+              
+              if (hasExistingAIMessage) {
+                console.log('🔄 [ORCHESTRATION] Fallback - Updating existing AI message');
+                const updatedMessages = [...prev];
+                updatedMessages[lastIndex] = {
+                  ...updatedMessages[lastIndex],
+                  text: updateData.response,
+                  isStreaming: false
+                };
+                console.log('🔄 [ORCHESTRATION] Fallback - Updated messages:', updatedMessages.length);
+                return updatedMessages;
+              } else {
+                console.log('➕ [ORCHESTRATION] Fallback - Adding new AI message');
+                const newMessage = {
+                  id: `ai-${Date.now()}`,
+                  text: updateData.response,
+                  sender: 'ai' as const,
+                  timestamp: new Date(),
+                  isStreaming: false
+                };
+                console.log('➕ [ORCHESTRATION] Fallback - New message:', newMessage);
+                const newMessages = [...prev, newMessage];
+                console.log('➕ [ORCHESTRATION] Fallback - Total messages after add:', newMessages.length);
+                return newMessages;
+              }
+            });
+          }
           
           // Clear loading and processing states
           console.log('🎯 [ORCHESTRATION] Clearing states - setIsLoading(false), setIsProcessingLocally(false)');
@@ -1141,7 +1313,7 @@ export default function ChatMessages() {
           </div>
         ) : (
           <>
-            {chatMessages.map((message) => (
+            {displayMessages.map((message) => (
               <div key={message.id} className={`group flex flex-col ${message.sender === 'user' ? 'items-end' : 'items-start'}`}>
                 {/* Message bubble */}
                 <div 
