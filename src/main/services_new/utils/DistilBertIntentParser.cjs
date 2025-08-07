@@ -631,6 +631,12 @@ class DistilBertIntentParser {
       { text: 'Show me what is scheduled', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
       { text: 'Remind me what is happening next week', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
       { text: 'Let me know what I have planned', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I check in two weeks', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I check next week', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I check tomorrow', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I be checking on', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I follow up on', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
+      { text: 'What should I review next month', intent: 'memory_retrieve', confidence: 'high', complexity: 'simple' },
       
       // === AMBIGUOUS CASES (Medium/Low Confidence) ===
       { text: "I'm not sure what I have this weekend", intent: 'memory_retrieve', confidence: 'medium', complexity: 'ambiguous' },

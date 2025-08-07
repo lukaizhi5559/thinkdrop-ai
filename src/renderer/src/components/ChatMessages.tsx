@@ -113,14 +113,12 @@ export default function ChatMessages() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
     try {
       const saved = localStorage.getItem('thinkdrop-chat-messages');
-      console.log('THE MESSAGES SAVAED:', JSON.stringify(saved));
       if (!saved) return [];
       
       const loadedMessages = JSON.parse(saved).map((msg: any) => ({
         ...msg,
         timestamp: new Date(msg.timestamp)
       }));
-      console.log('THE MESSAGES SAVAED:', JSON.stringify(loadedMessages), saved);
       return loadedMessages;
     } catch (error) {
       console.error('Failed to load chat messages from localStorage:', error);
@@ -140,6 +138,7 @@ export default function ChatMessages() {
   
   // Input state from ChatWindow
   const [currentMessage, setCurrentMessage] = useState('');
+  const [displayMessage, setDisplayMessage] = useState(''); // For immediate display
   
   // Inline editing state
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -153,6 +152,10 @@ export default function ChatMessages() {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentMessageRef = useRef<string>('');
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastHeightRef = useRef<number>(40);
+  const resizeTimeoutRef = useRef<number | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -375,28 +378,24 @@ export default function ChatMessages() {
 
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
-    console.log('📤 [DEBUG] handleSendMessage called', {
-      currentMessage: currentMessage.substring(0, 50) + '...',
-      isLoading,
-      isProcessingLocally,
-      wsStateConnected: wsState.isConnected
-    });
+    const currentMsg = currentMessageRef.current;
+    // Debug logging removed for performance
     
-    if (!currentMessage.trim() || isLoading || isProcessingLocally) {
-      console.log('🚫 [DEBUG] Message sending blocked:', {
-        noMessage: !currentMessage.trim(),
-        isLoading,
-        isProcessingLocally
-      });
+    if (!currentMsg.trim() || isLoading || isProcessingLocally) {
+      // Message sending blocked - debug logging removed for performance
       return;
     }
     
-    const messageText = currentMessage.trim();
+    const messageText = currentMsg.trim();
     setCurrentMessage('');
+    setDisplayMessage('');
+    currentMessageRef.current = ''; // Keep ref in sync
     
-    // Reset textarea height to single line
+    // Clear textarea and reset height for uncontrolled component
     if (textareaRef.current) {
+      textareaRef.current.value = '';
       textareaRef.current.style.height = 'auto';
+      // xlastHeightRef.current = 40;
     }
     
     setIsLoading(true);
@@ -487,7 +486,7 @@ export default function ChatMessages() {
         textareaRef.current.focus();
       }
     }, 100);
-  }, [currentMessage, isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
+  }, [isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
 
   // Handle local LLM fallback when backend is disconnected
   const handleLocalLLMFallback = useCallback(async (messageText: string) => {
@@ -600,6 +599,23 @@ export default function ChatMessages() {
     }
   }, [wsState.isConnected, localLLMError]);
 
+  // Sync displayMessage with currentMessage when it changes programmatically
+  useEffect(() => {
+    setDisplayMessage(currentMessage);
+  }, [currentMessage]);
+
+  // Cleanup timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimeoutRef.current) {
+        clearTimeout(debounceTimeoutRef.current);
+      }
+      if (resizeTimeoutRef.current) {
+        cancelAnimationFrame(resizeTimeoutRef.current);
+      }
+    };
+  }, []);
+
   // // Handle WebSocket toggle for testing local LLM fallback
   // const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
   //   e?.preventDefault();
@@ -639,10 +655,27 @@ export default function ChatMessages() {
   
   const handleTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const value = e.target.value;
-    setCurrentMessage(value);
-    
-    // Auto-resize textarea to fit content
     const target = e.target;
+    
+    // Update ref immediately - no React state updates for better performance
+    currentMessageRef.current = value;
+    
+    // Debounce only the button state update
+    if (debounceTimeoutRef.current) {
+      clearTimeout(debounceTimeoutRef.current);
+    }
+    
+    debounceTimeoutRef.current = setTimeout(() => {
+      setDisplayMessage(value); // Only for button disabled state
+      setCurrentMessage(value); // For other components that need it
+    }, 100); // Reduced debounce time
+    
+    // Auto-resize textarea with optimized timing
+    if (resizeTimeoutRef.current) {
+      cancelAnimationFrame(resizeTimeoutRef.current);
+    }
+    
+    // const target = e.target;
     requestAnimationFrame(() => {
       // Always reset height to auto first to get accurate scrollHeight
       target.style.height = 'auto';
@@ -814,7 +847,6 @@ export default function ChatMessages() {
   
   // Persist messages to localStorage whenever they change
   useEffect(() => {
-    console.log('💾 Saving messages to localStorage:', chatMessages.length);
     localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(chatMessages));
   }, [chatMessages]);
 
@@ -1393,7 +1425,7 @@ export default function ChatMessages() {
             </Tooltip>   
             <textarea
               ref={textareaRef}
-              value={currentMessage}
+              defaultValue=""
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything..."
@@ -1403,7 +1435,7 @@ export default function ChatMessages() {
             />
             <Button
               onClick={handleSendMessage}
-              disabled={!currentMessage.trim() || isLoading}
+              disabled={!displayMessage.trim() || isLoading}
               className="bg-gradient-to-r from-teal-500 to-blue-500 hover:from-teal-600 hover:to-blue-600 text-white w-9 h-9 p-0 rounded-xl disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
               style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >

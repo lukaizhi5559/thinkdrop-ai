@@ -264,7 +264,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
   };
 
   return (
-    <div className="w-full h-full bg-gray-900/95 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
+    <div className="w-full h-full bg-gray-900/85 backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl overflow-hidden">
       {/* Header - always visible */}
       {renderHeader()}
       
