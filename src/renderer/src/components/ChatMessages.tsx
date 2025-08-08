@@ -658,12 +658,14 @@ export default function ChatMessages() {
         
         // Add to conversation context if we have an active session
         if (activeSessionId) {
-          addConversationMessage(activeSessionId, {
-            text: aiResponseText,
-            sender: 'ai',
-            sessionId: activeSessionId,
-            metadata: { intent: result.intentClassificationPayload?.primaryIntent }
-          });
+          // DISABLED: This causes duplicates since orchestration broadcast handler also adds messages
+          // addConversationMessage(activeSessionId, {
+          //   text: aiResponseText,
+          //   sender: 'ai',
+          //   sessionId: activeSessionId,
+          //   metadata: { intent: result.intentClassificationPayload?.primaryIntent }
+          // });
+          console.log('📝 [ORCHESTRATION] AI response will be added via orchestration broadcast handler');
         } else {
           // Fallback to local storage
           setChatMessages(prev => {
@@ -1150,10 +1152,6 @@ export default function ChatMessages() {
       const processedUpdates = new Set<string>();
       
       window.electronAPI.onOrchestrationUpdate((_event: any, updateData: any) => {
-        console.log('📡 [FRONTEND] Received orchestration update:', updateData);
-        console.log('📡 [FRONTEND] Update type:', updateData?.type);
-        console.log('📡 [FRONTEND] Has response:', !!updateData?.response);
-        
         // Create unique key for this update
         const updateKey = `${updateData.type}-${updateData.timestamp}-${updateData.response?.substring(0, 50)}`;
         
@@ -1162,6 +1160,7 @@ export default function ChatMessages() {
           return;
         }
         
+        // Mark as processed BEFORE any processing
         processedUpdates.add(updateKey);
         console.log('✅ [FRONTEND] Processing unique orchestration update:', updateKey);
         
@@ -1170,7 +1169,17 @@ export default function ChatMessages() {
           
           // Add AI response to conversation session (this is what gets displayed)
           if (activeSessionId && addConversationMessage) {
-            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', activeSessionId);
+            // Check if this exact response was already added to prevent duplicates
+            const currentMessages = getSessionMessages(activeSessionId);
+            const lastMessage = currentMessages[currentMessages.length - 1];
+            const isDuplicateResponse = lastMessage?.sender === 'ai' && lastMessage?.text === updateData.response;
+            
+            if (isDuplicateResponse) {
+              console.warn('⚠️ [ORCHESTRATION] Duplicate AI response detected, skipping add to session');
+              return;
+            }
+            
+            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', activeSessionId);         
             addConversationMessage(activeSessionId, {
               text: updateData.response,
               sender: 'ai',

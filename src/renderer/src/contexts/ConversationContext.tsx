@@ -407,17 +407,51 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
 
   // Message management
   const addMessage = useCallback((sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
-    const newMessage: ChatMessage = {
-      ...message,
-      id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      timestamp: new Date().toISOString(),
-      sessionId
-    };
+    // Duplicate detection for AI messages
+    if (message.sender === 'ai' && message.text.length > 10) {
+      setMessages(prev => {
+        const existingMessages = prev[sessionId] || [];
+        const recentAiMessages = existingMessages.slice(-3).filter(msg => msg.sender === 'ai');
+        
+        const isDuplicate = recentAiMessages.some(msg => {
+          const textMatch = msg.text === message.text;
+          const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 5000; // 5 seconds
+          return textMatch && recentTime;
+        });
 
-    setMessages(prev => ({
-      ...prev,
-      [sessionId]: [...(prev[sessionId] || []), newMessage]
-    }));
+        if (isDuplicate) {
+          console.log('🚫 [CONVERSATION-CONTEXT] Blocked duplicate AI message:', message.text.substring(0, 50) + '...');
+          return prev;
+        }
+
+        console.log('✅ [CONVERSATION-CONTEXT] Adding AI message (passed duplicate check)');
+        const newMessage: ChatMessage = {
+          ...message,
+          id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          timestamp: new Date().toISOString(),
+          sessionId
+        };
+
+        return {
+          ...prev,
+          [sessionId]: [...(prev[sessionId] || []), newMessage]
+        };
+      });
+    } else {
+      // For user messages, add directly without duplicate detection
+      console.log('✅ [CONVERSATION-CONTEXT] Adding user message');
+      const newMessage: ChatMessage = {
+        ...message,
+        id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        timestamp: new Date().toISOString(),
+        sessionId
+      };
+
+      setMessages(prev => ({
+        ...prev,
+        [sessionId]: [...(prev[sessionId] || []), newMessage]
+      }));
+    }
 
     // Update session with last message and increment count
     setSessions(prev => prev.map(session => 
