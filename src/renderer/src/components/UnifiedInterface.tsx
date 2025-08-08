@@ -18,7 +18,7 @@ import MemoryDebugger from './MemoryDebugger';
 import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
-import { useConversation } from '../contexts/ConversationContext';
+import { useConversationSignals } from '../hooks/useConversationSignals';
 
 type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration';
 
@@ -36,7 +36,8 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
   const [showMenu, setShowMenu] = useState(false);
   
   // Conversation context for sidebar integration
-  const { toggleSidebar, isSidebarOpen } = useConversation();
+  const { signals, toggleSidebar } = useConversationSignals();
+  const isSidebarOpen = signals.isSidebarOpen.value;
   
   // Ref for the menu modal to detect clicks outside
   const menuRef = useRef<HTMLDivElement>(null);
@@ -95,7 +96,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
               <MessageCircle className="w-3 h-3 text-white" />
             </div>
             <div className="text-white/90 font-medium text-sm group-hover:text-white">
-              {isSidebarOpen ? 'Close Conversations' : 'Messages'}
+              {'Messages'}
             </div>
           </button>
         );

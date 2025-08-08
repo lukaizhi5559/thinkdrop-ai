@@ -7,6 +7,8 @@ import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
 import { ConversationSidebar } from './components/ConversationSidebar';
 import { SidebarToggle } from './components/SidebarToggle';
+
+import { initializeConversationSignals } from './signals/init';
 import './types/electronAPI'; // Import Electron API types
 
 function App() {
@@ -32,6 +34,14 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGatheringInsight] = useState(false);
   const [showResponse, setShowResponse] = useState(false);
+
+  // Initialize signals when app starts
+  useEffect(() => {
+    console.log('🚀 [APP] Initializing conversation signals...');
+    initializeConversationSignals().catch(error => {
+      console.error('❌ [APP] Failed to initialize signals:', error);
+    });
+  }, []);
 
   // Simulate analysis and response
   useEffect(() => {

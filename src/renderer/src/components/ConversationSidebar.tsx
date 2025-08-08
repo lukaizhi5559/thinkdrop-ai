@@ -14,7 +14,7 @@ import {
   ChevronLeft,
   Search
 } from 'lucide-react';
-import { useConversation } from '../contexts/ConversationContext';
+import { useConversationSignals } from '../hooks/useConversationSignals';
 import { formatDistanceToNow } from 'date-fns';
 
 interface ConversationSidebarProps {
@@ -23,18 +23,28 @@ interface ConversationSidebarProps {
 
 export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ className = '' }) => {
   const {
-    sessions,
+    signals,
     activeSessionId,
-    isSidebarOpen,
-    closeSidebar,
     createSession,
     switchToSession,
+    toggleSidebar,
     updateSession,
     deleteSession,
     hibernateSession,
-    resumeSession,
-    isLoading
-  } = useConversation();
+    resumeSession
+  } = useConversationSignals();
+
+  // Extract values from signals
+  const sessions = signals.sessions.value;
+  const isSidebarOpen = signals.isSidebarOpen.value;
+  const isLoading = signals.isLoading.value;
+  
+  // Sidebar actions - use the closeSidebar from signals
+  const closeSidebar = () => {
+    if (isSidebarOpen) {
+      toggleSidebar();
+    }
+  };
   
   // Debug logging for sidebar state
   React.useEffect(() => {
@@ -49,6 +59,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   const [searchQuery, setSearchQuery] = useState('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
 
   // Filter sessions based on search query
   const filteredSessions = sessions.filter(session =>
@@ -90,6 +101,11 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   const handleCancelEdit = useCallback(() => {
     setEditingSessionId(null);
     setEditingTitle('');
+  }, []);
+
+  // Handle actions menu toggle
+  const handleToggleMenu = useCallback((sessionId: string) => {
+    setOpenMenuSessionId(prev => prev === sessionId ? null : sessionId);
   }, []);
 
   // Handle session hibernation/resumption
@@ -229,21 +245,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                   {/* Session Header */}
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex items-center gap-2 flex-1 min-w-0">
-                      {/* Session Type Icon */}
-                      <div className={`
-                        flex-shrink-0 p-1 rounded-full
-                        ${session.type === 'ai-initiated' 
-                          ? 'bg-purple-500/20 text-purple-400' 
-                          : 'bg-blue-500/20 text-blue-400'
-                        }
-                      `}>
-                        {session.type === 'ai-initiated' ? (
-                          <Bot className="h-3 w-3" />
-                        ) : (
-                          <User className="h-3 w-3" />
-                        )}
-                      </div>
-
+                      
                       {/* Title */}
                       {editingSessionId === session.id ? (
                         <input
@@ -280,14 +282,15 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                           className="p-1 rounded hover:bg-gray-600/50 text-gray-400 hover:text-white transition-colors"
                           onClick={(e) => {
                             e.stopPropagation();
-                            // Toggle dropdown menu (you can implement this)
+                            handleToggleMenu(session.id);
                           }}
                         >
                           <MoreHorizontal className="h-4 w-4" />
                         </button>
                         
-                        {/* Quick Actions (visible on hover) */}
-                        <div className="absolute right-0 top-6 bg-gray-800 border border-gray-600 rounded-lg shadow-lg py-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none group-hover:pointer-events-auto">
+                        {/* Quick Actions (visible on click) */}
+                        {openMenuSessionId === session.id && (
+                        <div className="absolute right-0 top-6 bg-gray-800 border border-gray-600 rounded-lg shadow-lg py-1 z-10">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -330,6 +333,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                             Delete
                           </button>
                         </div>
+                        )}
                       </div>
                     </div>
                   </div>

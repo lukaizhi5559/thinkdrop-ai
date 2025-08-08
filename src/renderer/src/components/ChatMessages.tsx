@@ -15,6 +15,7 @@ import remarkBreaks from 'remark-breaks';
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import { useConversation } from '../contexts/ConversationContext';
+import { useConversationSignals } from '../hooks/useConversationSignals';
 // import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 interface ChatMessage {
@@ -110,22 +111,27 @@ const MarkdownRenderer: React.FC<{ content: any }> = React.memo(({ content }) =>
 });
 
 export default function ChatMessages() {
-  // Conversation context for multi-chat support
+  // Use signals for session management (eliminates race conditions)
+  const {
+    signals,
+    activeSessionId,
+    hasActiveSession,
+    sendMessage: signalsSendMessage,
+    logDebugState
+  } = useConversationSignals();
+
+  // LEGACY: Keep minimal context for backward compatibility during migration
   const { 
-    activeSessionId, 
     getSessionMessages, 
-    addMessage: addConversationMessage, 
-    sessions,
-    createSession,
-    switchToSession,
-    isLoading: contextIsLoading
+    addMessage: addConversationMessage
   } = useConversation();
 
+  // Use signals as primary source of truth
+  const sessions = signals.sessions.value;
+  const contextIsLoading = signals.isLoading.value;
+
   // State for localStorage persistence fallback
-  const [lastKnownActiveSession, setLastKnownActiveSession] = useState<string | null>(() => {
-    return localStorage.getItem('lastKnownActiveSession');
-  });
-  const [lastKnownSessions, setLastKnownSessions] = useState<any[]>(() => {
+  const [, setLastKnownSessions] = useState<any[]>(() => {
     const stored = localStorage.getItem('lastKnownSessions');
     return stored ? JSON.parse(stored) : [];
   });
@@ -139,7 +145,6 @@ export default function ChatMessages() {
     // Track last known good state with localStorage persistence
     if (activeSessionId) {
       localStorage.setItem('lastKnownActiveSession', activeSessionId);
-      setLastKnownActiveSession(activeSessionId);
       console.log('💾 [ChatMessages] Saved last known active session to localStorage:', activeSessionId);
     }
     if (sessions && sessions.length > 0) {
@@ -214,8 +219,7 @@ export default function ChatMessages() {
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [showScrollButton] = useState(false);
   const isProgrammaticScrolling = useRef(false);
   
   // LocalLLM integration comment out for now
@@ -447,107 +451,51 @@ export default function ChatMessages() {
       return;
     }
     
-    // Ensure we have an active session before sending message
-    console.log('🔍 [SESSION] Current state check:');
-    console.log('🔍 [SESSION] activeSessionId:', activeSessionId);
-    console.log('🔍 [SESSION] sessions:', sessions);
-    console.log('🔍 [SESSION] sessions length:', sessions?.length || 0);
-    console.log('🔍 [SESSION] contextIsLoading:', contextIsLoading);
-    console.log('🔍 [SESSION] displayMessage:', displayMessages?.length || 0, 'messages');
+    // 🚀 NEW: Use signals for session management (eliminates race conditions!)
+    console.log('🔍 [SIGNALS] Checking active session:', signals.activeSessionId.value);
+    console.log('🔍 [SIGNALS] Has active session:', hasActiveSession);
+    console.log('🔍 [SIGNALS] Sessions available:', signals.sessions.value.length);
+    logDebugState(); // Debug current signals state
     
     // Check if context is still loading
     if (contextIsLoading) {
-      console.log('⏳ [SESSION] Context is still loading, please wait...');
+      console.log('⏳ [SIGNALS] Context is still loading, please wait...');
       return;
     }
     
-    // Try to find an active session from the sessions list as fallback
-    let currentSessionId = activeSessionId;
+    // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
+    let currentSessionId = signals.activeSessionId.value;
+    console.log('🔍 [SIGNALS] currentSessionId (always fresh):', currentSessionId);
     
-    // CRITICAL: Check if we have a context state issue and use fallback
-    if (!sessions || sessions.length === 0) {
-      console.error('❌ [SESSION] CRITICAL: Sessions array is empty or null!');
-      console.error('❌ [SESSION] This indicates a context state synchronization issue or context not yet loaded');
-      
-      // Use last known good state as fallback
-      console.log('🔍 [SESSION] Checking localStorage fallback state:');
-      console.log('🔍 [SESSION] lastKnownActiveSession:', lastKnownActiveSession);
-      console.log('🔍 [SESSION] lastKnownSessions:', lastKnownSessions);
-      
-      if (lastKnownActiveSession && lastKnownSessions.length > 0) {
-        console.log('🔄 [SESSION] Using last known good state as fallback');
-        console.log('🔄 [SESSION] Last known active session:', lastKnownActiveSession);
-        console.log('🔄 [SESSION] Last known sessions count:', lastKnownSessions.length);
-        
-        // Try to switch back to the last known active session
-        try {
-          await switchToSession(lastKnownActiveSession);
-          console.log('✅ [SESSION] Successfully restored session state');
-          // Continue with the restored session
-          currentSessionId = lastKnownActiveSession;
-        } catch (error) {
-          console.error('❌ [SESSION] Failed to restore session state:', error);
-          // Don't return here, fall through to create a new session
-          console.log('🔄 [SESSION] Fallback failed, will create new session');
-        }
-      } else {
-        console.log('⚠️ [SESSION] No localStorage fallback available');
-        console.log('🔄 [SESSION] Will create new session as final fallback');
-        // Don't return here, fall through to create a new session
-      }
-    }
-    console.log('🔍 [SESSION] Debug session state:', {
-      activeSessionId,
-      sessionsCount: sessions?.length || 0,
-      sessions: sessions?.map(s => ({ id: s.id, title: s.title, isActive: s.isActive })) || []
-    });
-    
-    if (!currentSessionId && sessions && sessions.length > 0) {
-      // Look for an active session in the sessions list
-      const activeSession = sessions.find(session => session.isActive);
-      console.log('🔍 [SESSION] Active session search result:', activeSession);
-      if (activeSession) {
-        currentSessionId = activeSession.id;
-        console.log('🔄 [SESSION] Found active session from sessions list:', currentSessionId);
-        // Update the context to sync the state - but don't await to avoid blocking message send
-        switchToSession(currentSessionId).catch(error => {
-          console.error('❌ [SESSION] Error syncing session state:', error);
-        });
-      } else {
-        console.log('⚠️ [SESSION] No active session found in sessions list');
-        // If no active session exists, use the most recent session (first in list)
-        if (sessions.length > 0) {
-          currentSessionId = sessions[0].id;
-          console.log('🔄 [SESSION] Using most recent session as fallback:', currentSessionId);
-          // Switch to this session
-          switchToSession(currentSessionId).catch(error => {
-            console.error('❌ [SESSION] Error switching to fallback session:', error);
-          });
-        }
-      }
-    }
-    
+    // If no active session, create one using signals
     if (!currentSessionId) {
-      console.log('⚠️ [SESSION] No active session found, creating one...');
+      console.log('⚠️ [SIGNALS] No active session found, creating one...');
       try {
-        const newSessionId = await createSession('user-initiated', {
-          title: 'Chat Session'
-        });
+        // Use signals sendMessage which handles session creation automatically
+        const messageText = currentMsg.trim();
+        console.log('🚀 [SIGNALS] Using signalsSendMessage for automatic session handling');
         
-        if (newSessionId && newSessionId !== 'undefined') {
-          switchToSession(newSessionId);
-          currentSessionId = newSessionId; // Use the new session ID directly
-          console.log('✅ [SESSION] Created and switched to session:', newSessionId);
-        } else {
-          console.error('❌ [SESSION] Invalid sessionId returned from createSession:', newSessionId);
-          throw new Error('Failed to create valid session');
+        // Clear UI immediately
+        setCurrentMessage('');
+        setDisplayMessage('');
+        currentMessageRef.current = '';
+        
+        if (textareaRef.current) {
+          textareaRef.current.value = '';
+          textareaRef.current.style.height = 'auto';
         }
-        // Wait a bit for the session to be fully active
-        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Use signals sendMessage - this handles session creation AND message sending
+        currentSessionId = await signalsSendMessage(messageText);
+        console.log('✅ [SIGNALS] Message sent and session handled:', currentSessionId);
+        
+        // Continue with the rest of the flow...
       } catch (error) {
-        console.error('❌ [SESSION] Failed to create session:', error);
-        // Continue anyway, will fall back to localStorage
+        console.error('❌ [SIGNALS] Failed to send message:', error);
+        return;
       }
+    } else {
+      console.log('✅ [SIGNALS] Using existing session:', currentSessionId);
     }
     
     const messageText = currentMsg.trim();

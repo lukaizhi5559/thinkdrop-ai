@@ -1893,6 +1893,25 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@preact/signals-core@npm:^1.11.0":
+  version: 1.11.0
+  resolution: "@preact/signals-core@npm:1.11.0"
+  checksum: b94972a912a89e0c7a7ea30b1e94d69fdb992177280ab59996878b3869bdc0e1a362160bdeea030335c678fe038e08afcef6c551e9900d40da3e3a75ca867c85
+  languageName: node
+  linkType: hard
+
+"@preact/signals-react@npm:^3.2.1":
+  version: 3.2.1
+  resolution: "@preact/signals-react@npm:3.2.1"
+  dependencies:
+    "@preact/signals-core": ^1.11.0
+    use-sync-external-store: ^1.2.0
+  peerDependencies:
+    react: ^16.14.0 || 17.x || 18.x || 19.x
+  checksum: 997d562976b034fd01044bbddc6f6d2bc4ca013896948367d5168e1f9ae6c4622bc72f007e6e3e1e757ba6e5055005701989a00b572832a933fb85d447ea0890
+  languageName: node
+  linkType: hard
+
 "@protobufjs/aspromise@npm:^1.1.1, @protobufjs/aspromise@npm:^1.1.2":
   version: 1.1.2
   resolution: "@protobufjs/aspromise@npm:1.1.2"
@@ -12892,6 +12911,7 @@ __metadata:
     "@mistralai/mistralai": ^0.1.0
     "@nut-tree-fork/nut-js": ^4.2.6
     "@pinecone-database/pinecone": ^1.1.0
+    "@preact/signals-react": ^3.2.1
     "@radix-ui/react-avatar": ^1.1.10
     "@radix-ui/react-dialog": ^1.1.14
     "@radix-ui/react-progress": ^1.1.7
@@ -13419,7 +13439,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"use-sync-external-store@npm:^1.5.0":
+"use-sync-external-store@npm:^1.2.0, use-sync-external-store@npm:^1.5.0":
   version: 1.5.0
   resolution: "use-sync-external-store@npm:1.5.0"
   peerDependencies:

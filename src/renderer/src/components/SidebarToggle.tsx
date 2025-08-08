@@ -1,18 +1,18 @@
 import React from 'react';
 import { MessageSquare, ChevronRight } from 'lucide-react';
-import { useConversation } from '../contexts/ConversationContext';
+import { useConversationSignals } from '../hooks/useConversationSignals';
 
 interface SidebarToggleProps {
   className?: string;
 }
 
 export const SidebarToggle: React.FC<SidebarToggleProps> = ({ className = '' }) => {
-  const { 
-    isSidebarOpen, 
-    toggleSidebar, 
-    sessions, 
-    activeSessionId 
-  } = useConversation();
+  const { signals, toggleSidebar } = useConversationSignals();
+  
+  // Extract values from signals
+  const isSidebarOpen = signals.isSidebarOpen.value;
+  const sessions = signals.sessions.value;
+  const activeSessionId = signals.activeSessionId.value;
 
   // Get active session info
   const activeSession = sessions.find(s => s.id === activeSessionId);
