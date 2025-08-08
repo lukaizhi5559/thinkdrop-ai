@@ -117,65 +117,75 @@ export default function ChatMessages() {
     addMessage: addConversationMessage, 
     sessions,
     createSession,
-    switchToSession 
+    switchToSession,
+    isLoading: contextIsLoading
   } = useConversation();
+
+  // State for localStorage persistence fallback
+  const [lastKnownActiveSession, setLastKnownActiveSession] = useState<string | null>(() => {
+    return localStorage.getItem('lastKnownActiveSession');
+  });
+  const [lastKnownSessions, setLastKnownSessions] = useState<any[]>(() => {
+    const stored = localStorage.getItem('lastKnownSessions');
+    return stored ? JSON.parse(stored) : [];
+  });
+
+  // Debug activeSessionId changes and track good state with localStorage persistence
+  React.useEffect(() => {
+    console.log('🔍 [ChatMessages] activeSessionId changed:', activeSessionId);
+    console.log('🔍 [ChatMessages] sessions count:', sessions?.length || 0);
+    console.log('🔍 [ChatMessages] sessions state:', sessions?.map(s => ({ id: s.id, isActive: s.isActive })) || []);
+    
+    // Track last known good state with localStorage persistence
+    if (activeSessionId) {
+      localStorage.setItem('lastKnownActiveSession', activeSessionId);
+      setLastKnownActiveSession(activeSessionId);
+      console.log('💾 [ChatMessages] Saved last known active session to localStorage:', activeSessionId);
+    }
+    if (sessions && sessions.length > 0) {
+      const sessionData = sessions.map(s => ({ id: s.id, isActive: s.isActive, title: s.title }));
+      localStorage.setItem('lastKnownSessions', JSON.stringify(sessionData));
+      setLastKnownSessions(sessionData);
+      console.log('💾 [ChatMessages] Saved last known sessions to localStorage:', sessions.length);
+    }
+  }, [activeSessionId, sessions]);
   
   // Ensure we have an active session
-  React.useEffect(() => {
-    if (!activeSessionId && sessions.length === 0) {
-      // Create a default session if none exists
-      createSession('user-initiated', {
-        title: 'Chat Session'
-      }).then(sessionId => {
-        switchToSession(sessionId);
-      }).catch(error => {
-        console.error('Failed to create default session:', error);
-      });
-    }
-  }, [activeSessionId, sessions, createSession, switchToSession]);
-  
-  // Load chat messages from localStorage on component mount (memoized)
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(() => {
-    try {
-      const saved = localStorage.getItem('thinkdrop-chat-messages');
-      if (!saved) return [];
-      
-      const loadedMessages = JSON.parse(saved).map((msg: any) => ({
-        ...msg,
-        timestamp: new Date(msg.timestamp)
-      }));
-      return loadedMessages;
-    } catch (error) {
-      console.error('Failed to load chat messages from localStorage:', error);
-      return [];
-    }
-  });
+  // React.useEffect(() => {
+  //   console.log('[ACTIVE SESSION INFO]:', activeSessionId, sessions, createSession, switchToSession)
+  //   if (!activeSessionId && sessions.length === 0) {
+  //     // Create a default session if none exists
+  //     createSession('user-initiated', {
+  //       title: 'Chat Session'
+  //     }).then(sessionId => {
+  //       switchToSession(sessionId);
   const [isLoading, setIsLoading] = useState(false);
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
   
-  // Get messages for the active session, fallback to local messages if no active session
+  // Get messages for the active session only from ConversationContext
   const displayMessages = React.useMemo(() => {
-    if (activeSessionId) {
-      const sessionMessages = getSessionMessages(activeSessionId);
-      console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
-      console.log('📝 [DISPLAY] Session messages:', sessionMessages);
-      
-      // Convert conversation messages to ChatMessage format
-      const converted = sessionMessages.map(msg => ({
-        id: msg.id,
-        text: msg.text,
-        sender: msg.sender,
-        timestamp: new Date(msg.timestamp),
-        isStreaming: false
-      }));
-      
-      console.log('📝 [DISPLAY] Converted messages:', converted);
-      return converted;
+    if (!activeSessionId) {
+      console.log('📝 [DISPLAY] No active session, showing empty messages');
+      return [];
     }
-    console.log('📝 [DISPLAY] No active session, using chatMessages:', chatMessages.length, 'messages');
-    return chatMessages;
-  }, [activeSessionId, getSessionMessages, chatMessages]);
+    
+    const sessionMessages = getSessionMessages(activeSessionId);
+    console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
+    console.log('📝 [DISPLAY] Session messages:', sessionMessages);
+    
+    // Convert conversation messages to ChatMessage format
+    const converted = sessionMessages.map(msg => ({
+      id: msg.id,
+      text: msg.text,
+      sender: msg.sender,
+      timestamp: new Date(msg.timestamp),
+      isStreaming: false
+    }));
+    
+    console.log('📝 [DISPLAY] Converted messages:', converted);
+    return converted;
+  }, [activeSessionId, getSessionMessages]);
   const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const isStreamingEndedRef = useRef<boolean>(false);
@@ -254,7 +264,7 @@ export default function ChatMessages() {
   };
 
   // Handle incoming WebSocket messages for streaming
-  const handleWebSocketMessage = (message: any) => {
+  const handleWebSocketMessage = async (message: any) => {
     try {
       if (message.type === 'llm_stream_start') {
         console.log('🚀 Stream started for request:', message.requestId);
@@ -319,19 +329,23 @@ export default function ChatMessages() {
           isStreaming: false
         };
         
-        // Add final message to chat history
+        // Add final message to conversation context
         console.log('🤖 Adding final AI message:', finalMessage);
-        setChatMessages(prev => {
-          console.log('📊 Current messages before adding AI message:', prev.length);
-          const exists = prev.some(m => m.id === finalMessage.id);
-          if (exists) {
-            console.log('⚠️ AI message already exists, skipping');
-            return prev;
+        if (activeSessionId && addConversationMessage) {
+          try {
+            await addConversationMessage(activeSessionId, {
+              text: finalText,
+              sender: 'ai',
+              sessionId: activeSessionId,
+              metadata: { streamingComplete: true }
+            });
+            console.log('✅ Final AI message added to session successfully');
+          } catch (error) {
+            console.error('❌ Error adding final AI message to session:', error);
           }
-          const newMessages = [...prev, finalMessage];
-          console.log('📊 Messages after adding AI message:', newMessages.length);
-          return newMessages;
-        });
+        } else {
+          console.log('⚠️ No active session or addConversationMessage function available');
+        }
         
         // Final scroll-to-bottom when streaming completes (unless user is scrolling)
         console.log('🏁 LLM streaming ended - triggering final scroll-to-bottom');
@@ -434,16 +448,100 @@ export default function ChatMessages() {
     }
     
     // Ensure we have an active session before sending message
+    console.log('🔍 [SESSION] Current state check:');
+    console.log('🔍 [SESSION] activeSessionId:', activeSessionId);
+    console.log('🔍 [SESSION] sessions:', sessions);
+    console.log('🔍 [SESSION] sessions length:', sessions?.length || 0);
+    console.log('🔍 [SESSION] contextIsLoading:', contextIsLoading);
+    console.log('🔍 [SESSION] displayMessage:', displayMessages?.length || 0, 'messages');
+    
+    // Check if context is still loading
+    if (contextIsLoading) {
+      console.log('⏳ [SESSION] Context is still loading, please wait...');
+      return;
+    }
+    
+    // Try to find an active session from the sessions list as fallback
     let currentSessionId = activeSessionId;
+    
+    // CRITICAL: Check if we have a context state issue and use fallback
+    if (!sessions || sessions.length === 0) {
+      console.error('❌ [SESSION] CRITICAL: Sessions array is empty or null!');
+      console.error('❌ [SESSION] This indicates a context state synchronization issue or context not yet loaded');
+      
+      // Use last known good state as fallback
+      console.log('🔍 [SESSION] Checking localStorage fallback state:');
+      console.log('🔍 [SESSION] lastKnownActiveSession:', lastKnownActiveSession);
+      console.log('🔍 [SESSION] lastKnownSessions:', lastKnownSessions);
+      
+      if (lastKnownActiveSession && lastKnownSessions.length > 0) {
+        console.log('🔄 [SESSION] Using last known good state as fallback');
+        console.log('🔄 [SESSION] Last known active session:', lastKnownActiveSession);
+        console.log('🔄 [SESSION] Last known sessions count:', lastKnownSessions.length);
+        
+        // Try to switch back to the last known active session
+        try {
+          await switchToSession(lastKnownActiveSession);
+          console.log('✅ [SESSION] Successfully restored session state');
+          // Continue with the restored session
+          currentSessionId = lastKnownActiveSession;
+        } catch (error) {
+          console.error('❌ [SESSION] Failed to restore session state:', error);
+          // Don't return here, fall through to create a new session
+          console.log('🔄 [SESSION] Fallback failed, will create new session');
+        }
+      } else {
+        console.log('⚠️ [SESSION] No localStorage fallback available');
+        console.log('🔄 [SESSION] Will create new session as final fallback');
+        // Don't return here, fall through to create a new session
+      }
+    }
+    console.log('🔍 [SESSION] Debug session state:', {
+      activeSessionId,
+      sessionsCount: sessions?.length || 0,
+      sessions: sessions?.map(s => ({ id: s.id, title: s.title, isActive: s.isActive })) || []
+    });
+    
+    if (!currentSessionId && sessions && sessions.length > 0) {
+      // Look for an active session in the sessions list
+      const activeSession = sessions.find(session => session.isActive);
+      console.log('🔍 [SESSION] Active session search result:', activeSession);
+      if (activeSession) {
+        currentSessionId = activeSession.id;
+        console.log('🔄 [SESSION] Found active session from sessions list:', currentSessionId);
+        // Update the context to sync the state - but don't await to avoid blocking message send
+        switchToSession(currentSessionId).catch(error => {
+          console.error('❌ [SESSION] Error syncing session state:', error);
+        });
+      } else {
+        console.log('⚠️ [SESSION] No active session found in sessions list');
+        // If no active session exists, use the most recent session (first in list)
+        if (sessions.length > 0) {
+          currentSessionId = sessions[0].id;
+          console.log('🔄 [SESSION] Using most recent session as fallback:', currentSessionId);
+          // Switch to this session
+          switchToSession(currentSessionId).catch(error => {
+            console.error('❌ [SESSION] Error switching to fallback session:', error);
+          });
+        }
+      }
+    }
+    
     if (!currentSessionId) {
-      console.log('⚠️ [SESSION] No active session, creating one...');
+      console.log('⚠️ [SESSION] No active session found, creating one...');
       try {
         const newSessionId = await createSession('user-initiated', {
           title: 'Chat Session'
         });
-        switchToSession(newSessionId);
-        currentSessionId = newSessionId; // Use the new session ID directly
-        console.log('✅ [SESSION] Created and switched to session:', newSessionId);
+        
+        if (newSessionId && newSessionId !== 'undefined') {
+          switchToSession(newSessionId);
+          currentSessionId = newSessionId; // Use the new session ID directly
+          console.log('✅ [SESSION] Created and switched to session:', newSessionId);
+        } else {
+          console.error('❌ [SESSION] Invalid sessionId returned from createSession:', newSessionId);
+          throw new Error('Failed to create valid session');
+        }
         // Wait a bit for the session to be fully active
         await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
@@ -474,25 +572,17 @@ export default function ChatMessages() {
     setStreamingMessageId(null);
     isStreamingEndedRef.current = false;
     
-    // Add user message immediately
-    const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
-      text: messageText,
-      sender: 'user',
-      timestamp: new Date()
-    };
-    
     // Add to conversation context if we have an active session
     // Use the currentSessionId from session creation above
     console.log('🔍 [DEBUG] Session check - currentSessionId:', currentSessionId);
     console.log('🔍 [DEBUG] addConversationMessage function:', typeof addConversationMessage);
     
-    if (currentSessionId) {
+    if (currentSessionId && addConversationMessage) {
       console.log('📝 [USER-MESSAGE] Adding user message to session:', currentSessionId);
       console.log('📝 [USER-MESSAGE] Message text:', messageText);
       
       try {
-        addConversationMessage(currentSessionId, {
+        await addConversationMessage(currentSessionId, {
           text: messageText,
           sender: 'user',
           sessionId: currentSessionId,
@@ -501,15 +591,12 @@ export default function ChatMessages() {
         console.log('✅ [USER-MESSAGE] User message added to session successfully');
       } catch (error) {
         console.error('❌ [USER-MESSAGE] Error adding user message to session:', error);
+        // Session add failed - message will be handled by ConversationContext
+        console.log('⚠️ [USER-MESSAGE] Session add failed, relying on ConversationContext');
       }
     } else {
-      // Fallback to local storage
-      setChatMessages(prev => {
-        const updated = [...prev, userMessage];
-        // Save to localStorage
-        localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-        return updated;
-      });
+      // No session available - create one first
+      console.log('⚠️ [USER-MESSAGE] No session available, should create session first');
     }
     
     try {
@@ -526,19 +613,16 @@ export default function ChatMessages() {
       
       if (semanticResults && semanticResults.hasRelevantResults) {
         console.log('✅ Found relevant memories, using semantic search results');
-        // Add AI response with semantic search results
-        const aiMessage: ChatMessage = {
-          id: `ai-${Date.now()}`,
-          text: semanticResults.response,
-          sender: 'ai',
-          timestamp: new Date()
-        };
         
-        setChatMessages(prev => {
-          const updated = [...prev, aiMessage];
-          localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-          return updated;
-        });
+        // Add to conversation context if we have an active session
+        if (currentSessionId && addConversationMessage) {
+          await addConversationMessage(currentSessionId, {
+            text: semanticResults.response,
+            sender: 'ai',
+            sessionId: currentSessionId,
+            metadata: { source: 'semantic_search' }
+          });
+        }
         
         setIsLoading(false);
         return;
@@ -648,14 +732,6 @@ export default function ChatMessages() {
           return;
         }
         
-        // For non-memory intents, add AI response message immediately
-        const aiMessage: ChatMessage = {
-          id: `ai-${Date.now()}`,
-          text: aiResponseText,
-          sender: 'ai',
-          timestamp: new Date()
-        };
-        
         // Add to conversation context if we have an active session
         if (activeSessionId) {
           // DISABLED: This causes duplicates since orchestration broadcast handler also adds messages
@@ -667,12 +743,8 @@ export default function ChatMessages() {
           // });
           console.log('📝 [ORCHESTRATION] AI response will be added via orchestration broadcast handler');
         } else {
-          // Fallback to local storage
-          setChatMessages(prev => {
-            const updated = [...prev, aiMessage];
-            localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-            return updated;
-          });
+          // No active session - message will be handled by orchestration
+          console.log('⚠️ [LOCAL-LLM] No active session for AI response');
         }
         
         console.log('✅ Local LLM processing completed successfully');
@@ -694,11 +766,15 @@ export default function ChatMessages() {
         timestamp: new Date()
       };
       
-      setChatMessages(prev => {
-        const updated = [...prev, errorMessage];
-        localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(updated));
-        return updated;
-      });
+      // Add error message to conversation context if we have an active session
+      if (activeSessionId && addConversationMessage) {
+        await addConversationMessage(activeSessionId, {
+          text: errorMessage.text,
+          sender: 'ai',
+          sessionId: activeSessionId,
+          metadata: { error: true }
+        });
+      }
     } finally {
       // Only clear processing state if not waiting for memory retrieve or question orchestration
       if (!isMemoryRetrieve && !isQuestionIntent) {
@@ -839,15 +915,25 @@ export default function ChatMessages() {
     }
   }, []);
 
+  useEffect(() => {
+    // Messages are now managed by ConversationContext, no need for localStorage
+    console.log('💾 Messages are managed by ConversationContext - no localStorage needed');
+  }, []);
+
   const handleRegenerateMessage = useCallback(async (messageId: string) => {
     // Find the user message that preceded this AI message
-    const messageIndex = chatMessages.findIndex(m => m.id === messageId);
+    const messageIndex = displayMessages.findIndex(m => m.id === messageId);
+    if (displayMessages.length > 0) {
+      const lastMessage = displayMessages[displayMessages.length - 1];
+      if (lastMessage.sender === 'user') {
+        console.log('🔄 Last message was from user, regenerating...');
+        await handleSendMessage();
+      }
+    }
     if (messageIndex > 0) {
-      const previousMessage = chatMessages[messageIndex - 1];
+      const previousMessage = displayMessages[messageIndex - 1];
       if (previousMessage.sender === 'user') {
         console.log('🔄 Regenerating response for:', previousMessage.text);
-        // Remove the AI message and regenerate
-        setChatMessages(prev => prev.filter(m => m.id !== messageId));
         // Set the previous message in textarea and send
         setCurrentMessage(previousMessage.text);
         // Use setTimeout to ensure state is updated before sending
@@ -856,24 +942,24 @@ export default function ChatMessages() {
         }, 0);
       }
     }
-  }, [chatMessages, handleSendMessage]);
+  }, [handleSendMessage]);
 
-  const handleEditMessage = useCallback((messageId: string, messageText: string) => {
-    console.log('✏️ Edit message:', messageId, messageText);
-    // Start inline editing
-    setEditingMessageId(messageId);
-    setEditingText(messageText);
-    // Focus the edit textarea after state update
-    setTimeout(() => {
-      if (editTextareaRef.current) {
-        editTextareaRef.current.focus();
-        editTextareaRef.current.setSelectionRange(
-          editTextareaRef.current.value.length,
-          editTextareaRef.current.value.length
-        );
-      }
-    }, 0);
-  }, []);
+  // const handleEditMessage = useCallback((messageId: string, messageText: string) => {
+  //   console.log('✏️ Edit message:', messageId, messageText);
+  //   // Start inline editing
+  //   setEditingMessageId(messageId);
+  //   setEditingText(messageText);
+  //   // Focus the edit textarea after state update
+  //   setTimeout(() => {
+  //     if (editTextareaRef.current) {
+  //       editTextareaRef.current.focus();
+  //       editTextareaRef.current.setSelectionRange(
+  //         editTextareaRef.current.value.length,
+  //         editTextareaRef.current.value.length
+  //       );
+  //     }
+  //   }, 0);
+  // }, []);
 
   const handleThumbsUp = useCallback((messageId: string) => {
     console.log('👍 Thumbs up for message:', messageId);
@@ -887,33 +973,39 @@ export default function ChatMessages() {
 
   const handleSaveEdit = useCallback(async (messageId: string) => {
     if (!editingText.trim()) return;
-    
     console.log('✅ Saving edit for message:', messageId, editingText);
     
-    // Update the message in the chat
-    setChatMessages(prev => prev.map(msg => 
-      msg.id === messageId 
-        ? { ...msg, text: editingText.trim() }
-        : msg
-    ));
-    
-    // Remove messages from this point forward and regenerate
-    const messageIndex = chatMessages.findIndex(m => m.id === messageId);
-    if (messageIndex !== -1) {
-      // Remove subsequent messages
-      setChatMessages(prev => prev.slice(0, messageIndex + 1));
-      
-      // Set the edited text in the main textarea and send
-      setCurrentMessage(editingText.trim());
-      setTimeout(async () => {
-        await handleSendMessage();
-      }, 0);
+    // Update message in ConversationContext instead of local state
+    if (activeSessionId) {
+      // For now, just log - proper message editing should be implemented in ConversationContext
+      console.log('📝 Message edit requested - should be handled by ConversationContext');
     }
+    
+    // Set the edited text in the main textarea and send
+    setCurrentMessage(editingText.trim());
+    setTimeout(async () => {
+      await handleSendMessage();
+    }, 0);
     
     // Exit edit mode
     setEditingMessageId(null);
     setEditingText('');
-  }, [editingText, chatMessages, handleSendMessage]);
+  }, [editingText, activeSessionId, addConversationMessage, handleSendMessage]);
+
+  const handleEditMessage = useCallback((messageId: string, messageText: string) => {
+    console.log('✏️ Edit message:', messageId, messageText);
+    setEditingMessageId(messageId);
+    setEditingText(messageText);
+    setTimeout(() => {
+      if (editTextareaRef.current) {
+        editTextareaRef.current.focus();
+        editTextareaRef.current.setSelectionRange(
+          editTextareaRef.current.value.length,
+          editTextareaRef.current.value.length
+        );
+      }
+    }, 0);
+  }, []);
 
   const handleCancelEdit = useCallback(() => {
     console.log('❌ Canceling edit');
@@ -923,8 +1015,6 @@ export default function ChatMessages() {
 
   const handleEditTextareaChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setEditingText(e.target.value);
-    
-    // Auto-resize textarea
     const target = e.target;
     requestAnimationFrame(() => {
       target.style.height = 'auto';
@@ -946,7 +1036,7 @@ export default function ChatMessages() {
   useEffect(() => {
     // Connect WebSocket when component mounts
     console.log('🔌 ChatMessages mounted - connecting WebSocket...');
-    console.log('📊 Current messages count on mount:', chatMessages.length);
+    
     
     connectWebSocket().catch(error => {
       console.error('❌ Failed to connect WebSocket on mount:', error);
@@ -959,16 +1049,15 @@ export default function ChatMessages() {
     // Cleanup: disconnect when component unmounts
     return () => {
       console.log('🔌 ChatMessages unmounting - disconnecting WebSocket...');
-      console.log('📊 Messages count on unmount:', chatMessages.length);
       disconnectWebSocket();
       clearTimeout(timeoutId);
     };
   }, []); // Remove dependencies to prevent re-mounting
-  
+
   // Persist messages to localStorage whenever they change
-  useEffect(() => {
-    localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(chatMessages));
-  }, [chatMessages]);
+  // useEffect(() => {
+  //   localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(chatMessages));
+  // }, [chatMessages]);
 
   // Enhanced scroll to bottom function with smooth WebSocket chunk handling
   const scrollToBottom = useCallback((options: { smooth?: boolean; force?: boolean; onComplete?: (() => void) | null } = {}) => {
@@ -1026,69 +1115,26 @@ export default function ChatMessages() {
 
   // Auto-scroll to bottom when new messages arrive or streaming updates
   useEffect(() => {
-    if (!isUserScrolling && (chatMessages.length > 0 || currentStreamingMessage)) {
-      scrollToBottom({ smooth: true, force: false });
+    const hasMessages = displayMessages.length > 0;
+    if (hasMessages) {
+      const lastMessage = displayMessages[displayMessages.length - 1];
+      if (lastMessage && lastMessage.sender === 'ai' && !lastMessage.isStreaming) {
+        console.log('🔄 Auto-scrolling after AI message completion');
+        scrollToBottom({ smooth: true, force: true });
+      }
     }
-  }, [chatMessages, currentStreamingMessage, isUserScrolling, scrollToBottom]);
+  }, [displayMessages, scrollToBottom]);
 
-  // Gentle scroll for streaming messages - respect user scrolling behavior
-  useEffect(() => {
-    if (currentStreamingMessage && !isUserScrolling) {
-      console.log('📡 Streaming message detected, gentle scroll:', { isUserScrolling });
-      // Only auto-scroll during streaming if user is not manually scrolling
-      scrollToBottom({ smooth: true, force: false });
+  // ...
+
+  const handleClearMessages = useCallback(() => {
+    if (displayMessages.length === 0) {
+      console.log('📝 No messages to clear');
+      return;
     }
-  }, [currentStreamingMessage, isUserScrolling, scrollToBottom]);
-
-  // Scroll detection to show/hide scroll button
-  useEffect(() => {
-    const container = messagesContainerRef.current;
-    if (!container) return;
-
-    const handleScroll = () => {
-      // Ignore scroll events caused by programmatic scrolling
-      if (isProgrammaticScrolling.current) {
-        console.log('🤖 Ignoring programmatic scroll event');
-        return;
-      }
-      
-      const { scrollTop, scrollHeight, clientHeight } = container;
-      const isAtBottom = scrollHeight - scrollTop - clientHeight < 50; // 50px threshold
-      
-      console.log('👆 User scroll detected:', { scrollTop, scrollHeight, clientHeight, isAtBottom, hasStreaming: !!currentStreamingMessage });
-      
-      setShowScrollButton(!isAtBottom);
-      
-      // Don't pause auto-scroll during streaming - let streaming continue
-      if (currentStreamingMessage) {
-        console.log('📡 Streaming active - not pausing auto-scroll');
-        return;
-      }
-      
-      // Detect if user is manually scrolling (only for actual user interaction)
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-      
-      console.log('⏸️ Setting isUserScrolling = true');
-      setIsUserScrolling(true);
-      scrollTimeoutRef.current = setTimeout(() => {
-        if (isAtBottom) {
-          console.log('▶️ Resuming auto-scroll (user at bottom)');
-          setIsUserScrolling(false);
-        }
-      }, 1000); // Resume auto-scroll after 1 second if at bottom
-    };
-
-    container.addEventListener('scroll', handleScroll);
-    return () => {
-      container.removeEventListener('scroll', handleScroll);
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-    };
-  }, []);
-
+    // Clear messages should be handled by ConversationContext
+    console.log('🗑️ Clear messages requested - should be handled by ConversationContext');
+  }, [displayMessages]);
   // Handle scroll to bottom button click
   const handleScrollToBottom = useCallback(() => {
     setIsUserScrolling(false);
@@ -1098,6 +1144,7 @@ export default function ChatMessages() {
   useEffect(() => {
     // Listen for new messages from the main process
     if (window.electronAPI?.onChatMessage) {
+      // ...
       window.electronAPI.onChatMessage((_event: any, message: ChatMessage) => {
         // Check if we've already processed this message
         if (processedMessageIds.has(message.id)) {
@@ -1108,22 +1155,22 @@ export default function ChatMessages() {
         setProcessedMessageIds(prev => new Set([...prev, message.id]));
         
         // Add message to chat
-        setChatMessages(prev => {
-          // Double-check for duplicates by ID
-          const exists = prev.some(m => m.id === message.id);
-          if (exists) {
-            return prev;
-          }
+        // setChatMessages(prev => {
+        //   // Double-check for duplicates by ID
+        //   const exists = prev.some(m => m.id === message.id);
+        //   if (exists) {
+        //     return prev;
+        //   }
           
-          // Notify that a message was loaded (for focus management)
-          setTimeout(() => {
-            if (window.electronAPI?.notifyMessageLoaded) {
-              window.electronAPI.notifyMessageLoaded();
-            }
-          }, 200);
+        //   // Notify that a message was loaded (for focus management)
+        //   setTimeout(() => {
+        //     if (window.electronAPI?.notifyMessageLoaded) {
+        //       window.electronAPI.notifyMessageLoaded();
+        //     }
+        //   }, 200);
           
-          return [...prev, message];
-        });
+        //   return [...prev, message];
+        // });
         
         // Show loading indicator for user messages (AI response will come via WebSocket)
         if (message.sender === 'user') {
@@ -1144,24 +1191,22 @@ export default function ChatMessages() {
     console.log('🔍 [DEBUG] Setting up orchestration update listener...');
     console.log('🔍 [DEBUG] window.electronAPI exists:', !!window.electronAPI);
     console.log('🔍 [DEBUG] onOrchestrationUpdate exists:', !!(window.electronAPI?.onOrchestrationUpdate));
-    
+
     if (window.electronAPI?.onOrchestrationUpdate) {
       console.log('✅ [DEBUG] Successfully setting up onOrchestrationUpdate listener');
       
-      // Track processed updates to prevent duplicates
-      const processedUpdates = new Set<string>();
-      
-      window.electronAPI.onOrchestrationUpdate((_event: any, updateData: any) => {
+      window.electronAPI.onOrchestrationUpdate(async (_event: any, updateData: any) => {
         // Create unique key for this update
         const updateKey = `${updateData.type}-${updateData.timestamp}-${updateData.response?.substring(0, 50)}`;
         
-        if (processedUpdates.has(updateKey)) {
+        // Check if we've already processed this update using processedMessageIds
+        if (processedMessageIds.has(updateKey)) {
           console.warn('⚠️ [FRONTEND] Duplicate orchestration update ignored:', updateKey);
           return;
         }
         
-        // Mark as processed BEFORE any processing
-        processedUpdates.add(updateKey);
+        // Mark as processed
+        setProcessedMessageIds(prev => new Set([...prev, updateKey]));
         console.log('✅ [FRONTEND] Processing unique orchestration update:', updateKey);
         
         if (updateData.type === 'orchestration-complete' && updateData.response) {
@@ -1169,10 +1214,29 @@ export default function ChatMessages() {
           
           // Add AI response to conversation session (this is what gets displayed)
           if (activeSessionId && addConversationMessage) {
-            // Check if this exact response was already added to prevent duplicates
-            const currentMessages = getSessionMessages(activeSessionId);
-            const lastMessage = currentMessages[currentMessages.length - 1];
-            const isDuplicateResponse = lastMessage?.sender === 'ai' && lastMessage?.text === updateData.response;
+            // Enhanced duplicate detection for orchestration responses
+            const currentMessages = displayMessages;
+            const recentAiMessages = currentMessages.slice(-8).filter(msg => msg.sender === 'ai');
+            
+            const isDuplicateResponse = recentAiMessages.some((msg: any) => {
+              // Exact text match
+              const exactMatch = msg.text === updateData.response;
+              
+              // Recent time window (25 seconds)
+              const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 25000;
+              
+              // Similar text match for longer messages
+              const similarMatch = msg.text.length > 30 && updateData.response.length > 30 && 
+                                  msg.text.substring(0, 30) === updateData.response.substring(0, 30);
+              
+              // Short generic responses (like "I'll get it done.")
+              const shortGenericMatch = updateData.response.length < 50 && msg.text === updateData.response;
+              
+              // Very short responses (under 20 chars) are likely generic
+              const veryShortMatch = updateData.response.length < 20 && msg.text === updateData.response;
+              
+              return exactMatch || shortGenericMatch || veryShortMatch || (recentTime && similarMatch);
+            });
             
             if (isDuplicateResponse) {
               console.warn('⚠️ [ORCHESTRATION] Duplicate AI response detected, skipping add to session');
@@ -1180,7 +1244,7 @@ export default function ChatMessages() {
             }
             
             console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', activeSessionId);         
-            addConversationMessage(activeSessionId, {
+            await addConversationMessage(activeSessionId, {
               text: updateData.response,
               sender: 'ai',
               sessionId: activeSessionId,
@@ -1192,43 +1256,7 @@ export default function ChatMessages() {
             });
             console.log('✅ [ORCHESTRATION] AI response added to session successfully');
           } else {
-            console.warn('⚠️ [ORCHESTRATION] No active session or addConversationMessage function available');
-            
-            // Fallback: Update local chatMessages state
-            setChatMessages(prev => {
-              console.log('🔍 [ORCHESTRATION] Fallback - Current messages:', prev.length);
-              console.log('🔍 [ORCHESTRATION] Fallback - Last message:', prev[prev.length - 1]);
-              
-              const lastIndex = prev.length - 1;
-              const hasExistingAIMessage = lastIndex >= 0 && prev[lastIndex].sender === 'ai';
-              
-              console.log('🔍 [ORCHESTRATION] Fallback - Has existing AI message:', hasExistingAIMessage);
-              
-              if (hasExistingAIMessage) {
-                console.log('🔄 [ORCHESTRATION] Fallback - Updating existing AI message');
-                const updatedMessages = [...prev];
-                updatedMessages[lastIndex] = {
-                  ...updatedMessages[lastIndex],
-                  text: updateData.response,
-                  isStreaming: false
-                };
-                console.log('🔄 [ORCHESTRATION] Fallback - Updated messages:', updatedMessages.length);
-                return updatedMessages;
-              } else {
-                console.log('➕ [ORCHESTRATION] Fallback - Adding new AI message');
-                const newMessage = {
-                  id: `ai-${Date.now()}`,
-                  text: updateData.response,
-                  sender: 'ai' as const,
-                  timestamp: new Date(),
-                  isStreaming: false
-                };
-                console.log('➕ [ORCHESTRATION] Fallback - New message:', newMessage);
-                const newMessages = [...prev, newMessage];
-                console.log('➕ [ORCHESTRATION] Fallback - Total messages after add:', newMessages.length);
-                return newMessages;
-              }
-            });
+            console.warn('⚠️ [ORCHESTRATION] No active session; skipping adding AI response');
           }
           
           // Clear loading and processing states
@@ -1240,31 +1268,6 @@ export default function ChatMessages() {
       });
     }
   }, [processedMessageIds, wsState.isConnected, connectWebSocket]);
-
-  // TEMPORARILY DISABLED: Height adjustment causing chat window to disappear
-  useEffect(() => {
-    if (window.electronAPI?.adjustChatMessagesHeight) {
-      // Calculate content height with better logic
-      const baseHeight = 200; // Minimum window height
-      const messageHeight = 60; // Height per message (reduced from 80)
-      const padding = 100; // Extra padding for UI elements
-      
-      const contentHeight = Math.max(
-        baseHeight, 
-        Math.min(chatMessages.length * messageHeight + padding, 500) // Max height of 500px
-      );
-      
-      console.log(`📏 Adjusting chat window height: ${contentHeight}px for ${chatMessages.length} messages`);
-      window.electronAPI.adjustChatMessagesHeight(contentHeight);
-    }
-  }, [chatMessages.length]);
-
-  // Auto-scroll to bottom when new messages are added or streaming updates
-  useEffect(() => {
-    if (chatMessages.length > 0 || currentStreamingMessage) {
-      scrollToBottom({ smooth: true, force: false });
-    }
-  }, [chatMessages.length, currentStreamingMessage, scrollToBottom]);
 
   useEffect(() => {
     const handleResize = () => {
@@ -1315,7 +1318,7 @@ export default function ChatMessages() {
           } as React.CSSProperties}
         >
         <div className="space-y-4">
-        {chatMessages.length === 0 && !currentStreamingMessage ? (
+        {displayMessages.length === 0 && !currentStreamingMessage ? (
           <div className="text-center py-8">
             <div className="text-white/40 text-sm mb-2">No messages yet</div>
             <div className="text-white/30 text-xs">Start a conversation by typing in the chat input below</div>

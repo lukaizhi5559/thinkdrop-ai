@@ -111,11 +111,16 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   // Format relative time
   const formatTime = useCallback((dateString: string) => {
     try {
-      return formatDistanceToNow(new Date(dateString), { addSuffix: true });
+      if (!dateString) return 'Unknown';
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'Unknown';
+      return formatDistanceToNow(date, { addSuffix: true });
     } catch {
       return 'Unknown';
     }
   }, []);
+
+  console.log('[filteredSessions]', filteredSessions)
 
   return (
     <>
@@ -209,8 +214,15 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                     ${session.isHibernated ? 'opacity-60' : ''}
                   `}
                   onClick={() => {
+                    console.log('🖱️ [ConversationSidebar] Session clicked:', session.id, session.title);
                     if (editingSessionId !== session.id) {
+                      console.log('🔄 [ConversationSidebar] Calling switchToSession for:', session.id);
                       switchToSession(session.id);
+                      // Also close sidebar directly from here as backup
+                      console.log('🚪 [ConversationSidebar] Closing sidebar directly');
+                      closeSidebar();
+                    } else {
+                      console.log('⚠️ [ConversationSidebar] Session is being edited, ignoring click');
                     }
                   }}
                 >
@@ -249,7 +261,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                         />
                       ) : (
                         <h3 className="font-medium text-white truncate flex-1">
-                          {session.title}
+                          {session.lastMessage || session.title || 'New Chat'}
                         </h3>
                       )}
 
@@ -334,7 +346,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                     <div className="flex items-center gap-3">
                       <span className="flex items-center gap-1">
                         <MessageSquare className="h-3 w-3" />
-                        {session.messageCount}
+                        {session.messageCount || 0}
                       </span>
                       
                       {session.isHibernated && (

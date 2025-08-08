@@ -398,7 +398,8 @@ class HybridIntentParser {
       person: this.extractPeople(doc),
       location: this.extractLocations(doc),
       event: this.extractEvents(doc),
-      contact: this.extractContacts(doc)
+      contact: this.extractContacts(doc),
+      items: this.extractItems(doc, message)
     };
   }
   
@@ -445,6 +446,48 @@ class HybridIntentParser {
     } catch (error) {
       return [];
     }
+  }
+
+  extractItems(doc, message) {
+    const items = [];
+    const text = message.toLowerCase();
+    
+    // Use Compromise.js to find nouns that might be items
+    try {
+      const nouns = doc.nouns().out('array');
+      const itemNouns = nouns.filter(noun => {
+        const n = noun.toLowerCase();
+        return /^(shoes?|clothes?|food|phone|laptop|book|car|bike|furniture|equipment)/.test(n) ||
+               /\b(need|want|buy|get|looking for)\b.*\b(shoes?|clothes?|food|phone|laptop|book|car|bike)\b/.test(text);
+      });
+      items.push(...itemNouns);
+    } catch (error) {
+      // Fallback to regex patterns
+    }
+    
+    // Common item patterns (same as DistilBertIntentParser)
+    const itemPatterns = [
+      /\b(shoes?|boots?|sneakers?|sandals?|heels?|flats?)\b/g,
+      /\b(shirt?s?|pants?|jeans?|dress(es)?|skirt?s?|jacket?s?|coat?s?)\b/g,
+      /\b(phone?s?|laptop?s?|computer?s?|tablet?s?|headphones?)\b/g,
+      /\b(food|meal?s?|coffee|tea|water|juice)\b/g,
+      /\b(book?s?|magazine?s?|movie?s?|music)\b/g,
+      /\bneed (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\bwant (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\bbuy (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g
+    ];
+    
+    itemPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const item = match[1] || match[0];
+        if (item && item.length > 2 && !items.includes(item)) {
+          items.push(item.trim());
+        }
+      }
+    });
+    
+    return [...new Set(items)]; // Remove duplicates
   }
   
   /**

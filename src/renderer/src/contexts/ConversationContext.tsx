@@ -36,7 +36,7 @@ interface ConversationContextType {
   activeSessionId: string | null;
   loadSessions: () => Promise<void>;
   createSession: (type: 'user-initiated' | 'ai-initiated', options?: Partial<ConversationSession>) => Promise<string>;
-  switchToSession: (sessionId: string) => void;
+  switchToSession: (sessionId: string) => Promise<void>;
   updateSession: (sessionId: string, updates: Partial<ConversationSession>) => Promise<boolean>;
   deleteSession: (sessionId: string) => Promise<boolean>;
   hibernateSession: (sessionId: string, hibernationData?: Record<string, any>) => Promise<boolean>;
@@ -44,9 +44,10 @@ interface ConversationContextType {
   
   // Message Management
   messages: Record<string, ChatMessage[]>;
-  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => void;
+  addMessage: (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => Promise<void>;
   updateMessage: (sessionId: string, messageId: string, updates: Partial<ChatMessage>) => void;
   getSessionMessages: (sessionId: string) => ChatMessage[];
+  loadMessages: (sessionId: string) => Promise<void>;
   
   // Sidebar State
   isSidebarOpen: boolean;
@@ -80,6 +81,16 @@ interface ConversationProviderProps {
 export const ConversationProvider: React.FC<ConversationProviderProps> = ({ children }) => {
   const [sessions, setSessions] = useState<ConversationSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+
+  // Debug activeSessionId changes with stack trace
+  const debugSetActiveSessionId = useCallback((sessionId: string | null) => {
+    console.log('🔍 [ConversationContext] setActiveSessionId called:', {
+      from: activeSessionId,
+      to: sessionId,
+      stack: new Error().stack?.split('\n').slice(1, 4).join('\n')
+    });
+    setActiveSessionId(sessionId);
+  }, [activeSessionId]);
   const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -96,29 +107,116 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     });
   }, []);
 
-  // Load sessions from backend
-  const loadSessions = useCallback(async () => {
+  // Load messages for a specific session from backend
+  const loadMessages = useCallback(async (sessionId: string) => {
+    if (!sessionId) {
+      console.error('❌ [ConversationContext] Cannot load messages: sessionId is undefined');
+      return;
+    }
+    
+    console.log(`🔄 [ConversationContext] Loading messages for session: ${sessionId}`);
+    
     try {
-      setIsLoading(true);
-      setError(null);
-      
       if (window.electronAPI?.agentExecute) {
+        console.log(`📤 [ConversationContext] Sending message-list request for session: ${sessionId}`);
         const result = await window.electronAPI.agentExecute({
           agentName: 'ConversationSessionAgent',
-          action: 'session-list',
+          action: 'message-list',
           options: {
-            includeHibernated: false,
-            limit: 50
+            sessionId,
+            limit: 100,
+            offset: 0
           }
         });
-        
+
+        console.log(`📥 [ConversationContext] Raw result from message-list:`, result);
+        console.log(`📥 [ConversationContext] Result structure:`, {
+          success: result.success,
+          hasResult: !!result.result,
+          hasData: !!result.data,
+          hasMessages: !!result.messages,
+          resultKeys: result.result ? Object.keys(result.result) : 'no result',
+          dataKeys: result.data ? Object.keys(result.data) : 'no data',
+          fullResult: result
+        });
+
         if (result.success) {
-          setSessions(result.data.sessions || []);
+          // Handle nested response structure - backend returns result.result.data.messages
+          const messages = result.messages || result.result?.data?.messages || result.result?.messages || result.data?.messages || [];
+          console.log(`✅ [ConversationContext] Loaded ${messages.length} messages for session ${sessionId}`);
+          console.log(`📋 [ConversationContext] Messages:`, messages);
+          setMessages(prev => ({
+            ...prev,
+            [sessionId]: messages
+          }));
+        } else {
+          console.error('❌ [ConversationContext] Failed to load messages:', result.error);
+        }
+      } else {
+        console.warn('⚠️ [ConversationContext] Backend not available for loading messages');
+      }
+    } catch (error) {
+      console.error('❌ [ConversationContext] Error loading messages:', error);
+    }
+  }, []);
+
+  // Load sessions from backend
+  const loadSessions = useCallback(async () => {
+    // Prevent multiple simultaneous calls
+    if (isLoading) {
+      console.log('🔄 [ConversationContext] loadSessions already in progress, skipping...');
+      return;
+    }
+    
+    setIsLoading(true);
+    
+    try {
+      console.log('🔍 [ConversationContext] Checking electronAPI availability...');
+      console.log('electronAPI exists:', !!window.electronAPI);
+      console.log('conversation-session-list exists:', !!(window as any).electronAPI?.['conversation-session-list']);
+      
+      if ((window as any).electronAPI?.['conversation-session-list']) {
+        console.log('🔗 [ConversationContext] Calling conversation-session-list...');
+        const result = await (window as any).electronAPI['conversation-session-list']({
+          includeHibernated: false,
+          limit: 50
+        });
+        console.log('📥 [ConversationContext] Session list result:', result);
+        
+        if (result.success && result.data && result.data.sessions) {
+          console.log('✅ [ConversationContext] Loaded sessions from backend:', result.data.sessions.length);
+          console.log('Sessions:', result.data.sessions.map((s: any) => ({ id: s.id, title: s.title, isActive: s.isActive, lastMessage: s.lastMessage, messageCount: s.messageCount })));
           
-          // Set active session to the most recent if none is set
-          if (!activeSessionId && result.data.sessions.length > 0) {
-            setActiveSessionId(result.data.sessions[0].id);
-          }
+          const parsedSessions = result.data.sessions.map((session: any) => ({
+            ...session,
+            contextData: typeof session.contextData === 'string' ? JSON.parse(session.contextData || '{}') : session.contextData
+          }));
+
+          console.log('📋 [ConversationContext] Loaded sessions:', parsedSessions.map((s: ConversationSession) => ({ id: s.id, title: s.title, isActive: s.isActive })));
+          setSessions(parsedSessions);
+
+          // Load messages for all sessions to populate sidebar previews
+          console.log('📥 [ConversationContext] Loading messages for all sessions...');
+          parsedSessions.forEach((session: ConversationSession) => {
+            loadMessages(session.id);
+          });
+
+          // Check if there's an active session and set it
+          const activeSession = parsedSessions.find((s: ConversationSession) => s.isActive);
+          if (activeSession) {
+            console.log('🎯 [ConversationContext] Found active session:', activeSession.id);
+            setActiveSessionId(activeSession.id);
+            // Close sidebar if we have an active session
+            console.log('🔧 [ConversationContext] Closing sidebar - active session detected');
+            setIsSidebarOpen(false);
+          } else {
+            console.log('🚪 [ConversationContext] No active session found, opening sidebar for manual selection');
+            console.log('🔧 [ConversationContext] Current sidebar state before opening:', isSidebarOpen);
+            setIsSidebarOpen(true);
+            console.log('✅ [ConversationContext] Sidebar set to open - waiting for user to select a session');
+            setActiveSessionId(null);
+            console.log('⏳ [ConversationContext] Waiting for user to select a session from sidebar');
+          }  
         } else {
           setError(result.error || 'Failed to load sessions');
         }
@@ -144,6 +242,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
         };
         setSessions([demoSession]);
         setActiveSessionId('demo-session');
+        setIsSidebarOpen(false);
       }
     } catch (error) {
       console.error('Failed to load sessions:', error);
@@ -151,12 +250,57 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     } finally {
       setIsLoading(false);
     }
-  }, [activeSessionId]);
+  }, []);
 
   // Load sessions on mount
   useEffect(() => {
+    console.log('🚀 [ConversationContext] Component mounted, loading sessions...');
     loadSessions();
-  }, []);
+  }, []); // Empty dependency array - only run once on mount
+
+  // Monitor session activity and auto-open sidebar when no active sessions
+  useEffect(() => {
+    if (sessions.length > 0) {
+      const hasActiveSession = sessions.some(session => session.isActive);
+      const hasActiveSessionId = activeSessionId !== null;
+      
+      console.log('🔍 [ConversationContext] Session activity check:', {
+        sessionsCount: sessions.length,
+        hasActiveSession,
+        hasActiveSessionId,
+        currentSidebarState: isSidebarOpen
+      });
+      
+      // If we have sessions but no active session, open sidebar for selection
+      if (!hasActiveSession && !hasActiveSessionId && !isSidebarOpen) {
+        console.log('🚪 [ConversationContext] Auto-opening sidebar - no active sessions detected');
+        setIsSidebarOpen(true);
+      }
+    }
+  }, [sessions, activeSessionId, isSidebarOpen]);
+
+  // Load messages when active session changes
+  useEffect(() => {
+    console.log(`🔄 [ConversationContext] Active session changed to: ${activeSessionId}`);
+    
+    if (!activeSessionId) {
+      console.log('⚠️ [ConversationContext] No active session set, skipping message loading');
+      return;
+    }
+    
+    // Check if messages are already loaded for this session
+    const currentMessages = messages[activeSessionId];
+    const hasMessages = currentMessages && currentMessages.length > 0;
+    
+    console.log(`🔄 [ConversationContext] Messages exist for session: ${hasMessages ? currentMessages.length : 0}`);
+    
+    if (!hasMessages) {
+      console.log(`🔄 [ConversationContext] Loading messages for active session: ${activeSessionId}`);
+      loadMessages(activeSessionId);
+    } else {
+      console.log(`✅ [ConversationContext] Messages already loaded for session: ${activeSessionId} (${currentMessages.length} messages)`);
+    }
+  }, [activeSessionId, loadMessages]); // Removed 'messages' from dependencies to prevent infinite loop
 
   // Create new session
   const createSession = useCallback(async (
@@ -167,9 +311,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       setIsLoading(true);
       setError(null);
 
+      // Generate unique default title if none provided
+      const generateUniqueTitle = () => {
+        const sessionCount = sessions.length + 1;
+        return type === 'ai-initiated' ? `AI Chat ${sessionCount}` : `Chat ${sessionCount}`;
+      };
+
       const sessionData = {
         sessionType: type,
-        title: options.title || (type === 'ai-initiated' ? 'AI Conversation' : 'New Chat'),
+        title: options.title || generateUniqueTitle(),
         triggerReason: options.triggerReason || 'manual',
         triggerConfidence: options.triggerConfidence || 0.0,
         contextData: options.contextData || {},
@@ -185,7 +335,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
         });
 
         if (result.success) {
-          const sessionId = result.sessionId;
+          // Handle nested response structure from IPC
+          const actualResult = result.result || result;
+          const sessionId = actualResult.sessionId || actualResult.data?.id || result.sessionId;
+          
+          if (!sessionId) {
+            console.error('❌ Session creation response:', result);
+            console.error('❌ Actual result:', actualResult);
+            throw new Error('Session created but no sessionId returned');
+          }
           
           // Add to local state
           const newSession: ConversationSession = {
@@ -206,7 +364,15 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
             unreadCount: 0
           };
 
-          setSessions(prev => [newSession, ...prev]);
+          // Set all existing sessions to inactive and add the new active session
+          setSessions(prev => [
+            newSession,
+            ...prev.map(session => ({ ...session, isActive: false }))
+          ]);
+          
+          // Set the new session as active in the context
+          setActiveSessionId(sessionId);
+          
           return sessionId;
         } else {
           throw new Error(result.error || 'Failed to create session');
@@ -244,21 +410,54 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
   }, []);
 
   // Switch to session
-  const switchToSession = useCallback((sessionId: string) => {
-    setActiveSessionId(sessionId);
+  const switchToSession = useCallback(async (sessionId: string) => {
+    console.log('🔄 [ConversationContext] switchToSession called for:', sessionId);
     
-    // Mark session as read
-    setSessions(prev => prev.map(session => 
-      session.id === sessionId 
-        ? { ...session, unreadCount: 0, lastActivityAt: new Date().toISOString() }
-        : session
-    ));
+    // Update frontend state immediately to provide responsive UI
+    debugSetActiveSessionId(sessionId);
     
-    // Close sidebar on mobile after selection
-    if (window.innerWidth < 768) {
-      setIsSidebarOpen(false);
+    // Update sessions state to reflect the switch (without changing lastActivityAt to preserve order)
+    setSessions(prev => prev.map(session => ({
+      ...session,
+      isActive: session.id === sessionId,
+      unreadCount: session.id === sessionId ? 0 : session.unreadCount
+      // Don't update lastActivityAt to preserve session order
+    })));
+    
+    try {
+      // Call backend to properly set is_active flags
+      if (window.electronAPI?.agentExecute) {
+        console.log('📤 [ConversationContext] Calling backend session-switch for:', sessionId);
+        const result = await window.electronAPI.agentExecute({
+          agentName: 'ConversationSessionAgent',
+          action: 'session-switch',
+          options: { sessionId }
+        });
+        
+        if (result.success) {
+          console.log('✅ [ConversationContext] Backend session switch successful for:', sessionId);
+        } else {
+          console.error('❌ [ConversationContext] Backend session switch failed:', result.error);
+          // Frontend state is already updated, so we continue
+        }
+      }
+    } catch (error) {
+      console.error('❌ [ConversationContext] Error calling backend session switch:', error);
+      // Frontend state is already updated, so we continue
     }
-  }, []);
+    
+    // Load messages for the new session if not already loaded
+    if (!messages[sessionId] || messages[sessionId].length === 0) {
+      loadMessages(sessionId);
+    }
+    
+    // Close sidebar after selection (always, not just on mobile)
+    console.log('🔧 [ConversationContext] Closing sidebar after session selection');
+    setTimeout(() => {
+      setIsSidebarOpen(false);
+      console.log('✅ [ConversationContext] Sidebar closed');
+    }, 100);
+  }, [messages, loadMessages]);
 
   // Update session
   const updateSession = useCallback(async (sessionId: string, updates: Partial<ConversationSession>): Promise<boolean> => {
@@ -405,42 +604,97 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     }
   }, []);
 
-  // Message management
-  const addMessage = useCallback((sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
-    // Duplicate detection for AI messages
-    if (message.sender === 'ai' && message.text.length > 10) {
-      setMessages(prev => {
-        const existingMessages = prev[sessionId] || [];
-        const recentAiMessages = existingMessages.slice(-3).filter(msg => msg.sender === 'ai');
+  // Message management with backend persistence
+  const addMessage = useCallback(async (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
+    // Enhanced duplicate detection for AI messages
+    if (message.sender === 'ai') {
+      const existingMessages = messages[sessionId] || [];
+      const recentAiMessages = existingMessages.slice(-8).filter(msg => msg.sender === 'ai');
+      
+      const isDuplicate = recentAiMessages.some(msg => {
+        // Exact text match
+        const exactMatch = msg.text === message.text;
         
-        const isDuplicate = recentAiMessages.some(msg => {
-          const textMatch = msg.text === message.text;
-          const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 5000; // 5 seconds
-          return textMatch && recentTime;
+        // Recent time window (20 seconds)
+        const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 20000;
+        
+        // Similar text match for longer messages
+        const similarMatch = msg.text.length > 30 && message.text.length > 30 && 
+                             msg.text.substring(0, 30) === message.text.substring(0, 30);
+        
+        // Short generic responses (like "I'll get it done.")
+        const shortGenericMatch = message.text.length < 50 && msg.text === message.text;
+        
+        return exactMatch || (recentTime && similarMatch) || shortGenericMatch;
+      });
+
+      if (isDuplicate) {
+        console.log('🚫 [CONVERSATION-CONTEXT] Blocked duplicate AI message:', message.text.substring(0, 50) + '...');
+        return;
+      }
+    }
+
+    try {
+      // Save to backend database first
+      if ((window as any).electronAPI?.['conversation-message-add']) {
+        console.log('[MESSAGE-TEXT]',message);
+        const result = await (window as any).electronAPI['conversation-message-add'](message.sessionId, {
+          text: message.text,
+          sender: message.sender,
+          metadata: message.metadata || {}
         });
 
-        if (isDuplicate) {
-          console.log('🚫 [CONVERSATION-CONTEXT] Blocked duplicate AI message:', message.text.substring(0, 50) + '...');
-          return prev;
-        }
+        if (result.success) {
+          console.log('✅ [CONVERSATION-CONTEXT] Message saved to database:', result.message.id);
+          
+          // Update local state with the message from backend (includes generated ID and timestamp)
+          const newMessage: ChatMessage = {
+            id: result.message.id,
+            text: result.message.text,
+            sender: result.message.sender,
+            timestamp: result.message.timestamp,
+            sessionId: result.message.sessionId,
+            metadata: result.message.metadata
+          };
 
-        console.log('✅ [CONVERSATION-CONTEXT] Adding AI message (passed duplicate check)');
-        const newMessage: ChatMessage = {
+          setMessages(prev => ({
+            ...prev,
+            [sessionId]: [...(prev[sessionId] || []), newMessage]
+          }));
+        } else {
+          console.error('❌ [CONVERSATION-CONTEXT] Failed to save message to database:', result.error);
+          // Fallback to local-only storage
+          const fallbackMessage: ChatMessage = {
+            ...message,
+            id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+            timestamp: new Date().toISOString(),
+            sessionId
+          };
+
+          setMessages(prev => ({
+            ...prev,
+            [sessionId]: [...(prev[sessionId] || []), fallbackMessage]
+          }));
+        }
+      } else {
+        console.warn('⚠️ [CONVERSATION-CONTEXT] Backend not available, using local storage only');
+        // Fallback to local-only storage
+        const fallbackMessage: ChatMessage = {
           ...message,
           id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
           timestamp: new Date().toISOString(),
           sessionId
         };
 
-        return {
+        setMessages(prev => ({
           ...prev,
-          [sessionId]: [...(prev[sessionId] || []), newMessage]
-        };
-      });
-    } else {
-      // For user messages, add directly without duplicate detection
-      console.log('✅ [CONVERSATION-CONTEXT] Adding user message');
-      const newMessage: ChatMessage = {
+          [sessionId]: [...(prev[sessionId] || []), fallbackMessage]
+        }));
+      }
+    } catch (error) {
+      console.error('❌ [CONVERSATION-CONTEXT] Error adding message:', error);
+      // Fallback to local-only storage
+      const fallbackMessage: ChatMessage = {
         ...message,
         id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         timestamp: new Date().toISOString(),
@@ -449,7 +703,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
 
       setMessages(prev => ({
         ...prev,
-        [sessionId]: [...(prev[sessionId] || []), newMessage]
+        [sessionId]: [...(prev[sessionId] || []), fallbackMessage]
       }));
     }
 
@@ -601,6 +855,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     addMessage,
     updateMessage,
     getSessionMessages,
+    loadMessages,
     
     // Sidebar State
     isSidebarOpen,

@@ -160,6 +160,30 @@ function initializeIPCHandlers({
   // AGENT ORCHESTRATION HANDLERS
   // ========================================
 
+  // Direct agent execution handler
+  ipcMain.handle('agent-execute', async (event, request) => {
+    try {
+      if (!coreAgent || !coreAgent.initialized) {
+        return { success: false, error: 'CoreAgent not initialized' };
+      }
+      
+      console.log('🎯 Direct agent execution received:', request);
+      
+      const result = await coreAgent.executeAgent(request.agentName, {
+        action: request.action,
+        message: request.message,
+        input: request.input,
+        options: request.options,
+        ...request
+      });
+      
+      return result;
+    } catch (error) {
+      console.error('❌ Agent execution failed:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Unified IPC handler for all agent operations (Memory, InsightView, Messages, etc.)
   // Routes through AgentOrchestrator.ask() for unified agent execution
   ipcMain.handle('agent-orchestrate', async (event, intentPayload) => {
@@ -228,8 +252,8 @@ function broadcastOrchestrationUpdate(updateData, windows) {
   console.log('📡 [BROADCAST-FUNC] Broadcasting to windows:', Object.keys(windows || {}));
   
   // Send to all available windows, not just overlayWindow
-  const { overlayWindow, mainWindow } = windows;
-  const windowList = [overlayWindow, mainWindow].filter(Boolean);
+  const { overlayWindow } = windows;
+  const windowList = [overlayWindow].filter(Boolean);
   
   console.log('📡 [BROADCAST-FUNC] Valid windows found:', windowList.length);
   

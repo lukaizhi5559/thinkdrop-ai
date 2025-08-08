@@ -41,6 +41,7 @@ const { setupMemoryHandlers } = require('./handlers/ipc-handlers-memory.cjs');
 const { initializeHandlers: initializeHandlersPart3 } = require('./handlers/ipc-handlers-screenshot.cjs');
 const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-orchestration.cjs');
 const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
+const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversation.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -221,9 +222,12 @@ async function initializeServices() {
   try {
     // Initialize CoreAgent (AgentOrchestrator) for dynamic agent management
     try {
+      console.log('🔄 Step 1: Importing AgentOrchestrator...');
       // Dynamic import for ES module compatibility
       const { AgentOrchestrator } = await import('./services_new/agents_new/AgentOrchestrator.js');
+      console.log('✅ Step 1: AgentOrchestrator imported successfully');
       
+      console.log('🔄 Step 2: Setting up database paths...');
       // Initialize DuckDB for agent memory storage using DatabaseManager
       const path = require('path');
       const fs = require('fs');
@@ -236,17 +240,21 @@ async function initializeServices() {
         console.log(`📁 Creating data directory: ${dataDir}`);
         fs.mkdirSync(dataDir, { recursive: true });
       }
+      console.log('✅ Step 2: Database paths configured');
       
-      
+      console.log('🔄 Step 3: Importing and initializing DatabaseManager...');
       // Import and initialize DatabaseManager
       const { default: databaseManager } = await import('./services_new/utils/DatabaseManager.js');
       await databaseManager.initialize(dbPath);
+      console.log('✅ Step 3: DatabaseManager initialized successfully');
       
-      
+      console.log('🔄 Step 4: Creating AgentOrchestrator instance...');
       coreAgent = new AgentOrchestrator();
+      console.log('✅ Step 4: AgentOrchestrator instance created');
       
+      console.log('🔄 Step 5: Initializing CoreAgent...');
       // Initialize the CoreAgent
-      await coreAgent.initialize({
+      const initResult = await coreAgent.initialize({
         llmClient: null, // Will be set when needed
         database: databaseManager, // Pass the DatabaseManager instance
         apiConfig: {
@@ -254,6 +262,7 @@ async function initializeServices() {
           apiKey: process.env.BIBSCRIP_API_KEY
         }
       });
+      console.log('✅ Step 5: CoreAgent initialized successfully:', initResult);
 
       // Start the embedding daemon for automatic background embedding generation
       try {
@@ -262,6 +271,13 @@ async function initializeServices() {
         // Bootstrap SemanticEmbeddingAgent first
         await coreAgent.ask({
           agent: 'SemanticEmbeddingAgent',
+          action: 'bootstrap'
+        });
+        
+        // Bootstrap ConversationSessionAgent to create conversation database tables
+        console.log('🗣️ Bootstrapping ConversationSessionAgent...');
+        await coreAgent.ask({
+          agent: 'ConversationSessionAgent',
           action: 'bootstrap'
         });
         
@@ -284,6 +300,14 @@ async function initializeServices() {
 
     } catch (error) {
       console.error('❌ Failed to initialize CoreAgent:', error);
+      console.error('❌ CoreAgent error stack:', error.stack);
+      console.error('❌ CoreAgent error details:', {
+        message: error.message,
+        name: error.name,
+        code: error.code
+      });
+      // Set coreAgent to null to ensure handlers know it's not available
+      coreAgent = null;
     }
     
     // Legacy event listeners removed - functionality will be re-implemented using new agent architecture as needed
@@ -346,11 +370,14 @@ function setupIPCHandlers() {
   });
   
   // Setup orchestration workflow handlers
-  const { broadcastOrchestrationUpdate: broadcastWorkflowUpdate, sendClarificationRequest: sendWorkflowClarification } = 
+  const { sendClarificationRequest: sendWorkflowClarification } = 
     setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
   
+  // Setup conversation persistence handlers
+  setupConversationHandlers(ipcMain, coreAgent);
+  
   // Store the broadcast and clarification functions for use elsewhere
-  global.broadcastOrchestrationUpdate = broadcastWorkflowUpdate || broadcastUpdate;
+  global.broadcastOrchestrationUpdate = broadcastUpdate;
   global.sendClarificationRequest = sendWorkflowClarification || sendClarification;
 }
 

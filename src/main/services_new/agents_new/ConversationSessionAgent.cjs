@@ -18,7 +18,8 @@ const AGENT_FORMAT = {
         enum: [
           'session-create', 'session-list', 'session-get', 'session-update',
           'session-delete', 'session-hibernate', 'session-resume',
-          'context-similarity', 'auto-trigger-evaluate'
+          'context-similarity', 'auto-trigger-evaluate',
+          'message-add', 'message-list', 'message-get', 'message-update', 'message-delete'
         ]
       },
       sessionId: { type: 'string', description: 'Session ID for operations' },
@@ -59,7 +60,7 @@ const AGENT_FORMAT = {
   async createTables() {
     try {
       // Create conversation_sessions table
-      await AGENT_FORMAT.database.exec(`
+      await AGENT_FORMAT.database.run(`
         CREATE TABLE IF NOT EXISTS conversation_sessions (
           id TEXT PRIMARY KEY,
           type TEXT NOT NULL CHECK (type IN ('user-initiated', 'ai-initiated')),
@@ -80,7 +81,7 @@ const AGENT_FORMAT = {
       `);
 
       // Create session_context table for embeddings and context data
-      await AGENT_FORMAT.database.exec(`
+      await AGENT_FORMAT.database.run(`
         CREATE TABLE IF NOT EXISTS session_context (
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL,
@@ -89,7 +90,21 @@ const AGENT_FORMAT = {
           embedding BLOB,
           metadata TEXT DEFAULT '{}',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY (session_id) REFERENCES conversation_sessions(id) ON DELETE CASCADE
+          FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
+        )
+      `);
+
+      // Create conversation_messages table for persistent message storage
+      await AGENT_FORMAT.database.run(`
+        CREATE TABLE IF NOT EXISTS conversation_messages (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          text TEXT NOT NULL,
+          sender TEXT NOT NULL CHECK (sender IN ('user', 'ai')),
+          timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          metadata TEXT DEFAULT '{}',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
         )
       `);
 
@@ -127,13 +142,25 @@ const AGENT_FORMAT = {
           return await AGENT_FORMAT.checkContextSimilarity(options, context);
         case 'auto-trigger-evaluate':
           return await AGENT_FORMAT.evaluateAutoTrigger(options, context);
+        case 'message-add':
+          return await AGENT_FORMAT.addMessage(options, context);
+        case 'message-list':
+          return await AGENT_FORMAT.listMessages(options, context);
+        case 'message-get':
+          return await AGENT_FORMAT.getMessage(options, context);
+        case 'message-update':
+          return await AGENT_FORMAT.updateMessage(options, context);
+        case 'message-delete':
+          return await AGENT_FORMAT.deleteMessage(options, context);
+        case 'session-switch':
+          return await AGENT_FORMAT.switchToSession(options, context);
         default:
           return {
             success: false,
             error: `Unknown action: ${action}`,
             availableActions: [
               'session-create', 'session-list', 'session-get', 'session-update',
-              'session-delete', 'session-hibernate', 'session-resume', 
+              'session-delete', 'session-hibernate', 'session-resume', 'session-switch',
               'context-similarity', 'auto-trigger-evaluate'
             ]
           };
@@ -149,7 +176,12 @@ const AGENT_FORMAT = {
     }
   },
 
-  async createSession(options, context) {
+  async createSession(params, context) {
+    console.log('createSession received params:', JSON.stringify(params, null, 2));
+    
+    // Extract the actual options from the nested structure
+    const actualOptions = params.options || params;
+    
     const {
       sessionType,
       title,
@@ -158,37 +190,47 @@ const AGENT_FORMAT = {
       contextData = {},
       relatedMemories = [],
       currentActivity = {}
-    } = options;
+    } = actualOptions;
+    
+    console.log('Destructured values:', { sessionType, title, triggerReason, triggerConfidence });
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
     try {
-      const stmt = AGENT_FORMAT.database.prepare(`
-        INSERT INTO conversation_sessions (
-          id, type, title, trigger_reason, trigger_confidence,
-          context_data, related_memories, current_activity,
-          is_active, is_hibernated, message_count,
-          created_at, updated_at, last_activity_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      // First, set all existing sessions to inactive
+      await AGENT_FORMAT.database.run(`
+        UPDATE conversation_sessions SET is_active = false WHERE is_active = true
       `);
-
+      
       const now = new Date().toISOString();
-      stmt.run(
+      const params = [
         sessionId,
-        sessionType,
-        title,
+        sessionType || 'user-initiated',
+        title || 'New Chat Session',
         triggerReason,
         triggerConfidence,
         JSON.stringify(contextData),
         JSON.stringify(relatedMemories),
         JSON.stringify(currentActivity),
-        true,
-        false,
-        0,
-        now,
-        now,
-        now
-      );
+        true, // is_active - only this new session is active
+        false, // is_hibernated
+        '{}', // hibernation_data
+        0, // message_count
+        now, // created_at
+        now, // updated_at
+        now // last_activity_at
+      ];
+
+      console.log('Inserting session with params:', params);
+
+      await AGENT_FORMAT.database.run(`
+        INSERT INTO conversation_sessions (
+          id, type, title, trigger_reason, trigger_confidence,
+          context_data, related_memories, current_activity,
+          is_active, is_hibernated, hibernation_data, message_count,
+          created_at, updated_at, last_activity_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, params);
 
       return {
         success: true,
@@ -220,18 +262,13 @@ const AGENT_FORMAT = {
   },
 
   async listSessions(options, context) {
-    const { 
-      includeHibernated = false, 
-      limit = 50, 
-      offset = 0,
-      sortBy = 'last_activity_at',
-      sortOrder = 'DESC'
-    } = options;
+    const { limit = 50, offset = 0, includeHibernated = false, sortBy = 'last_activity_at', sortOrder = 'DESC' } = options;
 
     try {
+      // Return ALL sessions, not just active ones - frontend will handle display logic
       let query = `
         SELECT * FROM conversation_sessions 
-        WHERE is_active = true
+        WHERE 1=1
       `;
 
       if (!includeHibernated) {
@@ -240,17 +277,146 @@ const AGENT_FORMAT = {
 
       query += ` ORDER BY ${sortBy} ${sortOrder} LIMIT ? OFFSET ?`;
 
-      const stmt = AGENT_FORMAT.database.prepare(query);
-      const sessions = stmt.all(limit, offset);
+      const sessions = await AGENT_FORMAT.database.query(query, [limit, offset]);
+      
+      console.log('📋 Raw sessions from database:', sessions.length, 'sessions');
+      sessions.forEach((session, index) => {
+        console.log(`Session ${index}:`, {
+          id: session.id,
+          title: session.title,
+          type: session.type,
+          created_at: session.created_at
+        });
+      });
 
-      // Parse JSON fields
-      const parsedSessions = sessions.map(session => ({
-        ...session,
-        contextData: JSON.parse(session.context_data || '{}'),
-        relatedMemories: JSON.parse(session.related_memories || '[]'),
-        currentActivity: JSON.parse(session.current_activity || '{}'),
-        hibernationData: JSON.parse(session.hibernation_data || '{}')
+      // Parse JSON fields and populate additional data
+      const parsedSessions = await Promise.all(sessions.map(async (session) => {
+        try {
+          console.log(`🔍 Processing session ${session.id}...`);
+          
+          // Get message count for this session
+          const countQuery = `
+            SELECT COUNT(*) as count
+            FROM conversation_messages 
+            WHERE session_id = ?
+          `;
+          
+          const countResult = await AGENT_FORMAT.database.query(countQuery, [session.id]);
+          const messageCount = countResult[0]?.count || 0;
+          console.log(`📊 Session ${session.id}: ${messageCount} messages`);
+          
+          // Get the actual last message text and timestamp
+          let lastMessage = null;
+          let lastMessageTime = null;
+          if (messageCount > 0) {
+            const lastMessageQuery = `
+              SELECT text, created_at FROM conversation_messages 
+              WHERE session_id = ? 
+              ORDER BY created_at DESC 
+              LIMIT 1
+            `;
+            const lastMessageResult = await AGENT_FORMAT.database.query(lastMessageQuery, [session.id]);
+            if (lastMessageResult[0]) {
+              lastMessage = lastMessageResult[0].text;
+              lastMessageTime = lastMessageResult[0].created_at;
+              console.log(`💬 Session ${session.id}: Last message: "${lastMessage?.substring(0, 50)}..."`);
+            }
+          }
+
+          const processedSession = {
+            id: session.id,
+            type: session.type,
+            title: session.title,
+            triggerReason: session.trigger_reason,
+            triggerConfidence: session.trigger_confidence,
+            contextData: JSON.parse(session.context_data || '{}'),
+            relatedMemories: JSON.parse(session.related_memories || '[]'),
+            currentActivity: JSON.parse(session.current_activity || '{}'),
+            hibernationData: JSON.parse(session.hibernation_data || '{}'),
+            isActive: session.is_active,
+            isHibernated: session.is_hibernated,
+            messageCount: parseInt(messageCount) || 0,
+            createdAt: session.created_at,
+            updatedAt: session.updated_at,
+            lastActivityAt: lastMessageTime || session.last_activity_at || session.created_at,
+            lastMessage: lastMessage,
+            unreadCount: 0
+          };
+          
+          console.log(`✅ Processed session ${session.id}:`, {
+            id: processedSession.id,
+            title: processedSession.title,
+            messageCount: processedSession.messageCount,
+            lastMessage: processedSession.lastMessage?.substring(0, 30),
+            isActive: processedSession.isActive
+          });
+          
+          return processedSession;
+        } catch (error) {
+          console.error(`❌ Error processing session ${session.id}:`, error);
+          // Return a basic session object if processing fails
+          return {
+            id: session.id,
+            type: session.type,
+            title: session.title,
+            triggerReason: session.trigger_reason,
+            triggerConfidence: session.trigger_confidence,
+            contextData: JSON.parse(session.context_data || '{}'),
+            relatedMemories: JSON.parse(session.related_memories || '[]'),
+            currentActivity: JSON.parse(session.current_activity || '{}'),
+            hibernationData: JSON.parse(session.hibernation_data || '{}'),
+            isActive: session.is_active,
+            isHibernated: session.is_hibernated,
+            messageCount: 0,
+            createdAt: session.created_at,
+            updatedAt: session.updated_at,
+            lastActivityAt: session.last_activity_at || session.created_at,
+            lastMessage: null,
+            unreadCount: 0
+          };
+        }
       }));
+      
+      console.log('📋 Parsed sessions:', parsedSessions.length, 'sessions');
+      parsedSessions.forEach((session, index) => {
+        console.log(`Parsed Session ${index}:`, {
+          id: session.id,
+          title: session.title,
+          type: session.type,
+          isActive: session.isActive,
+          messageCount: session.messageCount,
+          lastMessage: session.lastMessage?.substring(0, 30)
+        });
+      });
+
+      // If no active session exists and we have sessions, activate the most recent one with messages
+      const hasActiveSession = parsedSessions.some(s => s.isActive);
+      if (!hasActiveSession && parsedSessions.length > 0) {
+        console.log('🔧 [ConversationSessionAgent] No active session found, activating most recent session with messages...');
+        
+        // Find the most recent session with messages, or just the most recent session
+        const sessionWithMessages = parsedSessions
+          .filter(s => s.messageCount > 0)
+          .sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime())[0];
+        
+        const sessionToActivate = sessionWithMessages || parsedSessions[0];
+        
+        if (sessionToActivate) {
+          console.log(`🎯 [ConversationSessionAgent] Auto-activating session: ${sessionToActivate.id} (${sessionToActivate.title})`);
+          
+          // Set this session as active in the database
+          await AGENT_FORMAT.database.run(`
+            UPDATE conversation_sessions 
+            SET is_active = true, updated_at = ?
+            WHERE id = ?
+          `, [new Date().toISOString(), sessionToActivate.id]);
+          
+          // Update the session object to reflect the change
+          sessionToActivate.isActive = true;
+          
+          console.log(`✅ [ConversationSessionAgent] Successfully activated session: ${sessionToActivate.id}`);
+        }
+      }
 
       // Get total count
       const countQuery = `
@@ -258,20 +424,29 @@ const AGENT_FORMAT = {
         WHERE is_active = true
         ${!includeHibernated ? 'AND is_hibernated = false' : ''}
       `;
-      const countResult = AGENT_FORMAT.database.prepare(countQuery).get();
+      const countResult = await AGENT_FORMAT.database.query(countQuery);
+      const total = countResult[0]?.total || 0;
 
-      return {
+      const returnData = {
         success: true,
         data: {
           sessions: parsedSessions,
           pagination: {
-            total: countResult.total,
+            total: total,
             limit,
             offset,
-            hasMore: (offset + limit) < countResult.total
+            hasMore: (offset + limit) < total
           }
         }
       };
+      
+      console.log('🔄 [ConversationSessionAgent] Returning session list result:', {
+        success: returnData.success,
+        sessionsCount: returnData.data.sessions.length,
+        total: returnData.data.pagination.total
+      });
+      
+      return returnData;
     } catch (error) {
       console.error('❌ Failed to list sessions:', error);
       return {
@@ -285,10 +460,10 @@ const AGENT_FORMAT = {
     const { sessionId } = options;
 
     try {
-      const stmt = AGENT_FORMAT.database.prepare(`
+      const sessions = await AGENT_FORMAT.database.query(`
         SELECT * FROM conversation_sessions WHERE id = ?
-      `);
-      const session = stmt.get(sessionId);
+      `, [sessionId]);
+      const session = sessions[0];
 
       if (!session) {
         return {
@@ -360,15 +535,18 @@ const AGENT_FORMAT = {
 
       values.push(sessionId);
 
-      const stmt = AGENT_FORMAT.database.prepare(`
+      await AGENT_FORMAT.database.run(`
         UPDATE conversation_sessions 
         SET ${updates.join(', ')}
         WHERE id = ?
-      `);
+      `, values);
 
-      const result = stmt.run(...values);
+      // Check if session exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
 
-      if (result.changes === 0) {
+      if (checkResult.length === 0) {
         return {
           success: false,
           error: `Session not found: ${sessionId}`
@@ -388,19 +566,79 @@ const AGENT_FORMAT = {
     }
   },
 
+  async switchToSession(options, context) {
+    const { sessionId } = options.options || options;
+
+    // Validate sessionId
+    if (!sessionId || sessionId === 'undefined') {
+      console.error('❌ switchToSession: Invalid sessionId:', sessionId);
+      return {
+        success: false,
+        error: 'Invalid or missing sessionId'
+      };
+    }
+
+    try {
+      // First, set all sessions to inactive
+      await AGENT_FORMAT.database.run(`
+        UPDATE conversation_sessions SET is_active = false WHERE is_active = true
+      `);
+
+      // Then set the target session to active (without updating last_activity_at to preserve order)
+      const now = new Date().toISOString();
+      const params = [true, now, sessionId];
+      
+      await AGENT_FORMAT.database.run(`
+        UPDATE conversation_sessions 
+        SET is_active = ?, updated_at = ?
+        WHERE id = ?
+      `, params);
+
+      // Check if session exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
+
+      if (checkResult.length === 0) {
+        return {
+          success: false,
+          error: `Session not found: ${sessionId}`
+        };
+      }
+
+      return {
+        success: true,
+        data: { 
+          switched: true, 
+          sessionId,
+          message: `Switched to session: ${sessionId}`
+        }
+      };
+    } catch (error) {
+      console.error('❌ Failed to switch session:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
   async deleteSession(options, context) {
     const { sessionId } = options;
 
     try {
-      const stmt = AGENT_FORMAT.database.prepare(`
+      await AGENT_FORMAT.database.run(`
         UPDATE conversation_sessions 
         SET is_active = ?, updated_at = ?
         WHERE id = ?
-      `);
+      `, [false, new Date().toISOString(), sessionId]);
 
-      const result = stmt.run(false, new Date().toISOString(), sessionId);
+      // Check if session exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
 
-      if (result.changes === 0) {
+      if (checkResult.length === 0) {
         return {
           success: false,
           error: `Session not found: ${sessionId}`
@@ -424,20 +662,23 @@ const AGENT_FORMAT = {
     const { sessionId, hibernationData = {} } = options;
 
     try {
-      const stmt = AGENT_FORMAT.database.prepare(`
+      await AGENT_FORMAT.database.run(`
         UPDATE conversation_sessions 
         SET is_hibernated = ?, hibernation_data = ?, updated_at = ?
         WHERE id = ?
-      `);
-
-      const result = stmt.run(
+      `, [
         true,
         JSON.stringify(hibernationData),
         new Date().toISOString(),
         sessionId
-      );
+      ]);
 
-      if (result.changes === 0) {
+      // Check if session exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
+
+      if (checkResult.length === 0) {
         return {
           success: false,
           error: `Session not found: ${sessionId}`
@@ -461,16 +702,19 @@ const AGENT_FORMAT = {
     const { sessionId } = options;
 
     try {
-      const stmt = AGENT_FORMAT.database.prepare(`
+      const now = new Date().toISOString();
+      await AGENT_FORMAT.database.run(`
         UPDATE conversation_sessions 
         SET is_hibernated = ?, is_active = ?, updated_at = ?, last_activity_at = ?
         WHERE id = ?
-      `);
+      `, [false, true, now, now, sessionId]);
 
-      const now = new Date().toISOString();
-      const result = stmt.run(false, true, now, now, sessionId);
+      // Check if session exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
 
-      if (result.changes === 0) {
+      if (checkResult.length === 0) {
         return {
           success: false,
           error: `Session not found: ${sessionId}`
@@ -565,6 +809,233 @@ const AGENT_FORMAT = {
       };
     } catch (error) {
       console.error('❌ Failed to evaluate auto trigger:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  // Message Management Methods
+  async addMessage(options, context) {
+    const { sessionId, text, sender, metadata = {} } = options;
+
+    try {
+      const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const timestamp = new Date().toISOString();
+
+      await AGENT_FORMAT.database.run(`
+        INSERT INTO conversation_messages (id, session_id, text, sender, timestamp, metadata)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `, [messageId, sessionId, text, sender, timestamp, JSON.stringify(metadata)]);
+
+      // Update session message count and last activity
+      await AGENT_FORMAT.database.run(`
+        UPDATE conversation_sessions 
+        SET message_count = message_count + 1, 
+            updated_at = ?, 
+            last_activity_at = ?
+        WHERE id = ?
+      `, [timestamp, timestamp, sessionId]);
+
+      return {
+        success: true,
+        data: {
+          messageId,
+          sessionId,
+          text,
+          sender,
+          timestamp,
+          metadata
+        }
+      };
+    } catch (error) {
+      console.error('❌ Failed to add message:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  async listMessages(options, context) {
+    const { sessionId, limit = 50, offset = 0 } = options.options || options;
+
+    console.log(`🔍 [ConversationSessionAgent] listMessages called with sessionId: ${sessionId}`);
+
+    // Validate sessionId
+    if (!sessionId || sessionId === 'undefined') {
+      console.error('❌ listMessages: Invalid sessionId:', sessionId);
+      return {
+        success: false,
+        error: 'Invalid or missing sessionId',
+        data: {
+          messages: [],
+          sessionId: null,
+          count: 0,
+          limit,
+          offset
+        }
+      };
+    }
+
+    try {
+      console.log(`📊 [ConversationSessionAgent] Querying messages for session: ${sessionId}`);
+      const messages = await AGENT_FORMAT.database.query(`
+        SELECT * FROM conversation_messages 
+        WHERE session_id = ? 
+        ORDER BY timestamp ASC 
+        LIMIT ? OFFSET ?
+      `, [sessionId, limit, offset]);
+
+      console.log(`📋 [ConversationSessionAgent] Found ${messages.length} messages for session ${sessionId}`);
+      
+      const result = {
+        success: true,
+        data: {
+          messages: messages.map(msg => ({
+            ...msg,
+            metadata: JSON.parse(msg.metadata || '{}')
+          })),
+          sessionId,
+          count: messages.length,
+          limit,
+          offset
+        }
+      };
+      
+      console.log(`✅ [ConversationSessionAgent] Returning result:`, {
+        success: result.success,
+        messageCount: result.data.messages.length,
+        sessionId: result.data.sessionId
+      });
+      
+      return result;
+    } catch (error) {
+      console.error('❌ Failed to list messages:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  async getMessage(options, context) {
+    const { messageId } = options;
+
+    try {
+      const messages = await AGENT_FORMAT.database.query(`
+        SELECT * FROM conversation_messages WHERE id = ?
+      `, [messageId]);
+
+      const message = messages[0];
+
+      if (!message) {
+        return {
+          success: false,
+          error: `Message not found: ${messageId}`
+        };
+      }
+
+      return {
+        success: true,
+        data: {
+          ...message,
+          metadata: JSON.parse(message.metadata || '{}')
+        }
+      };
+    } catch (error) {
+      console.error('❌ Failed to get message:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  async updateMessage(options, context) {
+    const { messageId, text, metadata } = options;
+
+    try {
+      const updates = [];
+      const values = [];
+
+      if (text !== undefined) {
+        updates.push('text = ?');
+        values.push(text);
+      }
+
+      if (metadata !== undefined) {
+        updates.push('metadata = ?');
+        values.push(JSON.stringify(metadata));
+      }
+
+      if (updates.length === 0) {
+        return {
+          success: false,
+          error: 'No updates provided'
+        };
+      }
+
+      values.push(messageId);
+
+      await AGENT_FORMAT.database.run(`
+        UPDATE conversation_messages 
+        SET ${updates.join(', ')} 
+        WHERE id = ?
+      `, values);
+
+      // Check if message exists by querying it
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_messages WHERE id = ?
+      `, [messageId]);
+
+      if (checkResult.length === 0) {
+        return {
+          success: false,
+          error: `Message not found: ${messageId}`
+        };
+      }
+
+      return {
+        success: true,
+        data: { messageId, updated: true }
+      };
+    } catch (error) {
+      console.error('❌ Failed to update message:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  },
+
+  async deleteMessage(options, context) {
+    const { messageId } = options;
+
+    try {
+      await AGENT_FORMAT.database.run(`
+        DELETE FROM conversation_messages WHERE id = ?
+      `, [messageId]);
+
+      // Check if message exists by querying it first
+      const checkResult = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_messages WHERE id = ?
+      `, [messageId]);
+
+      if (checkResult.length === 0) {
+        return {
+          success: false,
+          error: `Message not found: ${messageId}`
+        };
+      }
+
+      return {
+        success: true,
+        data: { messageId, deleted: true }
+      };
+    } catch (error) {
+      console.error('❌ Failed to delete message:', error);
       return {
         success: false,
         error: error.message

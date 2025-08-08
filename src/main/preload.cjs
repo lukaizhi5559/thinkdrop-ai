@@ -48,12 +48,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Agent communication
   processInput: (inputData) => ipcRenderer.invoke('process-input', inputData),
   getSystemHealth: () => ipcRenderer.invoke('get-system-health'),
+  agentExecute: (request) => ipcRenderer.invoke('agent-execute', request),
   agentOrchestrate: (request) => ipcRenderer.invoke('agent-orchestrate', request),
   openScreenshotWindow: (imageData) => ipcRenderer.invoke('open-screenshot-window', imageData),
   
   // Direct memory queries for fast loading
   queryMemoriesDirect: (params) => ipcRenderer.invoke('query-memories-direct', params),
   deleteMemoryDirect: (memoryId) => ipcRenderer.invoke('delete-memory-direct', memoryId),
+  
+  // Conversation session management
+  'conversation-session-list': (params) => ipcRenderer.invoke('conversation-session-list', params),
+  'conversation-session-create': (params) => ipcRenderer.invoke('conversation-session-create', params),
+  'conversation-session-update': (params) => ipcRenderer.invoke('conversation-session-update', params),
+  'conversation-session-delete': (params) => ipcRenderer.invoke('conversation-session-delete', params),
+  'conversation-session-get': (params) => ipcRenderer.invoke('conversation-session-get', params),
+  'conversation-message-add': (sessionId, message) => ipcRenderer.invoke('conversation-message-add', sessionId, message),
+  'conversation-message-list': (params) => ipcRenderer.invoke('conversation-message-list', params),
+  'conversation-message-update': (params) => ipcRenderer.invoke('conversation-message-update', params),
   
   // LocalLLMAgent communication
   getLocalLLMHealth: () => ipcRenderer.invoke('local-llm:health'),

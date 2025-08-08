@@ -1670,21 +1670,23 @@ export class AgentOrchestrator {
           
           let prompt;
           if (isUpcomingQuery) {
-            prompt = `Based on these memories, what upcoming events/items are scheduled?
+            prompt = `You are Thinkdrop AI. Use ONLY the memory information provided below to answer. Do NOT provide generic responses.
 
+MEMORY INFORMATION:
 ${memoryContext}
 
-Question: "${userMessage}"
+USER QUESTION: "${userMessage}"
 
-Answer briefly (1-2 sentences max). If no upcoming events found, say "I don't see any upcoming events in my memory."`;
+INSTRUCTIONS: Based on the memory above, answer what upcoming events/items are scheduled. If the memory shows "nothing shows up at all" or similar, respond with "Based on my memory, nothing shows up at all" or similar. Use the exact memory content. Do NOT say you cannot access calendars.`;
           } else {
-            prompt = `Answer ONLY using the information from these memories. Be concise (1-2 sentences max).
+            prompt = `You are Thinkdrop AI. Use ONLY the memory information provided below to answer. Do NOT provide generic responses about being an AI or lacking access to data.
 
+MEMORY INFORMATION:
 ${memoryContext}
 
-Question: "${userMessage}"
+USER QUESTION: "${userMessage}"
 
-Answer briefly using ONLY the memories above:`;
+INSTRUCTIONS: Answer using ONLY the memory information above. If the memory says "nothing shows up at all", respond with that information. Do NOT give generic AI disclaimers.`;
           }
           
           const phi3Result = await this.executeAgent('Phi3Agent', {

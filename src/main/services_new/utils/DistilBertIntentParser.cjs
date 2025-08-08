@@ -373,7 +373,8 @@ class DistilBertIntentParser {
       person: [],
       location: [],
       event: [],
-      contact: []
+      contact: [],
+      items: []
     };
     
     // 🏷️ LAYER 1: Try NER Transformer (most accurate for complex entities)
@@ -409,7 +410,8 @@ class DistilBertIntentParser {
       person: this.extractPeople(message),
       location: this.extractLocations(message),
       event: this.extractEvents(message),
-      contact: []
+      contact: [],
+      items: this.extractItems(message)
     };
     
     // Merge rule-based results (avoiding duplicates)
@@ -452,8 +454,7 @@ class DistilBertIntentParser {
     const properNames = message.match(namePatterns) || [];
     people.push(...properNames);
     
-    // Common person references
-    // const personWords = ['kids', 'children', 'child', 'family', 'parents', 'mom', 'dad', 'wife', 'husband', 'friend', 'colleague', 'client', 'doctor', 'dentist', 'teacher'];
+    // Common person references including political/leadership roles
     const personWords = [
       'kid', 'kids', 'child', 'children', 'teen', 'teenager',
       'family', 'relative', 'siblings', 'brother', 'sister',
@@ -462,17 +463,22 @@ class DistilBertIntentParser {
       'friend', 'friends', 'colleague', 'coworker',
       'boss', 'manager', 'team',
       'client', 'customer', 'patient',
-      'doctor', 'dentist', 'therapist', 'nurse', 'teacher', 'professor', 'coach'
+      'doctor', 'dentist', 'therapist', 'nurse', 'teacher', 'professor', 'coach',
+      // Political/leadership roles
+      'president', 'vice president', 'senator', 'governor', 'mayor',
+      'prime minister', 'king', 'queen', 'emperor', 'leader',
+      'ceo', 'founder', 'director', 'chairman'
     ];
     const foundPersons = personWords.filter(word => lowerMessage.includes(word));
     people.push(...foundPersons);
     
     return [...new Set(people)]; // Remove duplicates
   }
+
+// ... (rest of the code remains the same)
   
   extractLocations(message) {
     const lowerMessage = message.toLowerCase();
-    // const locationWords = ['office', 'home', 'hospital', 'school', 'restaurant', 'cafe', 'park', 'mall', 'store', 'downtown', 'gym', 'library', 'bank', 'airport', 'hotel'];
     const locationWords = [
       'office', 'work', 'workspace', 'home', 'house', 'apartment', 'residence',
       'hospital', 'clinic', 'school', 'university', 'college',
@@ -480,7 +486,15 @@ class DistilBertIntentParser {
       'park', 'zoo', 'beach', 'gym', 'pool', 'track', 'field',
       'mall', 'store', 'supermarket', 'grocery', 'market',
       'downtown', 'uptown', 'midtown', 'suburb', 'neighborhood',
-      'library', 'bank', 'airport', 'hotel', 'station', 'terminal', 'church', 'museum'
+      'library', 'bank', 'airport', 'hotel', 'station', 'terminal', 'church', 'museum',
+      // Countries and regions
+      'usa', 'united states', 'america', 'us', 'canada', 'mexico',
+      'uk', 'united kingdom', 'england', 'france', 'germany', 'italy', 'spain',
+      'china', 'japan', 'india', 'russia', 'brazil', 'australia',
+      // States/provinces
+      'california', 'texas', 'florida', 'new york', 'illinois', 'pennsylvania',
+      // Cities
+      'washington', 'new york city', 'los angeles', 'chicago', 'houston', 'phoenix'
     ];
     return locationWords.filter(word => lowerMessage.includes(word));
   }
@@ -534,6 +548,61 @@ class DistilBertIntentParser {
     }
     
     return [...new Set(events)]; // Remove duplicates
+  }
+  
+  /**
+   * Extract items/objects from message (shoes, clothes, food, etc.)
+   */
+  extractItems(message) {
+    const items = [];
+    const text = message.toLowerCase();
+    
+    // Common item patterns
+    const itemPatterns = [
+      // Clothing & Accessories
+      /\b(shoes?|boots?|sneakers?|sandals?|heels?|flats?)\b/g,
+      /\b(shirt?s?|pants?|jeans?|dress(es)?|skirt?s?|jacket?s?|coat?s?)\b/g,
+      /\b(hat?s?|cap?s?|gloves?|socks?|underwear|bra?s?)\b/g,
+      /\b(watch(es)?|jewelry|necklace?s?|ring?s?|earrings?)\b/g,
+      
+      // Electronics & Tech
+      /\b(phone?s?|laptop?s?|computer?s?|tablet?s?|headphones?)\b/g,
+      /\b(tv?s?|television?s?|camera?s?|speaker?s?|keyboard?s?)\b/g,
+      
+      // Food & Beverages
+      /\b(food|meal?s?|lunch|dinner|breakfast|snack?s?)\b/g,
+      /\b(coffee|tea|water|juice|soda|beer|wine)\b/g,
+      /\b(bread|milk|eggs?|cheese|meat|chicken|fish)\b/g,
+      
+      // Home & Furniture
+      /\b(furniture|chair?s?|table?s?|bed?s?|sofa?s?|couch(es)?)\b/g,
+      /\b(lamp?s?|mirror?s?|curtains?|pillow?s?|blanket?s?)\b/g,
+      
+      // Books & Media
+      /\b(book?s?|magazine?s?|movie?s?|music|album?s?|cd?s?)\b/g,
+      
+      // Sports & Recreation
+      /\b(bike?s?|bicycle?s?|ball?s?|equipment|gear)\b/g,
+      
+      // General patterns
+      /\bneed (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\bwant (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\bbuy (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\bget (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
+      /\blooking for (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g
+    ];
+    
+    itemPatterns.forEach(pattern => {
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        const item = match[1] || match[0];
+        if (item && item.length > 2 && !items.includes(item)) {
+          items.push(item.trim());
+        }
+      }
+    });
+    
+    return [...new Set(items)]; // Remove duplicates
   }
   
   /**

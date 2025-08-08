@@ -77,7 +77,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
             console.log('🎯 Using DistilBERT parser.parse() method...');
             const parseResult = await currentParser.parse(prompt);
             
-            if (parseResult && parseResult.confidence > 0.5) {
+            if (parseResult && parseResult.confidence >= 0.4) {
               console.log(`✅ ULTRA-FAST: DistilBERT classification - ${parseResult.intent} (confidence: ${(parseResult.confidence * 100).toFixed(1)}%)`);
               
               // Create result structure matching Phi3Agent output
@@ -88,7 +88,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
                     primaryIntent: parseResult.intent,
                     intents: [{ intent: parseResult.intent, confidence: parseResult.confidence, reasoning: parseResult.reasoning }],
                     entities: parseResult.entities || [],
-                    requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(parseResult.intent),
+                    requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(parseResult.intent),
                     requiresExternalData: false,
                     captureScreen: (parseResult.intent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
                                   (parseResult.intent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
@@ -151,7 +151,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
                   primaryIntent: bestIntent,
                   intents: [{ intent: bestIntent, confidence: 0.9, reasoning: 'Pattern-based classification' }],
                   entities: extractedEntities,
-                  requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete'].includes(bestIntent),
+                  requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(bestIntent),
                   requiresExternalData: false,
                   captureScreen: (bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
                                 (bestIntent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
@@ -196,6 +196,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         const { intentData } = intentResult.result;
         console.log('✅ Intent classification successful:', intentData.primaryIntent);
         
+
         quickResponse = intentData.suggestedResponse || 'I\'ll help you with that using my local capabilities.';
         
         // Use the complete structure from Phi3Agent - no manual building needed
