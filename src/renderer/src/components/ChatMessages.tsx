@@ -7,13 +7,9 @@ import {
   TooltipTrigger,
   TooltipProvider,
 } from './ui/tooltip';
-import ReactMarkdown from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import remarkGfm from 'remark-gfm';
-import remarkBreaks from 'remark-breaks';
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
+import MarkdownRenderer from './Markdown';
 import { useConversation } from '../contexts/ConversationContext';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 // import { useLocalLLM } from '../contexts/LocalLLMContext';
@@ -26,105 +22,50 @@ interface ChatMessage {
   isStreaming?: boolean;
 }
 
-// Simple markdown renderer component (memoized for performance)
-const MarkdownRenderer: React.FC<{ content: any }> = React.memo(({ content }) => {
-  // Ensure content is always a string
-  const safeContent = React.useMemo(() => {
-    if (typeof content === 'string') {
-      return content;
-    }
-    if (content === null || content === undefined) {
-      return '';
-    }
-    if (typeof content === 'object') {
-      // If it's an object, try to extract text or stringify it
-      if (content.text && typeof content.text === 'string') {
-        return content.text;
-      }
-      if (content.content && typeof content.content === 'string') {
-        return content.content;
-      }
-      // Last resort: stringify the object
-      try {
-        return JSON.stringify(content, null, 2);
-      } catch {
-        return '[Invalid content object]';
-      }
-    }
-    // Convert other types to string
-    return String(content);
-  }, [content]);
-
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm, remarkBreaks]}
-      components={{
-        code({ className, children, ...props }: any) {
-          const match = /language-(\w+)/.exec(className || '');
-          const isInline = !match;
-          return !isInline ? (
-            <SyntaxHighlighter
-              style={oneDark as any}
-              language={match[1]}
-              PreTag="div"
-              {...props}
-            >
-              {String(children).replace(/\n$/, '')}
-            </SyntaxHighlighter>
-          ) : (
-            <code className={className} {...props}>
-              {children}
-            </code>
-          );
-        },
-        p: ({ children }) => (
-          <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>
-        ),
-        ul: ({ children }) => (
-          <ul className="list-disc list-inside mb-2 space-y-1">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="list-decimal list-inside mb-2 space-y-1">{children}</ol>
-        ),
-        li: ({ children }) => (
-          <li className="leading-relaxed">{children}</li>
-        ),
-        blockquote: ({ children }) => (
-          <blockquote className="border-l-4 border-white/20 pl-4 italic mb-2">
-            {children}
-          </blockquote>
-        ),
-        h1: ({ children }) => (
-          <h1 className="text-lg font-bold mb-2">{children}</h1>
-        ),
-        h2: ({ children }) => (
-          <h2 className="text-base font-bold mb-2">{children}</h2>
-        ),
-        h3: ({ children }) => (
-          <h3 className="text-sm font-bold mb-1">{children}</h3>
-        ),
-      }}
-    >
-      {safeContent}
-    </ReactMarkdown>
-  );
-});
-
 export default function ChatMessages() {
   // Use signals for session management (eliminates race conditions)
   const {
     signals,
     activeSessionId,
-    hasActiveSession,
     sendMessage: signalsSendMessage,
+    addMessage: signalsAddMessage,
     logDebugState
   } = useConversationSignals();
 
-  // LEGACY: Keep minimal context for backward compatibility during migration
+  // LocalLLM integration comment out for now
+  // const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
+  
+  // WebSocket integration for receiving streaming responses
+  const {
+    state: wsState,
+    sendLLMRequest,
+    connect: connectWebSocket,
+    disconnect: disconnectWebSocket
+  } = useWebSocket({
+    autoConnect: false, // Manual connection control
+    onConnected: () => console.log('✅ ChatMessages WebSocket connected'),
+    onDisconnected: () => console.log('🔌 ChatMessages WebSocket disconnected'),
+    onError: (error) => console.error('❌ ChatMessages WebSocket error:', error),
+    onMessage: (message) => {
+      console.log('📨 ChatMessages received WebSocket message:', message);
+      handleWebSocketMessage(message);
+    }
+  });
+
+  /**
+   * 
+   * LEGACY: Keep minimal context for backward compatibility during migration
+   * 
+   */
   const { 
     getSessionMessages, 
     addMessage: addConversationMessage
   } = useConversation();
+  /**
+   * 
+   * LEGACY: END
+   * 
+   */
 
   // Use signals as primary source of truth
   const sessions = signals.sessions.value;
@@ -135,6 +76,42 @@ export default function ChatMessages() {
     const stored = localStorage.getItem('lastKnownSessions');
     return stored ? JSON.parse(stored) : [];
   });
+  const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const isStreamingEndedRef = useRef<boolean>(false);
+  
+  // Local LLM processing state
+  const [isProcessingLocally, setIsProcessingLocally] = useState(false);
+  const [localLLMError, setLocalLLMError] = useState<string | null>(null);
+  
+  // Input state from ChatWindow
+  const [currentMessage, setCurrentMessage] = useState('');
+  const [displayMessage, setDisplayMessage] = useState(''); // For immediate display
+  
+  // Inline editing state
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState('');
+  
+  // Copy feedback state
+  const [copiedMessageIds, setCopiedMessageIds] = useState<Set<string>>(new Set());
+
+  // Load state
+  const [isLoading, setIsLoading] = useState(false);
+  const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
+  const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
+  
+  // Refs
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const currentMessageRef = useRef<string>('');
+  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const resizeTimeoutRef = useRef<number | null>(null);
+  const [isUserScrolling, setIsUserScrolling] = useState(false);
+  const [showScrollButton] = useState(false);
+  const isProgrammaticScrolling = useRef(false);
+  const orchestrationListenerSetup = useRef<boolean>(false);
 
   // Debug activeSessionId changes and track good state with localStorage persistence
   React.useEffect(() => {
@@ -154,22 +131,6 @@ export default function ChatMessages() {
       console.log('💾 [ChatMessages] Saved last known sessions to localStorage:', sessions.length);
     }
   }, [activeSessionId, sessions]);
-  
-  // Ensure we have an active session
-  // React.useEffect(() => {
-  //   console.log('[ACTIVE SESSION INFO]:', activeSessionId, sessions, createSession, switchToSession)
-  //   if (!activeSessionId && sessions.length === 0) {
-  //     // Create a default session if none exists
-  //     createSession('user-initiated', {
-  //       title: 'Chat Session'
-  //     }).then(sessionId => {
-  //       switchToSession(sessionId);
-  const [isLoading, setIsLoading] = useState(false);
-  const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
-  const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
-  
-  // Ref to track if orchestration listener has been set up
-  const orchestrationListenerSetup = useRef<boolean>(false);
   
   // Get messages for the active session only from ConversationContext
   const displayMessages = React.useMemo(() => {
@@ -194,82 +155,7 @@ export default function ChatMessages() {
     console.log('📝 [DISPLAY] Converted messages:', converted);
     return converted;
   }, [activeSessionId, getSessionMessages]);
-  const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  const isStreamingEndedRef = useRef<boolean>(false);
   
-  // Local LLM processing state
-  const [isProcessingLocally, setIsProcessingLocally] = useState(false);
-  const [localLLMError, setLocalLLMError] = useState<string | null>(null);
-  
-  // Input state from ChatWindow
-  const [currentMessage, setCurrentMessage] = useState('');
-  const [displayMessage, setDisplayMessage] = useState(''); // For immediate display
-  
-  // Inline editing state
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
-  const [editingText, setEditingText] = useState('');
-  
-  // Copy feedback state
-  const [copiedMessageIds, setCopiedMessageIds] = useState<Set<string>>(new Set());
-  
-  // Refs
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const editTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const currentMessageRef = useRef<string>('');
-  const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const resizeTimeoutRef = useRef<number | null>(null);
-  const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const [showScrollButton] = useState(false);
-  const isProgrammaticScrolling = useRef(false);
-  
-  // LocalLLM integration comment out for now
-  // const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
-  
-  // WebSocket integration for receiving streaming responses
-  const {
-    state: wsState,
-    sendLLMRequest,
-    connect: connectWebSocket,
-    disconnect: disconnectWebSocket
-  } = useWebSocket({
-    autoConnect: false, // Manual connection control
-    onConnected: () => console.log('✅ ChatMessages WebSocket connected'),
-    onDisconnected: () => console.log('🔌 ChatMessages WebSocket disconnected'),
-    onError: (error) => console.error('❌ ChatMessages WebSocket error:', error),
-    onMessage: (message) => {
-      console.log('📨 ChatMessages received WebSocket message:', message);
-      handleWebSocketMessage(message);
-    }
-  });
-  
-  // Handle agent orchestration with direct intent classification payload
-  const handleAgentOrchestrationDirect = async (intentClassificationMessage: any) => {
-    try {
-      console.log('🎯 [AGENT] Processing direct intent classification payload...');
-      
-      if (window.electronAPI) {
-        const orchestrationResult = await window.electronAPI.agentOrchestrate({
-          message: JSON.stringify(intentClassificationMessage),
-          intent: intentClassificationMessage.primaryIntent,
-          context: { source: 'intent_classification_direct' }
-        });
-        console.log('✅ [AGENT] Direct AgentOrchestrator result:', orchestrationResult);
-        
-        if (orchestrationResult.success) {
-          console.log('🎉 [AGENT] Agent chain executed successfully from intent classification!');
-          // TODO: Show success indicator in UI
-        } else {
-          console.error('❌ [AGENT] Direct agent orchestration failed:', orchestrationResult.error);
-        }
-      }
-    } catch (error) {
-      console.error('❌ [AGENT] Error in direct agent orchestration:', error);
-    }
-  };
-
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = async (message: any) => {
     try {
@@ -315,9 +201,7 @@ export default function ChatMessages() {
         console.log('✅ Stream completed for request:', message.requestId);
         console.log('📄 Full response text:', message.payload?.fullText);
         console.log('🔍 [DEBUG] Full llm_stream_end message:', JSON.stringify(message, null, 2));
-        console.log('🔍 [DEBUG] Intent classification data:', message.payload?.intentClassification);
-        console.log('🔍 [DEBUG] All payload keys:', Object.keys(message.payload || {}));
-        
+          
         // Set streaming ended flag FIRST to prevent delayed chunks
         isStreamingEndedRef.current = true;
         
@@ -338,9 +222,9 @@ export default function ChatMessages() {
         
         // Add final message to conversation context
         console.log('🤖 Adding final AI message:', finalMessage);
-        if (activeSessionId && addConversationMessage) {          
+        if (activeSessionId && signalsAddMessage) {          
           try {
-            await addConversationMessage(activeSessionId, {
+            await signalsAddMessage(activeSessionId, {
               text: finalText,
               sender: 'ai',
               sessionId: activeSessionId,
@@ -351,7 +235,7 @@ export default function ChatMessages() {
             console.error('❌ Error adding final AI message to session:', error);
           }
         } else {
-          console.log('⚠️ No active session or addConversationMessage function available');
+          console.log('⚠️ No active session or signalsAddMessage function available');
         }
         
         // Final scroll-to-bottom when streaming completes (unless user is scrolling)
@@ -379,8 +263,28 @@ export default function ChatMessages() {
         
         // 🧠 CRITICAL: Trigger AgentOrchestrator with intent classification payload
         console.log('🧠 [AGENT] Triggering AgentOrchestrator with intent classification...');
-        handleAgentOrchestrationDirect(message);
-        
+        try {
+          console.log('🎯 [AGENT] Processing direct intent classification payload...');
+          
+          if (window.electronAPI) {
+            const orchestrationResult = await window.electronAPI.agentOrchestrate({
+              message: JSON.stringify(message),
+              intent: message.primaryIntent,
+              context: { source: 'intent_classification_direct' }
+            });
+            console.log('✅ [AGENT] Direct AgentOrchestrator result:', orchestrationResult);
+            
+            if (orchestrationResult.success) {
+              console.log('🎉 [AGENT] Agent chain executed successfully from intent classification!');
+              // TODO: Show success indicator in UI
+            } else {
+              console.error('❌ [AGENT] Direct agent orchestration failed:', orchestrationResult.error);
+            }
+          }
+        } catch (error) {
+          console.error('❌ [AGENT] Error in direct agent orchestration:', error);
+        }
+
       } else if (message.type === 'connection_status') {
         console.log('🔗 Connection status:', message.status);
       }
@@ -390,64 +294,63 @@ export default function ChatMessages() {
   };
 
   // 🎯 Semantic Search First - Try to find relevant stored memories
-  const trySemanticSearchFirst = useCallback(async (query: string) => {
-    try {
-      console.log('🔍 Performing semantic search for:', query.substring(0, 50) + '...');
+  // const trySemanticSearchFirst = useCallback(async (query: string) => {
+  //   try {
+  //     console.log('🔍 Performing semantic search for:', query.substring(0, 50) + '...');
       
-      // Call semantic search via Electron API
-      const result = await window.electronAPI?.agentExecute({
-        agentName: 'UserMemoryAgent',
-        action: 'memory-semantic-search',
-        input: query,
-        options: {
-          limit: 3,
-          minSimilarity: 0.6 // Higher threshold for better relevance
-        }
-      });
+  //     // Call semantic search via Electron API
+  //     const result = await window.electronAPI?.agentExecute({
+  //       agentName: 'UserMemoryAgent',
+  //       action: 'memory-semantic-search',
+  //       input: query,
+  //       options: {
+  //         limit: 3,
+  //         minSimilarity: 0.6 // Higher threshold for better relevance
+  //       }
+  //     });
       
-      if (result?.success && result.results && result.results.length > 0) {
-        console.log(`✅ Found ${result.results.length} relevant memories`);
+  //     if (result?.success && result.results && result.results.length > 0) {
+  //       console.log(`✅ Found ${result.results.length} relevant memories`);
         
-        // Format the response with found memories
-        const memories = result.results;
-        let response = "Based on what I remember:\n\n";
+  //       // Format the response with found memories
+  //       const memories = result.results;
+  //       let response = "Based on what I remember:\n\n";
         
-        memories.forEach((memory: any, index: number) => {
-          const similarity = Math.round(memory.similarity * 100);
-          response += `**Memory ${index + 1}** (${similarity}% match):\n`;
-          response += `${memory.source_text || memory.suggested_response}\n\n`;
-        });
+  //       memories.forEach((memory: any, index: number) => {
+  //         const similarity = Math.round(memory.similarity * 100);
+  //         response += `**Memory ${index + 1}** (${similarity}% match):\n`;
+  //         response += `${memory.source_text || memory.suggested_response}\n\n`;
+  //       });
         
-        response += "Is this what you were looking for, or would you like me to help with something else?";
+  //       response += "Is this what you were looking for, or would you like me to help with something else?";
         
-        return {
-          hasRelevantResults: true,
-          response: response,
-          memories: memories
-        };
-      }
+  //       return {
+  //         hasRelevantResults: true,
+  //         response: response,
+  //         memories: memories
+  //       };
+  //     }
       
-      console.log('📝 No relevant memories found with sufficient similarity');
-      return {
-        hasRelevantResults: false,
-        response: '',
-        memories: []
-      };
+  //     console.log('📝 No relevant memories found with sufficient similarity');
+  //     return {
+  //       hasRelevantResults: false,
+  //       response: '',
+  //       memories: []
+  //     };
       
-    } catch (error) {
-      console.error('❌ Semantic search failed:', error);
-      return {
-        hasRelevantResults: false,
-        response: '',
-        memories: []
-      };
-    }
-  }, []);
+  //   } catch (error) {
+  //     console.error('❌ Semantic search failed:', error);
+  //     return {
+  //       hasRelevantResults: false,
+  //       response: '',
+  //       memories: []
+  //     };
+  //   }
+  // }, []);
 
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
     const currentMsg = currentMessageRef.current;
-    // Debug logging removed for performance
     
     if (!currentMsg.trim() || isLoading || isProcessingLocally) {
       // Message sending blocked - debug logging removed for performance
@@ -455,9 +358,6 @@ export default function ChatMessages() {
     }
     
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
-    console.log('🔍 [SIGNALS] Checking active session:', signals.activeSessionId.value);
-    console.log('🔍 [SIGNALS] Has active session:', hasActiveSession);
-    console.log('🔍 [SIGNALS] Sessions available:', signals.sessions.value.length);
     logDebugState(); // Debug current signals state
     
     // Check if context is still loading
@@ -468,7 +368,6 @@ export default function ChatMessages() {
     
     // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
     let currentSessionId = signals.activeSessionId.value;
-    console.log('🔍 [SIGNALS] currentSessionId (always fresh):', currentSessionId);
     
     // If no active session, create one using signals
     if (!currentSessionId) {
@@ -524,16 +423,12 @@ export default function ChatMessages() {
     isStreamingEndedRef.current = false;
     
     // Add to conversation context if we have an active session
-    // Use the currentSessionId from session creation above
-    console.log('🔍 [DEBUG] Session check - currentSessionId:', currentSessionId);
-    console.log('🔍 [DEBUG] addConversationMessage function:', typeof addConversationMessage);
-    
-    if (currentSessionId && addConversationMessage) {
+    if (currentSessionId && signalsAddMessage) {
       console.log('📝 [USER-MESSAGE] Adding user message to session:', currentSessionId);
       console.log('📝 [USER-MESSAGE] Message text:', messageText);
       
       try {
-        await addConversationMessage(currentSessionId, {
+        await signalsAddMessage(currentSessionId, {
           text: messageText,
           sender: 'user',
           sessionId: currentSessionId,
@@ -560,43 +455,43 @@ export default function ChatMessages() {
       
       // 🎯 STEP 1: Try semantic search first for relevant stored memories
       console.log('🔍 Attempting semantic search first...');
-      const semanticResults = await trySemanticSearchFirst(messageText);
+      // const semanticResults = await trySemanticSearchFirst(messageText);
       
-      if (semanticResults && semanticResults.hasRelevantResults) {
-        console.log('✅ Found relevant memories, using semantic search results');
+      // if (semanticResults && semanticResults.hasRelevantResults) {
+      //   console.log('✅ Found relevant memories, using semantic search results');
         
-        // Add to conversation context if we have an active session
-        if (currentSessionId && addConversationMessage) {
-          await addConversationMessage(currentSessionId, {
-            text: semanticResults.response,
-            sender: 'ai',
-            sessionId: currentSessionId,
-            metadata: { source: 'semantic_search' }
-          });
-        }
+      //   // Add to conversation context if we have an active session
+      //   if (currentSessionId && addConversationMessage) {
+      //     await addConversationMessage(currentSessionId, {
+      //       text: semanticResults.response,
+      //       sender: 'ai',
+      //       sessionId: currentSessionId,
+      //       metadata: { source: 'semantic_search' }
+      //     });
+      //   }
         
-        setIsLoading(false);
-        return;
-      }
+      //   setIsLoading(false);
+      //   return;
+      // }
       
-      console.log('📝 No relevant memories found, proceeding with LLM...', semanticResults);
+      // console.log('📝 No relevant memories found, proceeding with LLM...', semanticResults);
       
-      if (!wsState.isConnected) {
-        console.warn('⚠️ WebSocket not connected, using local LLM fallback');
-        await handleLocalLLMFallback(messageText);
-        return;
-      }
+      // if (!wsState.isConnected) {
+      //   console.warn('⚠️ WebSocket not connected, using local LLM fallback');
+      //   await handleLocalLLMCall(messageText);
+      //   return;
+      // }
       
-      // Send message via WebSocket for backend processing
-      await sendLLMRequest({
-        prompt: messageText,
-        provider: 'openai',
-        options: {
-          taskType: 'ask',
-          stream: true,
-          temperature: 0.7
-        }
-      });
+      // // Send message via WebSocket for backend processing
+      // await sendLLMRequest({
+      //   prompt: messageText,
+      //   provider: 'openai',
+      //   options: {
+      //     taskType: 'ask',
+      //     stream: true,
+      //     temperature: 0.7
+      //   }
+      // });
       
     } catch (error) {
       console.error('❌ Failed to send message:', error);
@@ -613,7 +508,7 @@ export default function ChatMessages() {
   }, [isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
 
   // Handle local LLM fallback when backend is disconnected
-  const handleLocalLLMFallback = useCallback(async (messageText: string) => {
+  const handleLocalLLMCall = useCallback(async (messageText: string) => {
     let isMemoryRetrieve = false;
     let isQuestionIntent = false;
     try {
@@ -647,7 +542,7 @@ export default function ChatMessages() {
           }
         }
         
-        // Fallback to result.data or suggestedResponse
+        // result.data or suggestedResponse
         if (!aiResponseText) {
           aiResponseText = result.data || result.intentClassificationPayload?.suggestedResponse || 'I processed your request using local capabilities.';
         }
@@ -656,42 +551,40 @@ export default function ChatMessages() {
         console.log('🎯 [RESPONSE] Intent classification:', result.intentClassificationPayload?.primaryIntent);
         
         // For memory_retrieve intents, use the response in ThinkingIndicator and wait for orchestration
-        if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
-          isMemoryRetrieve = true;
-          // Set the thinking message to the initial response
-          const thinkingMsg = result.data || 'Let me check what I have stored about that.';
-          console.log('🎯 [THINKING] Setting thinking message for memory_retrieve:', thinkingMsg);
-          setInitialThinkingMessage(thinkingMsg);
+        // if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
+        //   isMemoryRetrieve = true;
+        //   // Set the thinking message to the initial response
+        //   const thinkingMsg = result.data || 'Let me check what I have stored about that.';
+        //   console.log('🎯 [THINKING] Setting thinking message for memory_retrieve:', thinkingMsg);
+        //   setInitialThinkingMessage(thinkingMsg);
           
-          // Keep processing state active to show ThinkingIndicator
-          console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
-          return;
-        }
+        //   // Keep processing state active to show ThinkingIndicator
+        //   console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
+        //   return;
+        // }
         
         // For question intents, show suggested response in ThinkingIndicator while processing
-        if (result.intentClassificationPayload?.primaryIntent === 'question') {
-          isQuestionIntent = true;
-          // Set the thinking message to the suggested response
-          const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-          console.log('🎯 [THINKING] Setting thinking message for question:', thinkingMsg);
-          console.log('🎯 [THINKING] States - isProcessingLocally:', isProcessingLocally, 'isLoading:', isLoading, 'wsConnected:', wsState.isConnected);
-          setInitialThinkingMessage(thinkingMsg);
+        // if (result.intentClassificationPayload?.primaryIntent === 'question') {
+        //   isQuestionIntent = true;
+        //   // Set the thinking message to the suggested response
+        //   const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
+        //   setInitialThinkingMessage(thinkingMsg);
           
-          // Ensure we stay in processing state to keep ThinkingIndicator visible
-          console.log('🎯 [THINKING] Keeping processing state active for question');
-          // Don't add the AI message yet - wait for orchestration update
-          return;
-        }
+        //   // Ensure we stay in processing state to keep ThinkingIndicator visible
+        //   console.log('🎯 [THINKING] Keeping processing state active for question');
+        //   // Don't add the AI message yet - wait for orchestration update
+        //   return;
+        // }
         
         // Add to conversation context if we have an active session
         if (activeSessionId) {
           // DISABLED: This causes duplicates since orchestration broadcast handler also adds messages
-          // addConversationMessage(activeSessionId, {
-          //   text: aiResponseText,
-          //   sender: 'ai',
-          //   sessionId: activeSessionId,
-          //   metadata: { intent: result.intentClassificationPayload?.primaryIntent }
-          // });
+          addConversationMessage(activeSessionId, {
+            text: aiResponseText,
+            sender: 'ai',
+            sessionId: activeSessionId,
+            metadata: { intent: result.intentClassificationPayload?.primaryIntent }
+          });
           console.log('📝 [ORCHESTRATION] AI response will be added via orchestration broadcast handler');
         } else {
           // No active session - message will be handled by orchestration
@@ -699,8 +592,6 @@ export default function ChatMessages() {
         }
         
         console.log('✅ Local LLM processing completed successfully');
-        console.log('📝 Note: Background orchestration is handled by IPC handler, no additional frontend call needed');
-        
       } else {
         throw new Error(result.error || 'Local LLM processing failed');
       }
@@ -764,30 +655,29 @@ export default function ChatMessages() {
   }, []);
 
   // // Handle WebSocket toggle for testing local LLM fallback
-  // const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
-  //   e?.preventDefault();
-  //   e?.stopPropagation();
+  const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
     
-  //   console.log('🔍 [DEBUG] WebSocket toggle clicked!', {
-  //     currentState: wsState.isConnected,
-  //     reconnectCount: wsState.reconnectCount,
-  //     activeRequests: wsState.activeRequests
-  //   });
-    
-  //   try {
-  //     if (wsState.isConnected) {
-  //       console.log('🔌 Manually disconnecting WebSocket for local LLM testing...');
-  //       await disconnectWebSocket();
-  //       console.log('✅ WebSocket disconnected - local LLM fallback will be used');
-  //     } else {
-  //       console.log('🔌 Reconnecting WebSocket...');
-  //       await connectWebSocket();
-  //       console.log('✅ WebSocket reconnected - backend streaming will be used');
-  //     }
-  //   } catch (error) {
-  //     console.error('❌ Error toggling WebSocket connection:', error);
-  //   }
-  // }, [wsState.isConnected, connectWebSocket, disconnectWebSocket]);
+    console.log('🔍 [DEBUG] WebSocket toggle clicked in input area!', {
+      currentState: wsState.isConnected,
+      reconnectCount: wsState.reconnectCount
+    });
+      
+    try {
+      if (wsState.isConnected) {
+        console.log('🔌 Disconnecting WebSocket for local LLM testing...');
+        await disconnectWebSocket();
+        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
+      } else {
+        console.log('🔌 Reconnecting WebSocket...');
+        await connectWebSocket();
+        console.log('✅ WebSocket reconnected - backend streaming will be used');
+      }
+    } catch (error) {
+      console.error('❌ Error toggling WebSocket connection:', error);
+    } 
+  }, [wsState.isConnected, connectWebSocket, disconnectWebSocket]);
   
   // Input handlers from ChatWindow
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1005,10 +895,6 @@ export default function ChatMessages() {
     };
   }, []); // Remove dependencies to prevent re-mounting
 
-  // Persist messages to localStorage whenever they change
-  // useEffect(() => {
-  //   localStorage.setItem('thinkdrop-chat-messages', JSON.stringify(chatMessages));
-  // }, [chatMessages]);
 
   // Enhanced scroll to bottom function with smooth WebSocket chunk handling
   const scrollToBottom = useCallback((options: { smooth?: boolean; force?: boolean; onComplete?: (() => void) | null } = {}) => {
@@ -1076,21 +962,7 @@ export default function ChatMessages() {
     }
   }, [displayMessages, scrollToBottom]);
 
-  // ...
 
-  const handleClearMessages = useCallback(() => {
-    if (displayMessages.length === 0) {
-      console.log('📝 No messages to clear');
-      return;
-    }
-    // Clear messages should be handled by ConversationContext
-    console.log('🗑️ Clear messages requested - should be handled by ConversationContext');
-  }, [displayMessages]);
-  // Handle scroll to bottom button click
-  const handleScrollToBottom = useCallback(() => {
-    setIsUserScrolling(false);
-    scrollToBottom({ smooth: true, force: true });
-  }, [scrollToBottom]);
 
   useEffect(() => {
     // Listen for new messages from the main process
@@ -1104,24 +976,6 @@ export default function ChatMessages() {
         
         // Add to processed messages
         setProcessedMessageIds(prev => new Set([...prev, message.id]));
-        
-        // Add message to chat
-        // setChatMessages(prev => {
-        //   // Double-check for duplicates by ID
-        //   const exists = prev.some(m => m.id === message.id);
-        //   if (exists) {
-        //     return prev;
-        //   }
-          
-        //   // Notify that a message was loaded (for focus management)
-        //   setTimeout(() => {
-        //     if (window.electronAPI?.notifyMessageLoaded) {
-        //       window.electronAPI.notifyMessageLoaded();
-        //     }
-        //   }, 200);
-          
-        //   return [...prev, message];
-        // });
         
         // Show loading indicator for user messages (AI response will come via WebSocket)
         if (message.sender === 'user') {
@@ -1477,26 +1331,7 @@ export default function ChatMessages() {
                       ? 'from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
                       : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
                   }`}
-                  onClick={async () => {
-                    console.log('🔍 [DEBUG] WebSocket toggle clicked in input area!', {
-                      currentState: wsState.isConnected,
-                      reconnectCount: wsState.reconnectCount
-                    });
-                    
-                    try {
-                      if (wsState.isConnected) {
-                        console.log('🔌 Disconnecting WebSocket for local LLM testing...');
-                        await disconnectWebSocket();
-                        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
-                      } else {
-                        console.log('🔌 Reconnecting WebSocket...');
-                        await connectWebSocket();
-                        console.log('✅ WebSocket reconnected - backend streaming will be used');
-                      }
-                    } catch (error) {
-                      console.error('❌ Error toggling WebSocket connection:', error);
-                    }
-                  }}
+                  onClick={handleWebSocketToggle}
                 >
                   {wsState.isConnected ? <Droplet className="w-4 h-4 text-white" /> : <Unplug className="w-4 h-4 text-white" />}
                   {/* WebSocket Connection Status Indicator */}

@@ -280,19 +280,19 @@ const AGENT_FORMAT = {
       const sessions = await AGENT_FORMAT.database.query(query, [limit, offset]);
       
       console.log('📋 Raw sessions from database:', sessions.length, 'sessions');
-      sessions.forEach((session, index) => {
-        console.log(`Session ${index}:`, {
-          id: session.id,
-          title: session.title,
-          type: session.type,
-          created_at: session.created_at
-        });
-      });
+      // sessions.forEach((session, index) => {
+      //   console.log(`Session ${index}:`, {
+      //     id: session.id,
+      //     title: session.title,
+      //     type: session.type,
+      //     created_at: session.created_at
+      //   });
+      // });
 
       // Parse JSON fields and populate additional data
       const parsedSessions = await Promise.all(sessions.map(async (session) => {
         try {
-          console.log(`🔍 Processing session ${session.id}...`);
+          // console.log(`🔍 Processing session ${session.id}...`);
           
           // Get message count for this session
           const countQuery = `
@@ -343,13 +343,13 @@ const AGENT_FORMAT = {
             unreadCount: 0
           };
           
-          console.log(`✅ Processed session ${session.id}:`, {
-            id: processedSession.id,
-            title: processedSession.title,
-            messageCount: processedSession.messageCount,
-            lastMessage: processedSession.lastMessage?.substring(0, 30),
-            isActive: processedSession.isActive
-          });
+          // console.log(`✅ Processed session ${session.id}:`, {
+          //   id: processedSession.id,
+          //   title: processedSession.title,
+          //   messageCount: processedSession.messageCount,
+          //   lastMessage: processedSession.lastMessage?.substring(0, 30),
+          //   isActive: processedSession.isActive
+          // });
           
           return processedSession;
         } catch (error) {
@@ -378,16 +378,16 @@ const AGENT_FORMAT = {
       }));
       
       console.log('📋 Parsed sessions:', parsedSessions.length, 'sessions');
-      parsedSessions.forEach((session, index) => {
-        console.log(`Parsed Session ${index}:`, {
-          id: session.id,
-          title: session.title,
-          type: session.type,
-          isActive: session.isActive,
-          messageCount: session.messageCount,
-          lastMessage: session.lastMessage?.substring(0, 30)
-        });
-      });
+      // parsedSessions.forEach((session, index) => {
+      //   console.log(`Parsed Session ${index}:`, {
+      //     id: session.id,
+      //     title: session.title,
+      //     type: session.type,
+      //     isActive: session.isActive,
+      //     messageCount: session.messageCount,
+      //     lastMessage: session.lastMessage?.substring(0, 30)
+      //   });
+      // });
 
       // If no active session exists and we have sessions, activate the most recent one with messages
       const hasActiveSession = parsedSessions.some(s => s.isActive);
@@ -911,11 +911,11 @@ const AGENT_FORMAT = {
         }
       };
       
-      console.log(`✅ [ConversationSessionAgent] Returning result:`, {
-        success: result.success,
-        messageCount: result.data.messages.length,
-        sessionId: result.data.sessionId
-      });
+      // console.log(`✅ [ConversationSessionAgent] Returning result:`, {
+      //   success: result.success,
+      //   messageCount: result.data.messages.length,
+      //   sessionId: result.data.sessionId
+      // });
       
       return result;
     } catch (error) {

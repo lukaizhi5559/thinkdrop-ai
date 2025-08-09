@@ -68,7 +68,7 @@ const AGENT_FORMAT = {
       // Store configuration on AGENT_FORMAT so it's accessible during execution
       AGENT_FORMAT.config = {
         timeout: config.timeout || 8000,
-        model: config.model || 'phi3-json',
+        model: config.model || 'phi4-mini:latest',
         maxRetries: config.maxRetries || 1
       };
       
@@ -88,7 +88,7 @@ const AGENT_FORMAT = {
       
       // Test Phi3 availability after service startup using base model
       try {
-        const testResult = await AGENT_FORMAT.executeOllamaQuery('Hello', { timeout: 3000, model: 'phi3:mini' });
+        const testResult = await AGENT_FORMAT.executeOllamaQuery('Hello', { timeout: 3000, model: 'phi4-mini:latest' });
         AGENT_FORMAT.isAvailable = testResult && testResult.length > 0;
         console.log('🔍 DEBUG: Phi3 availability test result:', AGENT_FORMAT.isAvailable);
       } catch (error) {
@@ -168,9 +168,9 @@ const AGENT_FORMAT = {
 ${prompt}
 
 Provide a short, helpful response (2-3 sentences max) describing what you see.`;
-        // Use regular phi3:mini model for natural language responses
+        // Use regular phi4-mini model for natural language responses
         queryOptions = {
-          model: 'phi3:mini',
+          model: 'phi4-mini:latest',
           temperature: 0.3,
           max_tokens: 150
         };
@@ -267,7 +267,7 @@ ${message}<|end|>
 
       const result = await AGENT_FORMAT.executeOllamaQuery(naturalPrompt, {
         ...options,
-        model: 'phi3:mini',
+        model: 'phi4-mini:latest',
         temperature: 0.2, // Lower for more focused responses
         maxTokens: 100 // Reduced tokens for brevity
       });
@@ -726,7 +726,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'phi3:mini',
+          model: 'phi4-mini:latest',
           prompt: testPrompt,
           stream: false,
           options: {
@@ -774,7 +774,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'phi3:mini',
+            model: 'phi4-mini:latest',
             prompt: '',
             stream: false,
             options: { num_predict: 1 }
@@ -806,7 +806,7 @@ Everything I do is processed locally on your device for complete privacy, reflec
   // Simple Phi3 query using direct HTTP approach
   async executeOllamaQuery(prompt, options = {}) {
     const defaultOptions = {
-      model: 'phi3-json',
+      model: 'phi4-mini:latest',
       temperature: 0.1,
       max_tokens: 500,
       top_p: 0.9,
@@ -1058,7 +1058,7 @@ This belief shapes the foundation of Thinkdrop AI’s worldview-aware mode, anch
 • 📝 **Information Processing**: Parse, analyze, and organize various types of data
 
 **Local Capabilities (Current Mode):**
-• Local LLM processing using Phi3-mini for privacy
+• Local LLM processing using Phi4-mini for privacy
 • Local memory storage with DuckDB database
 • Screen capture and analysis
 • Agent coordination and workflow management

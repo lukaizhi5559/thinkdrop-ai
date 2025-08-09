@@ -269,7 +269,7 @@ export class AgentOrchestrator {
         dependencies: ['child_process', 'path'],
         execution_target: 'frontend',
         requires_database: false,
-        config: { model: 'phi3:mini', timeout: 30000, max_tokens: 100 },
+        config: { model: 'phi4-mini:latest', timeout: 30000, max_tokens: 100 },
         orchestrator_metadata: { category: 'llm', priority: 'high' }
       },
       {
@@ -284,7 +284,7 @@ export class AgentOrchestrator {
       {
         name: 'EmbeddingDaemonAgent',
         description: 'Background daemon for generating embeddings for memories without them',
-        dependencies: ['SemanticEmbeddingAgent', 'UserMemoryAgent'],
+        dependencies: [],
         execution_target: 'frontend',
         requires_database: true,
         database_type: 'duckdb',
@@ -294,7 +294,7 @@ export class AgentOrchestrator {
       {
         name: 'ConversationSessionAgent',
         description: 'Manages multi-chat conversation sessions with context awareness and auto-initiation',
-        dependencies: ['UserMemoryAgent', 'SemanticEmbeddingAgent'],
+        dependencies: [],
         execution_target: 'frontend',
         requires_database: true,
         database_type: 'duckdb',

@@ -19,9 +19,7 @@ import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
 import { useConversationSignals } from '../hooks/useConversationSignals';
-
-type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration';
-
+import { ViewType } from '@/types/view';
 interface UnifiedInterfaceProps {
   isListening: boolean;
   toggleListening: () => void;
@@ -29,9 +27,12 @@ interface UnifiedInterfaceProps {
   isGatheringInsight: boolean;
   showResponse: boolean;
   setShowResponse: (show: boolean) => void;
+  onViewChange: (view: ViewType) => void;
 }
 
-const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
+const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
+  onViewChange
+}) => {
   const [currentView, setCurrentView] = useState<ViewType>('chat');
   const [showMenu, setShowMenu] = useState(false);
   
@@ -64,6 +65,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = () => {
   // Handle view changes
   const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
+    onViewChange(view);
     setShowMenu(false); // Close menu when switching views
   };
 

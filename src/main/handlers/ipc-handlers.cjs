@@ -167,7 +167,7 @@ function initializeIPCHandlers({
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
-      console.log('🎯 Direct agent execution received:', request);
+      // console.log('🎯 Direct agent execution received:', request);
       
       const result = await coreAgent.executeAgent(request.agentName, {
         action: request.action,

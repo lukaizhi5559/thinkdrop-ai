@@ -206,7 +206,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           context: {
             source: 'local_phi3_classification',
             sessionId: `local-session-${Date.now()}`,
-            model: 'phi3:mini'
+            model: 'phi4-mini:latest'
           }
         };
       } else {
@@ -227,7 +227,7 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           context: {
             source: 'local_phi3_fallback',
             sessionId: `local-session-${Date.now()}`,
-            model: 'phi3:mini'
+            model: 'phi4-mini:latest'
           }
         };
       }

@@ -53,8 +53,8 @@ const defaultConfig: AppConfig = {
   localLLM: {
     enabled: true,
     ollamaUrl: 'http://localhost:11434',
-    preferredModel: 'phi3:mini',
-    fallbackModels: ['llama3.2:1b', 'tinyllama'],
+    preferredModel: 'phi4-mini:latest',
+    fallbackModels: ['phi3:mini', 'llama3.2:1b', 'tinyllama'],
     timeout: 30000
   },
   features: {

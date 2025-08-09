@@ -10,6 +10,7 @@ import { SidebarToggle } from './components/SidebarToggle';
 
 import { initializeConversationSignals } from './signals/init';
 import './types/electronAPI'; // Import Electron API types
+import { ViewType } from '@/types/view';
 
 function App() {
   // Check if this is a specific mode (for legacy compatibility)
@@ -34,6 +35,12 @@ function App() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGatheringInsight] = useState(false);
   const [showResponse, setShowResponse] = useState(false);
+  const [currentView, setCurrentView] = useState(mode)
+
+  console.log('currentView', currentView)
+  const handleViewChange = (view: ViewType) => {
+    setCurrentView(view);
+  }
 
   // Initialize signals when app starts
   useEffect(() => {
@@ -91,10 +98,12 @@ function App() {
         {/* Conversation Sidebar */}
         <ConversationSidebar />
         
-        {/* Test Buttons */}
-        <div className="fixed top-16 left-4 z-10">
-          <SidebarToggle />
-        </div>
+        {/* SidebarToggle - only show in unified interface mode (not in legacy modes) */}
+        {currentView === 'chat' && (
+          <div className="fixed top-16 left-4 z-10">
+            <SidebarToggle />
+          </div>
+        )}
         
         {/* Main Content */}
         <UnifiedInterface
@@ -104,6 +113,7 @@ function App() {
           isGatheringInsight={isGatheringInsight}
           showResponse={showResponse}
           setShowResponse={setShowResponse}
+          onViewChange={handleViewChange}
         />
       </div>
     </ConversationProvider>
