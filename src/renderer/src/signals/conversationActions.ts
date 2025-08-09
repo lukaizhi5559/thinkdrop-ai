@@ -53,7 +53,12 @@ export const switchToSession = async (sessionId: string) => {
   }, 100);
 };
 
-export const createSession = async (sessionType: 'user-initiated' | 'ai-initiated' = 'user-initiated', options: { title?: string } = {}) => {
+export const createSession = async (sessionType: 'user-initiated' | 'ai-initiated' = 'user-initiated', options: { 
+  title?: string;
+  contextData?: any;
+  relatedMemories?: any[];
+  currentActivity?: any;
+} = {}) => {
   console.log('🆕 [SIGNALS] Creating new session:', { sessionType, options });
   
   try {
@@ -66,18 +71,27 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
         action: 'session-create',
         options: {
           sessionType,
-          title: options.title || 'Chat Session',
+          title: options?.title || `Chat ${sessions.value.length + 1}`,
           triggerReason: 'manual',
           triggerConfidence: 0,
-          contextData: {},
-          relatedMemories: [],
-          currentActivity: {}
+          contextData: options?.contextData || {},
+          relatedMemories: options?.relatedMemories || [],
+          currentActivity: options?.currentActivity || {}
         }
       });
-      
-      if (result.success && result.result?.data?.sessionId) {
-        const sessionId = result.result.data.sessionId;
-        console.log('✅ [SIGNALS] Session created successfully:', sessionId);
+
+      console.log('🔄 [SIGNALS] Backend response:', result);
+      console.log('🔄 [SIGNALS] Response type:', typeof result);
+      console.log('🔄 [SIGNALS] Response keys:', result ? Object.keys(result) : 'null/undefined');
+      console.log('🔄 [SIGNALS] Success value:', result?.success);
+      console.log('🔄 [SIGNALS] Error value:', result?.error);
+      console.log('🔄 [SIGNALS] Result object:', result?.result);
+      console.log('🔄 [SIGNALS] Result keys:', result?.result ? Object.keys(result.result) : 'null/undefined');
+      console.log('🔄 [SIGNALS] Result data:', result?.result?.data);
+
+      if (result?.success && result.result?.sessionId) {
+        const sessionId = result.result.sessionId;
+        console.log(' [SIGNALS] Session created successfully:', sessionId);
         
         // Create new session object
         const newSession: ConversationSession = {
@@ -100,8 +114,15 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
         };
         
         // Add to sessions list and set as active
+        const currentSessions = sessions.value;
+        console.log('🔄 [SIGNALS] Current sessions before update:', currentSessions.length);
+        
         sessions.value = [newSession, ...sessions.value.map(s => ({ ...s, isActive: false }))];
         activeSessionId.value = sessionId;
+        
+        console.log('🔄 [SIGNALS] Sessions after update:', sessions.value.length);
+        console.log('🔄 [SIGNALS] New session added:', newSession);
+        console.log('🔄 [SIGNALS] Active session ID set to:', sessionId);
         
         // Initialize empty messages array for this session
         messages.value = {
@@ -303,11 +324,13 @@ export const updateSession = async (sessionId: string, updates: { title?: string
   
   try {
     // Call backend to update session
-    await window.electronAPI?.agentExecute({
+    const result = await window.electronAPI?.agentExecute({
       agentName: 'ConversationSessionAgent',
       action: 'session-update',
-      options: { sessionId, updates }
+      options: { sessionId, ...updates }
     });
+    
+    console.log('📡 [SIGNALS] Backend update result:', result);
     
     // Update local sessions signal
     const currentSessions = sessions.value;
@@ -316,7 +339,7 @@ export const updateSession = async (sessionId: string, updates: { title?: string
     );
     sessions.value = updatedSessions;
     
-    console.log('✅ [SIGNALS] Session updated successfully');
+    console.log('✅ [SIGNALS] Session updated successfully - local state updated');
   } catch (error) {
     console.error('❌ [SIGNALS] Failed to update session:', error);
     throw error;

@@ -495,6 +495,10 @@ const AGENT_FORMAT = {
   },
 
   async updateSession(options, context) {
+    console.log('🔧 [ConversationSessionAgent] Raw options received:', options);
+    
+    // Handle nested options structure
+    const actualOptions = options.options || options;
     const { 
       sessionId, 
       title, 
@@ -502,7 +506,9 @@ const AGENT_FORMAT = {
       relatedMemories, 
       currentActivity,
       messageCount 
-    } = options;
+    } = actualOptions;
+
+    console.log('🔧 [ConversationSessionAgent] updateSession called with:', { sessionId, title, contextData, relatedMemories, currentActivity, messageCount });
 
     try {
       const updates = [];
@@ -535,11 +541,12 @@ const AGENT_FORMAT = {
 
       values.push(sessionId);
 
-      await AGENT_FORMAT.database.run(`
-        UPDATE conversation_sessions 
-        SET ${updates.join(', ')}
-        WHERE id = ?
-      `, values);
+      const sql = `UPDATE conversation_sessions SET ${updates.join(', ')} WHERE id = ?`;
+      console.log('🔧 [ConversationSessionAgent] SQL query:', sql);
+      console.log('🔧 [ConversationSessionAgent] Values array:', values);
+      console.log('🔧 [ConversationSessionAgent] Updates array:', updates);
+
+      await AGENT_FORMAT.database.run(sql, values);
 
       // Check if session exists by querying it
       const checkResult = await AGENT_FORMAT.database.query(`

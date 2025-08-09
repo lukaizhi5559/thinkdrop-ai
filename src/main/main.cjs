@@ -187,6 +187,10 @@ app.whenReady().then(() => {
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     toggleOverlay();
   });
+
+  globalShortcut.register('Control+Space', () => {
+    toggleOverlay();
+  });
   
   // Register global shortcut to quit app
   // globalShortcut.register('CommandOrControl+Q', () => {

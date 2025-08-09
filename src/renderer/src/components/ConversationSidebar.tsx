@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { 
   MessageSquare, 
   Plus, 
@@ -24,7 +24,10 @@ interface ConversationSidebarProps {
 export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ className = '' }) => {
   const {
     signals,
+    sessions,
     activeSessionId,
+    isSidebarOpen,
+    isLoading,
     createSession,
     switchToSession,
     toggleSidebar,
@@ -33,11 +36,6 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
     hibernateSession,
     resumeSession
   } = useConversationSignals();
-
-  // Extract values from signals
-  const sessions = signals.sessions.value;
-  const isSidebarOpen = signals.isSidebarOpen.value;
-  const isLoading = signals.isLoading.value;
   
   // Sidebar actions - use the closeSidebar from signals
   const closeSidebar = () => {
@@ -56,6 +54,11 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
     });
   }, [isSidebarOpen, sessions.length, activeSessionId, isLoading]);
 
+  // Track component renders
+  React.useEffect(() => {
+    console.log('🎨 [ConversationSidebar] Component rendered with sessions:', sessions.map(s => ({ id: s.id, title: s.title })));
+  });
+
   const [searchQuery, setSearchQuery] = useState('');
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
@@ -69,18 +72,27 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
 
   // Handle new chat creation
   const handleNewChat = useCallback(async () => {
+    console.log('🔥 [ConversationSidebar] NEW CHAT BUTTON CLICKED!');
     try {
+      console.log('🆕 [ConversationSidebar] Creating new chat, current sessions count:', sessions.length);
+      
       const sessionId = await createSession('user-initiated', {
         title: `Chat ${sessions.length + 1}`
       });
-      switchToSession(sessionId);
+      
+      console.log('✅ [ConversationSidebar] New session created:', sessionId);
+      console.log('📊 [ConversationSidebar] Sessions after creation:', sessions.length);
+      
+      await switchToSession(sessionId);
+      
+      console.log('🔄 [ConversationSidebar] Switched to new session, final sessions count:', sessions.length);
       
       // Close sidebar on mobile
       if (window.innerWidth < 768) {
         closeSidebar();
       }
     } catch (error) {
-      console.error('Failed to create new chat:', error);
+      console.error('❌ [ConversationSidebar] Failed to create new chat:', error);
     }
   }, [createSession, switchToSession, closeSidebar, sessions.length]);
 
@@ -123,6 +135,28 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
       await deleteSession(sessionId);
     }
   }, [deleteSession]);
+
+  // Handle outside click to close menu
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      // Close menu if clicking outside and a menu is open
+      if (openMenuSessionId) {
+        const target = event.target as HTMLElement;
+        // Check if click is outside the menu and not on a menu trigger button
+        if (!target.closest('.actions-menu') && !target.closest('.menu-trigger')) {
+          setOpenMenuSessionId(null);
+        }
+      }
+    };
+
+    if (openMenuSessionId) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [openMenuSessionId]);
 
   // Format relative time
   const formatTime = useCallback((dateString: string) => {
@@ -268,9 +302,9 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                       )}
 
                       {/* Unread Count */}
-                      {session.unreadCount && session.unreadCount > 0 && (
+                      {((session.unreadCount !== undefined && session.unreadCount !== null) && session.unreadCount > 0) && (
                         <span className="flex-shrink-0 bg-teal-500 text-white text-xs rounded-full px-2 py-0.5 min-w-[20px] text-center">
-                          {session.unreadCount > 99 ? '99+' : session.unreadCount}
+                          {session.unreadCount > 99 ? '99+' : session.unreadCount > 0 ? session.unreadCount : ''}
                         </span>
                       )}
                     </div>
@@ -279,7 +313,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                     <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
                       <div className="relative">
                         <button 
-                          className="p-1 rounded hover:bg-gray-600/50 text-gray-400 hover:text-white transition-colors"
+                          className="menu-trigger p-1 rounded hover:bg-gray-600/50 text-gray-400 hover:text-white transition-colors"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleToggleMenu(session.id);
@@ -290,7 +324,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                         
                         {/* Quick Actions (visible on click) */}
                         {openMenuSessionId === session.id && (
-                        <div className="absolute right-0 top-6 bg-gray-800 border border-gray-600 rounded-lg shadow-lg py-1 z-10">
+                        <div className="actions-menu absolute right-0 top-6 bg-gray-800 border border-gray-600 rounded-lg shadow-lg py-1 z-10">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
