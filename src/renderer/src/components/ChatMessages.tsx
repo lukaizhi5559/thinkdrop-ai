@@ -168,6 +168,9 @@ export default function ChatMessages() {
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
   
+  // Ref to track if orchestration listener has been set up
+  const orchestrationListenerSetup = useRef<boolean>(false);
+  
   // Get messages for the active session only from ConversationContext
   const displayMessages = React.useMemo(() => {
     if (!activeSessionId) {
@@ -335,7 +338,7 @@ export default function ChatMessages() {
         
         // Add final message to conversation context
         console.log('🤖 Adding final AI message:', finalMessage);
-        if (activeSessionId && addConversationMessage) {
+        if (activeSessionId && addConversationMessage) {          
           try {
             await addConversationMessage(activeSessionId, {
               text: finalText,
@@ -1136,22 +1139,14 @@ export default function ChatMessages() {
     }
 
     // Listen for orchestration updates (final results from background processing)
-    console.log('🔍 [DEBUG] Setting up orchestration update listener...');
-    console.log('🔍 [DEBUG] window.electronAPI exists:', !!window.electronAPI);
-    console.log('🔍 [DEBUG] onOrchestrationUpdate exists:', !!(window.electronAPI?.onOrchestrationUpdate));
-
-    if (window.electronAPI?.onOrchestrationUpdate) {
-      console.log('✅ [DEBUG] Successfully setting up onOrchestrationUpdate listener');
+    
+    if (!orchestrationListenerSetup.current && window.electronAPI?.onOrchestrationUpdate) {
+      console.log('🔍 [DEBUG] Setting up orchestration update listener (first time)...');
+      orchestrationListenerSetup.current = true;
       
       window.electronAPI.onOrchestrationUpdate(async (_event: any, updateData: any) => {
         // Create unique key for this update
         const updateKey = `${updateData.type}-${updateData.timestamp}-${updateData.response?.substring(0, 50)}`;
-        
-        // Check if we've already processed this update using processedMessageIds
-        if (processedMessageIds.has(updateKey)) {
-          console.warn('⚠️ [FRONTEND] Duplicate orchestration update ignored:', updateKey);
-          return;
-        }
         
         // Mark as processed
         setProcessedMessageIds(prev => new Set([...prev, updateKey]));
@@ -1161,41 +1156,16 @@ export default function ChatMessages() {
           console.log('🎯 [ORCHESTRATION] Received final response, clearing thinking indicator');
           
           // Add AI response to conversation session (this is what gets displayed)
-          if (activeSessionId && addConversationMessage) {
-            // Enhanced duplicate detection for orchestration responses
-            const currentMessages = displayMessages;
-            const recentAiMessages = currentMessages.slice(-8).filter(msg => msg.sender === 'ai');
-            
-            const isDuplicateResponse = recentAiMessages.some((msg: any) => {
-              // Exact text match
-              const exactMatch = msg.text === updateData.response;
-              
-              // Recent time window (25 seconds)
-              const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 25000;
-              
-              // Similar text match for longer messages
-              const similarMatch = msg.text.length > 30 && updateData.response.length > 30 && 
-                                  msg.text.substring(0, 30) === updateData.response.substring(0, 30);
-              
-              // Short generic responses (like "I'll get it done.")
-              const shortGenericMatch = updateData.response.length < 50 && msg.text === updateData.response;
-              
-              // Very short responses (under 20 chars) are likely generic
-              const veryShortMatch = updateData.response.length < 20 && msg.text === updateData.response;
-              
-              return exactMatch || shortGenericMatch || veryShortMatch || (recentTime && similarMatch);
-            });
-            
-            if (isDuplicateResponse) {
-              console.warn('⚠️ [ORCHESTRATION] Duplicate AI response detected, skipping add to session');
-              return;
-            }
-            
-            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', activeSessionId);         
-            await addConversationMessage(activeSessionId, {
+          // Get current session ID from signals to avoid stale closure issues
+          const currentSessionId = signals.activeSessionId.value;
+          console.log('🔍 [ORCHESTRATION] Current session ID from signals:', currentSessionId);
+          
+          if (currentSessionId && addConversationMessage) {
+            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', currentSessionId);         
+            await addConversationMessage(currentSessionId, {
               text: updateData.response,
               sender: 'ai',
-              sessionId: activeSessionId,
+              sessionId: currentSessionId,
               metadata: {
                 handledBy: updateData.handledBy,
                 method: updateData.method,
@@ -1204,7 +1174,8 @@ export default function ChatMessages() {
             });
             console.log('✅ [ORCHESTRATION] AI response added to session successfully');
           } else {
-            console.warn('⚠️ [ORCHESTRATION] No active session; skipping adding AI response');
+            console.warn('⚠️ [ORCHESTRATION] No active session from signals; skipping adding AI response');
+            console.warn('🔍 [ORCHESTRATION] Debug - currentSessionId:', currentSessionId, 'addConversationMessage:', !!addConversationMessage);
           }
           
           // Clear loading and processing states
@@ -1215,7 +1186,7 @@ export default function ChatMessages() {
         }
       });
     }
-  }, [processedMessageIds, wsState.isConnected, connectWebSocket]);
+  }, []); // Empty dependency array - orchestration listener should only be set up once
 
   useEffect(() => {
     const handleResize = () => {

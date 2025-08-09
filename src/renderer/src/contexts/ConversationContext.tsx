@@ -606,33 +606,6 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
 
   // Message management with backend persistence
   const addMessage = useCallback(async (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
-    // Enhanced duplicate detection for AI messages
-    if (message.sender === 'ai') {
-      const existingMessages = messages[sessionId] || [];
-      const recentAiMessages = existingMessages.slice(-8).filter(msg => msg.sender === 'ai');
-      
-      const isDuplicate = recentAiMessages.some(msg => {
-        // Exact text match
-        const exactMatch = msg.text === message.text;
-        
-        // Recent time window (20 seconds)
-        const recentTime = Date.now() - new Date(msg.timestamp).getTime() < 20000;
-        
-        // Similar text match for longer messages
-        const similarMatch = msg.text.length > 30 && message.text.length > 30 && 
-                             msg.text.substring(0, 30) === message.text.substring(0, 30);
-        
-        // Short generic responses (like "I'll get it done.")
-        const shortGenericMatch = message.text.length < 50 && msg.text === message.text;
-        
-        return exactMatch || (recentTime && similarMatch) || shortGenericMatch;
-      });
-
-      if (isDuplicate) {
-        console.log('🚫 [CONVERSATION-CONTEXT] Blocked duplicate AI message:', message.text.substring(0, 50) + '...');
-        return;
-      }
-    }
 
     try {
       // Save to backend database first
