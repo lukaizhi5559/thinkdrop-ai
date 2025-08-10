@@ -924,23 +924,39 @@ export default function ChatMessages() {
     });
   }, [isUserScrolling]);
 
-  // Auto-scroll to bottom when new messages arrive or streaming updates
+  // Auto-scroll to bottom when new messages arrive (only if user is not manually scrolling)
   useEffect(() => {
     const hasMessages = displayMessages.length > 0;
-    if (hasMessages) {
+    if (hasMessages && !isUserScrolling) {
       const lastMessage = displayMessages[displayMessages.length - 1];
       if (lastMessage && lastMessage.sender === 'ai' && !lastMessage.isStreaming) {
         console.log('🔄 Auto-scrolling after AI message completion');
         scrollToBottom({ smooth: true, force: true });
       }
     }
-  }, [displayMessages, scrollToBottom, setShowScrollButton]);
+  }, [displayMessages, scrollToBottom, isUserScrolling]);
 
   // Handle scroll to bottom button click
   const handleScrollToBottom = useCallback(() => {
     setIsUserScrolling(false);
     scrollToBottom({ smooth: true, force: true });
   }, [scrollToBottom]);
+
+  // Handle scroll detection for scroll button visibility
+  const handleScroll = useCallback(() => {
+    if (!messagesContainerRef.current) return;
+    
+    const container = messagesContainerRef.current;
+    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 100;
+    
+    // Show scroll button when not near bottom and there are messages
+    setShowScrollButton(!isNearBottom && displayMessages.length > 0);
+    
+    // Track user scrolling
+    if (!isProgrammaticScrolling.current) {
+      setIsUserScrolling(!isNearBottom);
+    }
+  }, [displayMessages.length]);
 
 
   useEffect(() => {
@@ -1023,16 +1039,18 @@ export default function ChatMessages() {
 
   useEffect(() => {
     const handleResize = () => {
-      // Force a re-render to recalculate scroll area
-      const scrollContainer = document.querySelector('.chat-messages-scroll');
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      // Only auto-scroll on resize if user is not manually scrolling
+      if (!isUserScrolling) {
+        const scrollContainer = document.querySelector('.chat-messages-scroll');
+        if (scrollContainer) {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
       }
     };
 
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, []);
+  }, [isUserScrolling]);
 
   useEffect(() => {
     if (!currentStreamingMessage) return;
@@ -1061,6 +1079,7 @@ export default function ChatMessages() {
         <div 
           ref={messagesContainerRef}
           className="overflow-y-auto overflow-x-hidden p-4 flex-1"
+          onScroll={handleScroll}
           style={{ 
             WebkitAppRegion: 'no-drag',
             // flex: '1 1 0%', // Explicit flex-grow with flex-basis 0

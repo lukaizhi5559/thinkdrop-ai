@@ -5,7 +5,7 @@ import type { ConversationSession, ChatMessage } from '../contexts/ConversationC
 export const sessions = signal<ConversationSession[]>([]);
 export const activeSessionId = signal<string | null>(null);
 export const messages = signal<Record<string, ChatMessage[]>>({});
-export const isSidebarOpen = signal(false);
+export const isSidebarOpen = signal(true);
 export const isLoading = signal(false);
 export const error = signal<string | null>(null);
 
