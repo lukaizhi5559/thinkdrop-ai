@@ -478,8 +478,8 @@ export default function ChatMessages() {
 
   // Handle local LLM fallback when backend is disconnected
   const handleLocalLLMCall = useCallback(async (messageText: string) => {
-    let isMemoryRetrieve = false;
-    let isQuestionIntent = false;
+    let isThinkingMsg = false;
+    
     try {
       console.log('🤖 Starting local LLM processing...');
       setIsProcessingLocally(true);
@@ -528,34 +528,28 @@ export default function ChatMessages() {
         
         console.log('🎯 [RESPONSE] Extracted AI response:', aiResponseText);
         console.log('🎯 [RESPONSE] Intent classification:', result.intentClassificationPayload?.primaryIntent);
+         
         
-        // For memory_retrieve intents, use the response in ThinkingIndicator and wait for orchestration
-        // if (result.intentClassificationPayload?.primaryIntent === 'memory_retrieve') {
-        //   isMemoryRetrieve = true;
-        //   // Set the thinking message to the initial response
-        //   const thinkingMsg = result.data || 'Let me check what I have stored about that.';
-        //   console.log('🎯 [THINKING] Setting thinking message for memory_retrieve:', thinkingMsg);
-        //   setInitialThinkingMessage(thinkingMsg);
+        // For question intents, memory operations, show suggested response in ThinkingIndicator while processing
+        if (
+            result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
+            result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
+            result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
+            result.intentClassificationPayload?.primaryIntent === 'question' ||
+            result.intentClassificationPayload?.primaryIntent === 'command'
+        ) {
+          isThinkingMsg = true;
+          // Set the thinking message to the suggested response
+          const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
+          setInitialThinkingMessage(thinkingMsg);
           
-        //   // Keep processing state active to show ThinkingIndicator
-        //   console.log('🎯 [THINKING] Keeping processing state active for memory_retrieve');
-        //   return;
-        // }
+          // Ensure we stay in processing state to keep ThinkingIndicator visible
+          console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
+          // Don't add the AI message yet - wait for orchestration update
+          return;
+        }
         
-        // For question intents, show suggested response in ThinkingIndicator while processing
-        // if (result.intentClassificationPayload?.primaryIntent === 'question') {
-        //   isQuestionIntent = true;
-        //   // Set the thinking message to the suggested response
-        //   const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-        //   setInitialThinkingMessage(thinkingMsg);
-          
-        //   // Ensure we stay in processing state to keep ThinkingIndicator visible
-        //   console.log('🎯 [THINKING] Keeping processing state active for question');
-        //   // Don't add the AI message yet - wait for orchestration update
-        //   return;
-        // }
-        
-        // Add to conversation context if we have an active session
+        // Add to conversation context if we have an active session (only for non-orchestrated responses)
         // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
         const currentSessionId = signals.activeSessionId.value;
         if (currentSessionId && signalsAddMessage) {
@@ -599,12 +593,12 @@ export default function ChatMessages() {
       }
     } finally {
       // Only clear processing state if not waiting for memory retrieve or question orchestration
-      if (!isMemoryRetrieve && !isQuestionIntent) {
+      if (!isThinkingMsg) {
       console.log('🎯 [THINKING] Clearing processing state in finally block');
       setIsProcessingLocally(false);
       setIsLoading(false);
       } else {
-        console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory:', isMemoryRetrieve, 'question:', isQuestionIntent);
+        console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory, question, command:', isThinkingMsg);
       }
       scrollToBottom({ smooth: true, force: true });
     }

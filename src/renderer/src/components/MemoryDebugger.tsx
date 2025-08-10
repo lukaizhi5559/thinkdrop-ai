@@ -302,11 +302,31 @@ const MemoryDebugger = () => {
     console.log('🚀 MemoryDebugger component mounted, loading memories...');
     loadMemories(false, '');
     
+    // Listen for orchestration updates to auto-refresh when memories are stored
+    const handleOrchestrationUpdate = (_event: any, data: any) => {
+      console.log('🔄 MemoryDebugger received orchestration update:', data);
+      
+      // Refresh memory list when memory operations complete
+      if (data.handledBy === 'UserMemoryAgent' && 
+          (data.method === 'local_memory_store' || data.method === 'memory_store')) {
+        console.log('🔄 Auto-refreshing memory list after memory store operation');
+        setTimeout(() => {
+          loadMemories(false, searchQuery);
+        }, 500); // Small delay to ensure database write is complete
+      }
+    };
+
+    // Add the listener if available
+    if (window.electronAPI?.onOrchestrationUpdate) {
+      window.electronAPI.onOrchestrationUpdate(handleOrchestrationUpdate);
+    }
+    
     // Cleanup function to track unmounting
     return () => {
       console.log('🚨 MemoryDebugger component unmounting!');
+      // Note: No explicit listener removal needed as component unmount handles cleanup
     };
-  }, []);
+  }, [searchQuery]);
   
   // Check for new memories when memories array changes
   useEffect(() => {

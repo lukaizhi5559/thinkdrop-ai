@@ -166,10 +166,14 @@ ${prompt}<|end|>
       // Use regular phi4-mini model for natural language responses - optimized for speed
       queryOptions = {
         model: 'phi4-mini:latest',
+        timeout: 10000,
         temperature: 0.05,  // Even lower for faster, more deterministic responses
-        max_tokens: 50,     // Reduced for faster generation
+        max_tokens: 120,     // Reduced for faster generation
         top_p: 0.9,         // Add top_p for faster sampling
-        repeat_penalty: 1.1 // Prevent repetition for concise responses
+        repeat_penalty: 1.1, // Prevent repetition for concise responses
+        // nice-to-haves if your runner supports them:
+        seed: 7,           // deterministic runs
+        stop: ["<|end|>", "</s>"]
       };
 
       const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
@@ -240,8 +244,14 @@ ${prompt}<|end|>
         // Use regular phi4-mini model for natural language responses
         queryOptions = {
           model: 'phi4-mini:latest',
-          temperature: 0.3,
-          max_tokens: 150
+          timeout: 10000,
+          temperature: 0.2,     // low, but not brittle
+          top_p: 0.9,           // keeps some variety without drift
+          max_tokens: 120,      // enough for 1–2 crisp sentences + edge cases
+          repeat_penalty: 1.05, // gentle nudge against loops
+          // nice-to-haves if your runner supports them:
+          seed: 7,           // deterministic runs
+          stop: ["<|end|>", "</s>"]
         };
       } else {
         thinkdropPrompt = `${AGENT_FORMAT.basePrompt()}

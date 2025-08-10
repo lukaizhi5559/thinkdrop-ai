@@ -1863,7 +1863,9 @@ Answer:`,
         if (entities.person && entities.person.length > 0) queryParts.push(...entities.person);
         if (entities.location && entities.location.length > 0) queryParts.push(...entities.location);
         if (entities.event && entities.event.length > 0) queryParts.push(...entities.event);
-        
+        if (entities.items && entities.items.length > 0) queryParts.push(...entities.items);
+        if (entities.contact && entities.contact.length > 0) queryParts.push(...entities.contact);
+
         if (queryParts.length > 0) {
           searchQuery = queryParts.join(' ');
           console.log('✅ Enhanced search query from entities:', searchQuery);
@@ -1970,32 +1972,42 @@ Answer:`,
           const isUpcomingQuery = /\b(coming|happening|scheduled|planned|upcoming|next|future)\b/i.test(userMessage);
           
           let prompt;
-          if (isUpcomingQuery) {
-            prompt = `You are Thinkdrop AI. Use ONLY the memory information provided below to answer. Do NOT provide generic responses.
+if (isUpcomingQuery) {
+  prompt = `
+Use ONLY the memory information provided below to answer. Do NOT provide generic responses.
 
 MEMORY INFORMATION:
 ${memoryContext}
 
 USER QUESTION: "${userMessage}"
 
-INSTRUCTIONS: Based on the memory above, answer what upcoming events/items are scheduled. If the memory shows "nothing shows up at all" or similar, respond with "Based on my memory, nothing shows up at all" or similar. Use the exact memory content. Do NOT say you cannot access calendars.`;
-          } else {
-            prompt = `You are Thinkdrop AI. Use ONLY the memory information provided below to answer. Do NOT provide generic responses about being an AI or lacking access to data.
+INSTRUCTIONS:
+Based on the memory above, answer what upcoming events/items are scheduled.
+If the memory shows "nothing shows up at all" or similar, respond with exactly that wording (or a close variant).
+Use the exact memory content. Do NOT say you cannot access calendars.
+  `.trim();
+} else {
+  prompt = `
+Use ONLY the memory information provided below to answer. Do NOT provide generic responses about being an AI or lacking access to data.
 
 MEMORY INFORMATION:
 ${memoryContext}
 
 USER QUESTION: "${userMessage}"
 
-INSTRUCTIONS: Answer using ONLY the memory information above. If the memory says "nothing shows up at all", respond with that information. Do NOT give generic AI disclaimers.`;
-          }
+INSTRUCTIONS:
+Answer using ONLY the memory information above.
+If the memory says "nothing shows up at all", respond with exactly that wording (or a close variant).
+Do NOT give generic AI disclaimers.
+  `.trim();
+}
           
           const phi3Result = await this.executeAgent('Phi3Agent', {
             action: 'query-phi3',
             prompt: prompt,
             options: {
-              maxTokens: 30,
-              temperature: 0.1
+              maxTokens: 60,
+              temperature: 0.2
             }
           }, context);
           
@@ -2162,9 +2174,14 @@ INSTRUCTIONS: Answer using ONLY the memory information above. If the memory says
         }
         
         const phi3Result = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3',
+          action: 'query-phi3-fast',
           prompt: concisePrompt,
-          options: { timeout: 10000, maxTokens: 50 }
+          options: { 
+            timeout: 10000, 
+            maxTokens: 120,
+            temperature: 0.2,
+            repeat_penalty: 1.1
+          }
         }, {
           ...context,
           executeAgent: this.executeAgent.bind(this)
