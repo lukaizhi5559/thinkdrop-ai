@@ -303,7 +303,6 @@ const AGENT_FORMAT = {
           
           const countResult = await AGENT_FORMAT.database.query(countQuery, [session.id]);
           const messageCount = countResult[0]?.count || 0;
-          console.log(`📊 Session ${session.id}: ${messageCount} messages`);
           
           // Get the actual last message text and timestamp
           let lastMessage = null;
@@ -887,7 +886,6 @@ const AGENT_FORMAT = {
     }
 
     try {
-      console.log(`📊 [ConversationSessionAgent] Querying messages for session: ${sessionId}`);
       const messages = await AGENT_FORMAT.database.query(`
         SELECT * FROM conversation_messages 
         WHERE session_id = ? 

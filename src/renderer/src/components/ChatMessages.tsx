@@ -109,7 +109,7 @@ export default function ChatMessages() {
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
-  const [showScrollButton] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
   const isProgrammaticScrolling = useRef(false);
   const orchestrationListenerSetup = useRef<boolean>(false);
 
@@ -476,22 +476,22 @@ export default function ChatMessages() {
       
       // console.log('📝 No relevant memories found, proceeding with LLM...', semanticResults);
       
-      // if (!wsState.isConnected) {
-      //   console.warn('⚠️ WebSocket not connected, using local LLM fallback');
-      //   await handleLocalLLMCall(messageText);
-      //   return;
-      // }
+      if (!wsState.isConnected) {
+        console.warn('⚠️ WebSocket not connected, using local LLM fallback');
+        await handleLocalLLMCall(messageText);
+        return;
+      }
       
       // // Send message via WebSocket for backend processing
-      // await sendLLMRequest({
-      //   prompt: messageText,
-      //   provider: 'openai',
-      //   options: {
-      //     taskType: 'ask',
-      //     stream: true,
-      //     temperature: 0.7
-      //   }
-      // });
+      await sendLLMRequest({
+        prompt: messageText,
+        provider: 'openai',
+        options: {
+          taskType: 'ask',
+          stream: true,
+          temperature: 0.7
+        }
+      });
       
     } catch (error) {
       console.error('❌ Failed to send message:', error);
@@ -609,8 +609,8 @@ export default function ChatMessages() {
       };
       
       // Add error message to conversation context if we have an active session
-      if (activeSessionId && addConversationMessage) {
-        await addConversationMessage(activeSessionId, {
+      if (activeSessionId && signalsAddMessage) {
+        await signalsAddMessage(activeSessionId, {
           text: errorMessage.text,
           sender: 'ai',
           sessionId: activeSessionId,
@@ -960,8 +960,13 @@ export default function ChatMessages() {
         scrollToBottom({ smooth: true, force: true });
       }
     }
-  }, [displayMessages, scrollToBottom]);
+  }, [displayMessages, scrollToBottom, setShowScrollButton]);
 
+  // Handle scroll to bottom button click
+  const handleScrollToBottom = useCallback(() => {
+    setIsUserScrolling(false);
+    scrollToBottom({ smooth: true, force: true });
+  }, [scrollToBottom]);
 
 
   useEffect(() => {
