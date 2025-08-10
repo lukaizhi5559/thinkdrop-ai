@@ -824,11 +824,26 @@ const AGENT_FORMAT = {
 
   // Message Management Methods
   async addMessage(options, context) {
-    const { sessionId, text, sender, metadata = {} } = options;
+    // Handle both direct options and nested options structure
+    const actualOptions = options.options || options;
+    const { sessionId, text, sender, metadata = {} } = actualOptions;
+
+    console.log('🔍 [DEBUG] addMessage received:', { sessionId, text, sender, metadata });
+
+    // Validate required parameters
+    if (!sessionId || !text || !sender) {
+      console.error('❌ [DEBUG] Missing required parameters:', { sessionId, text, sender });
+      return {
+        success: false,
+        error: 'Missing required parameters: sessionId, text, and sender are required'
+      };
+    }
 
     try {
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const timestamp = new Date().toISOString();
+
+      console.log('🔍 [DEBUG] About to insert with parameters:', [messageId, sessionId, text, sender, timestamp, JSON.stringify(metadata)]);
 
       await AGENT_FORMAT.database.run(`
         INSERT INTO conversation_messages (id, session_id, text, sender, timestamp, metadata)

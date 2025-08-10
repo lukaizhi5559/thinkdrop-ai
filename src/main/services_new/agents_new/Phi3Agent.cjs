@@ -119,6 +119,8 @@ const AGENT_FORMAT = {
       switch (action) {
         case 'query-phi3':
           return await AGENT_FORMAT.queryPhi3(params, context);
+        case 'query-phi3-fast':
+          return await AGENT_FORMAT.queryPhi3Fast(params, context);
         case 'classify-intent':
           return await AGENT_FORMAT.classifyIntent(params, context);
         case 'check-availability':
@@ -135,6 +137,70 @@ const AGENT_FORMAT = {
         error: error.message,
         timestamp: new Date().toISOString()
       };
+    }
+  },
+
+  async queryPhi3Fast(params, context) {
+    try {
+      const { prompt, options = {} } = params;
+      
+      if (!prompt) {
+        throw new Error('Prompt is required for query-phi3 action');
+      }
+      
+      if (!AGENT_FORMAT.isAvailable) {
+        throw new Error('Phi3 is not available');
+      }
+      
+      console.log(`🤖 Querying Phi3 with prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
+     
+      thinkdropPrompt = 
+`<|system|>
+You are ThinkDrop AI, a helpful assistant. For questions, provide a brief, direct answer (1-2 sentences max). For other requests, describe what the user wants to do.
+Be concise and to the point.<|end|>
+<|user|>
+${prompt}<|end|>
+<|assistant|> 
+`.trim();
+      
+      // Use regular phi4-mini model for natural language responses - optimized for speed
+      queryOptions = {
+        model: 'phi4-mini:latest',
+        temperature: 0.05,  // Even lower for faster, more deterministic responses
+        max_tokens: 50,     // Reduced for faster generation
+        top_p: 0.9,         // Add top_p for faster sampling
+        repeat_penalty: 1.1 // Prevent repetition for concise responses
+      };
+
+      const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
+      
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, { ...options, ...queryOptions });
+          
+          console.log('✅ Phi3 query successful');
+          
+          return {
+            success: true,
+            action: 'query-phi3',
+            response: result.trim(),
+            attempt,
+            timestamp: new Date().toISOString()
+          };
+        } catch (error) {
+          console.warn(`🔄 Phi3 attempt ${attempt}/${maxRetries} failed:`, error.message);
+          
+          if (attempt === maxRetries) {
+            throw new Error(`Phi3 failed after ${maxRetries} attempts: ${error.message}`);
+          }
+          
+          // Wait before retry (exponential backoff)
+          await AGENT_FORMAT.sleep(1000 * attempt);
+        }
+      }
+    } catch (error) {
+      console.error('❌ Phi3 query failed:', error);
+      throw error;
     }
   },
 
@@ -163,11 +229,14 @@ const AGENT_FORMAT = {
       let queryOptions = {};
       
       if (isScreenAnalysis) {
-        thinkdropPrompt = `You are Thinkdrop AI, a helpful desktop assistant. When analyzing screen content, provide brief, clear descriptions focusing on the main elements visible. Be concise and practical.
-
-${prompt}
-
-Provide a short, helpful response (2-3 sentences max) describing what you see.`;
+        thinkdropPrompt = 
+`<|system|>
+You are ThinkDrop AI, a helpful assistant. For questions, provide a brief, direct answer (1-2 sentences max). For other requests, describe what the user wants to do.
+Be concise and to the point.<|end|>
+<|user|>
+${prompt}<|end|>
+<|assistant|> 
+`.trim();
         // Use regular phi4-mini model for natural language responses
         queryOptions = {
           model: 'phi4-mini:latest',
@@ -550,9 +619,6 @@ ${message}<|end|>
   },
   
   generateIdentityResponse(lowerMessage) {
-    // Get the full basePrompt content for reference
-    const baseContent = this.basePrompt();
-    
     // Determine response type based on question focus
     if (lowerMessage.includes('believe') || lowerMessage.includes('belief') || lowerMessage.includes('worldview') || lowerMessage.includes('values') || lowerMessage.includes('stand for')) {
       return `I believe there is one true God, as revealed in the Bible — eternal, sovereign, and unchanging. God exists in three persons: the Father, the Son (Jesus Christ), and the Holy Spirit — co-equal and co-eternal in the unity of the Trinity.

@@ -99,7 +99,7 @@ function App() {
         <ConversationSidebar />
         
         {/* SidebarToggle - only show in unified interface mode (not in legacy modes) */}
-        {currentView === 'chat' && (
+        {(!currentView || currentView === 'chat') && (
           <div className="fixed top-16 left-4 z-10">
             <SidebarToggle />
           </div>

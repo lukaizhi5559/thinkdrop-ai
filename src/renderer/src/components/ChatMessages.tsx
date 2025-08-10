@@ -10,7 +10,6 @@ import {
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import MarkdownRenderer from './Markdown';
-import { useConversation } from '../contexts/ConversationContext';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 // import { useLocalLLM } from '../contexts/LocalLLMContext';
 
@@ -32,6 +31,8 @@ export default function ChatMessages() {
     logDebugState
   } = useConversationSignals();
 
+
+
   // LocalLLM integration comment out for now
   // const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
   
@@ -52,20 +53,7 @@ export default function ChatMessages() {
     }
   });
 
-  /**
-   * 
-   * LEGACY: Keep minimal context for backward compatibility during migration
-   * 
-   */
-  const { 
-    getSessionMessages, 
-    addMessage: addConversationMessage
-  } = useConversation();
-  /**
-   * 
-   * LEGACY: END
-   * 
-   */
+
 
   // Use signals as primary source of truth
   const sessions = signals.sessions.value;
@@ -132,19 +120,19 @@ export default function ChatMessages() {
     }
   }, [activeSessionId, sessions]);
   
-  // Get messages for the active session only from ConversationContext
+  // Get messages for the active session only from signals
   const displayMessages = React.useMemo(() => {
     if (!activeSessionId) {
       console.log('📝 [DISPLAY] No active session, showing empty messages');
       return [];
     }
     
-    const sessionMessages = getSessionMessages(activeSessionId);
+    const sessionMessages = signals.activeMessages.value || [];
     console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
     console.log('📝 [DISPLAY] Session messages:', sessionMessages);
     
     // Convert conversation messages to ChatMessage format
-    const converted = sessionMessages.map(msg => ({
+    const converted = sessionMessages.map((msg: any) => ({
       id: msg.id,
       text: msg.text,
       sender: msg.sender,
@@ -154,7 +142,7 @@ export default function ChatMessages() {
     
     console.log('📝 [DISPLAY] Converted messages:', converted);
     return converted;
-  }, [activeSessionId, getSessionMessages]);
+  }, [activeSessionId, signals.activeMessages.value]);
   
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = async (message: any) => {
@@ -453,43 +441,24 @@ export default function ChatMessages() {
         messageText: messageText.substring(0, 50) + '...'
       });
       
-      // 🎯 STEP 1: Try semantic search first for relevant stored memories
-      console.log('🔍 Attempting semantic search first...');
-      // const semanticResults = await trySemanticSearchFirst(messageText);
-      
-      // if (semanticResults && semanticResults.hasRelevantResults) {
-      //   console.log('✅ Found relevant memories, using semantic search results');
-        
-      //   // Add to conversation context if we have an active session
-      //   if (currentSessionId && addConversationMessage) {
-      //     await addConversationMessage(currentSessionId, {
-      //       text: semanticResults.response,
-      //       sender: 'ai',
-      //       sessionId: currentSessionId,
-      //       metadata: { source: 'semantic_search' }
-      //     });
-      //   }
-        
-      //   setIsLoading(false);
-      //   return;
-      // }
-      
-      // console.log('📝 No relevant memories found, proceeding with LLM...', semanticResults);
+      // 🎯 ENHANCED PIPELINE: Use existing backend infrastructure with better orchestration
+      console.log('🧠 [ENHANCED-PIPELINE] Starting message processing with existing backend...');
       
       if (!wsState.isConnected) {
-        console.warn('⚠️ WebSocket not connected, using local LLM fallback');
+        console.warn('⚠️ WebSocket not connected, using enhanced local LLM pipeline');
         await handleLocalLLMCall(messageText);
         return;
       }
       
-      // // Send message via WebSocket for backend processing
+      // Send message via WebSocket for backend processing with enhanced orchestration
       await sendLLMRequest({
         prompt: messageText,
         provider: 'openai',
         options: {
           taskType: 'ask',
           stream: true,
-          temperature: 0.7
+          temperature: 0.7,
+          useSemanticFirst: true // Flag to indicate semantic-first processing preference
         }
       });
       
@@ -523,9 +492,14 @@ export default function ChatMessages() {
         throw new Error('Electron API not available');
       }
       
+      // 🎯 ENHANCED: Use existing backend pipeline with semantic-first preferences
       const result = await window.electronAPI.llmQueryLocal(messageText, {
         temperature: 0.0,
-        maxTokens: 50
+        maxTokens: 50,
+        // Enhanced options to guide the existing backend pipeline
+        preferSemanticSearch: true,    // Hint to prioritize semantic search in orchestration
+        enableIntentClassification: true, // Use the sophisticated intent parsers
+        useAgentOrchestration: true    // Leverage the full agent orchestration pipeline
       });
       
       if (result.success) {
@@ -540,6 +514,11 @@ export default function ChatMessages() {
           if (match) {
             aiResponseText = match[1].trim();
           }
+        }
+        
+        // Check for early question handler response first
+        if (!aiResponseText && result.response) {
+          aiResponseText = result.response;
         }
         
         // result.data or suggestedResponse
@@ -577,18 +556,19 @@ export default function ChatMessages() {
         // }
         
         // Add to conversation context if we have an active session
-        if (activeSessionId) {
-          // DISABLED: This causes duplicates since orchestration broadcast handler also adds messages
-          addConversationMessage(activeSessionId, {
+        // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
+        const currentSessionId = signals.activeSessionId.value;
+        if (currentSessionId && signalsAddMessage) {
+          await signalsAddMessage(currentSessionId, {
             text: aiResponseText,
             sender: 'ai',
-            sessionId: activeSessionId,
+            sessionId: currentSessionId,
             metadata: { intent: result.intentClassificationPayload?.primaryIntent }
           });
-          console.log('📝 [ORCHESTRATION] AI response will be added via orchestration broadcast handler');
+          console.log('📝 [LOCAL-LLM] AI response added to session:', currentSessionId);
         } else {
           // No active session - message will be handled by orchestration
-          console.log('⚠️ [LOCAL-LLM] No active session for AI response');
+          console.log('⚠️ [LOCAL-LLM] No active session for AI response - currentSessionId:', currentSessionId, 'signalsAddMessage:', !!signalsAddMessage);
         }
         
         console.log('✅ Local LLM processing completed successfully');
@@ -831,7 +811,7 @@ export default function ChatMessages() {
     // Exit edit mode
     setEditingMessageId(null);
     setEditingText('');
-  }, [editingText, activeSessionId, addConversationMessage, handleSendMessage]);
+  }, [editingText, activeSessionId, handleSendMessage]);
 
   const handleEditMessage = useCallback((messageId: string, messageText: string) => {
     console.log('✏️ Edit message:', messageId, messageText);
@@ -1019,9 +999,9 @@ export default function ChatMessages() {
           const currentSessionId = signals.activeSessionId.value;
           console.log('🔍 [ORCHESTRATION] Current session ID from signals:', currentSessionId);
           
-          if (currentSessionId && addConversationMessage) {
+          if (currentSessionId && signalsAddMessage) {
             console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', currentSessionId);         
-            await addConversationMessage(currentSessionId, {
+            await signalsAddMessage(currentSessionId, {
               text: updateData.response,
               sender: 'ai',
               sessionId: currentSessionId,
@@ -1034,7 +1014,7 @@ export default function ChatMessages() {
             console.log('✅ [ORCHESTRATION] AI response added to session successfully');
           } else {
             console.warn('⚠️ [ORCHESTRATION] No active session from signals; skipping adding AI response');
-            console.warn('🔍 [ORCHESTRATION] Debug - currentSessionId:', currentSessionId, 'addConversationMessage:', !!addConversationMessage);
+            console.warn('🔍 [ORCHESTRATION] Debug - currentSessionId:', currentSessionId, 'signalsAddMessage:', !!signalsAddMessage);
           }
           
           // Clear loading and processing states

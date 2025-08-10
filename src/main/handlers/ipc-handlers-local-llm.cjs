@@ -18,6 +18,10 @@ parserFactory.configure({
 let currentParser = null;
 
 // ========================================
+// THIN IPC HANDLERS - BUSINESS LOGIC MOVED TO ORCHESTRATOR
+// ========================================
+
+// ========================================
 // LEGACY LLM COMPATIBILITY HANDLERS
 // ========================================
 
@@ -59,122 +63,86 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
-      console.log('🚀 [FAST PATH] Local LLM with intent classification:', prompt.substring(0, 50) + '...');
+      console.log('🚀 [SEMANTIC-FIRST] Local LLM with enhanced semantic-first processing:', prompt.substring(0, 50) + '...');
+      console.log('🎯 [SEMANTIC-FIRST] Options received:', {
+        preferSemanticSearch: options.preferSemanticSearch,
+        enableIntentClassification: options.enableIntentClassification,
+        useAgentOrchestration: options.useAgentOrchestration
+      });
 
-      let intentResult;
-
-      // ULTRA-FAST PATH: Try parser classification first
-      if (currentParser) {
+      ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP 0: NER-FIRST ROUTING - Smart routing based on entities
+      ////////////////////////////////////////////////////////////////////////
+      let routingDecision = null;
+      if (currentParser && currentParser.routeWithNER) {
         try {
-          const config = parserFactory.getConfig();
-          const parserName = config.useDistilBert ? 'DistilBertIntentParser' : 
-                            (config.useHybrid ? 'HybridIntentParser' : 
-                            (config.useFast ? 'FastIntentParser' : 'IntentParser'));
-          console.log(`⚡ ULTRA-FAST PATH: Trying ${parserName} classification...`);
-          
-          // Handle DistilBERT parser differently (uses parse() method)
-          if (config.useDistilBert && currentParser.constructor.name === 'DistilBertIntentParser') {
-            console.log('🎯 Using DistilBERT parser.parse() method...');
-            const parseResult = await currentParser.parse(prompt);
-            
-            if (parseResult && parseResult.confidence >= 0.4) {
-              console.log(`✅ ULTRA-FAST: DistilBERT classification - ${parseResult.intent} (confidence: ${(parseResult.confidence * 100).toFixed(1)}%)`);
-              
-              // Create result structure matching Phi3Agent output
-              intentResult = {
-                success: true,
-                result: {
-                  intentData: {
-                    primaryIntent: parseResult.intent,
-                    intents: [{ intent: parseResult.intent, confidence: parseResult.confidence, reasoning: parseResult.reasoning }],
-                    entities: parseResult.entities || [],
-                    requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(parseResult.intent),
-                    requiresExternalData: false,
-                    captureScreen: (parseResult.intent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
-                                  (parseResult.intent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
-                    suggestedResponse: parseResult.suggestedResponse,
-                    sourceText: prompt,
-                    chainOfThought: {
-                      step1_analysis: parseResult.reasoning,
-                      step2_reasoning: `DistilBERT confidence: ${(parseResult.confidence * 100).toFixed(1)}%`,
-                      step3_consistency: 'DistilBERT semantic classification'
-                    }
-                  }
-                }
-              };
-            }
-          } else if (currentParser.calculatePatternScores) {
-            // Use pattern matching for other parsers (Hybrid, Fast, Original)
-            const patternScores = currentParser.calculatePatternScores(prompt.toLowerCase());
-            const highestScore = Math.max(...Object.values(patternScores));
-          
-            if (highestScore > 0) {
-            // Apply same smart tie-breaking logic as IntentParser
-            const intentPriority = {
-              'memory_retrieve': 4,
-              'memory_store': 3,
-              'command': 2,
-              'question': 1,
-              'greeting': 0
-            };
-            
-            const bestIntent = Object.entries(patternScores)
-              .sort((a, b) => {
-                const scoreA = patternScores[a[0]];
-                const scoreB = patternScores[b[0]];
-                
-                // If scores are different, pick higher score
-                if (scoreA !== scoreB) {
-                  return scoreB - scoreA;
-                }
-                
-                // If scores are equal, use priority (memory_retrieve > question)
-                return (intentPriority[b[0]] || 0) - (intentPriority[a[0]] || 0);
-              })[0][0];
-            
-            console.log(`✅ ULTRA-FAST: Pattern match found - ${bestIntent} (score: ${highestScore})`);
-            
-            // Extract entities using the parser
-            let extractedEntities = [];
-            try {
-              extractedEntities = currentParser.extractEntities(prompt);
-            } catch (entityError) {
-              console.warn('⚠️ Entity extraction failed in fast path:', entityError.message);
-              extractedEntities = [];
-            }
-            
-            // Create result structure matching Phi3Agent output
-            intentResult = {
-              success: true,
-              result: {
-                intentData: {
-                  primaryIntent: bestIntent,
-                  intents: [{ intent: bestIntent, confidence: 0.9, reasoning: 'Pattern-based classification' }],
-                  entities: extractedEntities,
-                  requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(bestIntent),
-                  requiresExternalData: false,
-                  captureScreen: (bestIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
-                                (bestIntent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
-                  suggestedResponse: currentParser.getFallbackResponse(bestIntent, prompt),
-                  sourceText: prompt,
-                  chainOfThought: {
-                    step1_analysis: `Pattern-based detection for ${bestIntent}`,
-                    step2_reasoning: `High-confidence pattern match (score: ${highestScore})`,
-                    step3_consistency: 'Ultra-fast pattern classification'
-                  }
-                }
-              }
-            };
-            }
+          console.log('🎯 NER-FIRST: Using entity-based routing for optimal performance...');
+          routingDecision = await currentParser.routeWithNER(prompt);
+          if (routingDecision) {
+            console.log(`✅ NER Routing: ${routingDecision.primaryIntent} | Semantic: ${routingDecision.needsSemanticSearch} | Orchestration: ${routingDecision.needsOrchestration}`);
+          } else {
+            console.log('🤔 NER Routing: Abstained - falling back to semantic search');
           }
         } catch (error) {
-          console.warn('⚠️ IntentParser fast path failed:', error.message);
+          console.warn('⚠️ NER routing failed, using fallback:', error.message);
         }
       }
 
-      // FALLBACK PATH: Use full Phi3Agent classification if pattern matching failed
-      if (!intentResult) {
-        console.log('🎯 FALLBACK: Using full Phi3Agent classification...');
+      ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP 1: CONDITIONAL SEMANTIC SEARCH - Only when NER suggests it
+      ////////////////////////////////////////////////////////////////////////
+      if (!routingDecision || routingDecision.needsSemanticSearch) {
+        console.log('🔍 NER suggests semantic search - checking memories...');
+        const semanticResponse = await coreAgent.trySemanticSearchFirst(prompt, options);
+        if (semanticResponse) {
+          return semanticResponse;
+        }
+      } else {
+        console.log('⚡ NER routing: Skipping semantic search - not needed for this query type');
+      }
+
+      ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP 1.5: EARLY QUESTION HANDLER - Direct LLM for general knowledge
+      ////////////////////////////////////////////////////////////////////////
+      const directQuestionResponse = await coreAgent.tryDirectQuestionFirst(prompt, routingDecision, options);
+      if (directQuestionResponse) {
+        return directQuestionResponse;
+      }
+
+      ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP 2: SIMPLIFIED INTENT ASSIGNMENT - Use NER routing result
+      ////////////////////////////////////////////////////////////////////////
+      let intentResult;
+
+      // NER-FIRST SIMPLIFIED PATH: Use routing decision if available
+      if (routingDecision) {
+        console.log(`✅ NER-FIRST: Using routing decision - ${routingDecision.primaryIntent} (confidence: ${routingDecision.confidence})`);
+        
+        // Create result structure using NER routing decision
+        intentResult = {
+          success: true,
+          result: {
+            intentData: {
+              primaryIntent: routingDecision.primaryIntent,
+              intents: [{ intent: routingDecision.primaryIntent, confidence: routingDecision.confidence, reasoning: routingDecision.reasoning }],
+              entities: routingDecision.entities || {},
+              requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(routingDecision.primaryIntent),
+              requiresExternalData: false,
+              captureScreen: (routingDecision.primaryIntent === 'command' && /screenshot|capture|screen/.test(prompt.toLowerCase())) || 
+                            (routingDecision.primaryIntent === 'question' && /what.*see.*screen|what.*on.*screen|describe.*screen|analyze.*screen/.test(prompt.toLowerCase())),
+              suggestedResponse: currentParser?.getSuggestedResponse ? currentParser.getSuggestedResponse(routingDecision.primaryIntent, prompt) : 'I\'ll help you with that using my local capabilities.',
+              sourceText: prompt,
+              chainOfThought: {
+                step1_analysis: routingDecision.reasoning,
+                step2_reasoning: `NER-based routing (confidence: ${(routingDecision.confidence * 100).toFixed(1)}%)`,
+                step3_consistency: 'Entity-driven classification'
+              }
+            }
+          }
+        };
+      } else {
+        // FALLBACK PATH: Use Phi3Agent classification if NER routing failed
+        console.log('🎯 FALLBACK: NER routing unavailable, using Phi3Agent classification...');
         intentResult = await coreAgent.executeAgent('Phi3Agent', {
           action: 'classify-intent',
           message: prompt,
@@ -232,13 +200,16 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         };
       }
 
-      // Step 2: Trigger background orchestration (non-blocking)
-      console.log('🔄 Step 2: Triggering background orchestration...');
-      // Don't await this - let it run in background
-      coreAgent.handleLocalOrchestration(prompt, intentClassificationPayload, {
-        source: 'fast_local_llm_background',
-        timestamp: new Date().toISOString()
-      }).then(result => {
+      ////////////////////////////////////////////////////////////////////////
+      // STEP 3: CONDITIONAL ORCHESTRATION - Only when NER suggests it's needed
+      ////////////////////////////////////////////////////////////////////////
+      if (!routingDecision || routingDecision.needsOrchestration) {
+        console.log('🔄 Step 3: Triggering background orchestration (NER suggests needed)...');
+        // Don't await this - let it run in background
+        coreAgent.handleLocalOrchestration(prompt, intentClassificationPayload, {
+          source: 'fast_local_llm_background',
+          timestamp: new Date().toISOString()
+        }).then(result => {
         // Background orchestration completed
         
         // Broadcast orchestration update to frontend if result contains response
@@ -276,9 +247,12 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
           if (result && !result.response) console.log('  - Missing result.response');
           if (!windows) console.log('  - Missing windows parameter');
         }
-      }).catch(error => {
-        console.warn('⚠️ Background orchestration failed:', error.message);
-      });
+        }).catch(error => {
+          console.warn('⚠️ Background orchestration failed:', error.message);
+        });
+      } else {
+        console.log('⚡ NER routing: Skipping orchestration - not needed for this query type');
+      }
       
       console.log('🎉 [FAST PATH] Complete: Response + Intent Classification ready');
       
@@ -413,6 +387,11 @@ function initializeLocalLLMHandlers({
   windows
 }) {
   setupLocalLLMHandlers(ipcMain, coreAgent, windows);
+  
+  // Start background agent bootstrapping for instant first queries
+  setTimeout(() => {
+    coreAgent.bootstrapCriticalAgents();
+  }, 1000); // Small delay to let main initialization complete first
 }
 
 module.exports = {

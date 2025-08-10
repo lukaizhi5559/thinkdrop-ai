@@ -1049,6 +1049,307 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Pre-bootstrap critical agents in the background to eliminate first-query delay
+   */
+  async bootstrapCriticalAgents() {
+    console.log('🚀 [BOOTSTRAP] Starting background agent pre-warming...');
+    
+    try {
+      // Bootstrap agents in parallel for maximum speed
+      const bootstrapPromises = [
+        // SemanticEmbeddingAgent - Critical for semantic search
+        this.executeAgent('SemanticEmbeddingAgent', {
+          action: 'bootstrap'
+        }, {}).catch(err => console.warn('⚠️ SemanticEmbeddingAgent bootstrap failed:', err.message)),
+        
+        // Phi3Agent - Critical for LLM responses
+        this.executeAgent('Phi3Agent', {
+          action: 'check-availability'
+        }, {}).catch(err => console.warn('⚠️ Phi3Agent bootstrap failed:', err.message)),
+        
+        // UserMemoryAgent - Critical for memory search (using memory-list to validate connection)
+        this.executeAgent('UserMemoryAgent', {
+          action: 'memory-list',
+          limit: 1
+        }, {}).catch(err => console.warn('⚠️ UserMemoryAgent bootstrap failed:', err.message))
+      ];
+      
+      await Promise.allSettled(bootstrapPromises);
+      console.log('✅ [BOOTSTRAP] Background agent pre-warming completed');
+      
+    } catch (error) {
+      console.warn('⚠️ [BOOTSTRAP] Background bootstrapping failed:', error.message);
+    }
+  }
+
+  /**
+   * Semantic-first processing: Try semantic search before intent classification
+   * @param {string} prompt - User message
+   * @param {Object} options - Processing options
+   * @returns {Object|null} - Enhanced response if memories found, null if should continue to intent classification
+   */
+  async trySemanticSearchFirst(prompt, options = {}) {
+    if (options.preferSemanticSearch === false) {
+      console.log('🔍 [SEMANTIC-FIRST] Semantic search disabled by options, skipping...');
+      return null;
+    }
+
+    console.log('🔍 [SEMANTIC-FIRST] Attempting semantic search before intent classification...');
+    try {
+      const semanticResult = await this.executeAgent('UserMemoryAgent', {
+        action: 'memory-semantic-search',
+        query: prompt,
+        limit: 10,
+        minSimilarity: 0.2
+      }, {
+        source: 'semantic_first_orchestrator',
+        timestamp: new Date().toISOString()
+      });
+      
+      if (semanticResult.success && semanticResult.result?.results && semanticResult.result.results.length > 0) {
+        const memories = semanticResult.result.results;
+        const topScore = Math.max(...memories.map(m => m.similarity));
+        const avgTop3Score = memories.slice(0, 3).reduce((sum, m) => sum + m.similarity, 0) / Math.min(3, memories.length);
+        
+        console.log(`🎯 [SEMANTIC-FIRST] Found ${memories.length} memories - top: ${topScore.toFixed(3)}, avg3: ${avgTop3Score.toFixed(3)}`);
+        
+        // Semantic-first thresholds (optimized for fast path - more aggressive)
+        const hasRelevantMemories = topScore >= 0.25 || avgTop3Score >= 0.22;
+        
+        if (hasRelevantMemories) {
+          console.log('✅ [SEMANTIC-FIRST] FAST PATH - Using memories for immediate response');
+          
+          // Generate response using memories + Phi3
+          const memoryContext = memories.map((memory, index) => {
+            const similarity = Math.round(memory.similarity * 100);
+            return `Memory ${index + 1} (${similarity}% match): ${memory.source_text}`;
+          }).join('\n\n');
+          
+          const enhancedPrompt = `Based on these relevant memories, answer the question concisely:
+
+Memories:
+${memoryContext}
+
+Question: ${prompt}
+
+Answer based on the memories above (1-2 sentences):`;
+
+          try {
+            const phi3Result = await this.executeAgent('Phi3Agent', {
+              action: 'query-phi3-fast',
+              prompt: enhancedPrompt,
+              options: { timeout: 15000, maxTokens: 100 }
+            }, {
+              source: 'semantic_first_enhanced',
+              timestamp: new Date().toISOString()
+            });
+            
+            if (phi3Result.success && phi3Result.result?.response) {
+              console.log('🎉 [SEMANTIC-FIRST] FAST PATH SUCCESS - Returning enhanced response');
+              return {
+                success: true,
+                data: phi3Result.result.response,
+                intentClassificationPayload: {
+                  primaryIntent: 'semantic_enhanced_response',
+                  intents: [{ intent: 'semantic_enhanced_response', confidence: 0.9, reasoning: 'Semantic search found relevant memories' }],
+                  entities: [],
+                  requiresMemoryAccess: true,
+                  requiresExternalData: false,
+                  captureScreen: false,
+                  suggestedResponse: phi3Result.result.response,
+                  sourceText: prompt,
+                  memoriesUsed: memories.length,
+                  topSimilarity: topScore,
+                  method: 'semantic_first_fast_path',
+                  timestamp: new Date().toISOString()
+                }
+              };
+            }
+          } catch (phi3Error) {
+            console.warn('⚠️ [SEMANTIC-FIRST] Phi3 failed for semantic response, continuing to intent classification:', phi3Error.message);
+          }
+        }
+      }
+      
+      console.log('📝 [SEMANTIC-FIRST] No relevant memories found, proceeding to intent classification...');
+      return null;
+    } catch (semanticError) {
+      console.warn('⚠️ [SEMANTIC-FIRST] Semantic search failed, proceeding to intent classification:', semanticError.message);
+      return null;
+    }
+  }
+
+  /**
+   * Direct question processing: Handle evergreen general knowledge questions immediately with Phi3
+   * @param {string} prompt - User message
+   * @param {Object} routingDecision - NER routing decision
+   * @param {Object} options - Processing options
+   * @returns {Object|null} - Direct response if handled, null if should continue to orchestration
+   */
+  async tryDirectQuestionFirst(prompt, routingDecision, options = {}) {
+    // Handle case where NER routing failed - create fallback for potential questions
+    if (!routingDecision) {
+      // Simple heuristic: if it looks like a question, treat it as one
+      const looksLikeQuestion = /^(what|who|when|where|why|how|which|is|are|do|does|did|can|could|would|should|will)\b/i.test(prompt.trim());
+      if (!looksLikeQuestion) {
+        return null;
+      }
+      
+      // Create fallback routing decision for question-like prompts
+      routingDecision = {
+        primaryIntent: 'question',
+        confidence: 0.5,
+        entities: {},
+        needsOrchestration: true
+      };
+    }
+    
+    // Only handle questions (orchestration is expected for questions, so we'll filter ourselves)
+    if (routingDecision.primaryIntent !== 'question') {
+      return null;
+    }
+
+    const text = prompt.trim();
+
+    // Early exit: Treat modal requests as commands, not questions
+    if (/^(can|could|would|will)\s+you\b/i.test(text)) {
+      return null;
+    }
+
+    // 1) Stale-risk gate: Auto-route time-sensitive queries to orchestration
+    if (this._isStaleRisk(text)) {
+      console.log('⏰ [EARLY-QUESTION] Time-sensitive query detected, routing to orchestration');
+      return null;
+    }
+
+    // 2) General knowledge detector: Only handle evergreen, timeless questions
+    if (!this._isEvergreenGK(text)) {
+      console.log('🔍 [EARLY-QUESTION] Not detected as evergreen GK, routing to orchestration');
+      return null;
+    }
+  
+    console.log('✅ [EARLY-QUESTION] Detected as evergreen GK question');
+
+    // 3) Safety guards: Route computational/sensitive queries appropriately
+    if (this._looksComputational(text)) {
+      console.log('🔢 [EARLY-QUESTION] Computational query detected, routing to orchestration');
+      return null;
+    }
+    
+    if (this._isSensitiveDomain(text)) {
+      console.log('⚠️ [EARLY-QUESTION] Sensitive domain detected, routing to orchestration');
+      return null;
+    }
+
+    console.log('🚀 [EARLY-QUESTION] All checks passed - handling evergreen GK question directly with Phi3...');
+  console.log('🔍 [EARLY-QUESTION] Question text:', text);
+    try {
+      const phi3Agent = this.getAgent('Phi3Agent');
+      if (!phi3Agent) {
+        console.warn('⚠️ [EARLY-QUESTION] Phi3Agent not available, falling back to orchestration');
+        return null;
+      }
+
+      // Add timeout for safety
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1600);
+
+      const directResponse = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: `You are answering an evergreen general-knowledge question.
+- Be concise (2-4 sentences).
+- If the answer depends on current events or post-2023 facts, say you are not sure.
+- Do NOT invent current prices, office holders, dates, or scores.
+
+Question: ${text}
+Answer:`,
+        options: {
+          temperature: 0.2,
+          maxTokens: 180,
+          timeout: options.timeoutMs ?? 1600,
+          signal: controller.signal
+        }
+      }).finally(() => clearTimeout(timeout));
+      
+      // Validate response quality
+      const answer = directResponse?.response?.trim();
+      if (!answer || /^i('?| a)m not sure|i don'?t know/i.test(answer)) {
+        console.log('⚠️ [EARLY-QUESTION] Phi3 response uncertain, routing to orchestration');
+        return null;
+      }
+
+      if (directResponse && directResponse.response) {
+        console.log('✅ [EARLY-QUESTION] Direct Phi3 response successful');
+        console.log('🔍 [EARLY-QUESTION] Phi3 response content:', directResponse.response);
+        return {
+          success: true,
+          response: directResponse.response,
+          handledBy: 'early_question_handler',
+          method: 'direct_phi3_evergreen',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      return null;
+      
+    } catch (error) {
+      console.warn('⚠️ [EARLY-QUESTION] Direct handling failed, falling back to orchestration:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Check if query has stale-risk (time-sensitive, current events, post-2023 facts)
+   * @private
+   */
+  _isStaleRisk(text) {
+    const recencyKeywords = /\b(current|latest|today|tonight|now|this (week|month|year)|recent|up[- ]?to[- ]?date|live|breaking|update|patch|release)\b/i.test(text);
+    const staleCategories = /\b(price|cost|deal|sale|release|version|changelog|score|standings|ranking|game|match|weather|forecast|traffic|stock|crypto|exchange rate|election|president|governor|mayor|schedule|timetable|news)\b/i.test(text);
+    const futureYear = /20(2[4-9]|3\d)\b/.test(text); // 2024+ mentioned
+    // Only treat relative date phrases as stale if paired with a time unit
+    const relativeDates = /\b(yesterday|tomorrow|(last|next|this)\s+(week|month|year|night|evening|morning|quarter))\b/i.test(text);
+    
+    return recencyKeywords || staleCategories || futureYear || relativeDates;
+  }
+
+  /**
+   * Check if query is evergreen general knowledge (timeless, stable facts)
+   * @private
+   */
+  _isEvergreenGK(text) {
+    // Avoid "how to" procedures - route those elsewhere
+    if (/\bhow to\b/i.test(text)) {
+      return false;
+    }
+    
+    // Definitions, timeless facts, classical science, math theory
+    const definitionLike = /\b(what is|define|explain|describe|difference between|why does|how does\b.*\bwork)\b/i.test(text);
+    const conceptualQuestions = /\b(concept|theory|principle|law|rule|definition|meaning)\b/i.test(text);
+    const timelessTopics = /\b(photosynthesis|mitochondria|pythagorean|algorithm|http|dns|binary|sorting|recursion|data structure|gravity|evolution|geometry|algebra|calculus|thermodynamics|cellular respiration)\b/i.test(text);
+    
+    // Must not have stale-risk indicators
+    const noStaleRisk = !this._isStaleRisk(text);
+    
+    return (definitionLike || conceptualQuestions || timelessTopics) && noStaleRisk;
+  }
+
+  /**
+   * Check if query looks computational (needs calculator/tools)
+   * @private
+   */
+  _looksComputational(text) {
+    return /(\d+\s*[\+\-×x\*\/]\s*\d+)|\bpercent of\b|\b(convert|compute|calculate|solve|average|median|mode|derivative|integral|probability|p-value)\b/i.test(text);
+  }
+
+  /**
+   * Check if query is in sensitive domain (medical, legal, financial advice)
+   * @private
+   */
+  _isSensitiveDomain(text) {
+    return /\b(diagnosis|symptom|treatment|dosage|medication|legal advice|contract|lease|tax|investment|financial advice|lawsuit|medical|health)\b/i.test(text);
+  }
+
+  /**
    * Execute multiple agents in a workflow (agent-to-agent communication)
    * @param {Array} workflow - Array of {agent, params, context} objects
    * @param {Object} sharedContext - Context shared across all agents

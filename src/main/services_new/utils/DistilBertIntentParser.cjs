@@ -873,6 +873,286 @@ class DistilBertIntentParser {
     
     return mapping[nerType.toUpperCase()] || 'event';
   }
+
+  /**
+   * NER-First Routing: Use entity recognition to determine routing decisions
+   * This is much faster and more accurate than complex intent classification
+   * @param {string} message - User input message
+   * @returns {Object} Routing decision with intent, confidence, and semantic search recommendation
+   */
+  async routeWithNER(message) {
+    try {
+      console.log('🎯 NER-First Routing: Analyzing entities for fast routing...');
+      
+      // Extract entities using NER
+      const entities = await this.extractEntities(message);
+      
+      // Analyze entity patterns for routing decisions
+      const routingDecision = this.analyzeEntitiesForRouting(entities, message);
+      
+      console.log(`✅ NER Routing Decision: ${routingDecision.primaryIntent} (confidence: ${routingDecision.confidence})`);
+      console.log(`📊 Entities found:`, entities);
+      
+      return routingDecision;
+      
+    } catch (error) {
+      console.warn('⚠️ NER routing failed, using fallback:', error.message);
+      return {
+        primaryIntent: 'question',
+        confidence: 0.5,
+        needsSemanticSearch: true,
+        needsOrchestration: true,
+        entities: {},
+        reasoning: 'NER routing failed - using safe fallback'
+      };
+    }
+  }
+
+  /**
+   * Analyze extracted entities to make routing decisions using scored approach
+   * @param {Object} entities - Extracted entities by type
+   * @param {string} message - Original message for context
+   * @returns {Object} Routing decision
+   */
+  analyzeEntitiesForRouting(entities, message) {
+    const text = message.trim();
+    const tokens = this.tokenize(text);
+
+    // Extract signals
+    const whIdxs = this.indexOfTokens(tokens, ["what","when","where","who","how","why","which"]);
+    const qMark = text.endsWith("?");
+    const greetStart = /^(hi|hello|hey|greetings|good (morning|afternoon|evening))\b/i.test(text);
+    const imperativeStart = /^(save|remember|note|record|open|search|email|message|call|schedule|remind|create|delete|update|screenshot|capture)\b/i.test(text);
+    const actionIdxs = this.indexOfTokens(tokens, [
+      "save","remember","note","record","open","search","email","message","call","schedule",
+      "remind","create","delete","update","screenshot","capture","start","stop","run","execute"
+    ]);
+    const firstPerson = /\b(i|i'm|im|i've|i'd|i'll|me|my)\b/i.test(text);
+    const futureCue = /\b(tonight|tomorrow|next|upcoming|later|soon|in \d+ (min|mins|minutes|hours|days|weeks))\b/i.test(text);
+    const pastCue = /\b(yesterday|last|earlier|ago)\b/i.test(text);
+
+    // Normalize entities
+    const e = {
+      datetime: entities.datetime?.length || 0,
+      person: entities.person?.length || 0,
+      location: entities.location?.length || 0,
+      event: entities.event?.length || 0,
+      items: entities.items?.length || 0,
+      capability: entities.capability?.length || 0
+    };
+    const totalEntities = Object.values(e).reduce((a,b) => a+b, 0);
+
+    // Proximity check: action verbs near entities (if token positions available)
+    const entityTokenIdxs = entities.__tokenPositions || [];
+    const nearEntity = actionIdxs.length && entityTokenIdxs.length
+      ? actionIdxs.some(ai => entityTokenIdxs.some(ei => Math.abs(ai - ei) <= 6))
+      : actionIdxs.length > 0; // Fallback: if no token positions, allow action verbs
+
+    // Check for negation near action verbs
+    const negated = this.hasNegationNear(tokens, actionIdxs, 3);
+
+    // Modal requests and declarative abilities
+    const modalRequest = /^(can|could|would|will)\s+you\b/i.test(text) && actionIdxs.length > 0;
+    const declarativeAbility = /\bi can\b/i.test(text);
+
+    // Enhanced person detection (include group references)
+    const firstOrGroup = firstPerson || /\b(we|our|us)\b/i.test(text);
+
+    // Initialize scores
+    let scores = { memory_store: 0, memory_retrieve: 0, command: 0, question: 0, greeting: 0 };
+
+    // GREETING: Only if short, no clear request intent, and no action verbs
+    if (greetStart && tokens.length <= 6 && !imperativeStart && !(whIdxs.length || qMark) && actionIdxs.length === 0) {
+      scores.greeting += 0.85;
+    }
+
+    // Zero out greeting if there's any clear request or action verbs
+    if (greetStart && (imperativeStart || modalRequest || whIdxs.length || qMark || actionIdxs.length > 0)) {
+      scores.greeting = Math.min(scores.greeting, 0.1);
+    }
+
+    // COMMAND: Imperative start OR (action verb near entity) OR modal request, and not negated
+    if ((imperativeStart || (actionIdxs.length && nearEntity) || modalRequest) && !negated) {
+      scores.command += 0.75;
+      if (totalEntities > 0) scores.command += 0.05;
+      if (e.capability) scores.command += 0.10;
+    }
+
+    // Extra boost for modal requests ("can you...")
+    if (modalRequest && !negated) {
+      scores.command += 0.15; // Increased from 0.12 to ensure command wins over question
+    }
+
+    // Reduce command score for declarative abilities and boost memory_store
+    if (declarativeAbility) {
+      scores.command -= 0.35; // Increased penalty to ensure it doesn't route as command
+      scores.memory_store += 0.25; // Boost memory_store for "I can..." statements
+      scores.question += 0.15; // Slight boost for question consideration
+    }
+
+    // MEMORY STORE: Enhanced with more verbs and better speculative handling
+    const storeVerbIdxs = this.indexOfTokens(tokens, ["save","remember","note","record","log","track","journal","add"]);
+    const speculative = /(should|can|could)\s+i\s+(save|log|record|remember)/i.test(text);
+    const storeCues = (firstPerson && (futureCue || pastCue || e.event || e.person || e.location || e.datetime)) || storeVerbIdxs.length > 0 || declarativeAbility;
+    
+    if (storeCues && !negated) {
+      scores.memory_store += 0.70;
+      if (speculative) {
+        scores.memory_store -= 0.15; // Reduced penalty - still boost memory_store but less
+        scores.question += 0.25; // Boost question for speculative queries
+      }
+      if (e.datetime) scores.memory_store += 0.08;
+      if (e.person || e.event || e.location) scores.memory_store += 0.06;
+    }
+
+    // MEMORY RETRIEVE: Broadened patterns, no strict datetime requirement
+    const retrievePhrase = /(remind me|recall|what did (i|we) (say|tell you|plan|discuss|talk about)|what about|show me (what|the)|pull up|find (what|when|where) (i|we))/i.test(text)
+      || /\b(show|find|search)\b.*\b(my|our|previous|past|last)\b/i.test(text)
+      || /what (did|have) we (plan|discuss|say|talk about|decide)/i.test(text);
+    
+    if ((retrievePhrase || (whIdxs.length && firstOrGroup)) && !negated) {
+      scores.memory_retrieve += 0.75; // Increased from 0.72 for better confidence
+      if (e.datetime) scores.memory_retrieve += 0.06; // helpful but not required
+      if (totalEntities) scores.memory_retrieve += 0.04;
+    }
+
+    // QUESTION: WH words or question mark
+    if (whIdxs.length || qMark) {
+      scores.question += 0.65;
+      if (totalEntities) scores.question += 0.05;
+    }
+
+    // Apply penalties for negation
+    if (negated) {
+      scores.command -= 0.25;
+      scores.memory_store -= 0.25;
+    }
+
+    // Pick top intent with margin check
+    const entries = Object.entries(scores).sort((a,b) => b[1] - a[1]);
+    const [topIntent, topScore] = entries[0];
+    const [secondIntent, secondScore] = entries[1] || ['none', 0];
+    const margin = topScore - secondScore;
+
+    // Length-aware abstain + margin (less aggressive thresholds)
+    const shortUtterance = tokens.length < 3; // Only very short utterances
+    const abstain = (topScore < (shortUtterance ? 0.55 : 0.45)) || (margin < 0.05);
+    
+    const extras = { negated, totalEntities, margin };
+    const reasoning = this.explainScoring(entries, extras);
+
+    if (abstain) {
+      console.log(`🤔 [NER-ROUTING] ABSTAIN - ${reasoning}`);
+      return null; // Fall back to semantic-first
+    }
+
+    // Multi-intent tie handling: if memory_store and command are close, prefer memory_store
+    if (topIntent !== 'memory_store') {
+      const ms = scores.memory_store;
+      if (Math.abs(ms - topScore) <= 0.05 && ms > 0.6) {
+        console.log(`🔄 [NER-ROUTING] TIE-BREAK to memory_store (${ms.toFixed(2)} vs ${topScore.toFixed(2)}) + orchestration`);
+        return {
+          primaryIntent: 'memory_store',
+          confidence: ms,
+          margin: Math.abs(ms - secondScore),
+          reasoning: reasoning + '; tie-break to memory_store',
+          entities: entities,
+          requiresMemoryAccess: true,
+          requiresExternalData: false,
+          captureScreen: false,
+          alsoRunCommand: true, // Flag to run orchestration after auto-save
+          needsOrchestration: true,
+          method: 'ner_scored_routing_tiebreak'
+        };
+      }
+    }
+
+    // Determine orchestration needs (commands, memory operations, questions, and modal requests need orchestration)
+    const needsOrchestration = topIntent === 'command' || topIntent === 'memory_store' || topIntent === 'memory_retrieve' || topIntent === 'question' || modalRequest;
+
+    console.log(`🎯 [NER-ROUTING] ROUTED to ${topIntent} - ${reasoning}`);
+    
+    return {
+      primaryIntent: topIntent,
+      confidence: topScore,
+      margin: margin,
+      reasoning: reasoning,
+      entities: entities,
+      requiresMemoryAccess: topIntent === 'memory_retrieve' || topIntent === 'memory_store',
+      requiresExternalData: false,
+      captureScreen: topIntent === 'command',
+      needsOrchestration: needsOrchestration,
+      method: 'ner_scored_routing'
+    };
+  }
+
+  /**
+   * Helper methods for scored routing
+   */
+  tokenize(text) {
+    return text.toLowerCase().match(/\b[\w']+\b/g) || [];
+  }
+
+  indexOfTokens(tokens, targetList) {
+    const set = new Set(targetList);
+    const indices = [];
+    tokens.forEach((token, i) => {
+      if (set.has(token)) indices.push(i);
+    });
+    return indices;
+  }
+
+  hasNegationNear(tokens, actionIndices, window = 3) {
+    const negationWords = new Set(["don't", "dont", "do", "not", "no", "never", "stop", "cancel"]);
+    return actionIndices.some(i => {
+      for (let j = Math.max(0, i - window); j <= Math.min(tokens.length - 1, i + window); j++) {
+        if (negationWords.has(tokens[j])) return true;
+      }
+      return false;
+    });
+  }
+
+  explainScoring(sortedScores, extras) {
+    const top2 = sortedScores.slice(0, 2).map(([intent, score]) => `${intent}:${score.toFixed(2)}`).join(', ');
+    return `scores=${top2}; negated=${extras.negated}; entities=${extras.totalEntities}; margin=${extras.margin.toFixed(2)}`;
+  }
+
+  /**
+   * Legacy pattern methods (kept for backward compatibility)
+   */
+  isMemoryStoragePattern(message, entityCounts) {
+    const storageKeywords = /\b(remember|save|store|keep track|note|record|i have|i had|i will|i'm going|coming up|next week|tomorrow|yesterday)\b/i;
+    const hasTimeContext = entityCounts.datetime > 0;
+    const hasPersonOrEvent = entityCounts.person > 0 || entityCounts.event > 0;
+    const hasLocation = entityCounts.location > 0;
+    const hasItems = entityCounts.items > 0;
+    
+    return storageKeywords.test(message) && (hasTimeContext || hasPersonOrEvent || hasLocation || hasItems);
+  }
+
+  isMemoryRetrievalPattern(message, entityCounts) {
+    const retrievalKeywords = /\b(what did|when did|where did|who did|how did|what was|what about|tell me about|remind me|recall|what happened)\b/i;
+    const hasTimeContext = entityCounts.datetime > 0;
+    
+    return retrievalKeywords.test(message) && hasTimeContext;
+  }
+
+  isCommandPattern(message, entityCounts) {
+    const commandKeywords = /\b(take|capture|screenshot|screen|show|open|run|execute|start|stop)\b/i;
+    return commandKeywords.test(message);
+  }
+
+  isGreetingPattern(message) {
+    const greetingKeywords = /^(hi|hello|hey|good morning|good afternoon|good evening|greetings)(\s|$|!|\?)/i;
+    return greetingKeywords.test(message.trim());
+  }
+
+  isQuestionPattern(message) {
+    const questionWords = /\b(what|when|where|who|how|why|which|can|could|would|should|is|are|do|does|did)\b/i;
+    const endsWithQuestion = message.trim().endsWith('?');
+    
+    return questionWords.test(message) || endsWithQuestion;
+  }
 }
 
 module.exports = DistilBertIntentParser;

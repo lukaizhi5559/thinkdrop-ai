@@ -22,7 +22,7 @@ export const ThinkingIndicator: React.FC<ThinkingIndicatorProps> = ({
       {/* Thinking Message Bubble */}
       <div className="bg-gray-800/60 backdrop-blur-sm border border-white/10 rounded-2xl rounded-tl-sm px-4 py-3 max-w-xs">
         <div className="flex items-center space-x-2">
-          <span className="text-white/90 text-sm font-medium">{message}...</span>
+          <span className="text-white/90 text-sm font-medium">{message}</span>
           <div className="flex space-x-1">
             <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-bounce"></div>
             <div className="w-1.5 h-1.5 bg-teal-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
