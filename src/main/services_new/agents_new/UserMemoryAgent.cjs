@@ -2314,7 +2314,7 @@ const AGENT_FORMAT = {
     },
   
     // Validate database connection
-    async validateConnection(context) {
+    async validateConnection(context = {}) {
       try {
         // Use connection from context if available, otherwise use this.connection
         const connection = context?.connection || this.connection;
@@ -2418,7 +2418,7 @@ const AGENT_FORMAT = {
     },
   
     // Migration function to add embedding column to existing memory tables
-    async migrateMemoryTableForEmbeddings(context) {
+    async migrateMemoryTableForEmbeddings(context = {}) {
       try {
         console.log('[INFO] Checking if memory table needs embedding column migration...');
         
@@ -2629,7 +2629,7 @@ const AGENT_FORMAT = {
       console.log('[SUCCESS] Memory and memory_entities tables created');
     },
   
-    async verifyTableSchema(context) {
+    async verifyTableSchema(context = {}) {
       try {
         // Test if all required columns exist by running a sample query
         const testQuery = "SELECT id, backend_memory_id, source_text, suggested_response, primary_intent, created_at, updated_at, screenshot, extracted_text, metadata FROM memory LIMIT 1";
@@ -2741,7 +2741,7 @@ const AGENT_FORMAT = {
       }
     },
     
-    async storeMemory(params, context) {
+    async storeMemory(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -2905,7 +2905,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async retrieveMemory(params, context) {
+    async retrieveMemory(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -2983,7 +2983,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async searchMemories(params, context) {
+    async searchMemories(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -3051,7 +3051,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async deleteMemory(params, context) {
+    async deleteMemory(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -3137,7 +3137,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async listMemories(params, context) {
+    async listMemories(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -3225,7 +3225,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async updateMemory(params, context) {
+    async updateMemory(params, context = {}) {
       try {
         // Validate connection before proceeding
         await this.validateConnection(context);
@@ -3348,7 +3348,7 @@ const AGENT_FORMAT = {
       }
     },
   
-    async storeScreenshot(params, context) {
+    async storeScreenshot(params, context = {}) {
       try {
         const { screenshotData, ocrText, metadata = {} } = params;
         
@@ -3639,15 +3639,30 @@ const AGENT_FORMAT = {
           params.push(Math.min(5, limit));
         } 
         else if (queryClassification.details.position === 'last') {
-          sql = `
-            SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
-                   created_at, metadata
-            FROM conversation_messages
-            WHERE session_id = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-          `;
-          params.push(Math.min(5, limit));
+          // If this came from JUST_PATTERN (e.g., "what did I just say"),
+          // prioritize the immediate previous USER message in this session.
+          if (queryClassification.details.justPattern === true) {
+            sql = `
+              SELECT 'conversation' as source, id, text as source_text, sender, session_id,
+                     created_at, metadata
+              FROM conversation_messages
+              WHERE session_id = ? AND sender = 'user'
+              ORDER BY created_at DESC
+              LIMIT 1
+            `;
+            // No extra param needed beyond session_id
+          } else {
+            // Generic "last" (most recent messages in session regardless of sender)
+            sql = `
+              SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                     created_at, metadata
+              FROM conversation_messages
+              WHERE session_id = ?
+              ORDER BY created_at DESC
+              LIMIT ?
+            `;
+            params.push(Math.min(5, limit));
+          }
         }
         else if (queryClassification.details.messageNumber) {
           // Get message N positions ago
@@ -3661,6 +3676,19 @@ const AGENT_FORMAT = {
             LIMIT 1 OFFSET ?
           `;
           params.push(messageNum - 1);
+        }
+        else if (queryClassification.details.count) {
+          // Handle patterns like "N messages ago" or fuzzy counts mapped to a number
+          const count = Math.max(1, parseInt(queryClassification.details.count, 10) || 1);
+          sql = `
+            SELECT 'conversation' as source, id, text as source_text, sender, session_id,
+                   created_at, metadata
+            FROM conversation_messages
+            WHERE session_id = ? AND sender = 'user'
+            ORDER BY created_at DESC
+            LIMIT 1 OFFSET ?
+          `;
+          params.push(count - 1);
         }
         
         if (sql) {
@@ -3824,7 +3852,7 @@ const AGENT_FORMAT = {
       const PRONOUN = /\b(what did (i|we|you) (ask|say|tell)|what was (my|our|your) (first|last) (question|message))\b/;
 
       // Temporal/ordering cues
-      const ORDER = /\b(first|earliest|beginning|start|last|latest|most recent|previous|prior|earlier|before|after|next)\b/;
+      const ORDER = /\b(first|earliest|beginning|start|last|latest|most recent|previous|previously|prior|earlier|before|after|next)\b/;
 
       // Verbs commonly used when referring to prior turns
       const ACTION = /\b(ask(ed)?|say(d)?|tell|told|talk(ed)? about|discuss(ed)?|mention(ed)?|message(d)?|previously|earlier)\b/;
@@ -3841,8 +3869,8 @@ const AGENT_FORMAT = {
       // Show/display conversation patterns
       const DISPLAY_PATTERN = /\b(show|display|see|view).*(message|conversation|chat|history)\b|show.*me.*(message|msg)\b/;
 
-      // Negation patterns (stronger negation detection)
-      const NEGATION = /\b(don't|do not|no|never|stop|cancel|not)\b/;
+      // Negation patterns (stronger negation detection, include unicode apostrophe)
+      const NEGATION = /\b(don['’]?t|do not|no|never|stop|cancel|not)\b/;
 
       // Additional comprehensive patterns for 100% coverage
       const OVERVIEW_PATTERN = /\b(give me.*conversation.*(overview|summary)|conversation.*(overview|summary))\b/;
@@ -3871,14 +3899,27 @@ const AGENT_FORMAT = {
       // Guard against generic historical questions (e.g., "last emperor")
       const HIST_TRAP = /\b(last|first|earliest|previous)\b.*\b(emperor|president|war|century|year|season|game|movie|album|book|song|event|battle|dynasty|kingdom|empire|nation|country|city|planet|star|universe)\b/;
 
-      // Conversational if:
-      // 1. Has ordering cues AND chat reference (original dual gate)
-      // 2. OR has strong topic pattern (relaxed for topic queries)
-      // 3. OR has explicit meta references to this conversation
-      // BUT NOT if negated
+      // Conversational if any strong chat/session reference patterns are present,
+      // or ordering+chatRef, or explicit meta/topic patterns. Then exclude traps and negations.
+      const isDirectChatRef = (
+        MESSAGE_REF.test(s) ||
+        ORDINAL_MSG_PATTERN.test(s) ||
+        MESSAGES_AGO_PATTERN.test(s) ||
+        FEW_MESSAGES_PATTERN.test(s) ||
+        LAST_FEW_PATTERN.test(s) ||
+        TELL_PREVIOUSLY_PATTERN.test(s) ||
+        OVERVIEW_PATTERN.test(s) ||
+        DISPLAY_PATTERN.test(s) ||
+        JUST_PATTERN.test(s) ||
+        CATCH_ALL_PATTERNS.test(s) ||
+        FINAL_PATTERNS.test(s) ||
+        ULTIMATE_PATTERN.test(s)
+      );
+
       const isConversational = (
-        (hasOrdering && hasChatRef) || 
-        TOPIC_PATTERN.test(s) || 
+        isDirectChatRef ||
+        (hasOrdering && hasChatRef) ||
+        TOPIC_PATTERN.test(s) ||
         META.test(s)
       ) && !HIST_TRAP.test(s) && !NEGATION.test(s);
       
