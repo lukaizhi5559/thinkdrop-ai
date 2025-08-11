@@ -115,6 +115,8 @@ const AGENT_FORMAT = {
         )
       `);
 
+
+
       // Create conversation_messages table for persistent message storage
       await AGENT_FORMAT.database.run(`
         CREATE TABLE IF NOT EXISTS conversation_messages (
@@ -162,6 +164,24 @@ const AGENT_FORMAT = {
           // Don't throw - this is non-critical
         }
       }
+
+      // Create session_message_chunks table for scalable conversation context
+      // (Created after conversation_messages to avoid foreign key issues)
+      await AGENT_FORMAT.database.run(`
+        CREATE TABLE IF NOT EXISTS session_message_chunks (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL,
+          chunk_start_msg_id TEXT NOT NULL,
+          chunk_end_msg_id TEXT NOT NULL,
+          message_count INTEGER NOT NULL,
+          chunk_content TEXT NOT NULL,
+          chunk_embedding BLOB,
+          chunk_index INTEGER NOT NULL,
+          chunk_type TEXT DEFAULT 'sequential',
+          metadata TEXT DEFAULT '{}',
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
 
       console.log('✅ ConversationSessionAgent tables created successfully');
     } catch (error) {
@@ -948,6 +968,9 @@ const AGENT_FORMAT = {
             // TIER 2: Generate/Update session-level embedding
             await AGENT_FORMAT.updateSessionEmbedding(sessionId, context);
             
+            // TIER 3: Update session message chunks for scalable context
+            await AGENT_FORMAT.updateSessionChunks(sessionId, context);
+            
           } else {
             console.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
           }
@@ -1074,10 +1097,126 @@ const AGENT_FORMAT = {
     }
   },
 
+  async updateSessionChunks(sessionId, context) {
+    try {
+      console.log('🔄 [BACKGROUND] Tier 3 - Updating session chunks for:', sessionId);
+      
+      // Get all messages for this session
+      const messages = await AGENT_FORMAT.database.query(`
+        SELECT id, text, sender, timestamp FROM conversation_messages 
+        WHERE session_id = ? 
+        ORDER BY timestamp ASC
+      `, [sessionId]);
+      
+      if (messages.length === 0) {
+        console.log('⚠️ [BACKGROUND] No messages found for chunk generation');
+        return;
+      }
+      
+      const CHUNK_SIZE = 20; // Messages per chunk
+      const CHUNK_OVERLAP = 5; // Overlapping messages between chunks
+      
+      // Get existing chunks to see what needs updating
+      const existingChunks = await AGENT_FORMAT.database.query(`
+        SELECT chunk_index, chunk_end_msg_id FROM session_message_chunks 
+        WHERE session_id = ? 
+        ORDER BY chunk_index DESC 
+        LIMIT 1
+      `, [sessionId]);
+      
+      let startIndex = 0;
+      let chunkIndex = 0;
+      
+      if (existingChunks.length > 0) {
+        // Find where the last chunk ended
+        const lastChunk = existingChunks[0];
+        const lastMsgIndex = messages.findIndex(m => m.id === lastChunk.chunk_end_msg_id);
+        
+        if (lastMsgIndex >= 0) {
+          // Start new chunk with overlap from previous chunk
+          startIndex = Math.max(0, lastMsgIndex - CHUNK_OVERLAP + 1);
+          chunkIndex = lastChunk.chunk_index + 1;
+          
+          // Remove the last chunk if we're updating it
+          await AGENT_FORMAT.database.run(`
+            DELETE FROM session_message_chunks 
+            WHERE session_id = ? AND chunk_index = ?
+          `, [sessionId, lastChunk.chunk_index]);
+          
+          chunkIndex = lastChunk.chunk_index; // Reuse the index
+        }
+      }
+      
+      // Create chunks from messages
+      let chunksCreated = 0;
+      
+      while (startIndex < messages.length) {
+        const endIndex = Math.min(startIndex + CHUNK_SIZE, messages.length);
+        const chunkMessages = messages.slice(startIndex, endIndex);
+        
+        if (chunkMessages.length === 0) break;
+        
+        // Create chunk content
+        const chunkContent = chunkMessages.map(m => 
+          `${m.sender}: ${m.text} [${m.timestamp}]`
+        ).join('\n');
+        
+        // Generate embedding for chunk
+        const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+          action: 'generate-embedding',
+          text: chunkContent
+        }, context);
+        
+        if (embeddingResult.success && embeddingResult.result?.embedding) {
+          const chunkId = `chunk_${sessionId}_${chunkIndex}_${Date.now()}`;
+          
+          // Store chunk
+          await AGENT_FORMAT.database.run(`
+            INSERT INTO session_message_chunks (
+              id, session_id, chunk_start_msg_id, chunk_end_msg_id, 
+              message_count, chunk_content, chunk_embedding, chunk_index, 
+              chunk_type, metadata, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `, [
+            chunkId,
+            sessionId,
+            chunkMessages[0].id,
+            chunkMessages[chunkMessages.length - 1].id,
+            chunkMessages.length,
+            chunkContent,
+            JSON.stringify(embeddingResult.result.embedding),
+            chunkIndex,
+            'sequential',
+            JSON.stringify({
+              startTimestamp: chunkMessages[0].timestamp,
+              endTimestamp: chunkMessages[chunkMessages.length - 1].timestamp,
+              messageRange: `${startIndex + 1}-${endIndex}`
+            }),
+            new Date().toISOString()
+          ]);
+          
+          chunksCreated++;
+          console.log(`✅ [BACKGROUND] Created chunk ${chunkIndex} (${chunkMessages.length} messages)`);
+        }
+        
+        // Move to next chunk with overlap
+        startIndex = endIndex - CHUNK_OVERLAP;
+        chunkIndex++;
+        
+        // Prevent infinite loops
+        if (startIndex >= endIndex - CHUNK_OVERLAP) break;
+      }
+      
+      console.log(`✅ [BACKGROUND] Tier 3 - Created/updated ${chunksCreated} chunks for session:`, sessionId);
+      
+    } catch (error) {
+      console.error('❌ [BACKGROUND] Session chunk generation failed:', error);
+    }
+  },
+
   async listMessages(options, context) {
     const { sessionId, limit = 50, offset = 0 } = options.options || options;
 
-    console.log(`🔍 [ConversationSessionAgent] listMessages called with sessionId: ${sessionId}`);
 
     // Validate sessionId
     if (!sessionId || sessionId === 'undefined') {
@@ -1103,7 +1242,6 @@ const AGENT_FORMAT = {
         LIMIT ? OFFSET ?
       `, [sessionId, limit, offset]);
 
-      console.log(`📋 [ConversationSessionAgent] Found ${messages.length} messages for session ${sessionId}`);
       
       const result = {
         success: true,

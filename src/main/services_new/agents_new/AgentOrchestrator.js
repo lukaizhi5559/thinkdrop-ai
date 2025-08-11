@@ -951,8 +951,6 @@ export class AgentOrchestrator {
   async executeAgent(agentName, params, context = {}) {
     // ... (rest of the code remains the same)
     try {
-      console.log(`🎯 Executing ${agentName}.${params.action || 'default'}`);
-      
       const agent = await this.loadAgent(agentName);
       const dependencies = {};
 
@@ -1139,14 +1137,22 @@ export class AgentOrchestrator {
           
           let enhancedPrompt;
           if (isConversationalQuery) {
-            enhancedPrompt = `Based on these conversation memories, answer the specific question about conversation history:
+            enhancedPrompt = `You are helping the user recall specific details from their conversation history. Based on these conversation memories, provide a helpful and contextual answer:
 
 Memories:
 ${memoryContext}
 
 Question: ${prompt}
 
-Look through the memories above and provide the specific information requested. If asking about "first", find the earliest question/message. If asking about "last", find the most recent. Be specific and quote the actual content:`;
+Instructions:
+- If asking about "first" or "earliest", find and quote the very first message/question
+- If asking about "last" or "most recent", find and quote the latest message/question  
+- Always provide the actual content, not just a summary
+- Add brief context about when it occurred in the conversation
+- Be conversational and helpful, not just factual
+- If the exact content isn't clear, explain what you found and ask for clarification
+
+Answer:`.trim();
           } else {
             enhancedPrompt = `Based on these relevant memories, answer the question concisely:
 
@@ -1155,7 +1161,7 @@ ${memoryContext}
 
 Question: ${prompt}
 
-Answer based on the memories above (1-2 sentences):`;
+Answer based on the memories above (1-2 sentences):`.trim();
           }
 
           try {
@@ -1164,7 +1170,7 @@ Answer based on the memories above (1-2 sentences):`;
               prompt: enhancedPrompt,
               options: { 
                 timeout: 15000, 
-                maxTokens: isConversationalQuery ? 150 : 100,
+                maxTokens: isConversationalQuery ? 250 : 100, // More tokens for detailed conversational responses
                 temperature: 0.1 // Lower temperature for more precise conversational responses
               }
             }, {

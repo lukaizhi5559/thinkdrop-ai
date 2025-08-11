@@ -347,8 +347,12 @@ ${message}<|end|>
       const result = await AGENT_FORMAT.executeOllamaQuery(naturalPrompt, {
         ...options,
         model: 'phi4-mini:latest',
+        timeout: 10000,
         temperature: 0.2, // Lower for more focused responses
-        maxTokens: 100 // Reduced tokens for brevity
+        maxTokens: 100, // Reduced tokens for brevity
+        top_p: 0.9,           // keeps some variety without drift
+        repeat_penalty: 1.05, // gentle nudge against loops
+        stop: ['<|end|>', '</s>']
       });
       
       console.log('🎯 Raw Phi3 natural language result:', result);
