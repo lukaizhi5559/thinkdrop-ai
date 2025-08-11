@@ -611,7 +611,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       // Save to backend database first
       if ((window as any).electronAPI?.['conversation-message-add']) {
         console.log('[MESSAGE-TEXT]',message);
-        const result = await (window as any).electronAPI['conversation-message-add'](message.sessionId, {
+        const result = await (window as any).electronAPI['conversation-message-add'](sessionId, {
           text: message.text,
           sender: message.sender,
           metadata: message.metadata || {}

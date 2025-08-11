@@ -918,8 +918,10 @@ class DistilBertIntentParser {
     const text = message.trim();
     const tokens = this.tokenize(text);
 
-    // Extract signals
+    // Extract signals - Enhanced WH-word detection for contractions
     const whIdxs = this.indexOfTokens(tokens, ["what","when","where","who","how","why","which"]);
+    const whContractions = /\b(what's|when's|where's|who's|how's|why's|which's)\b/i.test(text);
+    const hasWhWord = whIdxs.length > 0 || whContractions;
     const qMark = text.endsWith("?");
     const greetStart = /^(hi|hello|hey|greetings|good (morning|afternoon|evening))\b/i.test(text);
     const imperativeStart = /^(save|remember|note|record|open|search|email|message|call|schedule|remind|create|delete|update|screenshot|capture)\b/i.test(text);
@@ -962,12 +964,12 @@ class DistilBertIntentParser {
     let scores = { memory_store: 0, memory_retrieve: 0, command: 0, question: 0, greeting: 0 };
 
     // GREETING: Only if short, no clear request intent, and no action verbs
-    if (greetStart && tokens.length <= 6 && !imperativeStart && !(whIdxs.length || qMark) && actionIdxs.length === 0) {
+    if (greetStart && tokens.length <= 6 && !imperativeStart && !(hasWhWord || qMark) && actionIdxs.length === 0) {
       scores.greeting += 0.85;
     }
 
     // Zero out greeting if there's any clear request or action verbs
-    if (greetStart && (imperativeStart || modalRequest || whIdxs.length || qMark || actionIdxs.length > 0)) {
+    if (greetStart && (imperativeStart || modalRequest || hasWhWord || qMark || actionIdxs.length > 0)) {
       scores.greeting = Math.min(scores.greeting, 0.1);
     }
 
@@ -995,7 +997,13 @@ class DistilBertIntentParser {
     const speculative = /(should|can|could)\s+i\s+(save|log|record|remember)/i.test(text);
     const storeCues = (firstPerson && (futureCue || pastCue || e.event || e.person || e.location || e.datetime)) || storeVerbIdxs.length > 0 || declarativeAbility;
     
-    if (storeCues && !negated) {
+    // CRITICAL FIX: Don't treat questions as storage operations
+    // If user asks "what's coming up" or similar, it's a question, not a storage request
+    const isQuestionNotStorage = (hasWhWord || qMark) && !storeVerbIdxs.length;
+    
+    console.log(`🔍 [DEBUG-FIX] storeCues=${storeCues}, isQuestionNotStorage=${isQuestionNotStorage}, hasWhWord=${hasWhWord}, whIdxs=${whIdxs.length}, storeVerbIdxs=${storeVerbIdxs.length}, qMark=${qMark}`);
+    
+    if (storeCues && !negated && !isQuestionNotStorage) {
       scores.memory_store += 0.70;
       if (speculative) {
         scores.memory_store -= 0.15; // Reduced penalty - still boost memory_store but less
@@ -1010,14 +1018,14 @@ class DistilBertIntentParser {
       || /\b(show|find|search)\b.*\b(my|our|previous|past|last)\b/i.test(text)
       || /what (did|have) we (plan|discuss|say|talk about|decide)/i.test(text);
     
-    if ((retrievePhrase || (whIdxs.length && firstOrGroup)) && !negated) {
+    if ((retrievePhrase || (hasWhWord && firstOrGroup)) && !negated) {
       scores.memory_retrieve += 0.75; // Increased from 0.72 for better confidence
       if (e.datetime) scores.memory_retrieve += 0.06; // helpful but not required
       if (totalEntities) scores.memory_retrieve += 0.04;
     }
 
     // QUESTION: WH words or question mark
-    if (whIdxs.length || qMark) {
+    if (hasWhWord || qMark) {
       scores.question += 0.65;
       if (totalEntities) scores.question += 0.05;
     }
@@ -1067,8 +1075,12 @@ class DistilBertIntentParser {
       }
     }
 
-    // Determine orchestration needs (commands, memory operations, questions, and modal requests need orchestration)
-    const needsOrchestration = topIntent === 'command' || topIntent === 'memory_store' || topIntent === 'memory_retrieve' || topIntent === 'question' || modalRequest;
+    // Determine orchestration needs (commands, memory store operations, questions, and modal requests need orchestration)
+    // NOTE: memory_retrieve should use fast semantic search, not orchestration
+    const needsOrchestration = topIntent === 'command' || topIntent === 'memory_store' || topIntent === 'question' || modalRequest;
+    
+    // Determine semantic search needs (memory retrieval queries should use fast semantic search)
+    const needsSemanticSearch = topIntent === 'memory_retrieve' || topIntent === 'question';
 
     console.log(`🎯 [NER-ROUTING] ROUTED to ${topIntent} - ${reasoning}`);
     
@@ -1082,6 +1094,7 @@ class DistilBertIntentParser {
       requiresExternalData: false,
       captureScreen: topIntent === 'command',
       needsOrchestration: needsOrchestration,
+      needsSemanticSearch: needsSemanticSearch,
       method: 'ner_scored_routing'
     };
   }

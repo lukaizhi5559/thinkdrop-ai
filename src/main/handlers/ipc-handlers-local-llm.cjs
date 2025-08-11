@@ -390,7 +390,11 @@ function initializeLocalLLMHandlers({
   
   // Start background agent bootstrapping for instant first queries
   setTimeout(() => {
-    coreAgent.bootstrapCriticalAgents();
+    if (coreAgent && typeof coreAgent.bootstrapCriticalAgents === 'function') {
+      coreAgent.bootstrapCriticalAgents();
+    } else {
+      console.log('⚠️ CoreAgent not available - skipping background bootstrapping');
+    }
   }, 1000); // Small delay to let main initialization complete first
 }
 

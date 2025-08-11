@@ -9,6 +9,8 @@ const fs = require('fs').promises;
 const AGENT_FORMAT = {
   name: 'ConversationSessionAgent',
   description: 'Manages multi-chat conversation sessions with context awareness and auto-initiation',
+  initialized: false,
+  bootstrapping: false,
   schema: {
     type: 'object',
     properties: {
@@ -40,6 +42,23 @@ const AGENT_FORMAT = {
 
   async bootstrap(config, context) {
     try {
+      // Prevent concurrent bootstrapping
+      if (AGENT_FORMAT.initialized) {
+        console.log('🔄 ConversationSessionAgent already initialized');
+        return { success: true };
+      }
+      
+      if (AGENT_FORMAT.bootstrapping) {
+        console.log('⏳ ConversationSessionAgent bootstrap in progress, waiting...');
+        // Wait for existing bootstrap to complete
+        while (AGENT_FORMAT.bootstrapping && !AGENT_FORMAT.initialized) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return { success: true };
+      }
+      
+      AGENT_FORMAT.bootstrapping = true;
+      
       AGENT_FORMAT.database = context.database;
       if (!AGENT_FORMAT.database) {
         throw new Error('Database connection required for ConversationSessionAgent');
@@ -48,10 +67,12 @@ const AGENT_FORMAT = {
       // Create conversation sessions table
       await AGENT_FORMAT.createTables();
       AGENT_FORMAT.initialized = true;
+      AGENT_FORMAT.bootstrapping = false;
       
       console.log('✅ ConversationSessionAgent initialized successfully');
       return { success: true };
     } catch (error) {
+      AGENT_FORMAT.bootstrapping = false;
       console.error('❌ ConversationSessionAgent initialization failed:', error);
       return { success: false, error: error.message };
     }
@@ -104,9 +125,43 @@ const AGENT_FORMAT = {
           timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
           metadata TEXT DEFAULT '{}',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          embedding TEXT DEFAULT NULL,
           FOREIGN KEY (session_id) REFERENCES conversation_sessions(id)
         )
       `);
+      
+      // Add embedding column if it doesn't exist (for existing tables)
+      // Use PRAGMA table_info which works better with ATTACH
+      try {
+        const columnCheck = await AGENT_FORMAT.database.query(`
+          PRAGMA table_info('conversation_messages')
+        `);
+        
+        const hasEmbeddingColumn = columnCheck.some(col => col.name === 'embedding');
+        
+        if (!hasEmbeddingColumn) {
+          console.log('🔄 Adding missing embedding column to conversation_messages table...');
+          await AGENT_FORMAT.database.run(`
+            ALTER TABLE conversation_messages ADD COLUMN embedding TEXT DEFAULT NULL
+          `);
+          console.log('✅ Added embedding column to conversation_messages table');
+        } else {
+          console.log('ℹ️ Embedding column already exists');
+        }
+      } catch (error) {
+        // Try to add the column anyway - check for both DuckDB error messages
+        if (error && error.message && (
+          error.message.includes('duplicate column name') || 
+          error.message.includes('Column with name embedding already exists') ||
+          error.message.includes('already exists')
+        )) {
+          // Silently ignore - column already exists
+          console.log('ℹ️ Embedding column already exists');
+        } else {
+          console.warn('⚠️ Failed to add embedding column:', error?.message || error);
+          // Don't throw - this is non-critical
+        }
+      }
 
       console.log('✅ ConversationSessionAgent tables created successfully');
     } catch (error) {
@@ -858,6 +913,44 @@ const AGENT_FORMAT = {
             last_activity_at = ?
         WHERE id = ?
       `, [timestamp, timestamp, sessionId]);
+
+      // Background embedding generation (non-blocking)
+      setImmediate(async () => {
+        try {
+          console.log('🔄 [BACKGROUND] Generating embedding for message:', messageId);
+          
+          // Skip embedding generation for very short or system messages
+          if (text.length < 10 || text.startsWith('[System') || text.match(/^(ok|thanks?|yes|no)$/i)) {
+            console.log('⚠️ [BACKGROUND] Skipping embedding for short/system message');
+            return;
+          }
+          
+          // Generate embedding using SemanticEmbeddingAgent
+          if (context?.executeAgent) {
+            const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+              action: 'generate-embedding',
+              text: text
+            }, context);
+            
+            if (embeddingResult.success && embeddingResult.result?.embedding) {
+              // Store embedding in conversation_messages table
+              await AGENT_FORMAT.database.run(`
+                UPDATE conversation_messages 
+                SET embedding = ? 
+                WHERE id = ?
+              `, [JSON.stringify(embeddingResult.result.embedding), messageId]);
+              
+              console.log('✅ [BACKGROUND] Embedding generated and stored for message:', messageId);
+            } else {
+              console.warn('⚠️ [BACKGROUND] Failed to generate embedding:', embeddingResult.error);
+            }
+          } else {
+            console.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
+          }
+        } catch (error) {
+          console.error('❌ [BACKGROUND] Embedding generation failed:', error);
+        }
+      });
 
       return {
         success: true,

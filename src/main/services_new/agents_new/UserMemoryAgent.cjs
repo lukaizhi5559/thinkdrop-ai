@@ -1575,10 +1575,10 @@ const AGENT_FORMAT = {
                 throw new Error('No database connection available');
               }
               
-              // Build SQL query with optional time filtering
+              // Build unified SQL query to search both memory and conversation_messages tables
               let sql = `
-                SELECT id, backend_memory_id, source_text, suggested_response, primary_intent, 
-                       created_at, updated_at, screenshot, extracted_text, metadata, embedding
+                SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
+                       created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
                 FROM memory 
                 WHERE embedding IS NOT NULL
               `;
@@ -1588,10 +1588,23 @@ const AGENT_FORMAT = {
                 sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
               }
               
+              // Add conversation messages to the search
+              sql += `
+                UNION ALL
+                SELECT 'conversation' as source, id, NULL as backend_memory_id, text as source_text, NULL as suggested_response, NULL as primary_intent,
+                       created_at, created_at as updated_at, NULL as screenshot, NULL as extracted_text, metadata, embedding, session_id, sender
+                FROM conversation_messages
+                WHERE embedding IS NOT NULL
+              `;
+              
+              if (timeWindow) {
+                sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+              }
+              
               sql += ` ORDER BY created_at DESC`;
               
               const memories = await database.query(sql, queryParams);
-              console.log(`[INFO] Found ${memories.length} memories with embeddings`);
+              console.log(`[INFO] Found ${memories.length} items with embeddings (memory + conversation messages)`);
               
               if (memories.length === 0) {
                 return {

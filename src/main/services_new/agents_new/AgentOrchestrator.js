@@ -1146,6 +1146,40 @@ Answer based on the memories above (1-2 sentences):`;
             
             if (phi3Result.success && phi3Result.result?.response) {
               console.log('🎉 [SEMANTIC-FIRST] FAST PATH SUCCESS - Returning enhanced response');
+              
+              // BACKGROUND PROCESSING: Store question context in memory for future retrieval
+              setImmediate(async () => {
+                try {
+                  console.log('🚀 [BACKGROUND] Storing semantic question context in memory...');
+                  const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
+                    action: 'memory-store',
+                    sourceText: prompt,
+                    entities: routingDecision?.entities || {},
+                    category: 'question',
+                    metadata: {
+                      intent: 'semantic_enhanced_response',
+                      timestamp: new Date().toISOString(),
+                      confidence: 0.9,
+                      phi3Response: phi3Result.result.response,
+                      memoriesUsed: memories.length,
+                      topSimilarity: topScore,
+                      method: 'semantic_first_fast_path'
+                    }
+                  }, {
+                    ...context,
+                    executeAgent: this.executeAgent.bind(this)
+                  });
+                  
+                  if (memoryStoreResult.success) {
+                    console.log('✅ [BACKGROUND] Semantic question context stored in memory');
+                  } else {
+                    console.warn('⚠️ [BACKGROUND] Failed to store semantic question context:', memoryStoreResult.error);
+                  }
+                } catch (memoryError) {
+                  console.warn('⚠️ [BACKGROUND] Memory storage failed for semantic question:', memoryError.message);
+                }
+              });
+              
               return {
                 success: true,
                 data: phi3Result.result.response,
@@ -1794,35 +1828,42 @@ Answer:`,
     try {
       console.log('💾 Handling local memory store operation...');
       
-      const memoryResult = await this.executeAgent('UserMemoryAgent', {
-        action: 'memory-store',
-        sourceText: intentResult.sourceText || userMessage,
-        suggestedResponse: intentResult.suggestedResponse || "I'll remember that for you.",
-        primaryIntent: 'memory_store',
-        entities: intentResult.entities || [],
-        metadata: {
-          timestamp: new Date().toISOString(),
-          source: 'local_orchestration'
-        }
-      }, context);
+      // FAST RESPONSE: Return immediately with suggested response
+      const fastResponse = {
+        success: true,
+        response: IntentResponses.getSuggestedResponse('memory_store', userMessage),
+        handledBy: 'UserMemoryAgent',
+        method: 'local_memory_store',
+        timestamp: new Date().toISOString()
+      };
       
-      if (memoryResult.success) {
-        return {
-          success: true,
-          response: IntentResponses.getSuggestedResponse('memory_store', userMessage),
-          handledBy: 'UserMemoryAgent',
-          method: 'local_memory_store',
-          timestamp: new Date().toISOString()
-        };
-      } else {
-        return {
-          success: true,
-          response: IntentResponses.getSuggestedResponse('memory_store', userMessage) + ' Though I had some trouble storing it persistently.',
-          handledBy: 'fallback',
-          method: 'memory_store_fallback',
-          timestamp: new Date().toISOString()
-        };
-      }
+      // BACKGROUND PROCESSING: Do memory storage after response is sent
+      setImmediate(async () => {
+        try {
+          console.log('🚀 [BACKGROUND] Starting memory storage...');
+          const memoryResult = await this.executeAgent('UserMemoryAgent', {
+            action: 'memory-store',
+            sourceText: intentResult.sourceText || userMessage,
+            suggestedResponse: intentResult.suggestedResponse || "I'll remember that for you.",
+            primaryIntent: 'memory_store',
+            entities: intentResult.entities || [],
+            metadata: {
+              timestamp: new Date().toISOString(),
+              source: 'local_orchestration'
+            }
+          }, context);
+          
+          if (memoryResult.success) {
+            console.log('✅ [BACKGROUND] Memory storage completed successfully');
+          } else {
+            console.warn('⚠️ [BACKGROUND] Memory storage failed:', memoryResult.error);
+          }
+        } catch (error) {
+          console.error('❌ [BACKGROUND] Memory storage failed:', error);
+        }
+      });
+      
+      return fastResponse;
       
     } catch (error) {
       console.error('❌ Local memory store failed:', error);
@@ -1947,10 +1988,10 @@ Answer:`,
             .slice(0, 3) // Only use top 3 most relevant memories
             .filter(m => m.similarity >= minSimilarityThreshold) // Only include relevant memories
             .map((m, index) => {
-              const relevanceLabel = index === 0 ? '[MOST RELEVANT]' : `[Similarity: ${m.similarity.toFixed(3)}]`;
-              return `${relevanceLabel} ${m.source_text}`;
+              const relevanceLabel = index === 0 ? 'PRIMARY' : `CONTEXT`;
+              return `${relevanceLabel}: ${m.source_text}`;
             })
-            .join('\n\n');
+            .join('\n');
             
           // Debug: Log the exact memories being passed to Phi3
           console.log(`[DEBUG] Memory context being passed to Phi3:`);
@@ -1974,31 +2015,25 @@ Answer:`,
           let prompt;
 if (isUpcomingQuery) {
   prompt = `
-Use ONLY the memory information provided below to answer. Do NOT provide generic responses.
+Based on the stored memories below, answer what upcoming events/items are scheduled.
 
-MEMORY INFORMATION:
+STORED MEMORIES:
 ${memoryContext}
 
-USER QUESTION: "${userMessage}"
+QUESTION: "${userMessage}"
 
-INSTRUCTIONS:
-Based on the memory above, answer what upcoming events/items are scheduled.
-If the memory shows "nothing shows up at all" or similar, respond with exactly that wording (or a close variant).
-Use the exact memory content. Do NOT say you cannot access calendars.
+Answer based on the memories above. If no relevant information is found, say "I don't have that information stored."
   `.trim();
 } else {
   prompt = `
-Use ONLY the memory information provided below to answer. Do NOT provide generic responses about being an AI or lacking access to data.
+Based on the stored memories below, answer the user's question.
 
-MEMORY INFORMATION:
+STORED MEMORIES:
 ${memoryContext}
 
-USER QUESTION: "${userMessage}"
+QUESTION: "${userMessage}"
 
-INSTRUCTIONS:
-Answer using ONLY the memory information above.
-If the memory says "nothing shows up at all", respond with exactly that wording (or a close variant).
-Do NOT give generic AI disclaimers.
+Answer based on the memories above. If no relevant information is found, say "I don't have that information stored."
   `.trim();
 }
           
@@ -2189,7 +2224,8 @@ Do NOT give generic AI disclaimers.
         
         if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
           console.log('✅ Phi3 provided response for question');
-          return {
+          
+          const fastResponse = {
             success: true,
             response: phi3Result.result.response,
             handledBy: 'phi3_question_handler',
@@ -2197,6 +2233,38 @@ Do NOT give generic AI disclaimers.
             confidence: intentResult.confidence,
             timestamp: new Date().toISOString()
           };
+          
+          // BACKGROUND PROCESSING: Store question context in memory for future retrieval
+          setImmediate(async () => {
+            try {
+              console.log('🚀 [BACKGROUND] Storing question context in memory...');
+              const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
+                action: 'memory-store',
+                sourceText: userMessage,
+                entities: intentResult.result?.entities || {},
+                category: 'question',
+                metadata: {
+                  intent: 'question',
+                  timestamp: new Date().toISOString(),
+                  confidence: intentResult.confidence,
+                  phi3Response: phi3Result.result.response
+                }
+              }, {
+                ...context,
+                executeAgent: this.executeAgent.bind(this)
+              });
+              
+              if (memoryStoreResult.success) {
+                console.log('✅ [BACKGROUND] Question context stored in memory');
+              } else {
+                console.warn('⚠️ [BACKGROUND] Failed to store question context:', memoryStoreResult.error);
+              }
+            } catch (memoryError) {
+              console.warn('⚠️ [BACKGROUND] Memory storage failed for question:', memoryError.message);
+            }
+          });
+          
+          return fastResponse;
         }
       } catch (phi3Error) {
         console.warn('⚠️ Phi3 failed for question, falling back to generic response:', phi3Error.message);
