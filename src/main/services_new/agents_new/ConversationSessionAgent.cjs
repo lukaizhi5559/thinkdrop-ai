@@ -914,10 +914,10 @@ const AGENT_FORMAT = {
         WHERE id = ?
       `, [timestamp, timestamp, sessionId]);
 
-      // Background embedding generation (non-blocking)
+      // Background embedding generation (non-blocking) - TWO-TIER APPROACH
       setImmediate(async () => {
         try {
-          console.log('🔄 [BACKGROUND] Generating embedding for message:', messageId);
+          console.log('🔄 [BACKGROUND] Generating embeddings for message and session:', messageId);
           
           // Skip embedding generation for very short or system messages
           if (text.length < 10 || text.startsWith('[System') || text.match(/^(ok|thanks?|yes|no)$/i)) {
@@ -925,8 +925,8 @@ const AGENT_FORMAT = {
             return;
           }
           
-          // Generate embedding using SemanticEmbeddingAgent
           if (context?.executeAgent) {
+            // TIER 1: Generate message-level embedding
             const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
               action: 'generate-embedding',
               text: text
@@ -940,10 +940,14 @@ const AGENT_FORMAT = {
                 WHERE id = ?
               `, [JSON.stringify(embeddingResult.result.embedding), messageId]);
               
-              console.log('✅ [BACKGROUND] Embedding generated and stored for message:', messageId);
+              console.log('✅ [BACKGROUND] Tier 1 - Message embedding generated:', messageId);
             } else {
-              console.warn('⚠️ [BACKGROUND] Failed to generate embedding:', embeddingResult.error);
+              console.warn('⚠️ [BACKGROUND] Failed to generate message embedding:', embeddingResult.error);
             }
+
+            // TIER 2: Generate/Update session-level embedding
+            await AGENT_FORMAT.updateSessionEmbedding(sessionId, context);
+            
           } else {
             console.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
           }
@@ -969,6 +973,104 @@ const AGENT_FORMAT = {
         success: false,
         error: error.message
       };
+    }
+  },
+
+  // TIER 2: Session-level embedding generation for Two-Tier Semantic Search
+  async updateSessionEmbedding(sessionId, context) {
+    try {
+      console.log('🔄 [BACKGROUND] Tier 2 - Generating session embedding for:', sessionId);
+      
+      // Get session details and recent messages to create session context
+      const session = await AGENT_FORMAT.database.query(`
+        SELECT title, type, trigger_reason, context_data FROM conversation_sessions WHERE id = ?
+      `, [sessionId]);
+      
+      if (session.length === 0) {
+        console.warn('⚠️ [BACKGROUND] Session not found for embedding:', sessionId);
+        return;
+      }
+      
+      // Get first few and last few messages to represent session context
+      const messages = await AGENT_FORMAT.database.query(`
+        SELECT text, sender, timestamp FROM conversation_messages 
+        WHERE session_id = ? 
+        ORDER BY timestamp ASC
+        LIMIT 10
+      `, [sessionId]);
+      
+      if (messages.length === 0) {
+        console.log('⚠️ [BACKGROUND] No messages found for session embedding');
+        return;
+      }
+      
+      // Create session summary for embedding
+      const sessionData = session[0];
+      const firstMessage = messages[0];
+      const lastMessage = messages[messages.length - 1];
+      
+      // Build session context text
+      let sessionContext = `Session: ${sessionData.title}\n`;
+      sessionContext += `Type: ${sessionData.type}\n`;
+      sessionContext += `Trigger: ${sessionData.trigger_reason}\n`;
+      sessionContext += `First message: ${firstMessage.text}\n`;
+      
+      if (messages.length > 1) {
+        sessionContext += `Recent messages: ${messages.slice(-3).map(m => `${m.sender}: ${m.text}`).join('; ')}\n`;
+      }
+      
+      // Add context data if available
+      try {
+        const contextData = JSON.parse(sessionData.context_data || '{}');
+        if (Object.keys(contextData).length > 0) {
+          sessionContext += `Context: ${JSON.stringify(contextData)}\n`;
+        }
+      } catch (e) {
+        // Ignore JSON parse errors
+      }
+      
+      console.log('🔍 [BACKGROUND] Session context for embedding:', sessionContext.substring(0, 200) + '...');
+      
+      // Generate embedding for session context
+      const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+        action: 'generate-embedding',
+        text: sessionContext
+      }, context);
+      
+      if (embeddingResult.success && embeddingResult.result?.embedding) {
+        // Store/update session embedding in session_context table
+        const contextId = `ctx_${sessionId}_${Date.now()}`;
+        
+        // First, remove any existing session context embeddings
+        await AGENT_FORMAT.database.run(`
+          DELETE FROM session_context WHERE session_id = ? AND context_type = 'session_summary'
+        `, [sessionId]);
+        
+        // Insert new session context embedding
+        await AGENT_FORMAT.database.run(`
+          INSERT INTO session_context (id, session_id, context_type, content, embedding, metadata, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `, [
+          contextId,
+          sessionId,
+          'session_summary',
+          sessionContext,
+          JSON.stringify(embeddingResult.result.embedding),
+          JSON.stringify({ 
+            messageCount: messages.length,
+            firstMessageTime: firstMessage.timestamp,
+            lastMessageTime: lastMessage.timestamp
+          }),
+          new Date().toISOString()
+        ]);
+        
+        console.log('✅ [BACKGROUND] Tier 2 - Session embedding generated and stored:', sessionId);
+      } else {
+        console.warn('⚠️ [BACKGROUND] Failed to generate session embedding:', embeddingResult.error);
+      }
+      
+    } catch (error) {
+      console.error('❌ [BACKGROUND] Session embedding generation failed:', error);
     }
   },
 

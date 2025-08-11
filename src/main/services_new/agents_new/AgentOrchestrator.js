@@ -1113,6 +1113,15 @@ export class AgentOrchestrator {
         
         console.log(`🎯 [SEMANTIC-FIRST] Found ${memories.length} memories - top: ${topScore.toFixed(3)}, avg3: ${avgTop3Score.toFixed(3)}`);
         
+        // Debug: Log memory content for conversational queries
+        const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell)\b/i.test(prompt);
+        if (isConversationalQuery && memories.length > 0) {
+          console.log('🔍 [DEBUG] Conversational query detected, found memories:');
+          memories.slice(0, 3).forEach((memory, index) => {
+            console.log(`  Memory ${index + 1} (${(memory.similarity * 100).toFixed(1)}%): "${memory.source_text?.substring(0, 100)}..."`);
+          });
+        }
+        
         // Semantic-first thresholds (optimized for fast path - more aggressive)
         const hasRelevantMemories = topScore >= 0.25 || avgTop3Score >= 0.22;
         
@@ -1125,7 +1134,21 @@ export class AgentOrchestrator {
             return `Memory ${index + 1} (${similarity}% match): ${memory.source_text}`;
           }).join('\n\n');
           
-          const enhancedPrompt = `Based on these relevant memories, answer the question concisely:
+          // Detect conversational context queries for specialized prompts
+          const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell)\b/i.test(prompt);
+          
+          let enhancedPrompt;
+          if (isConversationalQuery) {
+            enhancedPrompt = `Based on these conversation memories, answer the specific question about conversation history:
+
+Memories:
+${memoryContext}
+
+Question: ${prompt}
+
+Look through the memories above and provide the specific information requested. If asking about "first", find the earliest question/message. If asking about "last", find the most recent. Be specific and quote the actual content:`;
+          } else {
+            enhancedPrompt = `Based on these relevant memories, answer the question concisely:
 
 Memories:
 ${memoryContext}
@@ -1133,12 +1156,17 @@ ${memoryContext}
 Question: ${prompt}
 
 Answer based on the memories above (1-2 sentences):`;
+          }
 
           try {
             const phi3Result = await this.executeAgent('Phi3Agent', {
               action: 'query-phi3-fast',
               prompt: enhancedPrompt,
-              options: { timeout: 15000, maxTokens: 100 }
+              options: { 
+                timeout: 15000, 
+                maxTokens: isConversationalQuery ? 150 : 100,
+                temperature: 0.1 // Lower temperature for more precise conversational responses
+              }
             }, {
               source: 'semantic_first_enhanced',
               timestamp: new Date().toISOString()

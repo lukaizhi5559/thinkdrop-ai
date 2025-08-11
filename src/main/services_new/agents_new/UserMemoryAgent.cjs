@@ -1538,19 +1538,21 @@ const AGENT_FORMAT = {
             }
             
           case 'memory-semantic-search':
-            // Semantic search memories using embeddings
+            // TWO-TIER SEMANTIC SEARCH: Search sessions first, then messages within relevant sessions
             const semanticQuery = params.query || params.searchText || params.input || params.message;
             const semanticLimit = params.limit || params.options?.limit || 3;
-            const timeWindow = params.timeWindow || params.options?.timeWindow || null; // e.g., '7 days', '1 month'
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.4; // Increased threshold to prevent hallucination
-            console.log(`[DEBUG] Using similarity threshold: ${minSimilarity}`);
+            const timeWindow = params.timeWindow || params.options?.timeWindow || null;
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.4;
+            const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
+            
+            console.log(`[DEBUG] Two-Tier Search: ${useTwoTier}, Similarity threshold: ${minSimilarity}`);
             
             if (!semanticQuery) {
               throw new Error('Semantic search requires query parameter');
             }
             
             try {
-              console.log(`[INFO] Performing semantic search for: "${semanticQuery}"`);
+              console.log(`[INFO] Performing ${useTwoTier ? 'Two-Tier' : 'Legacy'} semantic search for: "${semanticQuery}"`);
               
               // Generate embedding for the search query
               let queryEmbedding = null;
@@ -1575,136 +1577,356 @@ const AGENT_FORMAT = {
                 throw new Error('No database connection available');
               }
               
-              // Build unified SQL query to search both memory and conversation_messages tables
-              let sql = `
-                SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
-                       created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
-                FROM memory 
-                WHERE embedding IS NOT NULL
-              `;
-              let queryParams = [];
-              
-              if (timeWindow) {
-                sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
-              }
-              
-              // Add conversation messages to the search
-              sql += `
-                UNION ALL
-                SELECT 'conversation' as source, id, NULL as backend_memory_id, text as source_text, NULL as suggested_response, NULL as primary_intent,
-                       created_at, created_at as updated_at, NULL as screenshot, NULL as extracted_text, metadata, embedding, session_id, sender
-                FROM conversation_messages
-                WHERE embedding IS NOT NULL
-              `;
-              
-              if (timeWindow) {
-                sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
-              }
-              
-              sql += ` ORDER BY created_at DESC`;
-              
-              const memories = await database.query(sql, queryParams);
-              console.log(`[INFO] Found ${memories.length} items with embeddings (memory + conversation messages)`);
-              
-              if (memories.length === 0) {
-                return {
-                  success: true,
-                  action: 'memory-semantic-search',
-                  query: semanticQuery,
-                  results: [],
-                  count: 0,
-                  message: 'No memories with embeddings found'
-                };
-              }
-              
-              // Calculate similarity for all memories in batch (much faster)
-              const rankedResults = [];
-              
-              // Prepare batch similarity calculation
-              const memoryEmbeddings = [];
-              const validMemories = [];
-              
-              for (const memory of memories) {
-                try {
-                  const memoryEmbedding = Array.isArray(memory.embedding) 
-                    ? memory.embedding 
-                    : JSON.parse(memory.embedding);
-                  
-                  memoryEmbeddings.push(memoryEmbedding);
-                  validMemories.push(memory);
-                } catch (error) {
-                  console.warn(`[WARN] Failed to parse embedding for memory ${memory.id}:`, error.message);
-                }
-              }
-              
-              // Batch calculate similarities (single agent call)
-              const batchSimilarityResult = await context.executeAgent('SemanticEmbeddingAgent', {
-                action: 'batch-calculate-similarity',
-                queryEmbedding: queryEmbedding,
-                memoryEmbeddings: memoryEmbeddings
-              }, context);
-              
-              // Handle nested result structure from agent execution
-              const actualResult = batchSimilarityResult.result?.result || batchSimilarityResult.result;
-              const similarities = actualResult?.similarities;
-              
-              if (batchSimilarityResult.success && similarities) {
+              if (useTwoTier) {
+                // TWO-TIER APPROACH: Search sessions first, then messages within relevant sessions
+                console.log('[INFO] TIER 2: Searching conversation sessions...');
                 
-                for (let i = 0; i < validMemories.length; i++) {
-                  const memory = validMemories[i];
-                  const similarity = similarities[i];
-                  
-                  if (similarity >= minSimilarity) {
-                    rankedResults.push({
-                      ...memory,
-                      similarity: similarity,
-                      embedding: undefined // Remove embedding from response to save space
-                    });
-                  }
+                // TIER 2: Search session-level embeddings
+                const sessionSql = `
+                  SELECT sc.session_id, sc.content, sc.embedding, sc.metadata, cs.title, cs.type, cs.trigger_reason, cs.created_at
+                  FROM session_context sc
+                  JOIN conversation_sessions cs ON sc.session_id = cs.id
+                  WHERE sc.context_type = 'session_summary' AND sc.embedding IS NOT NULL
+                  ORDER BY cs.created_at DESC
+                `;
+                
+                const sessions = await database.query(sessionSql, []);
+                console.log(`[INFO] Found ${sessions.length} sessions with embeddings`);
+                
+                if (sessions.length === 0) {
+                  console.log('[WARN] No session embeddings found, falling back to message-only search');
+                  // Fall back to message-only search
+                  return await AGENT_FORMAT.performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow);
                 }
                 
-                console.log(`[SUCCESS] Batch processed ${validMemories.length} memories, found ${rankedResults.length} matches`);
-              } else {
-                console.warn('[WARN] Batch similarity calculation failed, falling back to individual calculations');
+                // Calculate session similarities
+                const sessionResults = [];
+                const allSessionSimilarities = []; // For debugging
                 
-                // Fallback to individual calculations if batch fails
-                for (let i = 0; i < validMemories.length; i++) {
+                for (const session of sessions) {
                   try {
-                    const memory = validMemories[i];
-                    const memoryEmbedding = memoryEmbeddings[i];
+                    const sessionEmbedding = Array.isArray(session.embedding) 
+                      ? session.embedding 
+                      : JSON.parse(session.embedding);
                     
-                    // Calculate cosine similarity directly (avoid agent call)
-                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, memoryEmbedding);
+                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
+                    
+                    // Store all similarities for debugging
+                    allSessionSimilarities.push({
+                      sessionId: session.session_id,
+                      title: session.title,
+                      similarity: similarity
+                    });
                     
                     if (similarity >= minSimilarity) {
-                      rankedResults.push({
-                        ...memory,
+                      sessionResults.push({
+                        ...session,
                         similarity: similarity,
                         embedding: undefined
                       });
                     }
                   } catch (error) {
-                    console.warn(`[WARN] Failed to calculate similarity for memory ${validMemories[i].id}:`, error.message);
+                    console.warn(`[WARN] Failed to process session ${session.session_id}:`, error.message);
                   }
                 }
+                
+                // Debug logging for similarity scores
+                console.log(`[DEBUG] Session similarity scores:`, allSessionSimilarities.map(s => 
+                  `${s.title}: ${s.similarity.toFixed(4)}`
+                ).join(', '));
+                console.log(`[DEBUG] Similarity threshold: ${minSimilarity}, Sessions above threshold: ${sessionResults.length}`);
+                
+                // If no sessions meet threshold but we have sessions, lower threshold for conversational queries
+                if (sessionResults.length === 0 && sessions.length > 0) {
+                  const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell)\b/i.test(semanticQuery);
+                  if (isConversationalQuery) {
+                    const lowerThreshold = Math.min(0.1, minSimilarity * 0.5); // Much lower threshold
+                    console.log(`[DEBUG] Conversational query detected, lowering threshold to ${lowerThreshold}`);
+                    
+                    for (const session of sessions) {
+                      try {
+                        const sessionEmbedding = Array.isArray(session.embedding) 
+                          ? session.embedding 
+                          : JSON.parse(session.embedding);
+                        
+                        const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
+                        
+                        if (similarity >= lowerThreshold) {
+                          sessionResults.push({
+                            ...session,
+                            similarity: similarity,
+                            embedding: undefined
+                          });
+                        }
+                      } catch (error) {
+                        console.warn(`[WARN] Failed to process session ${session.session_id}:`, error.message);
+                      }
+                    }
+                    console.log(`[DEBUG] With lower threshold: ${sessionResults.length} sessions found`);
+                  }
+                }
+                
+                // Sort sessions by similarity
+                sessionResults.sort((a, b) => b.similarity - a.similarity);
+                const topSessions = sessionResults.slice(0, Math.max(2, Math.ceil(semanticLimit / 2))); // Get top sessions
+                
+                console.log(`[SUCCESS] TIER 2: Found ${topSessions.length} relevant sessions`);
+                
+                // Check if this is a conversational query that can be answered at session level
+                const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell|conversation|chat|discuss|talk|mention|said)\b/i.test(semanticQuery);
+                
+                if (isConversationalQuery && topSessions.length > 0) {
+                  console.log('[INFO] CONVERSATIONAL QUERY - Using session-level response (stopping at Tier 2)');
+                  
+                  // For conversational queries, provide session context directly without drilling to messages
+                  const sessionContextResults = [];
+                  
+                  for (const session of topSessions) {
+                    // Get the full session context that was used for embedding
+                    const sessionContextSql = `
+                      SELECT content, metadata FROM session_context 
+                      WHERE session_id = ? AND context_type = 'session_summary'
+                      ORDER BY created_at DESC LIMIT 1
+                    `;
+                    
+                    const sessionContextData = await database.query(sessionContextSql, [session.session_id]);
+                    
+                    if (sessionContextData.length > 0) {
+                      const contextContent = sessionContextData[0].content;
+                      
+                      // Create a session-level result with the full context
+                      sessionContextResults.push({
+                        id: `session_${session.session_id}`,
+                        source: 'session_context',
+                        source_text: contextContent, // This contains "First message: hi there" etc.
+                        sender: 'system',
+                        session_id: session.session_id,
+                        created_at: session.created_at,
+                        metadata: sessionContextData[0].metadata,
+                        similarity: session.similarity,
+                        sessionTitle: session.title,
+                        sessionType: session.type,
+                        sessionSimilarity: session.similarity,
+                        responseType: 'session_level'
+                      });
+                    }
+                  }
+                  
+                  if (sessionContextResults.length > 0) {
+                    console.log(`[SUCCESS] TIER 2 ONLY - Returning ${sessionContextResults.length} session-level contexts`);
+                    
+                    return {
+                      success: true,
+                      action: 'memory-semantic-search',
+                      query: semanticQuery,
+                      results: sessionContextResults,
+                      count: sessionContextResults.length,
+                      totalSessions: sessions.length,
+                      relevantSessions: topSessions.length,
+                      totalMessages: 0, // No message-level search performed
+                      minSimilarity: minSimilarity,
+                      timeWindow: timeWindow,
+                      searchType: 'two-tier-session-level',
+                      message: 'Session-level response for conversational query',
+                      sessionContext: topSessions.map(s => ({
+                        sessionId: s.session_id,
+                        title: s.title,
+                        type: s.type,
+                        similarity: s.similarity
+                      }))
+                    };
+                  }
+                }
+                
+                if (topSessions.length === 0) {
+                  // Fallback for when no sessions meet threshold
+                  if (isConversationalQuery && sessions.length > 0) {
+                    console.log('[INFO] No sessions met similarity threshold, using fallback session context');
+                    
+                    // Get the most recent session for context
+                    const currentSession = sessions[0];
+                    
+                    // Get session context directly
+                    const sessionContextSql = `
+                      SELECT content, metadata FROM session_context 
+                      WHERE session_id = ? AND context_type = 'session_summary'
+                      ORDER BY created_at DESC LIMIT 1
+                    `;
+                    
+                    const sessionContextData = await database.query(sessionContextSql, [currentSession.session_id]);
+                    
+                    if (sessionContextData.length > 0) {
+                      const contextResults = [{
+                        id: `session_${currentSession.session_id}`,
+                        source: 'session_context',
+                        source_text: sessionContextData[0].content,
+                        sender: 'system',
+                        session_id: currentSession.session_id,
+                        created_at: currentSession.created_at,
+                        metadata: sessionContextData[0].metadata,
+                        similarity: 0.7, // Lower similarity since it's fallback
+                        sessionTitle: currentSession.title,
+                        sessionType: currentSession.type,
+                        sessionSimilarity: 0.7,
+                        responseType: 'session_fallback'
+                      }];
+                      
+                      return {
+                        success: true,
+                        action: 'memory-semantic-search',
+                        query: semanticQuery,
+                        results: contextResults,
+                        count: contextResults.length,
+                        totalSessions: sessions.length,
+                        relevantSessions: 1,
+                        totalMessages: 0,
+                        minSimilarity: minSimilarity,
+                        timeWindow: timeWindow,
+                        searchType: 'two-tier-session-fallback',
+                        message: 'Fallback session context for conversational query',
+                        sessionContext: [{
+                          sessionId: currentSession.session_id,
+                          title: currentSession.title,
+                          similarity: 0.8
+                        }]
+                      };
+                    }
+                  }
+                  
+                  // Final fallback to legacy search
+                  console.log('[WARN] No sessions found with Two-Tier, falling back to legacy search');
+                  return await AGENT_FORMAT.performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow);
+                }
+                
+                // TIER 1: Search messages within relevant sessions
+                console.log('[INFO] TIER 1: Searching messages within relevant sessions...');
+                
+                const sessionIds = topSessions.map(s => s.session_id);
+                const placeholders = sessionIds.map(() => '?').join(',');
+                
+                // Detect chronological queries (first/last) for special handling
+                const isFirstQuery = /\b(first|earliest|initial|start|begin)\b/i.test(semanticQuery);
+                const isLastQuery = /\b(last|latest|recent|final|end)\b/i.test(semanticQuery);
+                const isChronologicalQuery = isFirstQuery || isLastQuery;
+                
+                let messageResults = [];
+                
+                if (isChronologicalQuery) {
+                  console.log(`[DEBUG] Chronological query detected: ${isFirstQuery ? 'FIRST' : 'LAST'}`);
+                  
+                  // For chronological queries, get messages in chronological order
+                  const chronoSql = `
+                    SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                           created_at, metadata, embedding
+                    FROM conversation_messages
+                    WHERE session_id IN (${placeholders})
+                    ORDER BY created_at ${isFirstQuery ? 'ASC' : 'DESC'}
+                    LIMIT ${semanticLimit * 2}
+                  `;
+                  
+                  const chronoMessages = await database.query(chronoSql, sessionIds);
+                  console.log(`[INFO] Found ${chronoMessages.length} chronological messages`);
+                  
+                  // For chronological queries, prioritize time order over semantic similarity
+                  for (const message of chronoMessages) {
+                    const sessionContext = topSessions.find(s => s.session_id === message.session_id);
+                    
+                    // Calculate similarity but give high weight to chronological position
+                    let similarity = 0.8; // High base similarity for chronological relevance
+                    
+                    if (message.embedding) {
+                      try {
+                        const messageEmbedding = Array.isArray(message.embedding) 
+                          ? message.embedding 
+                          : JSON.parse(message.embedding);
+                        const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                        // Blend chronological priority with semantic similarity
+                        similarity = 0.7 + (semanticSim * 0.3); // 70% chronological, 30% semantic
+                      } catch (error) {
+                        // Keep base similarity if embedding fails
+                      }
+                    }
+                    
+                    messageResults.push({
+                      ...message,
+                      similarity: similarity,
+                      embedding: undefined,
+                      sessionTitle: sessionContext?.title,
+                      sessionType: sessionContext?.type,
+                      sessionSimilarity: sessionContext?.similarity,
+                      chronologicalRank: messageResults.length + 1
+                    });
+                  }
+                  
+                } else {
+                  // Regular semantic search for non-chronological queries
+                  const messageSql = `
+                    SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                           created_at, metadata, embedding
+                    FROM conversation_messages
+                    WHERE session_id IN (${placeholders}) AND embedding IS NOT NULL
+                    ORDER BY created_at DESC
+                  `;
+                  
+                  const messages = await database.query(messageSql, sessionIds);
+                  console.log(`[INFO] Found ${messages.length} messages in relevant sessions`);
+                  
+                  // Calculate message similarities
+                  for (const message of messages) {
+                    try {
+                      const messageEmbedding = Array.isArray(message.embedding) 
+                        ? message.embedding 
+                        : JSON.parse(message.embedding);
+                      
+                      const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                      
+                      if (similarity >= minSimilarity) {
+                        // Add session context
+                        const sessionContext = topSessions.find(s => s.session_id === message.session_id);
+                        messageResults.push({
+                          ...message,
+                          similarity: similarity,
+                          embedding: undefined,
+                          sessionTitle: sessionContext?.title,
+                          sessionType: sessionContext?.type,
+                          sessionSimilarity: sessionContext?.similarity
+                        });
+                      }
+                    } catch (error) {
+                      console.warn(`[WARN] Failed to process message ${message.id}:`, error.message);
+                    }
+                  }
+                }
+                
+                // Combine and rank results
+                messageResults.sort((a, b) => b.similarity - a.similarity);
+                const topResults = messageResults.slice(0, semanticLimit);
+                
+                console.log(`[SUCCESS] TIER 1: Found ${topResults.length} relevant messages`);
+                
+                return {
+                  success: true,
+                  action: 'memory-semantic-search',
+                  query: semanticQuery,
+                  results: topResults,
+                  count: topResults.length,
+                  totalSessions: sessions.length,
+                  relevantSessions: topSessions.length,
+                  totalMessages: messages.length,
+                  minSimilarity: minSimilarity,
+                  timeWindow: timeWindow,
+                  searchType: 'two-tier',
+                  sessionContext: topSessions.map(s => ({
+                    sessionId: s.session_id,
+                    title: s.title,
+                    similarity: s.similarity
+                  }))
+                };
+                
+              } else {
+                // LEGACY APPROACH: Combined search
+                return await AGENT_FORMAT.performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow);
               }
-              
-              // Sort by similarity (highest first) and limit results
-              rankedResults.sort((a, b) => b.similarity - a.similarity);
-              const topResults = rankedResults.slice(0, semanticLimit);
-              
-              // Found similar memories
-              
-              return {
-                success: true,
-                action: 'memory-semantic-search',
-                query: semanticQuery,
-                results: topResults,
-                count: topResults.length,
-                totalMemories: memories.length,
-                minSimilarity: minSimilarity,
-                timeWindow: timeWindow
-              };
               
             } catch (error) {
               console.error('[ERROR] Semantic search failed:', error);
@@ -3173,7 +3395,96 @@ const AGENT_FORMAT = {
       }
       
       return dotProduct / (normA * normB);
-    }
+    },
+
+    // Legacy semantic search method (original implementation)
+    async performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow) {
+      console.log('[INFO] Performing legacy semantic search...');
+      
+      // Build unified SQL query to search both memory and conversation_messages tables
+      let sql = `
+        SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
+               created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
+        FROM memory 
+        WHERE embedding IS NOT NULL
+      `;
+      let queryParams = [];
+      
+      if (timeWindow) {
+        sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+      }
+      
+      // Add conversation messages to the search
+      sql += `
+        UNION ALL
+        SELECT 'conversation' as source, id, NULL as backend_memory_id, text as source_text, NULL as suggested_response, NULL as primary_intent,
+               created_at, created_at as updated_at, NULL as screenshot, NULL as extracted_text, metadata, embedding, session_id, sender
+        FROM conversation_messages
+        WHERE embedding IS NOT NULL
+      `;
+      
+      if (timeWindow) {
+        sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+      }
+      
+      sql += ` ORDER BY created_at DESC`;
+      
+      const memories = await database.query(sql, queryParams);
+      console.log(`[INFO] Found ${memories.length} items with embeddings (memory + conversation messages)`);
+      
+      if (memories.length === 0) {
+        return {
+          success: true,
+          action: 'memory-semantic-search',
+          query: semanticQuery,
+          results: [],
+          count: 0,
+          message: 'No memories with embeddings found',
+          searchType: 'legacy'
+        };
+      }
+      
+      // Calculate similarity for all memories
+      const rankedResults = [];
+      
+      for (const memory of memories) {
+        try {
+          const memoryEmbedding = Array.isArray(memory.embedding) 
+            ? memory.embedding 
+            : JSON.parse(memory.embedding);
+          
+          const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, memoryEmbedding);
+          
+          if (similarity >= minSimilarity) {
+            rankedResults.push({
+              ...memory,
+              similarity: similarity,
+              embedding: undefined // Remove embedding from response to save space
+            });
+          }
+        } catch (error) {
+          console.warn(`[WARN] Failed to parse embedding for memory ${memory.id}:`, error.message);
+        }
+      }
+      
+      // Sort by similarity (highest first) and limit results
+      rankedResults.sort((a, b) => b.similarity - a.similarity);
+      const topResults = rankedResults.slice(0, semanticLimit);
+      
+      console.log(`[SUCCESS] Legacy search found ${topResults.length} matches`);
+      
+      return {
+        success: true,
+        action: 'memory-semantic-search',
+        query: semanticQuery,
+        results: topResults,
+        count: topResults.length,
+        totalMemories: memories.length,
+        minSimilarity: minSimilarity,
+        timeWindow: timeWindow,
+        searchType: 'legacy'
+      };
+    },
   };
   
   // Export using CommonJS format
