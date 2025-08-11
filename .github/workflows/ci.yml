@@ -1,0 +1,39 @@
+name: Conversational Detection CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Use workspace
+        working-directory: .
+        run: |
+          echo "Workspace: $(pwd)"
+          ls -la
+
+      - name: Install dependencies if package.json exists
+        if: ${{ hashFiles('package.json') != '' }}
+        run: |
+          npm ci || npm install
+
+      - name: Run conversational detection tests
+        run: |
+          node tests/test_conversational_detection.js
+          node tests/test_conversational_detection_extra.js
+
+      - name: Run conversational retrieval tests
+        run: |
+          node tests/test_conversational_retrieval.js

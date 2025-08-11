@@ -1188,7 +1188,7 @@ Answer based on the memories above (1-2 sentences):`.trim();
                   const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
                     action: 'memory-store',
                     sourceText: prompt,
-                    entities: routingDecision?.entities || {},
+                    entities: {}, // No routing decision available in semantic-first path
                     category: 'question',
                     metadata: {
                       intent: 'semantic_enhanced_response',

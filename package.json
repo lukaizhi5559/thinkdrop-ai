@@ -16,7 +16,11 @@
     "build:main": "electron-builder",
     "test": "jest",
     "lint": "eslint src/",
-    "format": "prettier --write src/"
+    "format": "prettier --write src/",
+    "test:conv:detect": "node tests/test_conversational_detection.js",
+    "test:conv:retrieve": "node tests/test_conversational_retrieval.js",
+    "test:conv:extra": "node tests/test_conversational_detection_extra.js",
+    "test:conv:all": "npm run -s test:conv:detect && npm run -s test:conv:extra && npm run -s test:conv:retrieve"
   },
   "keywords": [
     "electron",
