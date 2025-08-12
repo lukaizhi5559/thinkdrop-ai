@@ -31,9 +31,9 @@ jobs:
 
       - name: Run conversational detection tests
         run: |
-          node tests/test_conversational_detection.js
-          node tests/test_conversational_detection_extra.js
+          npm run -s test:conv:detect
+          npm run -s test:conv:extra
 
       - name: Run conversational retrieval tests
         run: |
-          node tests/test_conversational_retrieval.js
+          npm run -s test:conv:retrieve

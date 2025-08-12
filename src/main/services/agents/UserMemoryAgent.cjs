@@ -3499,8 +3499,9 @@ const AGENT_FORMAT = {
       const q = query.toLowerCase().trim();
 
       // --- guards / helpers ---
-      const NEGATION = /\b(don't|do not|no|never|stop|cancel)\b/;
-      const CHAT_META = /\b(this|our|the)\s+(chat|conversation|thread|session)\b/;
+      const NEGATION = /\b(don['’]?t|do not|no|never|stop|cancel|not)\b/;
+      // Allow references like "this/our chat/conversation/thread/session/messages/history"
+      const CHAT_META = /\b(this|our|the)\s+(chat|conversation|thread|session|messages?|message history|chat history|conversation history|history)\b/;
       const SPEECH_VERB = /\b(ask(ed)?|say(d)?|told?|tell|talk(ed)?|discuss(ed)?|mention(ed)?)\b/;
       const FIRST_PERSON = /\b(i|we|you|me|us|our|my|your)\b/;
 
@@ -3519,16 +3520,18 @@ const AGENT_FORMAT = {
       const JUST_PATTERN = /\b(just|recently)\s+(said|asked|mentioned|told|talked about)\b/;
 
       // Conversation topic patterns (what have we discussed, what topics, etc.)
-      const TOPIC_PATTERN = /\b(what (topics?|subjects?|things?) (have|are|did) we|what have we (been )?(discussing|talking about|covering)|topics? (we'?ve|we have) (discussed|talked about|covered)|what.*we.*(talked? about|discussed|covered)|what.*our.*(conversation|chat).*about)\b/;
+      const TOPIC_PATTERN = /\b(what (topics?|subjects?|things?) (have|are|did) we|what have we (been )?(discussing|talking about|covering)|topics? (we'?ve|we have) (been )?(discussed|talked about|covered|discussing|covering)|what.*we.*(talked? about|discussed|covered|were.*discussing)|what.*our.*(conversation|chat|session).*about)\b/;
       
       // Message reference patterns (first message, last message, etc.)
       const MESSAGE_REF = /\b(first|last|latest|recent|previous|earlier).*(message|msg|question|response|reply)\b/;
       
       // Show/display conversation patterns
-      const DISPLAY_PATTERN = /\b(show|display|see|view).*(message|conversation|chat|history)\b|show.*me.*(message|msg)\b/;
+      // Broaden display verbs and allow common phrasing
+      const DISPLAY_PATTERN = /\b(show|display|see|view|list|bring up|pull up|fetch|retrieve|recap|review|summarize|summary|overview)\b.*\b(message|messages?|conversation|chat|thread|history)\b|\b(show|display)\b.*\b(me)\b.*\b(message|msg|messages)\b/;
 
       // Additional comprehensive patterns for 100% coverage
-      const OVERVIEW_PATTERN = /\b(give me.*conversation.*(overview|summary)|conversation.*(overview|summary))\b/;
+      // Include recap/review/summary/overview for conversation/chat
+      const OVERVIEW_PATTERN = /\b(give\s+me.*(conversation|chat).*(overview|summary)|(conversation|chat).*(overview|summary)|(recap|review|summary|overview)\s+of\s+(this|our)\s+(conversation|chat|thread|session))\b/;
       const ORDINAL_MSG_PATTERN = /\b(show|display).*\d+(st|nd|rd|th)\s+(message|msg)\b/;
       const MESSAGES_AGO_PATTERN = /\b\d+\s+(messages?|msgs?)\s+(ago|back)\b/;
       const FEW_MESSAGES_PATTERN = /\b(a\s+few|several)\s+(messages?|msgs?)\s+(ago|back)\b/;
@@ -3847,8 +3850,8 @@ const AGENT_FORMAT = {
     isConversationalQueryRobust(text) {
       const s = text.toLowerCase().trim();
 
-      // Meta-cues that it's about the chat/session itself
-      const META = /\b(this (chat|conversation|session)|our (chat|conversation)|in (this|the) thread)\b/;
+      // Meta-cues that it's about the chat/session itself (include our/the session)
+      const META = /\b((this|our|the)\s+(chat|conversation|session)|in\s+(this|the)\s+thread)\b/;
       const PRONOUN = /\b(what did (i|we|you) (ask|say|tell)|what was (my|our|your) (first|last) (question|message))\b/;
 
       // Temporal/ordering cues
@@ -3861,19 +3864,19 @@ const AGENT_FORMAT = {
       const JUST_PATTERN = /\b(just|recently)\s+(said|asked|mentioned|told|talked about)\b/;
 
       // Conversation topic patterns (what have we discussed, what topics, etc.)
-      const TOPIC_PATTERN = /\b(what (topics?|subjects?|things?) (have|are|did) we|what have we (been )?(discussing|talking about|covering)|topics? (we'?ve|we have) (discussed|talked about|covered)|what.*we.*(talked? about|discussed|covered)|what.*our.*(conversation|chat).*about)\b/;
+      const TOPIC_PATTERN = /\b(what (topics?|subjects?|things?) (have|are|did) we|what have we (been )?(discussing|talking about|covering)|topics? (we'?ve|we have) (been )?(discussed|talked about|covered|discussing|covering)|what.*we.*(talked? about|discussed|covered|were.*discussing)|what.*our.*(conversation|chat|session).*about)\b/;
       
       // Message reference patterns (first message, last message, etc.)
       const MESSAGE_REF = /\b(first|last|latest|recent|previous|earlier).*(message|msg|question|response|reply)\b/;
       
-      // Show/display conversation patterns
-      const DISPLAY_PATTERN = /\b(show|display|see|view).*(message|conversation|chat|history)\b|show.*me.*(message|msg)\b/;
+      // Show/display conversation patterns (broadened)
+      const DISPLAY_PATTERN = /\b(show|display|see|view|list|bring up|pull up|fetch|retrieve|recap|review|summarize|summary|overview)\b.*\b(message|messages?|conversation|chat|thread|history)\b|\b(show|display)\b.*\b(me)\b.*\b(message|msg|messages)\b|\b(show|display)\b.*\b(last|few|recent)\b.*\b(message|messages?)\b/;
 
       // Negation patterns (stronger negation detection, include unicode apostrophe)
       const NEGATION = /\b(don['’]?t|do not|no|never|stop|cancel|not)\b/;
 
-      // Additional comprehensive patterns for 100% coverage
-      const OVERVIEW_PATTERN = /\b(give me.*conversation.*(overview|summary)|conversation.*(overview|summary))\b/;
+      // Additional comprehensive patterns for 100% coverage (broadened)
+      const OVERVIEW_PATTERN = /\b(give\s+me.*(conversation|chat).*(overview|summary)|(conversation|chat).*(overview|summary)|(recap|review|summary|overview)\s+of\s+(this|our)\s+(conversation|chat|thread|session)|summarize\s+(our|this)\s+(session|conversation|chat))\b/;
       const ORDINAL_MSG_PATTERN = /\b(show|display).*\d+(st|nd|rd|th)\s+(message|msg)\b/;
       const MESSAGES_AGO_PATTERN = /\b\d+\s+(messages?|msgs?)\s+(ago|back)\b/;
       const FEW_MESSAGES_PATTERN = /\b(a\s+few|several)\s+(messages?|msgs?)\s+(ago|back)\b/;
@@ -3918,6 +3921,7 @@ const AGENT_FORMAT = {
 
       const isConversational = (
         isDirectChatRef ||
+        hasChatRef ||
         (hasOrdering && hasChatRef) ||
         TOPIC_PATTERN.test(s) ||
         META.test(s)

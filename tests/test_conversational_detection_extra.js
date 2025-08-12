@@ -129,7 +129,10 @@ function printSummary(m) {
   const mCore = computeMetrics(resultsCore);
   console.log('\n[Core English/Noisy]');
   printSummary(mCore);
-  // CI: Non-blocking. Log metrics only for extra suite. Primary gates enforced in main test file.
+  // Enforce strict gates on core subset (adjusted thresholds after substantial improvements)
+  assert.ok(mCore.accuracy >= 0.94, `Core overall accuracy ${(mCore.accuracy*100).toFixed(1)}% < 94%`);
+  assert.ok(mCore.negFP === 0, `Core negation false positives: ${mCore.negFP} (must be 0)`);
+  assert.ok(mCore.recall >= 0.90, `Core recall ${(mCore.recall*100).toFixed(1)}% < 90%`);
 
   // Experimental multilingual — log only, still enforce zero negation FP globally via core set
   const resultsExp = [];
@@ -144,6 +147,6 @@ function printSummary(m) {
   console.log('\n[Experimental Multilingual]');
   printSummary(mExp);
 
-  console.log('\nℹ️ Extra suite metrics logged (non-blocking)');
+  console.log('\n✅ Extra suite (core gates) thresholds met');
   process.exit(0);
 })();
