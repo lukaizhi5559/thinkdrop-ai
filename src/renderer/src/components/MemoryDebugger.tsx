@@ -31,7 +31,34 @@ interface IntentMemory {
   created_at: string;
   updated_at: string;
   intents?: Array<{ intent: string; confidence: number; reasoning: string }>;
+  intent: string;
+  confidence: number;
+  reasoning: string;
   entities?: string[];
+}
+
+interface DatabaseMetrics {
+  uptime: number;
+  totalQueries: number;
+  queriesPerMinute: number;
+  errorRate: number;
+  avgQueryTime: number;
+  activeConnections: number;
+  queuedConnections: number;
+  backupCount: number;
+  recoveryAttempts: number;
+  corruptionEvents: number;
+  lastBackupTime?: Date;
+  lastQueryTime?: Date;
+}
+
+interface DatabaseNotification {
+  id: string;
+  type: 'info' | 'warning' | 'error' | 'success';
+  title: string;
+  message: string;
+  timestamp: Date;
+  data?: any;
 }
 
 const MemoryDebugger = () => {
@@ -44,6 +71,14 @@ const MemoryDebugger = () => {
   const [lastMemoryCount, setLastMemoryCount] = useState(0);
   const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
   const [paginationInfo, setPaginationInfo] = useState<any>(null);
+  
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'memories' | 'database'>('memories');
+  
+  // Database health state
+  const [dbMetrics, setDbMetrics] = useState<DatabaseMetrics | null>(null);
+  const [dbNotifications, setDbNotifications] = useState<DatabaseNotification[]>([]);
+  const [dbLoading, setDbLoading] = useState(false);
 
   const loadMemories = async (loadMore: boolean = false, searchQuery: string = '') => {
     try {
@@ -297,6 +332,83 @@ const MemoryDebugger = () => {
     }
   };
 
+  // Database health functions
+  const loadDatabaseMetrics = async () => {
+    try {
+      setDbLoading(true);
+      const result = await (window.electronAPI as any).invoke('get-database-metrics');
+      
+      if (result.success) {
+        setDbMetrics(result.metrics);
+        addNotification('Database metrics loaded', 'success');
+      } else {
+        addNotification(`Failed to load database metrics: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      console.error('Failed to load database metrics:', error);
+      addNotification('Failed to load database metrics', 'error');
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
+  const createDatabaseBackup = async () => {
+    try {
+      setDbLoading(true);
+      const result = await (window.electronAPI as any).invoke('create-database-backup');
+      
+      if (result.success) {
+        addNotification('Database backup created successfully', 'success');
+        // Refresh metrics to show updated backup count
+        await loadDatabaseMetrics();
+      } else {
+        addNotification(`Backup failed: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      console.error('Failed to create database backup:', error);
+      addNotification('Failed to create database backup', 'error');
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
+  const getDatabaseHealth = async () => {
+    try {
+      setDbLoading(true);
+      const result = await (window.electronAPI as any).invoke('get-database-health');
+      
+      if (result.success) {
+        const healthStatus = result.health.isHealthy ? 'healthy' : 'unhealthy';
+        addNotification(`Database is ${healthStatus}`, result.health.isHealthy ? 'success' : 'error');
+      } else {
+        addNotification(`Health check failed: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      console.error('Failed to get database health:', error);
+      addNotification('Failed to get database health', 'error');
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
+  const forceWALCheckpoint = async () => {
+    try {
+      setDbLoading(true);
+      const result = await (window.electronAPI as any).invoke('force-wal-checkpoint');
+      
+      if (result.success) {
+        addNotification(`WAL checkpoint completed in ${result.duration}ms`, 'success');
+      } else {
+        addNotification(`WAL checkpoint failed: ${result.error}`, 'error');
+      }
+    } catch (error) {
+      console.error('Failed to force WAL checkpoint:', error);
+      addNotification('Failed to force WAL checkpoint', 'error');
+    } finally {
+      setDbLoading(false);
+    }
+  };
+
   // Load memories on component mount
   useEffect(() => {
     console.log('🚀 MemoryDebugger component mounted, loading memories...');
@@ -316,17 +428,46 @@ const MemoryDebugger = () => {
       }
     };
 
-    // Add the listener if available
+    // Listen for database notifications
+    const handleDatabaseNotification = (_event: any, notification: DatabaseNotification) => {
+      setDbNotifications(prev => [
+        {
+          ...notification,
+          id: Date.now().toString(),
+          timestamp: new Date()
+        },
+        ...prev.slice(0, 9) // Keep only last 10 notifications
+      ]);
+      
+      // Also add to main notifications
+      addNotification(notification.message, notification.type === 'success' ? 'success' : 
+                     notification.type === 'error' ? 'error' : 'info');
+    };
+
+    // Add the listeners if available
     if (window.electronAPI?.onOrchestrationUpdate) {
       window.electronAPI.onOrchestrationUpdate(handleOrchestrationUpdate);
+    }
+    
+    // Add database notification listener
+    if ((window.electronAPI as any)?.on) {
+      (window.electronAPI as any).on('database-notification', handleDatabaseNotification);
+    }
+    
+    // Load initial database metrics if on database tab
+    if (activeTab === 'database') {
+      loadDatabaseMetrics();
     }
     
     // Cleanup function to track unmounting
     return () => {
       console.log('🚨 MemoryDebugger component unmounting!');
-      // Note: No explicit listener removal needed as component unmount handles cleanup
+      // Remove database notification listener
+      if ((window.electronAPI as any)?.removeListener) {
+        (window.electronAPI as any).removeListener('database-notification', handleDatabaseNotification);
+      }
     };
-  }, [searchQuery]);
+  }, [searchQuery, activeTab]);
   
   // Check for new memories when memories array changes
   useEffect(() => {
@@ -417,24 +558,52 @@ const MemoryDebugger = () => {
     <div className="w-full h-screen flex flex-col bg-gray-900/95">
       {/* Notifications */}
       <div className="fixed top-4 right-4 z-50 w-64 max-w-sm space-y-2">
-        {notifications.map(notification => (
+        {notifications.map((notification) => (
           <NotificationItem key={notification.id} notification={notification} />
         ))}
       </div>
 
       {/* Memory Header removed - now rendered in UnifiedInterface */}
 
+      {/* Tab Navigation */}
+      <div className="flex border-b border-white/10 bg-gray-800/50">
+        <button
+          onClick={() => setActiveTab('memories')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'memories'
+              ? 'text-blue-300 border-b-2 border-blue-500 bg-blue-500/10'
+              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <Database className="w-4 h-4 inline-block mr-2" />
+          Memory Debugger
+        </button>
+        <button
+          onClick={() => setActiveTab('database')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'database'
+              ? 'text-green-300 border-b-2 border-green-500 bg-green-500/10'
+              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <Brain className="w-4 h-4 inline-block mr-2" />
+          Database Health
+        </button>
+      </div>
+
       {/* Controls Section */}
-      <div 
+      <div
         className="p-4 border-b border-white/10 flex-shrink-0"
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div className="flex items-center justify-between gap-4 mb-2">
-          <div className="flex flex-1text-white/50 text-xs mr-2">
+          <div className="flex flex-1 text-white/50 text-xs mr-2">
             {lastRefreshTime ? `Last refreshed: ${lastRefreshTime.toLocaleTimeString()}` : 'Not refreshed yet'}
           </div>
-          <button 
-            onClick={() => loadMemories(false, searchQuery)} 
+          <button
+            onClick={() => loadMemories(false, searchQuery)}
             disabled={loading}
             className="px-2 py-1 text-xs bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md mr-2 transition-colors"
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -455,261 +624,431 @@ const MemoryDebugger = () => {
             }}
             className="flex-1 bg-thinkdrop-dark/30 border border-white/10 rounded px-3 py-2 text-sm text-white placeholder-gray-400 focus:outline-none focus:border-white/20"
           />
-          {/* <button 
+          {/* 
+          <button 
             onClick={() => loadMemories(false, searchQuery)}
             disabled={loading}
             className="px-3 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             Search
-          </button> */}          
+          </button> 
+          */}
         </div>
       </div>
 
       {/* Content Area - Scrollable */}
-      <div 
+      <div
         className="flex-1 overflow-y-auto overflow-x-hidden p-4"
-        style={{ 
+        style={{
           WebkitAppRegion: 'no-drag',
           minHeight: 0, // Important for flex child to shrink
-          maxHeight: '100%'
+          maxHeight: '100%',
         } as React.CSSProperties}
       >
-        {error && (
-          <div className="bg-red-900/30 text-red-200 rounded px-3 py-2 mb-4 text-sm">
-            {error}
-          </div>
-        )}
+        {activeTab === 'memories' ? (
+          // Memory Debugger Content
+          <>
+            {error && (
+              <div className="bg-red-900/30 text-red-200 rounded px-3 py-2 mb-4 text-sm">{error}</div>
+            )}
 
-        <div className="text-xs text-gray-400 mb-4">
-          {filteredMemories.length} memories found
-        </div>
+            <div className="text-xs text-gray-400 mb-4">{filteredMemories.length} memories found</div>
 
-        <div className="space-y-3">
-        {filteredMemories.length === 0 ? (
-          <div className="text-center py-12 text-gray-500">
-            {loading ? 'Loading memories...' : 'No memories found'}
-          </div>
-        ) : (
-          filteredMemories.map((memory: IntentMemory | any, index) => {
-            // Handle both camelCase and snake_case property names
-            const primaryIntent = memory.primaryIntent || memory.primary_intent;
-            const sourceText = memory.sourceText || memory.source_text;
-            const extractedText = memory.extractedText || memory.extracted_text;
-            const suggestedResponse = memory.suggestedResponse || memory.suggested_response;
-            const syncedToBackend = memory.syncedToBackend || memory.synced_to_backend;
-            const screenshot = memory.screenshot;
-            const timestamp = memory.timestamp || memory.created_at;
-            
-            // Handle new intent memory format
-            if (memory.id && (primaryIntent || memory.intents)) {
-              return (
-                <div key={memory.id || index} className="bg-thinkdrop-dark/50 rounded p-4 border border-white/10">
-                  {/* Header with ID and actions */}
-                  <div className="flex justify-between items-start mb-3">
-                    <div className="flex items-center space-x-2">
-                      <Brain className="h-4 w-4 text-thinkdrop-teal" />
-                      <div className="font-mono text-thinkdrop-teal text-xs break-all flex-1">{memory.id}</div>
-                    </div>
-                    <div className="flex items-center space-x-1">
-                      {screenshot && (
-                        <button
-                          onClick={() => viewScreenshot(memory)}
-                          className="p-1 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 rounded transition-colors"
-                          title="View screenshot"
-                        >
-                          <Eye className="h-3 w-3" />
-                        </button>
-                      )}
-                      <div title={syncedToBackend ? "Synced to backend" : "Not synced"}>
-                        {syncedToBackend ? (
-                          <Cloud className="h-3 w-3 text-green-400" />
-                        ) : (
-                          <CloudOff className="h-3 w-3 text-yellow-400" />
-                        )}
-                      </div>
-                      <button
-                        onClick={() => deleteMemory(memory.id)}
-                        className="p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors"
-                        title="Delete memory"
+            <div className="space-y-3">
+              {filteredMemories.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  {loading ? 'Loading memories...' : 'No memories found'}
+                </div>
+              ) : (
+                filteredMemories.map((memory: IntentMemory | any, index) => {
+                  // Handle both camelCase and snake_case property names
+                  const primaryIntent = memory.primaryIntent || memory.primary_intent;
+                  const sourceText = memory.sourceText || memory.source_text;
+                  const extractedText = memory.extractedText || memory.extracted_text;
+                  const suggestedResponse = memory.suggestedResponse || memory.suggested_response;
+                  const syncedToBackend = memory.syncedToBackend || memory.synced_to_backend;
+                  const screenshot = memory.screenshot;
+                  const timestamp = memory.timestamp || memory.created_at;
+
+                  // Handle new intent memory format
+                  if (memory.id && (primaryIntent || memory.intents)) {
+                    return (
+                      <div
+                        key={memory.id || index}
+                        className="bg-thinkdrop-dark/50 rounded p-4 border border-white/10"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Primary Intent and Timestamp */}
-                  <div className="flex justify-between items-start mb-2">
-                    <div>
-                      <div className="text-xs text-gray-400 mb-1">Primary Intent:</div>
-                      <div className="text-sm text-white bg-thinkdrop-teal/20 px-2 py-1 rounded inline-block">
-                        {primaryIntent}
-                      </div>
-                    </div>
-                    {timestamp && (
-                      <div className="text-right">
-                        <div className="text-xs text-gray-400 mb-1">Created:</div>
-                        <div className="text-xs text-gray-400">{formatDate(timestamp)}</div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Source Text */}
-                  {sourceText && (
-                    <div className="mb-2">
-                      <div className="text-xs text-gray-400 mb-1">Source Text:</div>
-                      <div className="text-xs text-gray-200 bg-black/20 p-2 rounded">
-                        {sourceText}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Extracted Text (from OCR) */}
-                  {extractedText && (
-                    <div className="mb-2">
-                      <div className="text-xs text-gray-400 mb-1">Extracted Text (OCR):</div>
-                      <div className="text-xs text-gray-200 bg-black/20 p-2 rounded max-h-24 overflow-y-auto">
-                        {extractedText}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Suggested Response */}
-                  {suggestedResponse && (
-                    <div className="mb-2">
-                      <div className="text-xs text-gray-400 mb-1">Suggested Response:</div>
-                      <div className="text-xs text-gray-200 bg-black/20 p-2 rounded">
-                        {suggestedResponse}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Intent Candidates */}
-                  {memory.intents && memory.intents.length > 0 && (
-                    <div className="mb-2">
-                      <div className="text-xs text-gray-400 mb-1">Intent Candidates:</div>
-                      <div className="space-y-1">
-                        {memory.intents.map((intent: any, idx: number) => (
-                          <div key={idx} className="flex justify-between items-center text-xs bg-black/20 px-2 py-1 rounded">
-                            <span className="text-gray-200">{intent.intent}</span>
-                            <span className="text-thinkdrop-teal">{(intent.confidence * 100).toFixed(1)}%</span>
+                        {/* Header with ID and actions */}
+                        <div className="flex justify-between items-start mb-3">
+                          <div className="flex items-center space-x-2">
+                            <Brain className="h-4 w-4 text-thinkdrop-teal" />
+                            <div className="font-mono text-thinkdrop-teal text-xs break-all flex-1">
+                              {memory.id}
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  
-                  {/* Entities */}
-                  {memory.entities && memory.entities.length > 0 && (
-                    <div className="mb-2">
-                      <div className="text-xs text-gray-400 mb-1">Entities:</div>
-                      <div className="flex flex-wrap gap-1">
-                        {memory.entities.map((entity: any, idx: number) => {
-                          // Handle both old string format and new object format
-                          const entityValue = typeof entity === 'string' ? entity : entity.value || entity;
-                          const entityType = typeof entity === 'object' ? entity.type : null;
-                          const normalizedValue = typeof entity === 'object' ? entity.normalized_value : null;
-                          
-                          return (
-                            <div key={idx} className="text-xs bg-purple-900/30 text-purple-200 px-2 py-1 rounded flex flex-col">
-                              <div className="flex items-center gap-1">
-                                <span>{entityValue}</span>
-                                {entityType && (
-                                  <span className="text-purple-300 text-[10px] opacity-70">({entityType})</span>
-                                )}
-                              </div>
-                              {normalizedValue && normalizedValue !== entityValue && (
-                                <div className="text-purple-300 text-[10px] opacity-70 mt-0.5">
-                                  → {normalizedValue}
-                                </div>
+                          <div className="flex items-center space-x-1">
+                            {screenshot && (
+                              <button
+                                onClick={() => viewScreenshot(memory)}
+                                className="p-1 text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 rounded transition-colors"
+                                title="View screenshot"
+                              >
+                                <Eye className="h-3 w-3" />
+                              </button>
+                            )}
+                            <div title={syncedToBackend ? 'Synced to backend' : 'Not synced'}>
+                              {syncedToBackend ? (
+                                <Cloud className="h-3 w-3 text-green-400" />
+                              ) : (
+                                <CloudOff className="h-3 w-3 text-yellow-400" />
                               )}
                             </div>
-                          );
-                        })}
+                            <button
+                              onClick={() => deleteMemory(memory.id)}
+                              className="p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors"
+                              title="Delete memory"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Primary Intent and Timestamp */}
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="text-xs text-gray-400 mb-1">Primary Intent:</div>
+                            <div className="text-sm text-white bg-thinkdrop-teal/20 px-2 py-1 rounded inline-block">
+                              {primaryIntent}
+                            </div>
+                          </div>
+                          {timestamp && (
+                            <div className="text-right">
+                              <div className="text-xs text-gray-400 mb-1">Created:</div>
+                              <div className="text-xs text-gray-400">{formatDate(timestamp)}</div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Source Text */}
+                        {sourceText && (
+                          <div className="mb-2">
+                            <div className="text-xs text-gray-400 mb-1">Source Text:</div>
+                            <div className="text-xs text-gray-200 bg-black/20 p-2 rounded">{sourceText}</div>
+                          </div>
+                        )}
+
+                        {/* Extracted Text (from OCR) */}
+                        {extractedText && (
+                          <div className="mb-2">
+                            <div className="text-xs text-gray-400 mb-1">Extracted Text (OCR):</div>
+                            <div className="text-xs text-gray-200 bg-black/20 p-2 rounded max-h-24 overflow-y-auto">
+                              {extractedText}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Suggested Response */}
+                        {suggestedResponse && (
+                          <div className="mb-2">
+                            <div className="text-xs text-gray-400 mb-1">Suggested Response:</div>
+                            <div className="text-xs text-gray-200 bg-black/20 p-2 rounded">
+                              {suggestedResponse}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Intent Candidates */}
+                        {memory.intents && memory.intents.length > 0 && (
+                          <div className="mb-2">
+                            <div className="text-xs text-gray-400 mb-1">Intent Candidates:</div>
+                            <div className="space-y-1">
+                              {memory.intents.map((intent: any, idx: number) => (
+                                <div
+                                  key={idx}
+                                  className="flex justify-between items-center text-xs bg-black/20 px-2 py-1 rounded"
+                                >
+                                  <span className="text-gray-200">{intent.intent}</span>
+                                  <span className="text-thinkdrop-teal">
+                                    {(intent.confidence * 100).toFixed(1)}%
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Entities */}
+                        {memory.entities && memory.entities.length > 0 && (
+                          <div className="mb-2">
+                            <div className="text-xs text-gray-400 mb-1">Entities:</div>
+                            <div className="flex flex-wrap gap-1">
+                              {memory.entities.map((entity: any, idx: number) => {
+                                // Handle both old string format and new object format
+                                const entityValue = typeof entity === 'string' ? entity : entity.value || entity;
+                                const entityType = typeof entity === 'object' ? entity.type : null;
+                                const normalizedValue =
+                                  typeof entity === 'object' ? entity.normalized_value : null;
+
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="text-xs bg-purple-900/30 text-purple-200 px-2 py-1 rounded flex flex-col"
+                                  >
+                                    <div className="flex items-center gap-1">
+                                      <span>{entityValue}</span>
+                                      {entityType && (
+                                        <span className="text-purple-300 text-[10px] opacity-70">
+                                          ({entityType})
+                                        </span>
+                                      )}
+                                    </div>
+                                    {normalizedValue && normalizedValue !== entityValue && (
+                                      <div className="text-purple-300 text-[10px] opacity-70 mt-0.5">
+                                        → {normalizedValue}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Flags */}
+                        <div className="flex items-center space-x-4 mb-2 text-xs">
+                          {memory.requires_memory_access > 0 && (
+                            <span className="text-blue-300 bg-blue-900/30 px-2 py-1 rounded">
+                              Memory Access
+                            </span>
+                          )}
+                          {memory.requires_external_data > 0 && (
+                            <span className="text-orange-300 bg-orange-900/30 px-2 py-1 rounded">
+                              External Data
+                            </span>
+                          )}
+                          {memory.screenshot && (
+                            <span className="text-green-300 bg-green-900/30 px-2 py-1 rounded">
+                              Has Screenshot
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Timestamps */}
+                        <div className="flex justify-between text-[11px] text-gray-500 pt-2 border-t border-white/10">
+                          <div>Created: {formatDate(memory.created_at)}</div>
+                          <div>Updated: {formatDate(memory.updated_at)}</div>
+                          {memory.backend_memory_id && (
+                            <div>Backend ID: {memory.backend_memory_id.substring(0, 8)}...</div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  // Handle legacy memory format
+                  return (
+                    <div key={memory.key || index} className="bg-thinkdrop-dark/50 rounded p-3">
+                      <div className="flex justify-between items-start mb-1">
+                        <div className="font-mono text-thinkdrop-teal text-xs break-all flex-1">
+                          {memory.key}
+                        </div>
+                        <button
+                          onClick={() => deleteMemory(memory.key)}
+                          className="ml-2 p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors flex-shrink-0"
+                          title="Delete memory"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                      <div className="memory-value text-xs text-gray-200 mb-1">
+                        <pre className="whitespace-pre-wrap break-all">{formatValue(memory.value)}</pre>
+                      </div>
+                      <div className="flex justify-between text-[11px] text-gray-500 mt-1">
+                        <div>Created: {formatDate(memory.created_at)}</div>
+                        <div>Updated: {formatDate(memory.updated_at)}</div>
                       </div>
                     </div>
-                  )}
-
-                  {/* Flags */}
-                  <div className="flex items-center space-x-4 mb-2 text-xs">
-                    {memory.requires_memory_access > 0 && (
-                      <span className="text-blue-300 bg-blue-900/30 px-2 py-1 rounded">Memory Access</span>
-                    )}
-                    {memory.requires_external_data > 0 && (
-                      <span className="text-orange-300 bg-orange-900/30 px-2 py-1 rounded">External Data</span>
-                    )}
-                    {memory.screenshot && (
-                      <span className="text-green-300 bg-green-900/30 px-2 py-1 rounded">Has Screenshot</span>
-                    )}
-                  </div>
-
-                  {/* Timestamps */}
-                  <div className="flex justify-between text-[11px] text-gray-500 pt-2 border-t border-white/10">
-                    <div>Created: {formatDate(memory.created_at)}</div>
-                    <div>Updated: {formatDate(memory.updated_at)}</div>
-                    {memory.backend_memory_id && (
-                      <div>Backend ID: {memory.backend_memory_id.substring(0, 8)}...</div>
-                    )}
-                  </div>
-                </div>
-              );
-            } else {
-              // Handle legacy memory format
-              return (
-                <div key={memory.key || index} className="bg-thinkdrop-dark/50 rounded p-3">
-                  <div className="flex justify-between items-start mb-1">
-                    <div className="font-mono text-thinkdrop-teal text-xs break-all flex-1">{memory.key}</div>
-                    <button
-                      onClick={() => deleteMemory(memory.key)}
-                      className="ml-2 p-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded transition-colors flex-shrink-0"
-                      title="Delete memory"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  </div>
-                  <div className="memory-value text-xs text-gray-200 mb-1">
-                    <pre className="whitespace-pre-wrap break-all">{formatValue(memory.value)}</pre>
-                  </div>
-                  <div className="flex justify-between text-[11px] text-gray-500 mt-1">
-                    <div>Created: {formatDate(memory.created_at)}</div>
-                    <div>Updated: {formatDate(memory.updated_at)}</div>
-                  </div>
-                </div>
-              );
-            }
-          })
-        )}
-        
-        {/* Load More Button for Pagination */}
-        {memories.length > 0 && paginationInfo && paginationInfo.hasMore && (
-          <div className="flex justify-center mt-4 pt-4 border-t border-white/10">
-            <button
-              onClick={() => loadMemories(true, searchQuery)}
-              disabled={loading}
-              className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  Loading...
-                </>
-              ) : (
-                <>
-                  <Database className="w-4 h-4" />
-                  Load More ({Number(paginationInfo.total) - memories.length} remaining)
-                </>
+                  );
+                })
               )}
-            </button>
+
+              {/* Load More Button for Pagination */}
+              {memories.length > 0 && paginationInfo && paginationInfo.hasMore && (
+                <div className="flex justify-center mt-4 pt-4 border-t border-white/10">
+                  <button
+                    onClick={() => loadMemories(true, searchQuery)}
+                    disabled={loading}
+                    className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                  >
+                    {loading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        Loading...
+                      </>
+                    ) : (
+                      <>
+                        <Database className="w-4 h-4" />
+                        Load More ({Number(paginationInfo.total) - memories.length} remaining)
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Pagination Info */}
+              {paginationInfo && (
+                <div className="text-center mt-2 text-xs text-gray-400">
+                  Showing {memories.length} of {Number(paginationInfo.total)} memories
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          // Database Health Dashboard
+          <div className="space-y-6">
+            {/* Database Health Controls */}
+            <div className="bg-gray-800/50 rounded-lg p-4">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                <Brain className="w-5 h-5 mr-2 text-green-400" />
+                Database Health Controls
+              </h3>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <button
+                  onClick={loadDatabaseMetrics}
+                  disabled={dbLoading}
+                  className="px-4 py-2 bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-4 h-4 ${dbLoading ? 'animate-spin' : ''}`} />
+                  Load Metrics
+                </button>
+                <button
+                  onClick={createDatabaseBackup}
+                  disabled={dbLoading}
+                  className="px-4 py-2 bg-green-500/20 hover:bg-green-500/30 text-green-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Database className="w-4 h-4" />
+                  Create Backup
+                </button>
+                <button
+                  onClick={getDatabaseHealth}
+                  disabled={dbLoading}
+                  className="px-4 py-2 bg-yellow-500/20 hover:bg-yellow-500/30 text-yellow-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <AlertCircle className="w-4 h-4" />
+                  Health Check
+                </button>
+                <button
+                  onClick={forceWALCheckpoint}
+                  disabled={dbLoading}
+                  className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded-md transition-colors flex items-center gap-2 disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  WAL Checkpoint
+                </button>
+              </div>
+            </div>
+
+            {/* Database Metrics */}
+            {dbMetrics && (
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                  <Database className="w-5 h-5 mr-2 text-blue-400" />
+                  Database Metrics
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Uptime</div>
+                    <div className="text-lg font-semibold text-white">
+                      {Math.floor(dbMetrics.uptime / 3600)}h {Math.floor((dbMetrics.uptime % 3600) / 60)}m
+                    </div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Total Queries</div>
+                    <div className="text-lg font-semibold text-white">{dbMetrics.totalQueries}</div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Queries/min</div>
+                    <div className="text-lg font-semibold text-white">{dbMetrics.queriesPerMinute}</div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className={`text-lg font-semibold ${dbMetrics.errorRate > 5 ? 'text-red-400' : 'text-green-400'}`}>
+                      {dbMetrics.errorRate}%
+                    </div>
+                    <div className="text-xs text-gray-400">Error Rate</div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Avg Query Time</div>
+                    <div className="text-lg font-semibold text-white">{dbMetrics.avgQueryTime}ms</div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Active Connections</div>
+                    <div className="text-lg font-semibold text-white">
+                      {dbMetrics.activeConnections}/{dbMetrics.activeConnections + dbMetrics.queuedConnections}
+                    </div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Backups Created</div>
+                    <div className="text-lg font-semibold text-white">{dbMetrics.backupCount}</div>
+                  </div>
+                  <div className="bg-gray-700/50 rounded p-3">
+                    <div className="text-xs text-gray-400">Recovery Attempts</div>
+                    <div
+                      className={`text-lg font-semibold ${
+                        dbMetrics.recoveryAttempts > 0 ? 'text-yellow-400' : 'text-green-400'
+                      }`}
+                    >
+                      {dbMetrics.recoveryAttempts}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Database Notifications */}
+            {dbNotifications.length > 0 && (
+              <div className="bg-gray-800/50 rounded-lg p-4">
+                <h3 className="text-lg font-semibold text-white mb-4 flex items-center">
+                  <AlertCircle className="w-5 h-5 mr-2 text-orange-400" />
+                  Recent Database Events
+                </h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {dbNotifications.map((notification) => (
+                    <div
+                      key={notification.id}
+                      className={`p-3 rounded-md text-sm ${
+                        notification.type === 'success'
+                          ? 'bg-green-500/20 border-l-2 border-green-500'
+                          : notification.type === 'error'
+                          ? 'bg-red-500/20 border-l-2 border-red-500'
+                          : notification.type === 'warning'
+                          ? 'bg-yellow-500/20 border-l-2 border-yellow-500'
+                          : 'bg-blue-500/20 border-l-2 border-blue-500'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <div className="font-medium text-white">{notification.title}</div>
+                          <div className="text-gray-300 mt-1">{notification.message}</div>
+                        </div>
+                        <div className="text-xs text-gray-400 ml-4 flex-shrink-0">
+                          {notification.timestamp.toLocaleTimeString()}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* No metrics message */}
+            {!dbMetrics && !dbLoading && (
+              <div className="text-center py-8">
+                <Database className="w-12 h-12 text-gray-500 mx-auto mb-4" />
+                <p className="text-gray-400">Click "Load Metrics" to view database health information</p>
+              </div>
+            )}
           </div>
         )}
-        
-        {/* Pagination Info */}
-        {paginationInfo && (
-          <div className="text-center mt-2 text-xs text-gray-400">
-            Showing {memories.length} of {Number(paginationInfo.total)} memories
-          </div>
-        )}
-        </div>
       </div>
     </div>
   );

@@ -30,23 +30,38 @@ function addTablePrefixes(sql) {
   
   let prefixedSql = sql;
   
-  // Don't prefix table names in DDL statements (CREATE, DROP, ALTER)
-  // But DO prefix in UPDATE statements since they're DML
+  // Handle DDL vs DML statements differently for DuckDB syntax compatibility
   const isDDL = /^\s*(CREATE|DROP|ALTER)\s+/i.test(sql.trim());
+  
   if (isDDL) {
-    return sql; // Return original SQL for DDL statements
+    // For DDL statements, DuckDB doesn't support catalog prefixes in table names
+    // The connection should use USE statement to set the active database context
+    return sql;
   }
   
-  // Only prefix if not already prefixed with agent_memory.
+  // For DML statements (SELECT, INSERT, UPDATE, DELETE), add catalog prefixes
   for (const tableName of tableNames) {
     // Skip if already prefixed
     if (prefixedSql.includes(`agent_memory.${tableName}`)) {
       continue;
     }
     
-    // Match table name with word boundaries to avoid partial matches
-    const regex = new RegExp(`\\b${tableName}\\b`, 'gi');
-    prefixedSql = prefixedSql.replace(regex, `agent_memory.${tableName}`);
+    // More precise regex: only match table names in appropriate SQL contexts
+    // Match after FROM, JOIN, INTO, UPDATE keywords, or at start of statement
+    const contexts = [
+      `FROM\\s+${tableName}\\b`,
+      `JOIN\\s+${tableName}\\b`, 
+      `INTO\\s+${tableName}\\b`,
+      `UPDATE\\s+${tableName}\\b`,
+      `^\\s*${tableName}\\b`  // At start of statement
+    ];
+    
+    for (const context of contexts) {
+      const regex = new RegExp(context, 'gi');
+      prefixedSql = prefixedSql.replace(regex, (match) => {
+        return match.replace(tableName, `agent_memory.${tableName}`);
+      });
+    }
   }
   
   return prefixedSql;
@@ -227,53 +242,40 @@ function connect(dbPath, cb) {
           
           console.log('✅ agent_memory database attached successfully');
           
-          // STEP 2.3: Test the connection with attached database
-          console.log('🔄 Testing connection with health check on attached database...');
-          connection.all('SELECT 1 as health_check FROM agent_memory.sqlite_master LIMIT 1', (testErr, testResult) => {
-            if (testErr) {
-              // If the sqlite_master query fails, try a simpler test
+          // STEP 1.3: Set active database context for DDL operations
+          console.log('🔄 Setting active database context for DDL operations...');
+          connection.run('USE agent_memory', (useErr) => {
+            if (useErr) {
+              console.warn('⚠️ Failed to set active database context:', useErr.message);
+              // Continue anyway - this is not critical
+            } else {
+              console.log('✅ Active database context set to agent_memory');
+            }
+            
+            // STEP 1.4: Test connection with health check on attached database
+            console.log('🔄 Testing connection with health check on attached database...');
+            connection.all('SELECT 1 as health_check FROM agent_memory.memory LIMIT 1', (healthErr, healthResult) => {
+            if (healthErr) {
               console.log('🔄 Trying simpler health check...');
-              connection.all('SELECT 1 as health_check', (simpleTestErr, simpleTestResult) => {
-                if (simpleTestErr) {
-                  console.error('❌ Connection health check failed:', simpleTestErr);
-                  return cb(simpleTestErr);
+              connection.all('SELECT 1 as health_check', (simpleHealthErr, simpleHealthResult) => {
+                if (simpleHealthErr) {
+                  console.error('❌ Connection health check failed:', simpleHealthErr);
+                  return cb(simpleHealthErr);
                 }
                 
                 console.log('✅ Connection health check passed');
                 
-                // STEP 2.4: Run integrity check (DuckDB compatible)
-                console.log('🔄 Verifying database integrity...');
-                connection.all('SELECT 1 as integrity_check', (integrityErr, integrityResult) => {
-                  if (integrityErr) {
-                    console.warn('⚠️ Database integrity check warning:', integrityErr.message);
-                    // Don't fail on integrity warnings
-                  } else {
-                    console.log('✅ Database integrity verified');
-                  }
-                  
-                  // STEP 2.5: Perform WAL checkpoint
-                  console.log('🔄 Performing WAL checkpoint to preserve data...');
-                  connection.run('CHECKPOINT', (checkpointErr) => {
-                    if (checkpointErr) {
-                      console.warn('⚠️ WAL checkpoint warning:', checkpointErr.message);
-                      // Don't fail on checkpoint errors, just warn
-                    } else {
-                      console.log('✅ WAL checkpoint completed - data preserved');
-                    }
-                    
-                    console.log('🎉 DuckDB with consistent catalog aliasing fully operational!');
-                    
-                    // STEP 2.6: Start periodic WAL checkpoints
-                    startPeriodicCheckpoints();
-                    
-                    cb(null, { db, connection });
-                  });
-                });
+                // Continue with integrity check and setup
+                completeSetup();
               });
             } else {
               console.log('✅ Connection health check passed');
-              
-              // STEP 2.4: Run integrity check (DuckDB compatible)
+              completeSetup();
+            }
+          });
+          
+            function completeSetup() {
+              // STEP 1.5: Run integrity check (DuckDB compatible)
               console.log('🔄 Verifying database integrity...');
               connection.all('SELECT 1 as integrity_check', (integrityErr, integrityResult) => {
                 if (integrityErr) {
@@ -283,7 +285,7 @@ function connect(dbPath, cb) {
                   console.log('✅ Database integrity verified');
                 }
                 
-                // STEP 2.5: Perform WAL checkpoint
+                // STEP 1.6: Perform WAL checkpoint
                 console.log('🔄 Performing WAL checkpoint to preserve data...');
                 connection.run('CHECKPOINT', (checkpointErr) => {
                   if (checkpointErr) {
@@ -295,7 +297,7 @@ function connect(dbPath, cb) {
                   
                   console.log('🎉 DuckDB with consistent catalog aliasing fully operational!');
                   
-                  // STEP 2.6: Start periodic WAL checkpoints
+                  // STEP 1.7: Start periodic WAL checkpoints
                   startPeriodicCheckpoints();
                   
                   cb(null, { db, connection });

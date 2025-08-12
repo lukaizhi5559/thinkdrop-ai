@@ -15,8 +15,33 @@ class DatabaseManager {
     this.dbPath = null;
     this.backupInterval = null;
     this.healthCheckInterval = null;
+    this.walCheckpointInterval = null;
+    this.metricsInterval = null;
     this.lastBackupTime = null;
     this.corruptionDetected = false;
+    
+    // Connection pooling
+    this.connectionPool = [];
+    this.maxConnections = 5;
+    this.activeConnections = 0;
+    this.connectionQueue = [];
+    
+    // Metrics collection
+    this.metrics = {
+      totalQueries: 0,
+      totalErrors: 0,
+      avgQueryTime: 0,
+      lastQueryTime: null,
+      connectionFailures: 0,
+      recoveryAttempts: 0,
+      backupCount: 0,
+      corruptionEvents: 0,
+      queryTimes: [],
+      startTime: new Date()
+    };
+    
+    // User notification callbacks
+    this.notificationCallbacks = [];
   }
 
   /**
@@ -49,7 +74,10 @@ class DatabaseManager {
                 return;
               }
               this.isInitialized = true;
+              this.initializeConnectionPool();
               this.startHealthMonitoring();
+              this.startWALCheckpoints();
+              this.startMetricsCollection();
               resolve(dbWrapper);
             });
           } else {
@@ -59,7 +87,10 @@ class DatabaseManager {
         }
         
         this.isInitialized = true;
+        this.initializeConnectionPool();
         this.startHealthMonitoring();
+        this.startWALCheckpoints();
+        this.startMetricsCollection();
         resolve(dbWrapper); // Return the wrapper itself
       });
     });
@@ -124,8 +155,15 @@ class DatabaseManager {
    * @returns {Promise<void>}
    */
   async cleanup() {
-    // Stop health monitoring
+    // Stop all monitoring services
     this.stopHealthMonitoring();
+    this.stopWALCheckpoints();
+    this.stopMetricsCollection();
+    
+    // Clean up connection pool
+    this.connectionPool = [];
+    this.activeConnections = 0;
+    this.connectionQueue = [];
     
     return new Promise((resolve) => {
       if (this.isInitialized) {
@@ -140,6 +178,108 @@ class DatabaseManager {
         });
       } else {
         resolve();
+      }
+    });
+  }
+
+  /**
+   * Initialize connection pooling
+   * @returns {void}
+   */
+  initializeConnectionPool() {
+    console.log(`🔗 DatabaseManager: Initializing connection pool (max: ${this.maxConnections})`);
+    // Connection pool is managed dynamically - no pre-allocation needed for DuckDB
+  }
+
+  /**
+   * Get connection from pool or create new one
+   * @returns {Promise<Object>} - Database connection
+   */
+  async getPooledConnection() {
+    return new Promise((resolve, reject) => {
+      // If we have available connections, use them
+      if (this.activeConnections < this.maxConnections) {
+        this.activeConnections++;
+        resolve(dbWrapper);
+        return;
+      }
+
+      // Queue the request if pool is full
+      this.connectionQueue.push({ resolve, reject, timestamp: Date.now() });
+      
+      // Set timeout for queued requests
+      setTimeout(() => {
+        const queueIndex = this.connectionQueue.findIndex(req => req.resolve === resolve);
+        if (queueIndex !== -1) {
+          this.connectionQueue.splice(queueIndex, 1);
+          reject(new Error('Connection pool timeout - too many concurrent operations'));
+        }
+      }, 10000); // 10 second timeout
+    });
+  }
+
+  /**
+   * Release connection back to pool
+   * @returns {void}
+   */
+  releaseConnection() {
+    this.activeConnections = Math.max(0, this.activeConnections - 1);
+    
+    // Process queued requests
+    if (this.connectionQueue.length > 0 && this.activeConnections < this.maxConnections) {
+      const nextRequest = this.connectionQueue.shift();
+      this.activeConnections++;
+      nextRequest.resolve(dbWrapper);
+    }
+  }
+
+  /**
+   * Add user notification callback
+   * @param {Function} callback - Notification callback function
+   * @returns {void}
+   */
+  addNotificationCallback(callback) {
+    if (typeof callback === 'function') {
+      this.notificationCallbacks.push(callback);
+    }
+  }
+
+  /**
+   * Remove user notification callback
+   * @param {Function} callback - Callback to remove
+   * @returns {void}
+   */
+  removeNotificationCallback(callback) {
+    const index = this.notificationCallbacks.indexOf(callback);
+    if (index > -1) {
+      this.notificationCallbacks.splice(index, 1);
+    }
+  }
+
+  /**
+   * Send notification to users
+   * @param {string} type - Notification type (info, warning, error, success)
+   * @param {string} message - Notification message
+   * @param {Object} details - Additional details
+   * @returns {void}
+   */
+  notifyUsers(type, message, details = {}) {
+    const notification = {
+      type,
+      message,
+      details,
+      timestamp: new Date().toISOString(),
+      source: 'DatabaseManager'
+    };
+
+    console.log(`📢 DatabaseManager: ${type.toUpperCase()} - ${message}`);
+    
+    // Send to all registered callbacks
+    this.notificationCallbacks.forEach(callback => {
+      try {
+        callback(notification);
+      } catch (error) {
+        console.error('❌ DatabaseManager: Notification callback failed:', error);
       }
     });
   }
@@ -192,6 +332,14 @@ class DatabaseManager {
    */
   async handleCorruption(dbPath, corruptionInfo) {
     console.log(`🚨 DatabaseManager: Handling corruption - ${corruptionInfo.reason}`);
+    this.metrics.corruptionEvents++;
+    this.metrics.recoveryAttempts++;
+    
+    // Notify users of corruption detection
+    this.notifyUsers('warning', 'Database corruption detected, attempting automatic recovery...', {
+      reason: corruptionInfo.reason,
+      severity: corruptionInfo.severity
+    });
     
     try {
       // Create backup of corrupted file for forensics
@@ -207,6 +355,9 @@ class DatabaseManager {
       const restoreResult = await this.restoreFromBackup(dbPath);
       if (restoreResult.success) {
         console.log('✅ DatabaseManager: Successfully restored from backup');
+        this.notifyUsers('success', 'Database successfully restored from backup', {
+          backupFile: restoreResult.backupFile
+        });
         return { success: true, method: 'backup_restore' };
       }
 
@@ -214,9 +365,16 @@ class DatabaseManager {
       console.log('🔄 DatabaseManager: No backup available, creating fresh database');
       await this.createFreshDatabase(dbPath);
       
+      this.notifyUsers('info', 'Created fresh database - previous data may be lost', {
+        corruptedBackup: corruptedBackupPath
+      });
+      
       return { success: true, method: 'fresh_database' };
     } catch (error) {
       console.error('❌ DatabaseManager: Corruption handling failed:', error);
+      this.notifyUsers('error', 'Database recovery failed - manual intervention required', {
+        error: error.message
+      });
       return { success: false, error };
     }
   }
@@ -319,7 +477,14 @@ class DatabaseManager {
       fs.copyFileSync(this.dbPath, backupPath);
       
       this.lastBackupTime = new Date();
+      this.metrics.backupCount++;
       console.log(`💾 DatabaseManager: Backup created at ${backupPath}`);
+      
+      // Notify users of successful backup
+      this.notifyUsers('info', 'Database backup completed successfully', {
+        backupPath,
+        backupNumber: this.metrics.backupCount
+      });
       
       // Clean up old backups (keep last 5)
       await this.cleanupOldBackups(backupDir, 5);
@@ -327,6 +492,9 @@ class DatabaseManager {
       return { success: true, backupPath, timestamp };
     } catch (error) {
       console.error('❌ DatabaseManager: Backup creation failed:', error);
+      this.notifyUsers('warning', 'Database backup failed', {
+        error: error.message
+      });
       return { success: false, error };
     }
   }
@@ -438,6 +606,159 @@ class DatabaseManager {
   }
 
   /**
+   * Start WAL checkpoint management (every 1-2 minutes)
+   * @returns {void}
+   */
+  startWALCheckpoints() {
+    // WAL checkpoint every 90 seconds (1.5 minutes)
+    this.walCheckpointInterval = setInterval(async () => {
+      await this.performWALCheckpoint();
+    }, 90 * 1000);
+
+    console.log('📝 DatabaseManager: WAL checkpoint management started (every 90 seconds)');
+  }
+
+  /**
+   * Stop WAL checkpoint management
+   * @returns {void}
+   */
+  stopWALCheckpoints() {
+    if (this.walCheckpointInterval) {
+      clearInterval(this.walCheckpointInterval);
+      this.walCheckpointInterval = null;
+    }
+
+    console.log('🛑 DatabaseManager: WAL checkpoint management stopped');
+  }
+
+  /**
+   * Perform WAL checkpoint
+   * @returns {Promise<Object>} - Checkpoint result
+   */
+  async performWALCheckpoint() {
+    try {
+      const startTime = Date.now();
+      await this.query('PRAGMA wal_checkpoint(PASSIVE)');
+      const duration = Date.now() - startTime;
+      
+      console.log(`📝 DatabaseManager: WAL checkpoint completed in ${duration}ms`);
+      
+      // Update metrics
+      this.updateMetrics('wal_checkpoint', duration);
+      
+      return { success: true, duration };
+    } catch (error) {
+      console.warn('⚠️ DatabaseManager: WAL checkpoint failed:', error.message);
+      this.metrics.totalErrors++;
+      return { success: false, error };
+    }
+  }
+
+  /**
+   * Start metrics collection
+   * @returns {void}
+   */
+  startMetricsCollection() {
+    // Collect and log metrics every 10 minutes
+    this.metricsInterval = setInterval(() => {
+      this.logMetrics();
+    }, 10 * 60 * 1000);
+
+    console.log('📊 DatabaseManager: Metrics collection started');
+  }
+
+  /**
+   * Stop metrics collection
+   * @returns {void}
+   */
+  stopMetricsCollection() {
+    if (this.metricsInterval) {
+      clearInterval(this.metricsInterval);
+      this.metricsInterval = null;
+    }
+
+    console.log('🛑 DatabaseManager: Metrics collection stopped');
+  }
+
+  /**
+   * Update metrics
+   * @param {string} operation - Operation type
+   * @param {number} duration - Operation duration in ms
+   * @param {boolean} isError - Whether operation failed
+   * @returns {void}
+   */
+  updateMetrics(operation, duration, isError = false) {
+    this.metrics.totalQueries++;
+    this.metrics.lastQueryTime = new Date();
+    
+    if (isError) {
+      this.metrics.totalErrors++;
+    }
+    
+    // Track query times for average calculation
+    this.metrics.queryTimes.push(duration);
+    
+    // Keep only last 100 query times to prevent memory bloat
+    if (this.metrics.queryTimes.length > 100) {
+      this.metrics.queryTimes = this.metrics.queryTimes.slice(-100);
+    }
+    
+    // Calculate rolling average
+    this.metrics.avgQueryTime = this.metrics.queryTimes.reduce((a, b) => a + b, 0) / this.metrics.queryTimes.length;
+  }
+
+  /**
+   * Get current metrics
+   * @returns {Object} - Current metrics snapshot
+   */
+  getMetrics() {
+    const uptime = Date.now() - this.metrics.startTime.getTime();
+    const queriesPerMinute = this.metrics.totalQueries / (uptime / 60000);
+    const errorRate = this.metrics.totalQueries > 0 ? (this.metrics.totalErrors / this.metrics.totalQueries) * 100 : 0;
+    
+    return {
+      ...this.metrics,
+      uptime: Math.round(uptime / 1000), // seconds
+      queriesPerMinute: Math.round(queriesPerMinute * 100) / 100,
+      errorRate: Math.round(errorRate * 100) / 100,
+      activeConnections: this.activeConnections,
+      queuedConnections: this.connectionQueue.length,
+      avgQueryTime: Math.round(this.metrics.avgQueryTime * 100) / 100
+    };
+  }
+
+  /**
+   * Log current metrics
+   * @returns {void}
+   */
+  logMetrics() {
+    const metrics = this.getMetrics();
+    
+    console.log('📊 DatabaseManager Metrics:');
+    console.log(`   Uptime: ${Math.floor(metrics.uptime / 3600)}h ${Math.floor((metrics.uptime % 3600) / 60)}m`);
+    console.log(`   Total Queries: ${metrics.totalQueries}`);
+    console.log(`   Queries/min: ${metrics.queriesPerMinute}`);
+    console.log(`   Error Rate: ${metrics.errorRate}%`);
+    console.log(`   Avg Query Time: ${metrics.avgQueryTime}ms`);
+    console.log(`   Active Connections: ${metrics.activeConnections}/${this.maxConnections}`);
+    console.log(`   Queued Connections: ${metrics.queuedConnections}`);
+    console.log(`   Backups Created: ${metrics.backupCount}`);
+    console.log(`   Recovery Attempts: ${metrics.recoveryAttempts}`);
+    console.log(`   Corruption Events: ${metrics.corruptionEvents}`);
+    
+    // Send metrics notification if error rate is high
+    if (metrics.errorRate > 10) {
+      this.notifyUsers('warning', `High database error rate detected: ${metrics.errorRate}%`, {
+        metrics: {
+          errorRate: metrics.errorRate,
+          totalErrors: metrics.totalErrors,
+          totalQueries: metrics.totalQueries
+        }
+      });
+    }
+  }
+
+  /**
    * Perform health check
    * @returns {Promise<Object>} - Health check result
    */
@@ -473,7 +794,7 @@ class DatabaseManager {
   }
 
   /**
-   * Execute query via wrapper with retry logic
+   * Execute query via wrapper with retry logic, connection pooling, and metrics
    * @param {string} sql - SQL query
    * @param {Array} params - Query parameters
    * @param {Function} callback - Optional callback function
@@ -489,28 +810,42 @@ class DatabaseManager {
     
     const maxRetries = 3;
     const retryDelay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+    const startTime = Date.now();
+    
+    let connection = null;
     
     try {
-      const connection = await this.ensureConnection();
+      // Get connection from pool
+      connection = await this.getPooledConnection();
       
       if (callback) {
         connection.query(sql, params, async (err, rows) => {
+          const duration = Date.now() - startTime;
+          this.releaseConnection();
+          
           if (err && retryCount < maxRetries && this.shouldRetry(err)) {
             console.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+            this.updateMetrics('query', duration, true);
             setTimeout(async () => {
               await this.query(sql, params, callback, retryCount + 1);
             }, retryDelay);
             return;
           }
+          
+          this.updateMetrics('query', duration, !!err);
           callback(err, rows);
         });
       } else {
         // Promise-style call
         return new Promise((resolve, reject) => {
           connection.query(sql, params, async (err, rows) => {
+            const duration = Date.now() - startTime;
+            this.releaseConnection();
+            
             if (err) {
               if (retryCount < maxRetries && this.shouldRetry(err)) {
                 console.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                this.updateMetrics('query', duration, true);
                 setTimeout(async () => {
                   try {
                     const result = await this.query(sql, params, null, retryCount + 1);
@@ -521,19 +856,31 @@ class DatabaseManager {
                 }, retryDelay);
                 return;
               }
+              this.updateMetrics('query', duration, true);
               reject(err);
             } else {
+              this.updateMetrics('query', duration, false);
               resolve(rows);
             }
           });
         });
       }
     } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      if (connection) {
+        this.releaseConnection();
+      }
+      
       if (retryCount < maxRetries && this.shouldRetry(error)) {
         console.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+        this.updateMetrics('query', duration, true);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         return await this.query(sql, params, callback, retryCount + 1);
       }
+      
+      this.updateMetrics('query', duration, true);
+      this.metrics.connectionFailures++;
       
       if (callback) {
         callback(error);
@@ -544,7 +891,7 @@ class DatabaseManager {
   }
 
   /**
-   * Execute statement via wrapper with retry logic
+   * Execute statement via wrapper with retry logic, connection pooling, and metrics
    * @param {string} sql - SQL statement
    * @param {Array} params - Statement parameters
    * @param {Function} callback - Optional callback function
@@ -560,29 +907,43 @@ class DatabaseManager {
     
     const maxRetries = 3;
     const retryDelay = Math.pow(2, retryCount) * 1000; // Exponential backoff
+    const startTime = Date.now();
+    
+    let connection = null;
     
     try {
-      const connection = await this.ensureConnection();
+      // Get connection from pool
+      connection = await this.getPooledConnection();
       
       if (callback) {
         // Callback-style call
         connection.run(sql, params, async (err) => {
+          const duration = Date.now() - startTime;
+          this.releaseConnection();
+          
           if (err && retryCount < maxRetries && this.shouldRetry(err)) {
             console.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+            this.updateMetrics('run', duration, true);
             setTimeout(async () => {
               await this.run(sql, params, callback, retryCount + 1);
             }, retryDelay);
             return;
           }
+          
+          this.updateMetrics('run', duration, !!err);
           callback(err);
         });
       } else {
         // Promise-style call
         return new Promise((resolve, reject) => {
           connection.run(sql, params, async (err) => {
+            const duration = Date.now() - startTime;
+            this.releaseConnection();
+            
             if (err) {
               if (retryCount < maxRetries && this.shouldRetry(err)) {
                 console.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                this.updateMetrics('run', duration, true);
                 setTimeout(async () => {
                   try {
                     await this.run(sql, params, null, retryCount + 1);
@@ -593,19 +954,31 @@ class DatabaseManager {
                 }, retryDelay);
                 return;
               }
+              this.updateMetrics('run', duration, true);
               reject(err);
             } else {
+              this.updateMetrics('run', duration, false);
               resolve();
             }
           });
         });
       }
     } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      if (connection) {
+        this.releaseConnection();
+      }
+      
       if (retryCount < maxRetries && this.shouldRetry(error)) {
         console.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+        this.updateMetrics('run', duration, true);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         return await this.run(sql, params, callback, retryCount + 1);
       }
+      
+      this.updateMetrics('run', duration, true);
+      this.metrics.connectionFailures++;
       
       if (callback) {
         callback(error);
