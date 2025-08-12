@@ -232,7 +232,7 @@ export class AgentOrchestrator {
     // First ensure the agents table exists
     await this.createAgentsTable();
 
-    // Use __dirname directly since we're already in the agents_new directory
+    // Use __dirname directly since we're already in the agents directory
     const agentsDir = __dirname;
     const defaultAgents = [
       {
@@ -1084,9 +1084,10 @@ export class AgentOrchestrator {
    * Semantic-first processing: Try semantic search before intent classification
    * @param {string} prompt - User message
    * @param {Object} options - Processing options
+   * @param {Object} context - Execution context
    * @returns {Object|null} - Enhanced response if memories found, null if should continue to intent classification
    */
-  async trySemanticSearchFirst(prompt, options = {}) {
+  async trySemanticSearchFirst(prompt, options = {}, context = {}) {
     if (options.preferSemanticSearch === false) {
       console.log('🔍 [SEMANTIC-FIRST] Semantic search disabled by options, skipping...');
       return null;

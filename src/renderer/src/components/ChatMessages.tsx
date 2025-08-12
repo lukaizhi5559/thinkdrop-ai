@@ -1355,7 +1355,7 @@ export default function ChatMessages() {
               </TooltipTrigger>
               <TooltipContent>
                 <p>
-                  {wsState.isConnected ? 'Live: Messages sent to the server.' : 'Private: messages processed locally.'}
+                  {wsState.isConnected ? 'Live: Messages sent to the server.' : 'Private: conversation is local.'}
                 </p>
               </TooltipContent>
             </Tooltip>   

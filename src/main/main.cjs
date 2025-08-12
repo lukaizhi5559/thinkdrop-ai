@@ -220,7 +220,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll();
 });
 
-// Initialize new services_new architecture only
+// Initialize new services architecture only
 
 async function initializeServices() {
   try {
@@ -228,7 +228,7 @@ async function initializeServices() {
     try {
       console.log('🔄 Step 1: Importing AgentOrchestrator...');
       // Dynamic import for ES module compatibility
-      const { AgentOrchestrator } = await import('./services_new/agents_new/AgentOrchestrator.js');
+      const { AgentOrchestrator } = await import('./services/agents/AgentOrchestrator.js');
       console.log('✅ Step 1: AgentOrchestrator imported successfully');
       
       console.log('🔄 Step 2: Setting up database paths...');
@@ -248,7 +248,7 @@ async function initializeServices() {
       
       console.log('🔄 Step 3: Importing and initializing DatabaseManager...');
       // Import and initialize DatabaseManager
-      const { default: databaseManager } = await import('./services_new/utils/DatabaseManager.js');
+      const { default: databaseManager } = await import('./services/utils/DatabaseManager.js');
       await databaseManager.initialize(dbPath);
       console.log('✅ Step 3: DatabaseManager initialized successfully');
       

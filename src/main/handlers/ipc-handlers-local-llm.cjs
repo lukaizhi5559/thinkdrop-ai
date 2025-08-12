@@ -5,7 +5,7 @@
 // const { broadcastOrchestrationUpdate } = require('./ipc-handlers.cjs');
 
 // Import IntentParser factory for centralized parser management
-const parserFactory = require('../services_new/utils/IntentParserFactory.cjs');
+const parserFactory = require('../services/utils/IntentParserFactory.cjs');
 
 // Configure parser preferences (can be changed at runtime)
 parserFactory.configure({
@@ -93,7 +93,10 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       ////////////////////////////////////////////////////////////////////////
       if (!routingDecision || routingDecision.needsSemanticSearch) {
         console.log('🔍 NER suggests semantic search - checking memories...');
-        const semanticResponse = await coreAgent.trySemanticSearchFirst(prompt, options);
+        const semanticResponse = await coreAgent.trySemanticSearchFirst(prompt, options, {
+          executeAgent: coreAgent.executeAgent.bind(coreAgent),
+          database: coreAgent.context?.database
+        });
         if (semanticResponse) {
           return semanticResponse;
         }

@@ -1639,8 +1639,8 @@ const AGENT_FORMAT = {
                 // If no sessions meet threshold but we have sessions, use improved conversational query detection
                 if (sessionResults.length === 0 && sessions.length > 0) {
                   if (AGENT_FORMAT.isConversationalQueryRobust(semanticQuery)) {
-                    // Don't go below a hard floor; bias to recent sessions
-                    const lowerThreshold = Math.max(0.22, (minSimilarity || 0.6) * 0.6);
+                    // For conversational queries, be much more lenient with thresholds
+                    const lowerThreshold = Math.max(0.15, (minSimilarity || 0.6) * 0.4);
                     console.log(`[DEBUG] Conversational query detected, lowering threshold to ${lowerThreshold}`);
                     
                     for (const session of sessions) {
@@ -1688,9 +1688,9 @@ const AGENT_FORMAT = {
                 console.log(`[DEBUG] Query classification:`, queryClassification);
                 
                 if (queryClassification.isConversational && topSessions.length > 0) {
-                  console.log(`[INFO] CONVERSATIONAL QUERY (${queryClassification.type}) - Using intelligent context retrieval`);
+                  console.log(`[INFO] CONVERSATIONAL QUERY (${queryClassification.type}) - Using message-first retrieval`);
                   
-                  // STEP 3: Intelligent Query Routing based on query type
+                  // STEP 3: Message-First Retrieval - Always prioritize actual conversation messages
                   let contextResults = [];
                   
                   if (queryClassification.type === 'positional') {
@@ -1699,27 +1699,63 @@ const AGENT_FORMAT = {
                       topSessions, queryClassification, database, semanticLimit
                     );
                   } 
-                  else if (queryClassification.type === 'topical') {
-                    // Handle "our discussion about React", "when we talked about X"
-                    contextResults = await AGENT_FORMAT.searchWithinSession(
-                      topSessions, semanticQuery, queryEmbedding, database, semanticLimit
-                    );
-                  }
-                  else if (queryClassification.type === 'overview') {
-                    // Handle "what have we been chatting about", "conversation summary"
-                    contextResults = await AGENT_FORMAT.getSessionOverview(
-                      topSessions, database, semanticLimit
-                    );
-                  }
                   else {
-                    // Fallback to chunk-based search for complex queries
-                    contextResults = await AGENT_FORMAT.searchSessionChunks(
-                      topSessions, semanticQuery, queryEmbedding, database, semanticLimit
-                    );
+                    // For ALL other conversational queries, get actual messages from sessions
+                    console.log(`[INFO] Retrieving actual conversation messages for ${queryClassification.type} query`);
+                    
+                    const sessionIds = topSessions.map(s => s.session_id);
+                    const placeholders = sessionIds.map(() => '?').join(',');
+                    
+                    // Get actual conversation messages from relevant sessions
+                    const messagesSql = `
+                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                             created_at, metadata, embedding
+                      FROM conversation_messages
+                      WHERE session_id IN (${placeholders})
+                      ORDER BY created_at DESC
+                      LIMIT ${semanticLimit * 3}
+                    `;
+                    
+                    const messages = await database.query(messagesSql, sessionIds);
+                    console.log(`[INFO] Found ${messages.length} conversation messages`);
+                    
+                    // Calculate semantic similarity for each message
+                    for (const message of messages) {
+                      const sessionContext = topSessions.find(s => s.session_id === message.session_id);
+                      
+                      let similarity = sessionContext?.similarity || 0.5; // Base similarity from session
+                      
+                      if (message.embedding) {
+                        try {
+                          const messageEmbedding = Array.isArray(message.embedding) 
+                            ? message.embedding 
+                            : JSON.parse(message.embedding);
+                          const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          
+                          // Combine session relevance with message semantic similarity
+                          similarity = (sessionContext?.similarity || 0.5) * 0.3 + semanticSim * 0.7;
+                        } catch (error) {
+                          console.warn(`[WARN] Failed to parse embedding for message ${message.id}:`, error.message);
+                        }
+                      }
+                      
+                      contextResults.push({
+                        ...message,
+                        similarity: similarity,
+                        sessionTitle: sessionContext?.title,
+                        sessionType: sessionContext?.type,
+                        sessionSimilarity: sessionContext?.similarity,
+                        responseType: 'conversation_message'
+                      });
+                    }
+                    
+                    // Sort by similarity and take top results
+                    contextResults.sort((a, b) => b.similarity - a.similarity);
+                    contextResults = contextResults.slice(0, semanticLimit);
                   }
                   
                   if (contextResults.length > 0) {
-                    console.log(`[SUCCESS] INTELLIGENT ROUTING - Returning ${contextResults.length} ${queryClassification.type} results`);
+                    console.log(`[SUCCESS] MESSAGE-FIRST RETRIEVAL - Returning ${contextResults.length} conversation messages`);
                     
                     return {
                       success: true,
@@ -1729,11 +1765,11 @@ const AGENT_FORMAT = {
                       count: contextResults.length,
                       totalSessions: sessions.length,
                       relevantSessions: topSessions.length,
-                      totalMessages: 0,
+                      totalMessages: contextResults.length,
                       minSimilarity: minSimilarity,
                       timeWindow: timeWindow,
-                      searchType: `intelligent-${queryClassification.type}`,
-                      message: `${queryClassification.type} query resolved with intelligent routing`,
+                      searchType: `message-first-${queryClassification.type}`,
+                      message: `${queryClassification.type} query resolved with actual conversation messages`,
                       queryClassification: queryClassification,
                       sessionContext: topSessions.map(s => ({
                         sessionId: s.session_id,
@@ -1748,54 +1784,91 @@ const AGENT_FORMAT = {
                 if (topSessions.length === 0) {
                   // Fallback for when no sessions meet threshold
                   if (queryClassification.isConversational && sessions.length > 0) {
-                    console.log('[INFO] No sessions met similarity threshold, using fallback session context');
+                    console.log('[INFO] No sessions met similarity threshold, using fallback conversation messages');
                     
-                    // Get the most recent session for context
-                    const currentSession = sessions[0];
+                    // For conversational queries, ALWAYS get actual conversation messages, not session summaries
+                    const recentSessions = sessions.slice(0, 2); // Use top 2 most recent sessions
+                    const sessionIds = recentSessions.map(s => s.session_id);
+                    const placeholders = sessionIds.map(() => '?').join(',');
                     
-                    // Get session context directly
-                    const sessionContextSql = `
-                      SELECT content, metadata FROM session_context 
-                      WHERE session_id = ? AND context_type = 'session_summary'
-                      ORDER BY created_at DESC LIMIT 1
+                    // Get actual conversation messages from recent sessions
+                    const messagesSql = `
+                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                             created_at, metadata, embedding
+                      FROM conversation_messages
+                      WHERE session_id IN (${placeholders})
+                      ORDER BY created_at DESC
+                      LIMIT ${semanticLimit * 2}
                     `;
                     
-                    const sessionContextData = await database.query(sessionContextSql, [currentSession.session_id]);
+                    const messages = await database.query(messagesSql, sessionIds);
+                    console.log(`[INFO] Fallback: Found ${messages.length} conversation messages from recent sessions`);
                     
-                    if (sessionContextData.length > 0) {
-                      const contextResults = [{
-                        id: `session_${currentSession.session_id}`,
-                        source: 'session_context',
-                        source_text: sessionContextData[0].content,
-                        sender: 'system',
-                        session_id: currentSession.session_id,
-                        created_at: currentSession.created_at,
-                        metadata: sessionContextData[0].metadata,
-                        similarity: 0.7, // Lower similarity since it's fallback
-                        sessionTitle: currentSession.title,
-                        sessionType: currentSession.type,
-                        sessionSimilarity: 0.7,
-                        responseType: 'session_fallback'
-                      }];
+                    // Debug: Log first few messages to see what we're actually retrieving
+                    if (messages.length > 0) {
+                      console.log(`[DEBUG] Sample messages retrieved:`);
+                      messages.slice(0, 3).forEach((msg, idx) => {
+                        console.log(`  ${idx + 1}. [${msg.sender}] "${msg.source_text?.substring(0, 50)}..." (ID: ${msg.id})`);
+                      });
+                    }
+                    
+                    const contextResults = [];
+                    
+                    // Process messages and calculate similarity
+                    for (const message of messages) {
+                      const sessionContext = recentSessions.find(s => s.session_id === message.session_id);
+                      
+                      let similarity = 0.6; // Base similarity for fallback
+                      
+                      if (message.embedding) {
+                        try {
+                          const messageEmbedding = Array.isArray(message.embedding) 
+                            ? message.embedding 
+                            : JSON.parse(message.embedding);
+                          const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          
+                          // Combine base fallback similarity with message semantic similarity
+                          similarity = 0.4 + semanticSim * 0.6;
+                        } catch (error) {
+                          console.warn(`[WARN] Failed to parse embedding for fallback message ${message.id}:`, error.message);
+                        }
+                      }
+                      
+                      contextResults.push({
+                        ...message,
+                        similarity: similarity,
+                        sessionTitle: sessionContext?.title,
+                        sessionType: sessionContext?.type,
+                        sessionSimilarity: 0.6,
+                        responseType: 'conversation_message_fallback'
+                      });
+                    }
+                    
+                    // Sort by similarity and take top results
+                    contextResults.sort((a, b) => b.similarity - a.similarity);
+                    const finalResults = contextResults.slice(0, semanticLimit);
+                    
+                    if (finalResults.length > 0) {
+                      console.log(`[SUCCESS] FALLBACK MESSAGE RETRIEVAL - Returning ${finalResults.length} conversation messages`);
                       
                       return {
                         success: true,
                         action: 'memory-semantic-search',
                         query: semanticQuery,
-                        results: contextResults,
-                        count: contextResults.length,
+                        results: finalResults,
+                        count: finalResults.length,
                         totalSessions: sessions.length,
-                        relevantSessions: 1,
-                        totalMessages: 0,
+                        relevantSessions: recentSessions.length,
+                        totalMessages: finalResults.length,
                         minSimilarity: minSimilarity,
                         timeWindow: timeWindow,
-                        searchType: 'two-tier-session-fallback',
-                        message: 'Fallback session context for conversational query',
-                        sessionContext: [{
-                          sessionId: currentSession.session_id,
-                          title: currentSession.title,
-                          similarity: 0.8
-                        }]
+                        searchType: 'fallback-message-first',
+                        message: 'Fallback conversation messages for conversational query',
+                        sessionContext: recentSessions.map(s => ({
+                          sessionId: s.session_id,
+                          title: s.title,
+                          similarity: 0.6
+                        }))
                       };
                     }
                   }
