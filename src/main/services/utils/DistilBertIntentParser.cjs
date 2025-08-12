@@ -1016,7 +1016,9 @@ class DistilBertIntentParser {
     // MEMORY RETRIEVE: Broadened patterns, no strict datetime requirement
     const retrievePhrase = /(remind me|recall|what did (i|we) (say|tell you|plan|discuss|talk about)|what about|show me (what|the)|pull up|find (what|when|where) (i|we))/i.test(text)
       || /\b(show|find|search)\b.*\b(my|our|previous|past|last)\b/i.test(text)
-      || /what (did|have) we (plan|discuss|say|talk about|decide)/i.test(text);
+      || /what (did|have) we (plan|discuss|say|talk about|decide)/i.test(text)
+      || /what('s|s)?\s+(the\s+)?(first|last|earliest|latest|initial|previous)\s+(message|thing|question|ask)/i.test(text)
+      || /\b(first|last|earliest|latest|initial|previous)\s+(message|thing|question|ask|conversation)/i.test(text);
     
     if ((retrievePhrase || (hasWhWord && firstOrGroup)) && !negated) {
       scores.memory_retrieve += 0.75; // Increased from 0.72 for better confidence

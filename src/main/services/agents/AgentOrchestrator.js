@@ -1099,7 +1099,8 @@ export class AgentOrchestrator {
         action: 'memory-semantic-search',
         query: prompt,
         limit: 10,
-        minSimilarity: 0.2
+        minSimilarity: 0.2,
+        sessionId: context.currentSessionId // Add session scoping to prevent cross-session contamination
       }, {
         source: 'semantic_first_orchestrator',
         timestamp: new Date().toISOString()
@@ -1112,10 +1113,10 @@ export class AgentOrchestrator {
         
         console.log(`🎯 [SEMANTIC-FIRST] Found ${memories.length} memories - top: ${topScore.toFixed(3)}, avg3: ${avgTop3Score.toFixed(3)}`);
         
-        // Debug: Log memory content for conversational queries
-        const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell)\b/i.test(prompt);
-        if (isConversationalQuery && memories.length > 0) {
-          console.log('🔍 [DEBUG] Conversational query detected, found memories:');
+        // Debug: Log memory content for conversational queries (will be determined by LLM later)
+        const debugConversationalPattern = /\b(first|last|earlier|before|after|previous|next|what.*(ask|say|said|tell|told)|sum up|summary|summarize|recap|overview|what.*(chat|discuss|talk)|what.*message|what.*conversation|2nd|second|third|1st)\b/i.test(prompt);
+        if (debugConversationalPattern && memories.length > 0) {
+          console.log('🔍 [DEBUG] Potential conversational query detected, found memories:');
           memories.slice(0, 3).forEach((memory, index) => {
             console.log(`  Memory ${index + 1} (${(memory.similarity * 100).toFixed(1)}%): "${memory.source_text?.substring(0, 100)}..."`);
           });
@@ -1133,36 +1134,81 @@ export class AgentOrchestrator {
             return `Memory ${index + 1} (${similarity}% match): ${memory.source_text}`;
           }).join('\n\n');
           
-          // Detect conversational context queries for specialized prompts
-          const isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*ask|what.*say|what.*tell)\b/i.test(prompt);
+          // Use LLM-based conversational query detection for more accurate classification
+          let isConversationalQuery = false;
+          let isPositionalQuery = false;
+          
+          try {
+            const classificationResult = await this.executeAgent('UserMemoryAgent', {
+              action: 'classify-conversational-query',
+              query: prompt
+            }, context);
+            
+            if (classificationResult.success && classificationResult.result && classificationResult.result.result) {
+              console.log(`🔍 [DEBUG] Raw classification result:`, classificationResult.result);
+              const actualResult = classificationResult.result.result;
+              isConversationalQuery = actualResult.isConversational;
+              isPositionalQuery = actualResult.type === 'positional';
+              console.log(`🔍 [DEBUG] Processed values: isConversationalQuery=${isConversationalQuery}, isPositionalQuery=${isPositionalQuery}`);
+              console.log(`🔍 [DEBUG] LLM classified "${prompt}" as ${isConversationalQuery ? 'CONVERSATIONAL' : 'NON-CONVERSATIONAL'} (${actualResult.type || 'general'})`);
+            } else {
+              console.log(`🔍 [DEBUG] Classification failed:`, classificationResult);
+              throw new Error('UserMemoryAgent classification failed');
+            }
+          } catch (error) {
+            console.warn('⚠️ [DEBUG] LLM classification failed, falling back to regex:', error.message);
+            // Fallback to regex if LLM classification fails
+            isConversationalQuery = /\b(first|last|earlier|before|after|previous|next|what.*(ask|say|said|tell|told)|sum up|summary|summarize|recap|overview|what.*(chat|discuss|talk)|what.*message|what.*conversation|2nd|second|third|1st)\b/i.test(prompt);
+            isPositionalQuery = /\b(first|last|earliest|latest|initial|1st|2nd|second|third)\s*(message|thing|question|ask)\b/i.test(prompt);
+          }
           
           let enhancedPrompt;
-          if (isConversationalQuery) {
-            enhancedPrompt = `You are helping the user recall specific details from their conversation history. Based on these conversation memories, provide a helpful and contextual answer:
+        if (isConversationalQuery) {
+          // Include universal conversation context for chain awareness
+          const universalContext = context.conversationContext ? `\nRECENT CONVERSATION CHAIN:\n${context.conversationContext}\n` : '';
+          
+          console.log(`🔍 [SEMANTIC-DEBUG] Building conversational prompt with context:`, {
+            hasUniversalContext: !!context.conversationContext,
+            universalContextLength: context.conversationContext?.length || 0,
+            universalContextPreview: context.conversationContext?.substring(0, 100) || 'NONE'
+          });
+          
+          // Always use the enhanced conversational prompt for any conversational query
+          // Truncate context if too long to prevent prompt corruption
+          const maxContextLength = 1500; // Reasonable limit to prevent truncation
+          const truncatedUniversalContext = universalContext.length > maxContextLength 
+            ? universalContext.substring(0, maxContextLength) + '...[truncated]'
+            : universalContext;
+          const truncatedMemoryContext = memoryContext.length > maxContextLength
+            ? memoryContext.substring(0, maxContextLength) + '...[truncated]'
+            : memoryContext;
+            
+          enhancedPrompt = `You are ThinkDrop AI. Answer naturally about our conversation history.
 
-Memories:
-${memoryContext}
+RECENT CONTEXT:
+${truncatedUniversalContext}
 
-Question: ${prompt}
+RELEVANT HISTORY:
+${truncatedMemoryContext}
 
-Instructions:
-- If asking about "first" or "earliest", find and quote the very first message/question
-- If asking about "last" or "most recent", find and quote the latest message/question  
-- Always provide the actual content, not just a summary
-- Add brief context about when it occurred in the conversation
-- Be conversational and helpful, not just factual
-- If the exact content isn't clear, explain what you found and ask for clarification
+QUESTION: ${prompt}
 
-Answer:`.trim();
+Answer naturally and conversationally.`.trim();
           } else {
-            enhancedPrompt = `Based on these relevant memories, answer the question concisely:
+            enhancedPrompt = `You are ThinkDrop AI. Use the information below to answer the question.
 
-Memories:
+RELEVANT INFORMATION:
 ${memoryContext}
 
-Question: ${prompt}
+USER QUESTION:
+${prompt}
 
-Answer based on the memories above (1-2 sentences):`.trim();
+INSTRUCTIONS:
+- Be concise and specific
+- Reference the provided information directly
+- Do not include these instructions in your answer
+
+ANSWER:`.trim();
           }
 
           try {
@@ -1171,7 +1217,7 @@ Answer based on the memories above (1-2 sentences):`.trim();
               prompt: enhancedPrompt,
               options: { 
                 timeout: 15000, 
-                maxTokens: isConversationalQuery ? 250 : 100, // More tokens for detailed conversational responses
+                maxTokens: isConversationalQuery ? 200 : 100, // More tokens for detailed conversational responses
                 temperature: 0.1 // Lower temperature for more precise conversational responses
               }
             }, {
@@ -1311,34 +1357,44 @@ Answer based on the memories above (1-2 sentences):`.trim();
     }
 
     console.log('🚀 [EARLY-QUESTION] All checks passed - handling evergreen GK question directly with Phi3...');
-  console.log('🔍 [EARLY-QUESTION] Question text:', text);
-    try {
-      const phi3Agent = this.getAgent('Phi3Agent');
-      if (!phi3Agent) {
-        console.warn('⚠️ [EARLY-QUESTION] Phi3Agent not available, falling back to orchestration');
-        return null;
-      }
+console.log('🔍 [EARLY-QUESTION] Question text:', text);
+  try {
+    const phi3Agent = this.getAgent('Phi3Agent');
+    if (!phi3Agent) {
+      console.warn('⚠️ [EARLY-QUESTION] Phi3Agent not available, falling back to orchestration');
+      return null;
+    }
 
-      // Add timeout for safety
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1600);
+    // Add timeout for safety
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1600);
 
-      const directResponse = await phi3Agent.execute({
-        action: 'query-phi3-fast',
-        prompt: `You are answering an evergreen general-knowledge question.
+    // Extract conversation context from options for chain awareness
+    const conversationContext = options.conversationContext ? `\n\nRECENT CONVERSATION CONTEXT:\n${options.conversationContext}\n` : '';
+
+    console.log(`🔍 [DIRECT-QUESTION-DEBUG] Context info:`, {
+      hasConversationContext: !!options.conversationContext,
+      contextLength: options.conversationContext?.length || 0,
+      contextPreview: options.conversationContext?.substring(0, 100) || 'NONE'
+    });
+
+    const directResponse = await phi3Agent.execute({
+      action: 'query-phi3-fast',
+      prompt: `You are answering an evergreen general-knowledge question.${conversationContext}
 - Be concise (2-4 sentences).
+- If there's conversation context above, use it to provide a more relevant response.
 - If the answer depends on current events or post-2023 facts, say you are not sure.
 - Do NOT invent current prices, office holders, dates, or scores.
 
 Question: ${text}
 Answer:`,
-        options: {
-          temperature: 0.2,
-          maxTokens: 180,
-          timeout: options.timeoutMs ?? 1600,
-          signal: controller.signal
-        }
-      }).finally(() => clearTimeout(timeout));
+      options: {
+        temperature: 0.2,
+        maxTokens: 180,
+        timeout: options.timeoutMs ?? 1600,
+        signal: controller.signal
+      }
+    }).finally(() => clearTimeout(timeout));
       
       // Validate response quality
       const answer = directResponse?.response?.trim();

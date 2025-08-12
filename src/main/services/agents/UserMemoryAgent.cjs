@@ -23,7 +23,8 @@ const AGENT_FORMAT = {
             'memory-list',
             'screenshot-store',
             'migrate-embedding-column',
-            'cleanup-contaminated-memories'
+            'cleanup-contaminated-memories',
+            'classify-conversational-query'
           ]
         },
         key: { type: 'string', description: 'Memory key for store/retrieve operations' },
@@ -1544,8 +1545,26 @@ const AGENT_FORMAT = {
             const timeWindow = params.timeWindow || params.options?.timeWindow || null;
             const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.4;
             const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
+            const sessionId = params.sessionId; // Session scoping to prevent cross-session contamination
             
-            console.log(`[DEBUG] Two-Tier Search: ${useTwoTier}, Similarity threshold: ${minSimilarity}`);
+            // SMART SCOPING: Use LLM to detect if query needs cross-session search
+            let needsCrossSessionSearch = false;
+            try {
+              const scopeClassification = await AGENT_FORMAT.classifyConversationalQuery(semanticQuery, context);
+              needsCrossSessionSearch = scopeClassification.needsCrossSession || false;
+              console.log(`[DEBUG] LLM scope classification:`, {
+                isConversational: scopeClassification.isConversational,
+                needsCrossSession: needsCrossSessionSearch,
+                scope: scopeClassification.details?.scope
+              });
+            } catch (error) {
+              console.warn(`[WARN] LLM scope classification failed, defaulting to session-scoped:`, error.message);
+              needsCrossSessionSearch = false;
+            }
+            
+            const effectiveSessionId = needsCrossSessionSearch ? null : sessionId; // Override session scoping for cross-session queries
+            
+            console.log(`[DEBUG] Two-Tier Search: ${useTwoTier}, Similarity threshold: ${minSimilarity}, Session scoped: ${!!effectiveSessionId}, Cross-session needed: ${needsCrossSessionSearch}`);
             
             if (!semanticQuery) {
               throw new Error('Semantic search requires query parameter');
@@ -1581,16 +1600,33 @@ const AGENT_FORMAT = {
                 // TWO-TIER APPROACH: Search sessions first, then messages within relevant sessions
                 console.log('[INFO] TIER 2: Searching conversation sessions...');
                 
-                // TIER 2: Search session-level embeddings
-                const sessionSql = `
-                  SELECT sc.session_id, sc.content, sc.embedding, sc.metadata, cs.title, cs.type, cs.trigger_reason, cs.created_at
-                  FROM session_context sc
-                  JOIN conversation_sessions cs ON sc.session_id = cs.id
-                  WHERE sc.context_type = 'session_summary' AND sc.embedding IS NOT NULL
-                  ORDER BY cs.created_at DESC
-                `;
+                // TIER 2: Search session-level embeddings (with smart scoping)
+                let sessionSql, sessionParams;
+                if (effectiveSessionId) {
+                  // Session-scoped search: only search within the current session
+                  sessionSql = `
+                    SELECT sc.session_id, sc.content, sc.embedding, sc.metadata, cs.title, cs.type, cs.trigger_reason, cs.created_at
+                    FROM session_context sc
+                    JOIN conversation_sessions cs ON sc.session_id = cs.id
+                    WHERE sc.context_type = 'session_summary' AND sc.embedding IS NOT NULL AND sc.session_id = ?
+                    ORDER BY cs.created_at DESC
+                  `;
+                  sessionParams = [effectiveSessionId];
+                  console.log(`[INFO] Session-scoped search for session: ${effectiveSessionId}`);
+                } else {
+                  // Cross-session search: search across all sessions
+                  sessionSql = `
+                    SELECT sc.session_id, sc.content, sc.embedding, sc.metadata, cs.title, cs.type, cs.trigger_reason, cs.created_at
+                    FROM session_context sc
+                    JOIN conversation_sessions cs ON sc.session_id = cs.id
+                    WHERE sc.context_type = 'session_summary' AND sc.embedding IS NOT NULL
+                    ORDER BY cs.created_at DESC
+                  `;
+                  sessionParams = [];
+                  console.log(`[INFO] Cross-session search across all sessions (query requires historical context)`);
+                }
                 
-                const sessions = await database.query(sessionSql, []);
+                const sessions = await database.query(sessionSql, sessionParams);
                 console.log(`[INFO] Found ${sessions.length} sessions with embeddings`);
                 
                 if (sessions.length === 0) {
@@ -1684,7 +1720,7 @@ const AGENT_FORMAT = {
                 console.log(`[SUCCESS] TIER 2: Found ${topSessions.length} relevant sessions`);
                 
                 // STEP 2: Smart Query Classification
-                const queryClassification = AGENT_FORMAT.classifyConversationalQuery(semanticQuery);
+                const queryClassification = await AGENT_FORMAT.classifyConversationalQuery(semanticQuery, context);
                 console.log(`[DEBUG] Query classification:`, queryClassification);
                 
                 if (queryClassification.isConversational && topSessions.length > 0) {
@@ -2375,6 +2411,28 @@ const AGENT_FORMAT = {
             } catch (error) {
               console.error('[ERROR] Embedding column migration failed:', error);
               throw new Error('Migration failed: ' + error.message);
+            }
+            
+          case 'classify-conversational-query':
+            try {
+              const { query } = params;
+              if (!query) {
+                throw new Error('Query is required for classify-conversational-query action');
+              }
+              
+              console.log(`[DEBUG] Classifying conversational query: "${query}"`);
+              const classificationResult = await AGENT_FORMAT.classifyConversationalQuery(query, context);
+              
+              console.log(`[DEBUG] Classification result:`, classificationResult);
+              return {
+                success: true,
+                action: 'classify-conversational-query',
+                result: classificationResult
+              };
+              
+            } catch (error) {
+              console.error('[ERROR] Conversational query classification failed:', error);
+              throw new Error('Classification failed: ' + error.message);
             }
             
           default:
@@ -3568,7 +3626,7 @@ const AGENT_FORMAT = {
     },
 
     // STEP 2: Robust Query Classification with Guards and Context Detection
-    classifyConversationalQuery(query) {
+    async classifyConversationalQuery(query, context = {}) {
       const q = query.toLowerCase().trim();
 
       // --- guards / helpers ---
@@ -3617,14 +3675,6 @@ const AGENT_FORMAT = {
 
       // Ultra-comprehensive final patterns for 100% coverage
       const FINAL_PATTERNS = /show.*\d+(st|nd|rd|th).*message|\d+.*messages?.*ago|\d+.*messages?.*back|give.*conversation.*overview|tell.*previously|several.*msgs?.*back|few.*messages?.*ago/;
-
-      // Ultimate comprehensive pattern for 100% pass rate
-      const ULTIMATE_PATTERN = /tell.*previously|show.*3rd.*message|2.*messages.*back|few.*messages.*ago|several.*msgs.*back|give.*conversation.*overview|\d+.*message|\d+.*ago|\d+.*back|show.*\d+|tell.*you.*previously/;
-
-      // meta references (this/our chat) OR pronoun + speech verb OR topic patterns → "chat context"
-      const hasChatRef = CHAT_META.test(q) || (SPEECH_VERB.test(q) && FIRST_PERSON.test(q)) || TOPIC_PATTERN.test(q) || MESSAGE_REF.test(q) || DISPLAY_PATTERN.test(q) || OVERVIEW_PATTERN.test(q) || ORDINAL_MSG_PATTERN.test(q) || MESSAGES_AGO_PATTERN.test(q) || FEW_MESSAGES_PATTERN.test(q) || LAST_FEW_PATTERN.test(q) || TELL_PREVIOUSLY_PATTERN.test(q) || DISCUSSION_ABOUT_PATTERN.test(q) || CATCH_ALL_PATTERNS.test(q) || FINAL_PATTERNS.test(q) || ULTIMATE_PATTERN.test(q) || JUST_PATTERN.test(q);
-
-      // quick exits
       if (NEGATION.test(q)) {
         return { isConversational: false, type: 'general', details: { negated: true }, originalQuery: query };
       }
@@ -3632,65 +3682,112 @@ const AGENT_FORMAT = {
         return { isConversational: false, type: 'general', details: { historyTrap: true }, originalQuery: query };
       }
 
-      // --- classification ---
-      let type = 'general';
-      let isConversational = false;
-      const details = { scope: CHAT_META.test(q) ? 'current_session' : 'any_session' };
+      // Use LLM to classify if query is conversational
+      try {
+        const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history AND what scope it needs.
 
-      // positional
-      let m;
-      if ((m = q.match(ORDINAL))) {
-        isConversational = true; type = 'positional';
-        details.messageNumber = parseInt(m[1], 10);
-        details.kind = 'ordinal';
-      } else if ((m = q.match(N_MESSAGES_AGO))) {
-        isConversational = true; type = 'positional';
-        details.count = parseInt(m[1], 10);
-        details.direction = 'ago';
-      } else if (FUZZY_COUNT.test(q)) {
-        isConversational = true; type = 'positional';
-        details.count = 3; // heuristic for "a few"
-        details.direction = 'ago';
-        details.fuzzy = true;
-      } else if (JUST_PATTERN.test(q)) {
-        isConversational = true; type = 'positional';
-        details.position = 'last';
-        details.scope = 'current_session';
-        details.justPattern = true;
-      } else if (ORDER.test(q) && hasChatRef) {
-        isConversational = true; type = 'positional';
-        if (/\b(first|earliest|initial|start|begin|at the beginning)\b/.test(q)) details.position = 'first';
-        if (/\b(last|latest|final|end|most recent|recent)\b/.test(q)) details.position = 'last';
-        if (/\b(previous|prior|earlier|before)\b/.test(q)) details.relative = 'previous';
-        if (/\b(after|next)\b/.test(q)) details.relative = 'next';
+USER QUERY: "${query}"
+
+CONVERSATIONAL queries ask about:
+- What was discussed/said earlier  
+- Conversation summary or overview
+- First/last messages
+- Topics from chat history
+- Any reference to "we", "us", "our conversation", etc.
+
+SCOPE determines search range:
+- CURRENT_SESSION: References immediate context ("this", "that", "what do you think", "expand on that")
+- CROSS_SESSION: Historical references ("have we ever", "did we discuss before", "what did you tell me about X")
+
+Respond with ONLY two words separated by space:
+- "CONVERSATIONAL CURRENT_SESSION" - conversation query about current chat
+- "CONVERSATIONAL CROSS_SESSION" - conversation query needing historical search
+- "GENERAL CURRENT_SESSION" - general query with current context
+- "GENERAL CROSS_SESSION" - general query needing historical search
+
+Answer:`;
+
+        // Use existing Phi3Agent if available
+        if (context && context.executeAgent) {
+          const phi3Result = await context.executeAgent('Phi3Agent', {
+            action: 'query-phi3-fast',
+            prompt: classificationPrompt,
+            options: { 
+              timeout: 5000, 
+              maxTokens: 10,
+              temperature: 0.1
+            }
+          });
+          
+          if (phi3Result.success && phi3Result.result?.response) {
+            const response = phi3Result.result.response.trim().toUpperCase();
+            const parts = response.split(' ');
+            
+            if (parts.length >= 2) {
+              const isConversational = parts[0] === 'CONVERSATIONAL';
+              const needsCrossSession = parts[1] === 'CROSS_SESSION';
+              
+              if (isConversational) {
+                // Determine conversation type with simple patterns
+                let type = 'general';
+                let details = { 
+                  scope: needsCrossSession ? 'cross_session' : 'current_session',
+                  needsCrossSession: needsCrossSession
+                };
+                
+                if (/\b(first|last|earliest|latest|initial|previous|prior|earlier|before|after|next|start|begin|end|final|most recent|recent|\d+(st|nd|rd|th)|second|third|fourth|fifth)\b/.test(q)) {
+                  type = 'positional';
+                  if (/\b(first|earliest|initial|start|begin|1st)\b/.test(q)) details.position = 'first';
+                  if (/\b(last|latest|final|end|most recent|recent)\b/.test(q)) details.position = 'last';
+                  if (/\b(\d+(st|nd|rd|th)|second|third|fourth|fifth)\b/.test(q)) details.position = 'ordinal';
+                } else if (/\b(summary|overview|recap|sum up|summarize)\b/.test(q)) {
+                  type = 'overview';
+                } else if (/\b(about|regarding|topic)\b/.test(q)) {
+                  type = 'topical';
+                }
+                
+                console.log(`[DEBUG] LLM classified "${query}" as CONVERSATIONAL (${type}) with ${needsCrossSession ? 'CROSS-SESSION' : 'CURRENT-SESSION'} scope`);
+                return { isConversational: true, type, details, originalQuery: query, needsCrossSession };
+              } else {
+                // General query - still return scope info for potential future use
+                console.log(`[DEBUG] LLM classified "${query}" as GENERAL with ${needsCrossSession ? 'CROSS-SESSION' : 'CURRENT-SESSION'} scope`);
+                return { 
+                  isConversational: false, 
+                  type: 'general', 
+                  details: { 
+                    scope: needsCrossSession ? 'cross_session' : 'current_session',
+                    needsCrossSession: needsCrossSession
+                  }, 
+                  originalQuery: query, 
+                  needsCrossSession 
+                };
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.warn('[WARN] LLM classification failed, falling back to simple patterns:', error.message);
       }
 
-      // topical (only if not already set)
-      if (!isConversational && hasChatRef && /\b(about|regarding|on)\b/.test(q) && /\b(discussion|talked?|mention|said|chat|conversation)\b/.test(q)) {
-        isConversational = true; type = 'topical';
+      // Fallback to simple pattern matching if LLM fails
+      const hasChatRef = /\b(we|us|our|you and i|conversation|chat|discuss|talk|said|told|ask|mention|previous|earlier|before|after|first|last|summary|sum up|overview)\b/.test(q);
+      
+      if (hasChatRef) {
+        let type = 'general';
+        let details = { scope: 'current_session' };
+        
+        if (/\b(first|last|earliest|latest|initial|previous|prior|earlier|before|after|next)\b/.test(q)) {
+          type = 'positional';
+        } else if (/\b(summary|overview|recap|sum up|summarize)\b/.test(q)) {
+          type = 'overview';
+        }
+        
+        console.log(`[DEBUG] Pattern-based fallback classified "${query}" as CONVERSATIONAL (${type})`);
+        return { isConversational: true, type, details, originalQuery: query };
       }
 
-      // overview
-      if (!isConversational && (/\b(conversation|chat|discussion)\b/.test(q)) &&
-          (/\b(summary|overview|history|recap|what (have|are|did) we)\b/.test(q))) {
-        isConversational = true; type = 'overview';
-      }
-
-      // fallback conversational if strong chat refs but no order words
-      if (!isConversational && hasChatRef) {
-        isConversational = true; type = 'general';
-      }
-
-      console.log(`[DEBUG] Query classification for "${query}":`, {
-        isConversational,
-        type,
-        details,
-        hasChatRef,
-        negated: NEGATION.test(q),
-        historyTrap: HISTORY_TRAP.test(q)
-      });
-
-      return { isConversational, type, details, originalQuery: query };
+      console.log(`[DEBUG] Classified "${query}" as GENERAL (non-conversational)`);
+      return { isConversational: false, type: 'general', details: { scope: 'any_session' }, originalQuery: query };
     },
 
     // STEP 3: Intelligent Query Routing Methods

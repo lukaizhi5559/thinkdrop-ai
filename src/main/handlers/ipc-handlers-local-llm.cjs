@@ -71,6 +71,81 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       });
 
       ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP -1: UNIVERSAL CONVERSATION CONTEXT - Get recent messages for chain awareness
+      ////////////////////////////////////////////////////////////////////////
+      let conversationContext = null;
+      let currentSessionId = null; // Track current session for scoping
+      try {
+        const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+        if (conversationAgent) {
+          // First get the current active session
+          const sessionsResult = await conversationAgent.execute({
+            action: 'session-list',
+            limit: 1,
+            offset: 0
+          });
+          
+          if (sessionsResult?.success && sessionsResult?.data?.sessions?.length > 0) {
+            const currentSession = sessionsResult.data.sessions[0]; // Get most recent session
+            const sessionId = currentSession.id;
+            currentSessionId = sessionId; // Store for semantic search scoping
+            
+            console.log(`🔍 [CONTEXT-DEBUG] Using session: ${sessionId}`);
+            
+            // Now get messages from that session - Human-like context window: 8 messages = ~4 exchange pairs
+            const recentMessages = await conversationAgent.execute({
+              action: 'message-list',
+              sessionId: sessionId,
+              limit: 8,
+              offset: 0
+            });
+          
+          console.log(`🔍 [CONTEXT-DEBUG] Raw result:`, {
+            success: recentMessages?.success,
+            hasData: !!recentMessages?.data,
+            hasMessages: !!recentMessages?.data?.messages,
+            messageCount: recentMessages?.data?.messages?.length || 0
+          });
+          
+          if (recentMessages && recentMessages.data && recentMessages.data.messages && recentMessages.data.messages.length > 0) {
+            // Format context messages (exclude current prompt)
+            const allMessages = recentMessages.data.messages.filter(msg => msg.text !== prompt);
+            console.log(`🔍 [CONTEXT-DEBUG] Filtered ${allMessages.length} messages (excluded current prompt)`);
+            console.log(`🔍 [CONTEXT-DEBUG] Raw messages preview:`, allMessages.slice(-4).map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
+            
+            // Prioritize recent messages (human recency effect) - ensure chronological order
+            const last8Messages = allMessages.slice(-8); // Last 8 messages (4 exchange pairs)
+            const contextMessages = last8Messages
+              .map((msg, index) => {
+                // Add recency indicators for human-like processing (fixed index reference)
+                const isVeryRecent = index >= last8Messages.length - 2; // Last 2 messages in this slice
+                const prefix = isVeryRecent ? '🔥' : ''; // Mark very recent for AI attention
+                return `${prefix}${msg.sender}: ${msg.text}`;
+              })
+              .join('\n');
+            
+            console.log(`🔍 [CONTEXT-DEBUG] Generated context (${contextMessages.length} chars):`);
+            console.log(`🔍 [CONTEXT-FULL] Complete context:\n${contextMessages}`);
+            
+            if (contextMessages.trim()) {
+              conversationContext = contextMessages;
+              console.log(`✅ [CONTEXT] Added ${allMessages.length} messages (~${Math.ceil(allMessages.length/2)} exchange pairs) for human-like conversation awareness`);
+            } else {
+              console.log(`⚠️ [CONTEXT] Context messages empty after processing`);
+            }
+          } else {
+            console.log(`⚠️ [CONTEXT] No messages found in conversation agent response`);
+          }
+          } else {
+            console.log(`⚠️ [CONTEXT] No active sessions found`);
+          }
+        }
+      } catch (contextError) {
+        console.warn('⚠️ [CONTEXT] Failed to get conversation context:', contextError.message);
+        // Continue without context - not critical
+      }
+
+      ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 0: NER-FIRST ROUTING - Smart routing based on entities
       ////////////////////////////////////////////////////////////////////////
       let routingDecision = null;
@@ -89,13 +164,48 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       }
 
       ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP 0.5: LLM CONVERSATIONAL QUERY OVERRIDE - Fix misclassified queries
+      ////////////////////////////////////////////////////////////////////////
+      if (routingDecision && (routingDecision.primaryIntent === 'memory_store' || routingDecision.primaryIntent === 'command')) {
+        try {
+          console.log(`🔍 LLM-CHECK: Verifying if ${routingDecision.primaryIntent} classification is correct...`);
+          const classificationResult = await coreAgent.executeAgent('UserMemoryAgent', {
+            action: 'classify-conversational-query',
+            query: prompt
+          });
+          
+          if (classificationResult.success && classificationResult.result && classificationResult.result.result) {
+            const actualResult = classificationResult.result.result;
+            const isConversationalQuery = actualResult.isConversational;
+            
+            if (isConversationalQuery) {
+              console.log(`🔄 LLM-OVERRIDE: "${prompt}" is conversational - changing memory_store → memory_retrieve`);
+              routingDecision = {
+                ...routingDecision,
+                primaryIntent: 'memory_retrieve',
+                needsSemanticSearch: true,
+                needsOrchestration: false,
+                method: 'llm_conversational_override'
+              };
+            } else {
+              console.log(`✅ LLM-CONFIRM: "${prompt}" is correctly classified as memory_store`);
+            }
+          }
+        } catch (error) {
+          console.warn('⚠️ LLM conversational check failed, keeping NER decision:', error.message);
+        }
+      }
+
+      ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 1: CONDITIONAL SEMANTIC SEARCH - Only when NER suggests it
       ////////////////////////////////////////////////////////////////////////
       if (!routingDecision || routingDecision.needsSemanticSearch) {
         console.log('🔍 NER suggests semantic search - checking memories...');
         const semanticResponse = await coreAgent.trySemanticSearchFirst(prompt, options, {
           executeAgent: coreAgent.executeAgent.bind(coreAgent),
-          database: coreAgent.context?.database
+          database: coreAgent.context?.database,
+          conversationContext: conversationContext,
+          currentSessionId: currentSessionId // Add session scoping to prevent cross-session contamination
         });
         if (semanticResponse) {
           return semanticResponse;
@@ -107,7 +217,10 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 1.5: EARLY QUESTION HANDLER - Direct LLM for general knowledge
       ////////////////////////////////////////////////////////////////////////
-      const directQuestionResponse = await coreAgent.tryDirectQuestionFirst(prompt, routingDecision, options);
+      const directQuestionResponse = await coreAgent.tryDirectQuestionFirst(prompt, routingDecision, {
+        ...options,
+        conversationContext: conversationContext
+      });
       if (directQuestionResponse) {
         return directQuestionResponse;
       }

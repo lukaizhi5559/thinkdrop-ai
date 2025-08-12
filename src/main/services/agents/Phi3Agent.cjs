@@ -140,7 +140,7 @@ const AGENT_FORMAT = {
     }
   },
 
-  async queryPhi3Fast(params, context) {
+  async queryPhi3Fast(params, _context = {}) {
     try {
       const { prompt, options = {} } = params;
       
@@ -154,7 +154,27 @@ const AGENT_FORMAT = {
       
       console.log(`🤖 Querying Phi3 with prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
      
-      thinkdropPrompt = 
+      // For conversational queries with history, use specialized prompt handling
+      const isConversationalQuery = prompt.includes('CONVERSATION HISTORY:') || 
+                                   prompt.includes('You are ThinkDrop AI. You have access to the user') ||
+                                   prompt.includes('conversation history');
+      
+      let thinkdropPrompt;
+      let queryOptions = {};
+
+      if (isConversationalQuery) {
+        // For conversational queries, use the prompt as-is without base prompt to avoid conflicts
+        thinkdropPrompt = prompt;
+        queryOptions = {
+          model: 'phi4-mini:latest',
+          timeout: 15000,
+          temperature: 0.1,     // very low for consistent responses
+          top_p: 0.8,           // focused responses
+          max_tokens: 300,      // enough for detailed conversation summaries
+          repeat_penalty: 1.1
+        };
+      } else {
+        thinkdropPrompt = 
 `<|system|>
 You are ThinkDrop AI, a helpful assistant. For questions, provide a brief, direct answer (1-2 sentences max). For other requests, describe what the user wants to do.
 Be concise and to the point.<|end|>
@@ -162,19 +182,19 @@ Be concise and to the point.<|end|>
 ${prompt}<|end|>
 <|assistant|> 
 `.trim();
-      
-      // Use regular phi4-mini model for natural language responses - optimized for speed
-      queryOptions = {
-        model: 'phi4-mini:latest',
-        timeout: 10000,
-        temperature: 0.05,  // Even lower for faster, more deterministic responses
-        max_tokens: 120,     // Reduced for faster generation
-        top_p: 0.9,         // Add top_p for faster sampling
-        repeat_penalty: 1.1, // Prevent repetition for concise responses
-        // nice-to-haves if your runner supports them:
-        seed: 7,           // deterministic runs
-        stop: ["<|end|>", "</s>"]
-      };
+        // Use regular phi4-mini model for natural language responses - optimized for speed
+        queryOptions = {
+          model: 'phi4-mini:latest',
+          timeout: 10000,
+          temperature: 0.05,  // Even lower for faster, more deterministic responses
+          max_tokens: 120,     // Reduced for faster generation
+          top_p: 0.9,         // Add top_p for faster sampling
+          repeat_penalty: 1.1, // Prevent repetition for concise responses
+          // nice-to-haves if your runner supports them:
+          seed: 7,           // deterministic runs
+          stop: ["<|end|>", "</s>"]
+        };
+      } 
 
       const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
       
@@ -229,6 +249,11 @@ ${prompt}<|end|>
                               prompt.toLowerCase().includes('describe the screen') ||
                               prompt.toLowerCase().includes('analyze the screen');
       
+      // For conversational queries with history, use specialized prompt handling
+      const isConversationalQuery = prompt.includes('CONVERSATION HISTORY:') || 
+                                   prompt.includes('You are ThinkDrop AI. You have access to the user') ||
+                                   prompt.includes('conversation history');
+      
       let thinkdropPrompt;
       let queryOptions = {};
       
@@ -252,6 +277,17 @@ ${prompt}<|end|>
           // nice-to-haves if your runner supports them:
           seed: 7,           // deterministic runs
           stop: ["<|end|>", "</s>"]
+        };
+      } else if (isConversationalQuery) {
+        // For conversational queries, use the prompt as-is without base prompt to avoid conflicts
+        thinkdropPrompt = prompt;
+        queryOptions = {
+          model: 'phi4-mini:latest',
+          timeout: 15000,
+          temperature: 0.1,     // very low for consistent responses
+          top_p: 0.8,           // focused responses
+          max_tokens: 300,      // enough for detailed conversation summaries
+          repeat_penalty: 1.1
         };
       } else {
         thinkdropPrompt = `${AGENT_FORMAT.basePrompt()}

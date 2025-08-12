@@ -42,6 +42,7 @@ const { initializeHandlers: initializeHandlersPart3 } = require('./handlers/ipc-
 const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-orchestration.cjs');
 const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
 const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversation.cjs');
+const { setupDatabaseNotificationHandlers } = require('./handlers/ipc-handlers-database-notifications.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -174,13 +175,13 @@ app.whenReady().then(() => {
     } else {
       return Promise.resolve();
     }
-  }).then(() => {
+  }).then(async () => {
     // Setup IPC handlers after CoreAgent is initialized
-    setupIPCHandlers();
-  }).catch(error => {
+    await setupIPCHandlers();
+  }).catch(async error => {
     console.error('❌ Error during initialization sequence:', error);
     // Setup IPC handlers anyway to allow basic functionality
-    setupIPCHandlers();
+    await setupIPCHandlers();
   });
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
@@ -323,7 +324,7 @@ async function initializeServices() {
 }
 
 // Setup IPC handlers using modularized files
-function setupIPCHandlers() {
+async function setupIPCHandlers() {
   // Unified window state - UI state now managed by React components
   const windowState = {
     isGloballyVisible,
@@ -379,6 +380,9 @@ function setupIPCHandlers() {
   
   // Setup conversation persistence handlers
   setupConversationHandlers(ipcMain, coreAgent);
+  
+  // Setup database notification handlers
+  await setupDatabaseNotificationHandlers();
   
   // Store the broadcast and clarification functions for use elsewhere
   global.broadcastOrchestrationUpdate = broadcastUpdate;
