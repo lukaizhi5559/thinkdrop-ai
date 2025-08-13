@@ -1746,21 +1746,32 @@ const AGENT_FORMAT = {
                     const placeholders = sessionIds.map(() => '?').join(',');
                     
                     // Get actual conversation messages from relevant sessions
-                    // Modified query to ensure balanced retrieval from all target sessions
+                    // Smart retrieval: get all messages from short sessions, balanced from longer ones
                     const messagesPerSession = Math.ceil(semanticLimit / sessionIds.length);
                     console.log(`[DEBUG] Retrieving ${messagesPerSession} messages per session from ${sessionIds.length} sessions`);
                     
                     const messagesSql = `
-                      WITH session_messages AS (
-                        SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
-                               created_at, metadata, embedding,
-                               ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) as rn
+                      WITH session_info AS (
+                        SELECT session_id, COUNT(*) as total_messages
                         FROM conversation_messages
                         WHERE session_id IN (${placeholders})
+                        GROUP BY session_id
+                      ),
+                      session_messages AS (
+                        SELECT 'conversation' as source, cm.id, cm.text as source_text, cm.sender, cm.session_id, 
+                               cm.created_at, cm.metadata, cm.embedding,
+                               si.total_messages,
+                               ROW_NUMBER() OVER (PARTITION BY cm.session_id ORDER BY cm.created_at DESC) as rn
+                        FROM conversation_messages cm
+                        JOIN session_info si ON cm.session_id = si.session_id
+                        WHERE cm.session_id IN (${placeholders})
                       )
-                      SELECT source, id, source_text, sender, session_id, created_at, metadata, embedding
+                      SELECT source, id, source_text, sender, session_id, created_at, metadata, embedding, total_messages
                       FROM session_messages
-                      WHERE rn <= ${messagesPerSession}
+                      WHERE rn <= CASE 
+                        WHEN total_messages <= ${messagesPerSession} THEN total_messages  -- Get all messages from short sessions
+                        ELSE ${messagesPerSession}  -- Limit longer sessions
+                      END
                       ORDER BY session_id, created_at DESC
                     `;
                     

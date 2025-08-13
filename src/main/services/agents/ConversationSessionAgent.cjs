@@ -227,6 +227,8 @@ const AGENT_FORMAT = {
           return await AGENT_FORMAT.updateMessage(options, context);
         case 'message-delete':
           return await AGENT_FORMAT.deleteMessage(options, context);
+        case 'get-conversation-messages-with-embeddings':
+          return await AGENT_FORMAT.getConversationMessagesWithEmbeddings(options, context);
         case 'session-switch':
           return await AGENT_FORMAT.switchToSession(options, context);
         default:
@@ -1443,6 +1445,79 @@ const AGENT_FORMAT = {
       return {
         success: false,
         error: error.message
+      };
+    }
+  },
+
+  /**
+   * Get conversation messages with their stored embeddings for semantic similarity
+   */
+  async getConversationMessagesWithEmbeddings(options, context) {
+    const { sessionId, limit = 20, includeSystemMessages = false } = options;
+    
+    if (!sessionId) {
+      return { success: false, error: 'Session ID is required' };
+    }
+
+    try {
+      // First try to get messages with embeddings, then fallback to all messages
+      let sql = `
+        SELECT id, session_id, text, sender, timestamp, metadata, embedding, created_at
+        FROM conversation_messages 
+        WHERE session_id = ? AND embedding IS NOT NULL AND embedding != 'NULL'
+      `;
+      
+      const params = [sessionId];
+      
+      // Optionally exclude system messages
+      if (!includeSystemMessages) {
+        sql += ` AND sender != 'system'`;
+      }
+      
+      sql += ` ORDER BY created_at DESC LIMIT ?`;
+      params.push(limit);
+
+      let messages = await AGENT_FORMAT.database.query(sql, params);
+      
+      // If no messages with embeddings found, get recent messages anyway for fallback
+      if (messages.length === 0) {
+        console.log(`⚠️ No messages with embeddings found, falling back to recent messages for session: ${sessionId}`);
+        
+        let fallbackSql = `
+          SELECT id, session_id, text, sender, timestamp, metadata, embedding, created_at
+          FROM conversation_messages 
+          WHERE session_id = ?
+        `;
+        
+        const fallbackParams = [sessionId];
+        
+        if (!includeSystemMessages) {
+          fallbackSql += ` AND sender != 'system'`;
+        }
+        
+        fallbackSql += ` ORDER BY created_at DESC LIMIT ?`;
+        fallbackParams.push(limit);
+        
+        messages = await AGENT_FORMAT.database.query(fallbackSql, fallbackParams);
+      }
+      
+      console.log(`✅ Retrieved ${messages.length} conversation messages for session: ${sessionId} (${messages.filter(m => m.embedding && m.embedding !== 'NULL').length} with embeddings)`);
+      
+      return {
+        success: true,
+        result: {
+          messages,
+          sessionId,
+          count: messages.length,
+          embeddedCount: messages.filter(m => m.embedding && m.embedding !== 'NULL').length
+        }
+      };
+    } catch (error) {
+      console.error('❌ Failed to get conversation messages with embeddings:', error);
+      return {
+        success: false,
+        error: error.message,
+        sessionId
       };
     }
   }

@@ -784,6 +784,7 @@ export default function ChatMessages() {
   const useProgressiveSearch = useCallback(async (messageText: string) => {
     try {
       console.log('🔍 [PROGRESSIVE] Starting progressive search (backend will handle detection)...');
+      scrollToBottom({ smooth: true, force: true });
       
       // Check if progressive search API is available
       if (!(window.electronAPI as any)?.localLLMProgressiveSearch) {

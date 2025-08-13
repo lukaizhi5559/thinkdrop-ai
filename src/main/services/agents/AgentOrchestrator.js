@@ -1103,7 +1103,10 @@ export class AgentOrchestrator {
       let stage1Result = null;
       
       // Stage 1: Current Scope (recent conversation only)
-      const stage1 = await this.stageCurrentScope(prompt, { conversationContext: context.conversationContext });
+      const stage1 = await this.stageCurrentScope(prompt, { 
+        conversationContext: context.conversationContext,
+        currentSessionId: context.currentSessionId 
+      });
       if (stage1 && stage1.success) {
         console.log('✅ [STAGE-1] Current scope success');
         stage1Result = stage1.data.response;
@@ -1269,7 +1272,10 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
     
     // Stage 1: Current Scope
     console.log('🔍 [STAGE-1] Checking current conversation scope...');
-    const stage1 = await this.stageCurrentScope(prompt, context);
+    const stage1 = await this.stageCurrentScope(prompt, { 
+      conversationContext: context.conversationContext,
+      currentSessionId: context.currentSessionId 
+    });
     
     if (stage1?.success && !isCrossSessionQuery) {
       console.log('✅ [STAGE-1] Found result in current scope (non-cross-session query)');
@@ -1282,18 +1288,38 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       };
     }
     
-    // Stage 1 result - Send intermediate response for cross-session queries
-    if (isCrossSessionQuery) {
-      console.log('🔍 [STAGE-1] Cross-session query, continuing to broader search...');
+    // For cross-session queries, evaluate if Stage 1 response is comprehensive enough
+    if (isCrossSessionQuery && stage1?.success) {
+      const isComprehensive = await this.evaluateResponseCompleteness(stage1.data.response, prompt, context);
+      
+      if (isComprehensive) {
+        console.log('✅ [STAGE-1] Found comprehensive result in current scope (cross-session query) - stopping early');
+        return {
+          stage: 1,
+          positive: true,
+          success: true,
+          data: { response: stage1.data.response },
+          continueToNextStage: false
+        };
+      } else {
+        console.log('🔍 [STAGE-1] Found partial result in current scope (cross-session query) - continuing search...');
+        if (sendIntermediateCallback) {
+          await sendIntermediateCallback({
+            stage: 1,
+            positive: true,
+            response: "I found something in our current conversation, but let me also check our session history for more complete context...",
+            continueToNextStage: true
+          });
+        }
+      }
+    } else if (isCrossSessionQuery && !stage1?.success) {
+      // Cross-session query with no Stage 1 results
+      console.log('🔍 [STAGE-1] No results in current scope (cross-session query) - continuing search...');
       if (sendIntermediateCallback) {
-        const intermediateMessage = stage1?.success 
-          ? "I found something in our current conversation, but let me also check our session history for more context..."
-          : "I didn't find anything about that in our current conversation, let me check this session's history...";
-        
         await sendIntermediateCallback({
           stage: 1,
-          positive: stage1?.success || false,
-          response: intermediateMessage,
+          positive: false,
+          response: "I didn't find anything about that in our current conversation, let me check this session's history...",
           continueToNextStage: true
         });
       }
@@ -1337,18 +1363,51 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       }
     }
     
-    // Stage 2 result - Send intermediate response if continuing to Stage 3
-    if (isCrossSessionQuery) {
-      console.log('🔍 [STAGE-2] Cross-session query, continuing to cross-session search...');
-      if (sendIntermediateCallback) {
-        const intermediateMessage = stage2?.success
-          ? "Found some context in this session, but let me also check all our previous conversations for complete history..."
-          : "Still searching... give me a moment while I check all our previous conversations...";
+    // For cross-session queries, evaluate if Stage 2 response is comprehensive enough
+    if (isCrossSessionQuery && stage2?.success) {
+      // Generate Stage 2 response first
+      const phiPrompt = this.buildStagedPrompt(prompt, { 
+        conversationContext: context.conversationContext, 
+        memorySnippets: stage2.data.snippets 
+      });
+      const resp = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+      });
+      
+      if (resp.success && resp.result?.response) {
+        const isComprehensive = await this.evaluateResponseCompleteness(resp.result.response, prompt, context);
         
+        if (isComprehensive) {
+          console.log('✅ [STAGE-2] Found comprehensive result in session scope (cross-session query) - stopping early');
+          return {
+            stage: 2,
+            positive: true,
+            success: true,
+            data: { response: resp.result.response },
+            continueToNextStage: false
+          };
+        } else {
+          console.log('🔍 [STAGE-2] Found partial result in session scope (cross-session query) - continuing search...');
+          if (sendIntermediateCallback) {
+            await sendIntermediateCallback({
+              stage: 2,
+              positive: true,
+              response: "Found some context in this session, but let me also check all our previous conversations for complete history...",
+              continueToNextStage: true
+            });
+          }
+        }
+      }
+    } else if (isCrossSessionQuery && !stage2?.success) {
+      // Cross-session query with no Stage 2 results
+      console.log('🔍 [STAGE-2] No results in session scope (cross-session query) - continuing search...');
+      if (sendIntermediateCallback) {
         await sendIntermediateCallback({
           stage: 2,
-          positive: stage2?.success || false,
-          response: intermediateMessage,
+          positive: false,
+          response: "Still searching... give me a moment while I check all our previous conversations...",
           continueToNextStage: true
         });
       }
@@ -1437,10 +1496,191 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
   }
 
   /**
-   * Stage 1: Current-scope check using only recent conversation context
+   * Stage 1: Current-scope check using stored embeddings from conversation_messages
    * Returns null if no meaningful context or low relevance
    */
-  async stageCurrentScope(prompt, { conversationContext }) {
+  async stageCurrentScope(prompt, { conversationContext, currentSessionId }) {
+    if (!currentSessionId) {
+      console.warn('⚠️ [STAGE-1] No session ID provided, falling back to text-based approach');
+      return this.stageCurrentScopeFallback(prompt, { conversationContext });
+    }
+
+    try {
+      // Generate embedding for the prompt only (not for conversation context)
+      const promptEmbedding = await this.executeAgent('SemanticEmbeddingAgent', { 
+        action: 'generate-embedding', 
+        text: prompt 
+      });
+      
+      if (!promptEmbedding.success) {
+        console.warn('⚠️ [STAGE-1] Failed to generate prompt embedding, using fallback');
+        return this.stageCurrentScopeFallback(prompt, { conversationContext });
+      }
+
+      // Query conversation messages with stored embeddings from current session
+      const conversationAgent = await this.executeAgent('ConversationSessionAgent', {
+        action: 'get-conversation-messages-with-embeddings',
+        sessionId: currentSessionId,
+        limit: 1000 // High limit to get all messages, let semantic similarity filter relevance
+      });
+
+      // Debug: Log the exact response structure
+      console.log('🔍 [STAGE-1-DEBUG] ConversationAgent response:', {
+        success: conversationAgent.success,
+        hasResult: !!conversationAgent.result,
+        hasMessages: !!conversationAgent.result?.messages,
+        messagesLength: conversationAgent.result?.messages?.length,
+        resultKeys: conversationAgent.result ? Object.keys(conversationAgent.result) : 'NO_RESULT'
+      });
+
+      // Handle nested result structure: conversationAgent.result.result.messages
+      const actualResult = conversationAgent.result?.result || conversationAgent.result;
+      
+      if (!conversationAgent.success || !actualResult?.messages?.length) {
+        console.warn('⚠️ [STAGE-1] No conversation messages found');
+        console.warn('⚠️ [STAGE-1-DEBUG] Full response:', JSON.stringify(conversationAgent, null, 2));
+        return this.stageCurrentScopeFallback(prompt, { conversationContext });
+      }
+
+      const messages = actualResult.messages;
+      const promptEmb = promptEmbedding.result.embedding;
+      const embeddedCount = actualResult.embeddedCount || 0;
+
+      console.log(`🔍 [STAGE-1] Processing ${messages.length} messages (${embeddedCount} with embeddings)`);
+
+      // Calculate semantic similarity with stored embeddings
+      const relevantMessages = [];
+      const messagesWithoutEmbeddings = [];
+      
+      console.log(`🔍 [STAGE-1-DEBUG] Processing ${messages.length} messages for similarity`);
+      
+      for (let i = 0; i < messages.length; i++) {
+        const msg = messages[i];
+        
+        // Debug first few messages
+        if (i < 3) {
+          console.log(`🔍 [STAGE-1-DEBUG] Message ${i}:`, {
+            id: msg.id,
+            text: msg.text?.substring(0, 50) + '...',
+            sender: msg.sender,
+            hasEmbedding: !!msg.embedding,
+            embeddingType: typeof msg.embedding,
+            embeddingLength: msg.embedding?.length,
+            embeddingPreview: msg.embedding?.substring(0, 50) + '...'
+          });
+        }
+        
+        if (!msg.embedding || msg.embedding === 'NULL' || msg.embedding === '{}') {
+          messagesWithoutEmbeddings.push(msg);
+          continue;
+        }
+        
+        try {
+          const msgEmb = JSON.parse(msg.embedding);
+          const similarity = this.calculateCosineSimilarity(promptEmb, msgEmb);
+          
+          // Debug similarity calculation
+          if (i < 3) {
+            console.log(`🔍 [STAGE-1-DEBUG] Message ${i} similarity: ${similarity.toFixed(4)}`);
+          }
+          
+          if (similarity >= 0.18) { // Lower threshold for conversational recency
+            relevantMessages.push({
+              ...msg,
+              similarity,
+              text: msg.text || msg.source_text
+            });
+          }
+        } catch (embError) {
+          console.warn('⚠️ [STAGE-1] Failed to parse embedding for message:', msg.id, embError.message);
+          messagesWithoutEmbeddings.push(msg);
+        }
+      }
+      
+      console.log(`🔍 [STAGE-1-DEBUG] Results: ${relevantMessages.length} relevant, ${messagesWithoutEmbeddings.length} without embeddings`);
+      if (relevantMessages.length > 0) {
+        console.log(`🔍 [STAGE-1-DEBUG] Top similarities: ${relevantMessages.map(m => m.similarity.toFixed(4)).join(', ')}`);
+      }
+
+      // If no semantically relevant messages found, but we have messages without embeddings,
+      // use recent messages as fallback
+      if (relevantMessages.length === 0) {
+        if (messagesWithoutEmbeddings.length > 0) {
+          console.log(`ℹ️ [STAGE-1] No semantically relevant messages found, using ${messagesWithoutEmbeddings.length} recent messages as fallback`);
+          
+          // Use most recent messages without embeddings
+          const recentMessages = messagesWithoutEmbeddings
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+            .slice(0, 8);
+          
+          const fallbackContext = recentMessages
+            .map(msg => `${msg.sender}: ${msg.text}`)
+            .join('\n');
+          
+          const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: fallbackContext, memorySnippets: [] });
+          const resp = await this.executeAgent('Phi3Agent', {
+            action: 'query-phi3-fast',
+            prompt: phiPrompt,
+            options: { timeout: 10000, maxTokens: 140, temperature: 0.2 }
+          });
+
+          if (resp.success && resp.result?.response) {
+            return { 
+              success: true, 
+              data: { 
+                response: resp.result.response, 
+                stage: 'current_scope_fallback',
+                usedMessages: recentMessages.length,
+                fallbackReason: 'no_embeddings_available'
+              } 
+            };
+          }
+        }
+        
+        console.log('ℹ️ [STAGE-1] No relevant messages found');
+        return null;
+      }
+
+      // Sort by similarity and select top relevant messages
+      relevantMessages.sort((a, b) => b.similarity - a.similarity);
+      const topMessages = relevantMessages.slice(0, 8); // Limit context size
+      
+      // Build context from most relevant messages
+      const semanticContext = topMessages
+        .map(msg => `${msg.sender}: ${msg.text}`)
+        .join('\n');
+
+      console.log(`✅ [STAGE-1] Found ${topMessages.length} relevant messages (avg similarity: ${(topMessages.reduce((s, m) => s + m.similarity, 0) / topMessages.length).toFixed(3)})`);
+
+      // Generate response using semantically selected context
+      const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: semanticContext, memorySnippets: [] });
+      const resp = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 10000, maxTokens: 140, temperature: 0.2 }
+      });
+
+      if (resp.success && resp.result?.response) {
+        return { 
+          success: true, 
+          data: { 
+            response: resp.result.response, 
+            stage: 'current_scope',
+            relevantMessages: topMessages.length,
+            avgSimilarity: topMessages.reduce((s, m) => s + m.similarity, 0) / topMessages.length
+          } 
+        };
+      }
+    } catch (e) {
+      console.warn('⚠️ [STAGE-1] Current scope check failed:', e.message);
+    }
+    return null;
+  }
+
+  /**
+   * Fallback method for stageCurrentScope when stored embeddings are not available
+   */
+  async stageCurrentScopeFallback(prompt, { conversationContext }) {
     if (!conversationContext || conversationContext.length < 40) return null;
     try {
       // Light semantic check: compare embeddings of prompt vs convo sample
@@ -1455,13 +1695,10 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
 
       if (!q.success || !c.success) return null;
       const qv = q.result.embedding, cv = c.result.embedding;
-      const dot = qv.reduce((s, v, i) => s + v * cv[i], 0);
-      const n1 = Math.sqrt(qv.reduce((s, v) => s + v * v, 0));
-      const n2 = Math.sqrt(cv.reduce((s, v) => s + v * v, 0));
-      const sim = dot / (n1 * n2 + 1e-8);
+      const similarity = this.calculateCosineSimilarity(qv, cv);
 
       // Lower threshold for conversational recency
-      if (sim >= 0.18) {
+      if (similarity >= 0.18) {
         const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: sample, memorySnippets: [] });
         const resp = await this.executeAgent('Phi3Agent', {
           action: 'query-phi3-fast',
@@ -1469,13 +1706,104 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
           options: { timeout: 10000, maxTokens: 140, temperature: 0.2 }
         });
         if (resp.success && resp.result?.response) {
-          return { success: true, data: { response: resp.result.response, stage: 'current_scope' } };
+          return { success: true, data: { response: resp.result.response, stage: 'current_scope_fallback' } };
         }
       }
     } catch (e) {
-      console.warn('⚠️ [STAGE-1] Current scope check failed:', e.message);
+      console.warn('⚠️ [STAGE-1] Fallback current scope check failed:', e.message);
     }
     return null;
+  }
+
+  /**
+   * Calculate cosine similarity between two embedding vectors
+   */
+  calculateCosineSimilarity(vec1, vec2) {
+    if (!vec1 || !vec2 || vec1.length !== vec2.length) return 0;
+    
+    const dot = vec1.reduce((sum, val, i) => sum + val * vec2[i], 0);
+    const norm1 = Math.sqrt(vec1.reduce((sum, val) => sum + val * val, 0));
+    const norm2 = Math.sqrt(vec2.reduce((sum, val) => sum + val * val, 0));
+    
+    return dot / (norm1 * norm2 + 1e-8);
+  }
+
+  /**
+   * Calculate conversation relevance using stored embeddings from conversation_messages
+   * This replaces the inefficient on-the-fly embedding generation for context sampling
+   */
+  async calculateConversationRelevance(prompt, context) {
+    if (!context.currentSessionId) {
+      return { success: false, error: 'No session ID available' };
+    }
+
+    try {
+      // Generate embedding only for the prompt (not for conversation context)
+      const promptEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
+        action: 'generate-embedding',
+        text: prompt
+      });
+
+      if (!promptEmbedding.success) {
+        return { success: false, error: 'Failed to generate prompt embedding' };
+      }
+
+      // Get conversation messages with stored embeddings
+      const conversationAgent = await this.executeAgent('ConversationSessionAgent', {
+        action: 'get-conversation-messages-with-embeddings',
+        sessionId: context.currentSessionId,
+        limit: 1000 // High limit to get all messages, let semantic similarity filter relevance
+      });
+
+      // Handle nested result structure: conversationAgent.result.result.messages
+      const actualResult = conversationAgent.result?.result || conversationAgent.result;
+      
+      if (!conversationAgent.success || !actualResult?.messages?.length) {
+        return { success: false, error: 'No conversation messages with embeddings found' };
+      }
+
+      const messages = actualResult.messages;
+      const promptEmb = promptEmbedding.result.embedding;
+      const similarities = [];
+
+      // Calculate similarity with stored embeddings
+      for (const msg of messages) {
+        if (!msg.embedding) continue;
+        
+        try {
+          const msgEmb = JSON.parse(msg.embedding);
+          const similarity = this.calculateCosineSimilarity(promptEmb, msgEmb);
+          similarities.push(similarity);
+        } catch (embError) {
+          console.warn('⚠️ [CONVERSATION-RELEVANCE] Failed to parse embedding for message:', msg.id);
+        }
+      }
+
+      if (similarities.length === 0) {
+        return { success: false, error: 'No valid embeddings found for similarity calculation' };
+      }
+
+      // Calculate average similarity and determine relevance
+      const avgSimilarity = similarities.reduce((sum, sim) => sum + sim, 0) / similarities.length;
+      const maxSimilarity = Math.max(...similarities);
+      
+      // Use lower threshold for conversational queries (0.15 instead of 0.3)
+      // Also consider if any individual message has high similarity
+      const isRelevant = avgSimilarity > 0.12 || maxSimilarity > 0.18;
+
+      console.log(`✅ [CONVERSATION-RELEVANCE] Analyzed ${similarities.length} messages: avg=${avgSimilarity.toFixed(3)}, max=${maxSimilarity.toFixed(3)}, relevant=${isRelevant}`);
+
+      return {
+        success: true,
+        isRelevant,
+        avgSimilarity,
+        maxSimilarity,
+        messageCount: similarities.length
+      };
+    } catch (error) {
+      console.warn('⚠️ [CONVERSATION-RELEVANCE] Calculation failed:', error.message);
+      return { success: false, error: error.message };
+    }
   }
 
   /**
@@ -1485,7 +1813,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
     const params = {
       action: 'memory-semantic-search',
       query: prompt,
-      limit: 20,
+      limit: sessionId ? 20 : 60, // Higher limit for cross-session searches to capture more history
       minSimilarity: sessionId ? 0.26 : 0.32
     };
     if (sessionId) params.sessionId = sessionId;
@@ -1836,39 +2164,16 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
                   console.log(`🔍 [SEMANTIC-DEBUG] Detected past conversation query, prioritizing current session conversation context`);
                 }
               } else {
-                // Generate embeddings for both the query and conversation context
-                const queryEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
-                  action: 'generate-embedding',
-                  text: prompt
-                }, context);
+                // Use stored embeddings for semantic similarity calculation
+                const semanticRelevance = await this.calculateConversationRelevance(prompt, context);
                 
-                // Sample beginning, middle, and end of conversation for comprehensive matching
-                let contextSample;
-                if (context.conversationContext.length > 1200) {
-                  const length = context.conversationContext.length;
-                  const beginning = context.conversationContext.substring(0, 300);
-                  const middle = context.conversationContext.substring(Math.floor(length / 2) - 150, Math.floor(length / 2) + 150);
-                  const end = context.conversationContext.substring(length - 300);
-                  contextSample = `${beginning}\n...\n${middle}\n...\n${end}`;
+                if (semanticRelevance.success) {
+                  useConversationContextPrimarily = semanticRelevance.isRelevant;
+                  console.log(`🔍 [SEMANTIC-DEBUG] Conversation relevance: ${semanticRelevance.avgSimilarity?.toFixed(3) || 'N/A'}, using conversation context: ${useConversationContextPrimarily}`);
                 } else {
-                  contextSample = context.conversationContext;
-                }
-                
-                const contextEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
-                  action: 'generate-embedding', 
-                  text: contextSample
-                }, context);
-                
-                if (queryEmbedding.success && contextEmbedding.success) {
-                  // Calculate semantic similarity between query and conversation context
-                  const similarity = this.cosineSimilarity(
-                    queryEmbedding.result.embedding,
-                    contextEmbedding.result.embedding
-                  );
-                  
-                  // Lower threshold for conversational queries (0.15 instead of 0.3)
-                  useConversationContextPrimarily = similarity > 0.15;
-                  console.log(`🔍 [SEMANTIC-DEBUG] Query-Context similarity: ${similarity.toFixed(3)}, using conversation context: ${useConversationContextPrimarily}`);
+                  // Fallback to heuristic if semantic analysis fails
+                  useConversationContextPrimarily = memories.length < 3 && context.conversationContext.length > 500;
+                  console.log(`🔍 [SEMANTIC-DEBUG] Semantic analysis failed, using heuristic fallback: ${useConversationContextPrimarily}`);
                 }
               }
             } catch (embeddingError) {
@@ -3913,6 +4218,192 @@ Answer based on the memories above. If no relevant information is found, say "I 
       console.error(`❌ Failed to re-register agent ${agentName}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * Evaluate if a response is comprehensive enough to stop progressive search
+   * Uses AI-powered semantic evaluation for better accuracy
+   */
+  async evaluateResponseCompleteness(response, originalPrompt, context = {}) {
+    if (!response || typeof response !== 'string') return false;
+    
+    const trimmed = response.trim();
+    if (trimmed.length < 20) return false;
+
+    // ---------- Sophisticated Heuristic Scoring (0..1) ----------
+    const txt = trimmed.toLowerCase();
+
+    // Strong signals of incompleteness (each adds 0.35)
+    const STRONG = [
+      'let me check', 'i need to search', 'searching for more', 'give me a moment',
+      'let me look for', 'checking…', 'looking…', 'loading…', 'working on it',
+      'i will get back', 'i\'ll get back', 'hold on', 'one moment',
+      'pulling this up', 'fetching', 'retrieving', 'processing',
+    ];
+
+    // Medium signals (each adds 0.2)
+    const MEDIUM = [
+      'not sure', 'i think', 'probably', 'maybe', 'might be', 'i guess',
+      'needs more info', 'need more info', 'need more details', 'more details please',
+      'could you clarify', 'please clarify', 'which one', 'what exactly',
+      'for more context', 'incomplete', 'partial answer'
+    ];
+
+    // Weak signals (each adds 0.1)
+    const WEAK = [
+      'for example', 'etc.', 'and so on', 'might help', 'consider', 'you could',
+      'as mentioned earlier', 'see above'
+    ];
+
+    // Regex cues
+    const regexCues = [
+      { re: /\.\.\.$|…$/u, w: 0.25 },                  // trailing ellipsis
+      { re: /\?$/, w: 0.25 },                           // ends with a question
+      { re: /\b(tbd|coming soon|wip|to be determined)\b/i, w: 0.35 },
+      { re: /\b(as an ai|i cannot|i can't)\b/i, w: 0.25 }, // generic disclaimers
+      { re: /\b(partial answer|incomplete)\b/i, w: 0.35 },
+    ];
+
+    // Content sufficiency hints (negative weight = more complete)
+    const POSITIVE = [
+      'in summary', 'therefore', 'so,', 'the answer is', 'you should', 'do this',
+      'steps:', '1.', '2.', '3.', 'here\'s how', 'use:', 'final:', 'solution:',
+      'specifically', 'according to', 'based on'
+    ];
+
+    let score = 0;
+
+    // Tally list hits
+    const countHits = (arr, w) => {
+      let c = 0;
+      for (const s of arr) if (txt.includes(s)) c++;
+      return c * w;
+    };
+    score += countHits(STRONG, 0.35);
+    score += countHits(MEDIUM, 0.20);
+    score += countHits(WEAK, 0.10);
+
+    // Regex hits
+    for (const { re, w } of regexCues) if (re.test(txt)) score += w;
+
+    // Reward "complete-looking" phrasing a bit
+    let positive = 0;
+    for (const p of POSITIVE) if (txt.includes(p)) positive += 0.08;
+    score = Math.max(0, score - Math.min(positive, 0.24)); // cap positive deduction
+
+    // Structure heuristics
+    const sentences = trimmed.split(/[.!?]\s+/).filter(Boolean).length;
+    const hasList = /(^|\n)\s*[-*•]\s+/.test(trimmed) || /\n\d+\.\s+/.test(trimmed);
+    const hasCodeOrQuote = /```|^>/m.test(trimmed);
+
+    if (sentences <= 1 && !hasList && !hasCodeOrQuote) score += 0.15; // likely too brief
+
+    // Normalize to 0..1-ish
+    score = Math.min(1, score);
+
+    // Decision thresholds
+    const INCOMPLETE_THRESHOLD = 0.55;
+    const isIncomplete = score >= INCOMPLETE_THRESHOLD;
+    
+    console.log(`🔍 [COMPLETENESS-EVAL] Heuristic score: ${score.toFixed(3)}, Incomplete: ${isIncomplete}`);
+    
+    // Only trust heuristic for very high confidence incomplete cases
+    if (score >= 0.8) {
+      console.log('🔍 [COMPLETENESS-EVAL] Very high confidence incomplete - stopping');
+      return false;
+    }
+    
+    // For all other cases, use AI validation to make the determination
+    console.log('🔍 [COMPLETENESS-EVAL] Uncertain case - consulting AI for validation');
+    
+    try {
+      const evaluationPrompt = `Evaluate if this response fully and ACCURATELY answers the original question.
+
+ORIGINAL QUESTION: "${originalPrompt}"
+
+RESPONSE TO EVALUATE: "${trimmed}"
+
+CONVERSATION CONTEXT (for factual checking): "${context.conversationContext || 'No context available'}"
+
+Instructions:
+- Check if the response directly addresses the original question
+- CRITICALLY IMPORTANT: Verify the response is factually accurate against the conversation context
+- If the response contradicts evidence in the conversation context, it should be marked as INCOMPLETE
+- Consider if the response provides sufficient detail and context
+- Determine if the response is complete or if it suggests more information is needed
+- A response that sounds complete but is factually wrong should be marked INCOMPLETE
+
+Respond with ONLY one of these options:
+COMPLETE - if the response fully AND accurately answers the question with sufficient detail
+PARTIAL - if the response partially answers but lacks important details or context
+INCOMPLETE - if the response doesn't adequately address the question OR contradicts available evidence
+
+Your evaluation:`;
+
+      const evaluationResult = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: evaluationPrompt,
+        options: { 
+          timeout: 6000, 
+          maxTokens: 30, 
+          temperature: 0.1
+        }
+      });
+
+      if (evaluationResult.success && evaluationResult.result?.response) {
+        const aiEvaluation = evaluationResult.result.response.trim();
+        let isComprehensive = false;
+        
+        // Handle both JSON and simple text responses
+        if (aiEvaluation.startsWith('{') || aiEvaluation.includes('JSON')) {
+          // Parse JSON response
+          try {
+            const jsonMatch = aiEvaluation.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const parsed = JSON.parse(jsonMatch[0]);
+              // Check if factual accuracy and completeness are both true
+              const response = parsed.RESPONSE || parsed.response || parsed;
+              const factuallyAccurate = response.FACTUAL_ACCURACY === true || response.factual_accuracy === true;
+              const complete = response.COMPLETENESS === true || response.completeness === true;
+              isComprehensive = factuallyAccurate && complete;
+            }
+          } catch (parseError) {
+            console.warn('⚠️ [COMPLETENESS-EVAL] Failed to parse JSON response, using text fallback');
+          }
+        }
+        
+        // Fallback to simple text parsing
+        if (!isComprehensive) {
+          const upperEval = aiEvaluation.toUpperCase();
+          isComprehensive = upperEval.includes('COMPLETE') && !upperEval.includes('INCOMPLETE') && !upperEval.includes('PARTIAL');
+        }
+        
+        console.log(`🔍 [COMPLETENESS-EVAL] AI Validation: "${aiEvaluation.substring(0, 100)}..." → Comprehensive: ${isComprehensive}`);
+        return isComprehensive;
+      } else {
+        console.warn('⚠️ [COMPLETENESS-EVAL] AI validation failed, using heuristic decision');
+        return !isIncomplete; // Use heuristic decision as fallback
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ [COMPLETENESS-EVAL] AI validation error:', error.message);
+      return !isIncomplete; // Use heuristic decision as fallback
+    }
+  }
+
+  /**
+   * Fallback heuristic evaluation when AI evaluation fails
+   */
+  fallbackCompletenessEvaluation(trimmedResponse) {
+    // Simple fallback: longer responses with proper punctuation are more likely complete
+    const hasProperEnding = /[.!?]$/.test(trimmedResponse);
+    const isReasonableLength = trimmedResponse.length >= 60;
+    const hasCompleteIndicators = /\b(specifically|according to|based on|the answer|in summary)\b/i.test(trimmedResponse);
+    
+    const isComprehensive = (hasProperEnding && isReasonableLength) || hasCompleteIndicators;
+    console.log(`🔍 [COMPLETENESS-EVAL] Fallback heuristic: Length=${trimmedResponse.length}, Comprehensive=${isComprehensive}`);
+    
+    return isComprehensive;
   }
 
 }
