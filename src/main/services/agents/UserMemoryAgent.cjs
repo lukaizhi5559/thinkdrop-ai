@@ -1543,7 +1543,8 @@ const AGENT_FORMAT = {
             const semanticQuery = params.query || params.searchText || params.input || params.message;
             const semanticLimit = params.limit || params.options?.limit || 3;
             const timeWindow = params.timeWindow || params.options?.timeWindow || null;
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.4;
+            // Lowered from 0.4 to 0.08 to be more inclusive for cross-session queries (includes all 3 sessions)
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.08;
             const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
             const sessionId = params.sessionId; // Session scoping to prevent cross-session contamination
             
@@ -1676,7 +1677,7 @@ const AGENT_FORMAT = {
                 if (sessionResults.length === 0 && sessions.length > 0) {
                   if (AGENT_FORMAT.isConversationalQueryRobust(semanticQuery)) {
                     // For conversational queries, be much more lenient with thresholds
-                    const lowerThreshold = Math.max(0.15, (minSimilarity || 0.6) * 0.4);
+                    const lowerThreshold = Math.max(0.05, (minSimilarity || 0.6) * 0.3);
                     console.log(`[DEBUG] Conversational query detected, lowering threshold to ${lowerThreshold}`);
                     
                     for (const session of sessions) {
@@ -1743,17 +1744,46 @@ const AGENT_FORMAT = {
                     const placeholders = sessionIds.map(() => '?').join(',');
                     
                     // Get actual conversation messages from relevant sessions
+                    // Modified query to ensure balanced retrieval from all target sessions
+                    const messagesPerSession = Math.ceil(semanticLimit / sessionIds.length);
+                    console.log(`[DEBUG] Retrieving ${messagesPerSession} messages per session from ${sessionIds.length} sessions`);
+                    
                     const messagesSql = `
-                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
-                             created_at, metadata, embedding
-                      FROM conversation_messages
-                      WHERE session_id IN (${placeholders})
-                      ORDER BY created_at DESC
-                      LIMIT ${semanticLimit * 3}
+                      WITH session_messages AS (
+                        SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                               created_at, metadata, embedding,
+                               ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY created_at DESC) as rn
+                        FROM conversation_messages
+                        WHERE session_id IN (${placeholders})
+                      )
+                      SELECT source, id, source_text, sender, session_id, created_at, metadata, embedding
+                      FROM session_messages
+                      WHERE rn <= ${messagesPerSession}
+                      ORDER BY session_id, created_at DESC
                     `;
                     
                     const messages = await database.query(messagesSql, sessionIds);
                     console.log(`[INFO] Found ${messages.length} conversation messages`);
+                    
+                    // Debug: Show session distribution in retrieved messages
+                    const messageSessionDistribution = {};
+                    messages.forEach(msg => {
+                      const sessionId = msg.session_id || 'NO_SESSION';
+                      messageSessionDistribution[sessionId] = (messageSessionDistribution[sessionId] || 0) + 1;
+                    });
+                    console.log(`[DEBUG] Retrieved message session distribution:`, messageSessionDistribution);
+                    console.log(`[DEBUG] Target sessions for search:`, sessionIds);
+                    
+                    // Debug: Check what's actually in the database for each target session
+                    for (const sessionId of sessionIds) {
+                      const sessionCheckSql = `
+                        SELECT COUNT(*) as message_count, MIN(created_at) as earliest, MAX(created_at) as latest
+                        FROM conversation_messages 
+                        WHERE session_id = ?
+                      `;
+                      const sessionCheck = await database.query(sessionCheckSql, [sessionId]);
+                      console.log(`[DEBUG] Session ${sessionId} has ${sessionCheck[0]?.message_count || 0} messages (${sessionCheck[0]?.earliest || 'none'} to ${sessionCheck[0]?.latest || 'none'})`);
+                    }
                     
                     // Calculate semantic similarity for each message
                     for (const message of messages) {
@@ -1775,14 +1805,23 @@ const AGENT_FORMAT = {
                         }
                       }
                       
+                      // Explicitly preserve the original session_id
+                      const originalSessionId = message.session_id;
+                      
                       contextResults.push({
                         ...message,
+                        session_id: originalSessionId, // Explicitly preserve original session ID
                         similarity: similarity,
                         sessionTitle: sessionContext?.title,
                         sessionType: sessionContext?.type,
                         sessionSimilarity: sessionContext?.similarity,
                         responseType: 'conversation_message'
                       });
+                      
+                      // Debug: Log session ID preservation
+                      if (contextResults.length <= 3) {
+                        console.log(`[DEBUG] Message ${contextResults.length} session ID: ${originalSessionId} -> ${contextResults[contextResults.length - 1].session_id}`);
+                      }
                     }
                     
                     // Sort by similarity and take top results

@@ -469,7 +469,10 @@ class DistilBertIntentParser {
       'prime minister', 'king', 'queen', 'emperor', 'leader',
       'ceo', 'founder', 'director', 'chairman'
     ];
-    const foundPersons = personWords.filter(word => lowerMessage.includes(word));
+    const foundPersons = personWords.filter(word => {
+      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      return regex.test(message);
+    });
     people.push(...foundPersons);
     
     return [...new Set(people)]; // Remove duplicates
@@ -496,7 +499,11 @@ class DistilBertIntentParser {
       // Cities
       'washington', 'new york city', 'los angeles', 'chicago', 'houston', 'phoenix'
     ];
-    return locationWords.filter(word => lowerMessage.includes(word));
+    // Use word boundaries to avoid partial matches (e.g., "framework" shouldn't match "work")
+  return locationWords.filter(word => {
+    const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return regex.test(message);
+  });
   }
   
   extractEvents(message) {

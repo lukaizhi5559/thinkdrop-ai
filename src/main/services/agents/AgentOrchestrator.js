@@ -1095,13 +1095,69 @@ export class AgentOrchestrator {
 
     console.log('🔍 [SEMANTIC-FIRST] Attempting semantic search before intent classification...');
     try {
-      const semanticResult = await this.executeAgent('UserMemoryAgent', {
+      // For cross-session queries, don't scope to current session
+      const searchParams = {
         action: 'memory-semantic-search',
         query: prompt,
-        limit: 10,
-        minSimilarity: 0.2,
-        sessionId: context.currentSessionId // Add session scoping to prevent cross-session contamination
-      }, {
+        limit: 20,  // Increased from 10 to ensure sufficient cross-session content
+        minSimilarity: 0.08  // Lowered to capture all 3 sessions including Chat 3 (0.0808)
+      };
+      
+      // Use LLM to determine if query needs cross-session scope
+      let needsCrossSessionScope = false;
+      try {
+        const scopeClassification = await this.executeAgent('Phi3Agent', {
+          action: 'query-phi3-fast',
+          prompt: `Analyze this user query and determine if it needs cross-session scope:
+
+Query: "${prompt}"
+
+Does this query refer to information from a DIFFERENT conversation session or ask about historical context across multiple conversations?
+
+Key indicators for CROSS_SESSION:
+- "way back", "long ago", "ages ago", "previously", "in the past"
+- "ever" (have we ever, did we ever)
+- "another conversation", "previous conversation", "other session"
+- "didn't mention", "never said", "haven't discussed" (checking across all history)
+- References to distant/old conversations or denying past discussions
+- Questions about what was discussed across all conversations
+
+Key indicators for CURRENT_SESSION:
+- "before" (recently discussed in current conversation)
+- "earlier" (in current conversation)
+- "we talked about" (likely current session unless specified otherwise)
+- "just now", "recently", "a moment ago"
+
+Examples:
+- "what framework we talked about before" → recent discussion → CURRENT_SESSION
+- "have we ever discussed presidents" → asking about all history → CROSS_SESSION  
+- "who was that president I mentioned way back" → distant past → CROSS_SESSION
+- "I didn't mention a framework in another conversation" → checking across sessions → CROSS_SESSION
+- "was code brought up in a previous conversation" → checking historical context → CROSS_SESSION
+- "what framework should I use" → general question → CURRENT_SESSION
+
+Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
+          options: { 
+            timeout: 3000, 
+            maxTokens: 5,
+            temperature: 0.1
+          }
+        }, context);
+        
+        if (scopeClassification.success && scopeClassification.result?.response) {
+          needsCrossSessionScope = scopeClassification.result.response.trim().toUpperCase() === 'CROSS_SESSION';
+          console.log(`🔍 [SCOPE-DEBUG] LLM classified "${prompt}" as ${needsCrossSessionScope ? 'CROSS_SESSION' : 'CURRENT_SESSION'}`);
+        }
+      } catch (scopeError) {
+        console.warn('⚠️ [SCOPE-DEBUG] Failed to classify scope, defaulting to current session:', scopeError.message);
+      }
+      
+      // Only add session scoping for current-session queries
+      if (!needsCrossSessionScope) {
+        searchParams.sessionId = context.currentSessionId; // Prevent cross-session contamination for current-session queries
+      }
+      
+      const semanticResult = await this.executeAgent('UserMemoryAgent', searchParams, {
         source: 'semantic_first_orchestrator',
         timestamp: new Date().toISOString()
       });
@@ -1134,6 +1190,8 @@ export class AgentOrchestrator {
             return `Memory ${index + 1} (${similarity}% match): ${memory.source_text}`;
           }).join('\n\n');
           
+          console.log(`🔍 [DEBUG] Memory context being passed to Phi3:`, memoryContext.substring(0, 500) + '...');
+          
           // Use LLM-based conversational query detection for more accurate classification
           let isConversationalQuery = false;
           let isPositionalQuery = false;
@@ -1164,13 +1222,80 @@ export class AgentOrchestrator {
           
           let enhancedPrompt;
         if (isConversationalQuery) {
-          // Include universal conversation context for chain awareness
-          const universalContext = context.conversationContext ? `\nRECENT CONVERSATION CHAIN:\n${context.conversationContext}\n` : '';
+          // Build conversation context - include cross-session data if available and needed
+          let conversationContext = context.conversationContext || '';
+          
+          // Check if we have cross-session conversation messages in memories
+          const crossSessionMessages = memories.filter(m => {
+            // For cross-session queries, look for messages from different sessions
+            // Use AgentOrchestrator's scope classification (needsCrossSessionScope) as primary authority
+            const isCrossSession = needsCrossSessionScope && m.session_id && m.session_id !== context.currentSessionId;
+            const isConversationMessage = m.responseType === 'conversation_message' || 
+                                        m.source_text?.includes('user:') || 
+                                        m.source_text?.includes('ai:') ||
+                                        m.sender; // Has sender field indicating it's a conversation message
+            
+            // For cross-session queries, include ALL conversation messages regardless of session
+            // since the AgentOrchestrator already determined this needs cross-session scope
+            const isFromCrossSessionSearch = needsCrossSessionScope && isConversationMessage;
+            
+            return (isCrossSession || isFromCrossSessionSearch) && isConversationMessage;
+          });
+          
+          console.log(`🔍 [CROSS-SESSION-DEBUG] Filtering memories: total=${memories.length}, crossSession=${crossSessionMessages.length}`);
+          console.log(`🔍 [CROSS-SESSION-DEBUG] Current session ID: ${context.currentSessionId}`);
+          
+          // Debug: Show structure of ALL memories to see session distribution
+          const sessionDistribution = {};
+          memories.forEach((memory, index) => {
+            const sessionId = memory.session_id || 'NO_SESSION';
+            sessionDistribution[sessionId] = (sessionDistribution[sessionId] || 0) + 1;
+            
+            if (index < 5) { // Show first 5 memories
+              console.log(`🔍 [CROSS-SESSION-DEBUG] Memory ${index + 1} structure:`, {
+                session_id: memory.session_id,
+                responseType: memory.responseType,
+                sender: memory.sender,
+                source_text_preview: memory.source_text?.substring(0, 50) + '...',
+                has_user_colon: memory.source_text?.includes('user:'),
+                has_ai_colon: memory.source_text?.includes('ai:'),
+                sessionTitle: memory.sessionTitle,
+                sessionType: memory.sessionType,
+                sessionSimilarity: memory.sessionSimilarity
+              });
+            }
+          });
+          
+          console.log(`🔍 [CROSS-SESSION-DEBUG] Session distribution:`, sessionDistribution);
+          
+          if (crossSessionMessages.length > 0) {
+            console.log(`🔍 [CROSS-SESSION-DEBUG] Sample cross-session message:`, {
+              session_id: crossSessionMessages[0].session_id,
+              responseType: crossSessionMessages[0].responseType,
+              sender: crossSessionMessages[0].sender,
+              preview: crossSessionMessages[0].source_text?.substring(0, 100)
+            });
+          }
+          
+          if (needsCrossSessionScope && crossSessionMessages.length > 0) {
+            // Build cross-session conversation context
+            const crossSessionContext = crossSessionMessages
+              .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)) // Sort by time
+              .map(msg => `${msg.sender}: ${msg.source_text}`)
+              .join('\n');
+            
+            conversationContext = crossSessionContext + '\n\n[CURRENT SESSION]\n' + conversationContext;
+            console.log(`🔍 [CROSS-SESSION-DEBUG] Added ${crossSessionMessages.length} cross-session messages to context`);
+          }
+          
+          const universalContext = conversationContext ? `\nRECENT CONVERSATION CHAIN:\n${conversationContext}\n` : '';
           
           console.log(`🔍 [SEMANTIC-DEBUG] Building conversational prompt with context:`, {
-            hasUniversalContext: !!context.conversationContext,
-            universalContextLength: context.conversationContext?.length || 0,
-            universalContextPreview: context.conversationContext?.substring(0, 100) || 'NONE'
+            hasUniversalContext: !!conversationContext,
+            universalContextLength: conversationContext?.length || 0,
+            universalContextPreview: conversationContext?.substring(0, 100) || 'NONE',
+            hasCrossSessionData: crossSessionMessages.length > 0,
+            crossSessionMessages: crossSessionMessages.length
           });
           
           // Always use the enhanced conversational prompt for any conversational query
@@ -1183,7 +1308,79 @@ export class AgentOrchestrator {
             ? memoryContext.substring(0, maxContextLength) + '...[truncated]'
             : memoryContext;
             
-          enhancedPrompt = `You are ThinkDrop AI. Answer naturally about our conversation history.
+          // For conversational queries, determine if conversation context is more relevant than stored memories
+          // Use semantic similarity to make this decision intelligently
+          let useConversationContextPrimarily = false;
+          
+          if (context.conversationContext && context.conversationContext.length > 100) {
+            try {
+              // For conversational queries about "what we talked about", prioritize conversation context
+              const isAboutPastConversation = /\b(we|us|our|talked|discussed|mentioned|said|conversation|chat)\b/i.test(prompt);
+              
+              if (isAboutPastConversation) {
+                // For cross-session queries, prioritize cross-session context over current session context
+                if (needsCrossSessionScope && crossSessionMessages.length > 0) {
+                  useConversationContextPrimarily = true;
+                  console.log(`🔍 [SEMANTIC-DEBUG] Cross-session query detected, prioritizing cross-session conversation context`);
+                } else {
+                  // For current session queries, use current session conversation context
+                  useConversationContextPrimarily = true;
+                  console.log(`🔍 [SEMANTIC-DEBUG] Detected past conversation query, prioritizing current session conversation context`);
+                }
+              } else {
+                // Generate embeddings for both the query and conversation context
+                const queryEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
+                  action: 'generate-embedding',
+                  text: prompt
+                }, context);
+                
+                // Sample beginning, middle, and end of conversation for comprehensive matching
+                let contextSample;
+                if (context.conversationContext.length > 1200) {
+                  const length = context.conversationContext.length;
+                  const beginning = context.conversationContext.substring(0, 300);
+                  const middle = context.conversationContext.substring(Math.floor(length / 2) - 150, Math.floor(length / 2) + 150);
+                  const end = context.conversationContext.substring(length - 300);
+                  contextSample = `${beginning}\n...\n${middle}\n...\n${end}`;
+                } else {
+                  contextSample = context.conversationContext;
+                }
+                
+                const contextEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
+                  action: 'generate-embedding', 
+                  text: contextSample
+                }, context);
+                
+                if (queryEmbedding.success && contextEmbedding.success) {
+                  // Calculate semantic similarity between query and conversation context
+                  const similarity = this.cosineSimilarity(
+                    queryEmbedding.result.embedding,
+                    contextEmbedding.result.embedding
+                  );
+                  
+                  // Lower threshold for conversational queries (0.15 instead of 0.3)
+                  useConversationContextPrimarily = similarity > 0.15;
+                  console.log(`🔍 [SEMANTIC-DEBUG] Query-Context similarity: ${similarity.toFixed(3)}, using conversation context: ${useConversationContextPrimarily}`);
+                }
+              }
+            } catch (embeddingError) {
+              console.warn('⚠️ [SEMANTIC-DEBUG] Failed to compute context relevance, using fallback logic:', embeddingError.message);
+              // Fallback: use conversation context if it's substantial and memories are sparse
+              useConversationContextPrimarily = memories.length < 3 && context.conversationContext.length > 500;
+            }
+          }
+          
+          if (useConversationContextPrimarily) {
+            enhancedPrompt = `You are ThinkDrop AI. Answer based on our recent conversation.
+
+RECENT CONVERSATION:
+${truncatedUniversalContext}
+
+QUESTION: ${prompt}
+
+Answer based on what we discussed in our recent conversation above. Be specific and reference the actual content we talked about.`.trim();
+          } else {
+            enhancedPrompt = `You are ThinkDrop AI. Answer naturally about our conversation history.
 
 RECENT CONTEXT:
 ${truncatedUniversalContext}
@@ -1194,7 +1391,8 @@ ${truncatedMemoryContext}
 QUESTION: ${prompt}
 
 Answer naturally and conversationally.`.trim();
-          } else {
+          }
+        } else {
             enhancedPrompt = `You are ThinkDrop AI. Use the information below to answer the question.
 
 RELEVANT INFORMATION:
@@ -1209,8 +1407,10 @@ INSTRUCTIONS:
 - Do not include these instructions in your answer
 
 ANSWER:`.trim();
-          }
+        }
 
+        console.log(`🔍 [DEBUG] Final prompt being sent to Phi3:`, enhancedPrompt.substring(0, 800) + '...');
+          
           try {
             const phi3Result = await this.executeAgent('Phi3Agent', {
               action: 'query-phi3-fast',
@@ -1232,16 +1432,57 @@ ANSWER:`.trim();
               setImmediate(async () => {
                 try {
                   console.log('🚀 [BACKGROUND] Storing semantic question context in memory...');
+                  
+                  // Extract entities for semantic-first path using DistilBertIntentParser
+                  let extractedEntities = {};
+                  try {
+                    const { createRequire } = await import('module');
+                    const require = createRequire(import.meta.url);
+                    const DistilBertIntentParser = require('../utils/DistilBertIntentParser.cjs');
+                    
+                    const parser = new DistilBertIntentParser();
+                    await parser.initialize();
+                    
+                    extractedEntities = await parser.extractEntities(prompt);
+                    console.log('🏷️ [BACKGROUND] Extracted entities for memory storage:', extractedEntities);
+                  } catch (entityError) {
+                    console.warn('⚠️ [BACKGROUND] Entity extraction failed, storing without entities:', entityError.message);
+                  }
+                  
+                  // Store the AI response, not the user question
+                  const aiResponse = phi3Result.result.response;
+                  
+                  // Also extract entities from the AI response for better context
+                  let responseEntities = {};
+                  try {
+                    // Reuse the same parser instance
+                    const aiResponseEntities = await parser.extractEntities(aiResponse);
+                    responseEntities = aiResponseEntities;
+                    console.log('🏷️ [BACKGROUND] Extracted entities from AI response:', responseEntities);
+                  } catch (responseEntityError) {
+                    console.warn('⚠️ [BACKGROUND] Failed to extract entities from AI response:', responseEntityError.message);
+                    responseEntities = {}; // Fallback to empty object
+                  }
+                  
+                  // Combine entities from both user question and AI response
+                  const combinedEntities = {};
+                  Object.keys(extractedEntities).forEach(key => {
+                    combinedEntities[key] = [...new Set([
+                      ...(extractedEntities[key] || []),
+                      ...(responseEntities[key] || [])
+                    ])];
+                  });
+                  
                   const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
                     action: 'memory-store',
-                    sourceText: prompt,
-                    entities: {}, // No routing decision available in semantic-first path
-                    category: 'question',
+                    sourceText: aiResponse, // Store the AI response, not the user question
+                    entities: combinedEntities, // Use combined entities
+                    category: 'ai_response',
                     metadata: {
                       intent: 'semantic_enhanced_response',
                       timestamp: new Date().toISOString(),
                       confidence: 0.9,
-                      phi3Response: phi3Result.result.response,
+                      userQuestion: prompt, // Keep the original question as metadata
                       memoriesUsed: memories.length,
                       topSimilarity: topScore,
                       method: 'semantic_first_fast_path'
@@ -2008,7 +2249,7 @@ Answer:`,
         action: 'memory-semantic-search',
         query: searchQuery,
         limit: 5,
-        minSimilarity: 0.2   // Optimized based on similarity testing for temporal queries
+        minSimilarity: 0.11   // Optimized based on similarity testing for temporal queries
       }, context);
       
       console.log(`[INFO] Memory search completed: ${memoryResult.success ? 'success' : 'failed'}`);
@@ -3018,6 +3259,31 @@ Answer based on the memories above. If no relevant information is found, say "I 
    */
   getAgent(agentName) {
     return this.loadedAgents.get(agentName);
+  }
+
+  /**
+   * Calculate cosine similarity between two vectors
+   */
+  cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) {
+      return 0;
+    }
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    
+    if (normA === 0 || normB === 0) {
+      return 0;
+    }
+    
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
 
   /**
