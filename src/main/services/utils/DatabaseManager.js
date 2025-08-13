@@ -468,7 +468,7 @@ class DatabaseManager {
       
       // Perform WAL checkpoint before backup
       try {
-        await this.query('PRAGMA wal_checkpoint(TRUNCATE)');
+        await this.query('PRAGMA force_checkpoint');
       } catch (checkpointError) {
         console.warn('⚠️ DatabaseManager: WAL checkpoint failed before backup:', checkpointError.message);
       }
@@ -638,7 +638,7 @@ class DatabaseManager {
   async performWALCheckpoint() {
     try {
       const startTime = Date.now();
-      await this.query('PRAGMA wal_checkpoint(PASSIVE)');
+      await this.query('PRAGMA force_checkpoint');
       const duration = Date.now() - startTime;
       
       console.log(`📝 DatabaseManager: WAL checkpoint completed in ${duration}ms`);

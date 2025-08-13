@@ -1543,8 +1543,8 @@ const AGENT_FORMAT = {
             const semanticQuery = params.query || params.searchText || params.input || params.message;
             const semanticLimit = params.limit || params.options?.limit || 3;
             const timeWindow = params.timeWindow || params.options?.timeWindow || null;
-            // Lowered from 0.4 to 0.08 to be more inclusive for cross-session queries (includes all 3 sessions)
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.08;
+            // Use higher threshold for cross-session to prevent contamination, lower for same-session
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.25;
             const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
             const sessionId = params.sessionId; // Session scoping to prevent cross-session contamination
             

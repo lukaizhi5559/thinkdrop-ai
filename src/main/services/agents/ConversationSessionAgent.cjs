@@ -915,6 +915,22 @@ const AGENT_FORMAT = {
     }
 
     try {
+      // Check for duplicate messages (same text, sender, session within last 5 seconds)
+      const recentCutoff = new Date(Date.now() - 5000).toISOString();
+      const duplicateCheck = await AGENT_FORMAT.database.query(`
+        SELECT id FROM conversation_messages 
+        WHERE session_id = ? AND text = ? AND sender = ? AND timestamp > ?
+        ORDER BY timestamp DESC LIMIT 1
+      `, [sessionId, text, sender, recentCutoff]);
+
+      if (duplicateCheck.length > 0) {
+        console.log('⚠️ [DEBUG] Duplicate message detected, skipping insertion:', duplicateCheck[0].id);
+        return {
+          success: true,
+          data: { messageId: duplicateCheck[0].id, isDuplicate: true }
+        };
+      }
+
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const timestamp = new Date().toISOString();
 
@@ -1215,8 +1231,7 @@ const AGENT_FORMAT = {
   },
 
   async listMessages(options, context) {
-    const { sessionId, limit = 50, offset = 0 } = options.options || options;
-
+    const { sessionId, limit = 50, offset = 0, direction = 'ASC' } = options.options || options;
 
     // Validate sessionId
     if (!sessionId || sessionId === 'undefined') {
@@ -1235,10 +1250,21 @@ const AGENT_FORMAT = {
     }
 
     try {
+      // Get total count of messages for this session
+      const totalCountResult = await AGENT_FORMAT.database.query(`
+        SELECT COUNT(*) as total FROM conversation_messages 
+        WHERE session_id = ?
+      `, [sessionId]);
+      
+      const totalCount = totalCountResult[0]?.total || 0;
+      
+      // Support both ASC (oldest first) and DESC (newest first) ordering
+      const orderBy = direction === 'DESC' ? 'timestamp DESC' : 'timestamp ASC';
+      
       const messages = await AGENT_FORMAT.database.query(`
         SELECT * FROM conversation_messages 
         WHERE session_id = ? 
-        ORDER BY timestamp ASC 
+        ORDER BY ${orderBy}
         LIMIT ? OFFSET ?
       `, [sessionId, limit, offset]);
 
@@ -1252,6 +1278,7 @@ const AGENT_FORMAT = {
           })),
           sessionId,
           count: messages.length,
+          totalCount: totalCount,
           limit,
           offset
         }

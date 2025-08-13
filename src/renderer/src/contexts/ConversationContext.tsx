@@ -124,7 +124,7 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
           action: 'message-list',
           options: {
             sessionId,
-            limit: 100,
+            limit: 500,  // Increased from 100 to handle longer conversations
             offset: 0
           }
         });
@@ -288,19 +288,24 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
       return;
     }
     
+    // Skip loading messages for active session - let ChatMessages batch loading handle it
+    console.log(`🔄 [ConversationContext] Skipping message loading for active session - batch loading will handle it: ${activeSessionId}`);
+    
     // Check if messages are already loaded for this session
     const currentMessages = messages[activeSessionId];
     const hasMessages = currentMessages && currentMessages.length > 0;
     
     console.log(`🔄 [ConversationContext] Messages exist for session: ${hasMessages ? currentMessages.length : 0}`);
     
-    if (!hasMessages) {
-      console.log(`🔄 [ConversationContext] Loading messages for active session: ${activeSessionId}`);
-      loadMessages(activeSessionId);
-    } else {
-      console.log(`✅ [ConversationContext] Messages already loaded for session: ${activeSessionId} (${currentMessages.length} messages)`);
-    }
-  }, [activeSessionId, loadMessages]); // Removed 'messages' from dependencies to prevent infinite loop
+    // Only load messages for non-active sessions (for sidebar display)
+    // Active session messages will be handled by ChatMessages batch loading
+    // if (!hasMessages) {
+    //   console.log(`🔄 [ConversationContext] Loading messages for active session: ${activeSessionId}`);
+    //   loadMessages(activeSessionId);
+    // } else {
+    //   console.log(`✅ [ConversationContext] Messages already loaded for session: ${activeSessionId} (${currentMessages.length} messages)`);
+    // }
+  }, [activeSessionId]); // Removed loadMessages and messages dependencies
 
   // Create new session
   const createSession = useCallback(async (

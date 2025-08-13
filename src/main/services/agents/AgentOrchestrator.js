@@ -1184,10 +1184,31 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
         if (hasRelevantMemories) {
           console.log('✅ [SEMANTIC-FIRST] FAST PATH - Using memories for immediate response');
           
-          // Generate response using memories + Phi3
-          const memoryContext = memories.map((memory, index) => {
-            const similarity = Math.round(memory.similarity * 100);
-            return `Memory ${index + 1} (${similarity}% match): ${memory.source_text}`;
+          // Build memory context string from top memories with entity filtering
+          let relevantMemories = memories.slice(0, 3);
+        
+          // If user mentions specific technologies, filter memories for relevance
+          const userQuery = prompt.toLowerCase();
+          const mentionedTechs = ['svelte', 'sveltejs', 'react', 'python', 'javascript', 'typescript'];
+          const queryTech = mentionedTechs.find(tech => userQuery.includes(tech));
+        
+          if (queryTech) {
+            // Prioritize memories that mention the same technology
+            const techRelevantMemories = memories.filter(memory => 
+              memory.source_text.toLowerCase().includes(queryTech)
+            );
+            
+            if (techRelevantMemories.length > 0) {
+              relevantMemories = techRelevantMemories.slice(0, 2);
+              console.log(`🎯 [CONTEXT-FILTER] Filtered memories for ${queryTech}: ${relevantMemories.length} relevant`);
+            }
+          }
+        
+          const memoryContext = relevantMemories.map((memory, index) => {
+            const preview = memory.source_text.length > 150 
+              ? memory.source_text.substring(0, 150) + '...'
+              : memory.source_text;
+            return `Memory ${index + 1} (${Math.round(memory.similarity * 100)}% match): ${preview}`;
           }).join('\n\n');
           
           console.log(`🔍 [DEBUG] Memory context being passed to Phi3:`, memoryContext.substring(0, 500) + '...');
@@ -1402,8 +1423,11 @@ USER QUESTION:
 ${prompt}
 
 INSTRUCTIONS:
-- Be concise and specific
-- Reference the provided information directly
+- Answer in natural, conversational language (NOT JSON format)
+- Be CONCISE and to the point (2-3 sentences max)
+- Focus specifically on what the user asked about
+- Reference the provided information when directly relevant
+- If user asks about SvelteJS, focus on SvelteJS (not other technologies)
 - Do not include these instructions in your answer
 
 ANSWER:`.trim();
@@ -1417,7 +1441,7 @@ ANSWER:`.trim();
               prompt: enhancedPrompt,
               options: { 
                 timeout: 15000, 
-                maxTokens: isConversationalQuery ? 200 : 100, // More tokens for detailed conversational responses
+                maxTokens: isConversationalQuery ? 150 : 100, // Reduced tokens for concise responses
                 temperature: 0.1 // Lower temperature for more precise conversational responses
               }
             }, {

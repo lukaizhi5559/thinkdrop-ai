@@ -37,6 +37,12 @@ class IntentParserFactory {
         try {
           console.log('🤖 Creating DistilBERT Intent Parser instance...');
           this.distilBertInstance = new DistilBertIntentParser();
+          
+          // Initialize the parser to load NER and other models
+          console.log('🔄 Initializing DistilBERT parser models...');
+          await this.distilBertInstance.initialize();
+          console.log('✅ DistilBERT parser fully initialized with NER support');
+          
           return this.distilBertInstance;
         } catch (error) {
           console.warn('⚠️ DistilBERT parser failed, falling back to HybridIntentParser:', error.message);
@@ -124,7 +130,14 @@ class IntentParserFactory {
   async getDistilBertParser() {
     if (!this.distilBertInstance) {
       try {
+        console.log('🤖 Creating DistilBERT Intent Parser instance (direct access)...');
         this.distilBertInstance = new DistilBertIntentParser();
+        
+        // Initialize the parser to load NER and other models
+        console.log('🔄 Initializing DistilBERT parser models (direct access)...');
+        await this.distilBertInstance.initialize();
+        console.log('✅ DistilBERT parser fully initialized with NER support (direct access)');
+        
       } catch (error) {
         console.warn('⚠️ DistilBERT parser not available:', error.message);
         return null;

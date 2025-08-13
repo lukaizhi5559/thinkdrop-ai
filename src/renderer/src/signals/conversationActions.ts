@@ -190,8 +190,12 @@ export const loadSessions = async () => {
   }
 };
 
-export const loadMessages = async (sessionId: string) => {
-  console.log('📨 [SIGNALS] Loading messages for session:', sessionId);
+export const loadMessages = async (sessionId: string, options?: {
+  limit?: number;
+  offset?: number;
+  direction?: 'ASC' | 'DESC';
+}) => {
+  console.log('📨 [SIGNALS] Loading messages for session:', sessionId, options);
   
   try {
     if (window.electronAPI?.agentExecute) {
@@ -200,8 +204,9 @@ export const loadMessages = async (sessionId: string) => {
         action: 'message-list',
         options: {
           sessionId,
-          limit: 100,
-          offset: 0
+          limit: options?.limit || 50,  // Default to 50 for batch loading
+          offset: options?.offset || 0,
+          direction: options?.direction || 'DESC'  // Default to DESC for most recent first
         }
       });
       
@@ -211,11 +216,13 @@ export const loadMessages = async (sessionId: string) => {
           ...messages.value,
           [sessionId]: result.result.data.messages
         };
+        return result.result.data.messages;
       }
     }
   } catch (err) {
     console.error('❌ [SIGNALS] Failed to load messages:', err);
   }
+  return [];
 };
 
 export const addMessage = async (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {

@@ -28,6 +28,7 @@ export default function ChatMessages() {
     activeSessionId,
     sendMessage: signalsSendMessage,
     addMessage: signalsAddMessage,
+    loadMessages: signalsLoadMessages,
     logDebugState
   } = useConversationSignals();
 
@@ -86,6 +87,7 @@ export default function ChatMessages() {
   // Load state
   const [isLoading, setIsLoading] = useState(false);
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
+  const [processedOrchestrationMessages, setProcessedOrchestrationMessages] = useState<Set<string>>(new Set());
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
   
   // Refs
@@ -100,6 +102,13 @@ export default function ChatMessages() {
   const [showScrollButton, setShowScrollButton] = useState(false);
   const isProgrammaticScrolling = useRef(false);
   const orchestrationListenerSetup = useRef<boolean>(false);
+  
+  // Batch loading state
+  const [batchSize] = useState(50);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [totalMessageCount, setTotalMessageCount] = useState(0);
+  const loadingMoreRef = useRef(false);
 
   // Debug activeSessionId changes and track good state with localStorage persistence
   React.useEffect(() => {
@@ -120,6 +129,121 @@ export default function ChatMessages() {
     }
   }, [activeSessionId, sessions]);
   
+  // Load older messages function
+  const loadOlderMessages = useCallback(async () => {
+    if (!activeSessionId || loadingMoreRef.current || !hasMoreMessages) return;
+    
+    console.log('📨 [ChatMessages] Loading older messages...');
+    loadingMoreRef.current = true;
+    setLoadingOlder(true);
+    
+    try {
+      const currentMessages = signals.activeMessages.value || [];
+      const currentCount = currentMessages.length;
+      
+      // Load the next batch of older messages
+      const result = await (window as any).electronAPI.agentExecute({
+        agentName: 'ConversationSessionAgent',
+        action: 'message-list',
+        options: {
+          sessionId: activeSessionId,
+          limit: currentCount + batchSize, // Load all current + next batch
+          offset: 0,
+          direction: 'DESC' // Most recent first
+        }
+      });
+      
+      if (result.success && result.result?.data?.messages) {
+        const messages = result.result.data.messages;
+        const totalCount = Number(result.result.data.totalCount) || messages.length;
+        
+        console.log(`📨 [ChatMessages] Loaded ${messages.length} total messages (was ${currentCount})`);
+        
+        // Update total count
+        setTotalMessageCount(totalCount);
+        
+        // Check if there are more messages to load
+        setHasMoreMessages(messages.length < totalCount);
+        
+        // Use signals to update the messages
+        await signalsLoadMessages(activeSessionId, {
+          limit: currentCount + batchSize,
+          offset: 0,
+          direction: 'DESC'
+        });
+        
+        console.log(`📨 [ChatMessages] Now showing ${messages.length}/${totalCount} messages`);
+      } else {
+        console.warn('📨 [ChatMessages] Failed to load older messages:', result.error || 'Unknown error');
+        setHasMoreMessages(false);
+      }
+    } catch (error) {
+      console.error('📨 [ChatMessages] Error loading older messages:', error);
+      setHasMoreMessages(false);
+    } finally {
+      setLoadingOlder(false);
+      loadingMoreRef.current = false;
+    }
+  }, [activeSessionId, batchSize, hasMoreMessages, signalsLoadMessages]);
+  
+
+  
+  // Initialize batch loading for active session
+  React.useEffect(() => {
+    if (activeSessionId) {
+      console.log('🔄 [BatchLoad] Initializing batch loading for session:', activeSessionId);
+      setHasMoreMessages(true);
+      setTotalMessageCount(0);
+      
+      // Load initial batch of messages (most recent 50)
+      loadInitialMessages();
+    }
+  }, [activeSessionId]);
+  
+  // Load initial batch of messages
+  const loadInitialMessages = useCallback(async () => {
+    if (!activeSessionId) return;
+    
+    console.log('📨 [BatchLoad] Loading initial batch of messages...');
+    try {
+      // First get total count from backend
+      const result = await (window as any).electronAPI.agentExecute({
+        agentName: 'ConversationSessionAgent',
+        action: 'message-list',
+        options: {
+          sessionId: activeSessionId,
+          limit: batchSize,
+          offset: 0,
+          direction: 'DESC'
+        }
+      });
+      
+      if (result.success && result.result?.data?.messages) {
+        const messages = result.result.data.messages;
+        const totalCount = Number(result.result.data.totalCount) || messages.length;
+        
+        console.log(`📨 [BatchLoad] Loaded initial ${messages.length} messages`);
+        
+        // Set total count from backend
+        setTotalMessageCount(totalCount);
+        console.log(`📨 [BatchLoad] Total messages available: ${totalCount}`);
+        console.log(`📨 [BatchLoad] Backend response totalCount:`, result.result.data.totalCount);
+        console.log(`📨 [BatchLoad] Setting totalMessageCount state to:`, totalCount);
+        
+        // Update signals with the messages
+        await signalsLoadMessages(activeSessionId, {
+          limit: batchSize,
+          offset: 0,
+          direction: 'DESC'
+        });
+        
+        setHasMoreMessages(messages.length < totalCount);
+      }
+    } catch (error) {
+      console.error('📨 [BatchLoad] Error loading initial messages:', error);
+    }
+  }, [activeSessionId, batchSize, signalsLoadMessages]);
+  
   // Get messages for the active session only from signals
   const displayMessages = React.useMemo(() => {
     if (!activeSessionId) {
@@ -129,7 +253,6 @@ export default function ChatMessages() {
     
     const sessionMessages = signals.activeMessages.value || [];
     console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
-    console.log('📝 [DISPLAY] Session messages:', sessionMessages);
     
     // Convert conversation messages to ChatMessage format
     const converted = sessionMessages.map((msg: any) => ({
@@ -140,9 +263,19 @@ export default function ChatMessages() {
       isStreaming: false
     }));
     
-    console.log('📝 [DISPLAY] Converted messages:', converted);
+    // Ensure ascending chronological order regardless of fetch direction
+    converted.sort((a: any, b: any) => a.timestamp.getTime() - b.timestamp.getTime());
+    
+    // Update total count when messages change
+    if (converted.length > 0 && totalMessageCount === 0) {
+      // This is a fallback - the proper total should come from the backend
+      console.log('📝 [DISPLAY] Setting fallback total count:', converted.length);
+    }
+    
+    console.log('📝 [DISPLAY] Converted messages:', converted.length, 'messages');
+    console.log('📝 [DISPLAY] Current totalMessageCount state:', totalMessageCount);
     return converted;
-  }, [activeSessionId, signals.activeMessages.value]);
+  }, [activeSessionId, signals.activeMessages.value, totalMessageCount]);
   
   // Handle incoming WebSocket messages for streaming
   const handleWebSocketMessage = async (message: any) => {
@@ -541,7 +674,7 @@ export default function ChatMessages() {
           isThinkingMsg = true;
           // Set the thinking message to the suggested response
           const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-          setInitialThinkingMessage(thinkingMsg);
+          setInitialThinkingMessage(thinkingMsg); 
           
           // Ensure we stay in processing state to keep ThinkingIndicator visible
           console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
@@ -942,12 +1075,18 @@ export default function ChatMessages() {
     scrollToBottom({ smooth: true, force: true });
   }, [scrollToBottom]);
 
-  // Handle scroll detection for scroll button visibility
+  // Handle scroll detection for scroll button visibility and batch loading
   const handleScroll = useCallback(() => {
     if (!messagesContainerRef.current) return;
     
     const container = messagesContainerRef.current;
-    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 100;
+    const { scrollTop, scrollHeight, clientHeight } = container;
+    const isNearBottom = scrollTop + clientHeight >= scrollHeight - 100;
+    
+    // Check if scrolled to top (load older messages)
+    if (scrollTop === 0 && hasMoreMessages && !loadingOlder) {
+      loadOlderMessages();
+    }
     
     // Show scroll button when not near bottom and there are messages
     setShowScrollButton(!isNearBottom && displayMessages.length > 0);
@@ -956,7 +1095,7 @@ export default function ChatMessages() {
     if (!isProgrammaticScrolling.current) {
       setIsUserScrolling(!isNearBottom);
     }
-  }, [displayMessages.length]);
+  }, [displayMessages.length, hasMoreMessages, loadingOlder, loadOlderMessages]);
 
 
   useEffect(() => {
@@ -1004,27 +1143,35 @@ export default function ChatMessages() {
         if (updateData.type === 'orchestration-complete' && updateData.response) {
           console.log('🎯 [ORCHESTRATION] Received final response, clearing thinking indicator');
           
-          // Add AI response to conversation session (this is what gets displayed)
-          // Get current session ID from signals to avoid stale closure issues
-          const currentSessionId = signals.activeSessionId.value;
-          console.log('🔍 [ORCHESTRATION] Current session ID from signals:', currentSessionId);
-          
-          if (currentSessionId && signalsAddMessage) {
-            console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', currentSessionId);         
-            await signalsAddMessage(currentSessionId, {
-              text: updateData.response,
-              sender: 'ai',
-              sessionId: currentSessionId,
-              metadata: {
-                handledBy: updateData.handledBy,
-                method: updateData.method,
-                originalTimestamp: updateData.timestamp
-              }
-            });
-            console.log('✅ [ORCHESTRATION] AI response added to session successfully');
+          // Check if this message was already added to prevent duplicates
+          const messageKey = `${updateData.response}_${updateData.timestamp}`;
+          if (processedOrchestrationMessages.has(messageKey)) {
+            console.log('⚠️ [ORCHESTRATION] Duplicate message detected, skipping:', messageKey);
           } else {
-            console.warn('⚠️ [ORCHESTRATION] No active session from signals; skipping adding AI response');
-            console.warn('🔍 [ORCHESTRATION] Debug - currentSessionId:', currentSessionId, 'signalsAddMessage:', !!signalsAddMessage);
+            setProcessedOrchestrationMessages(prev => new Set([...prev, messageKey]));
+            
+            // Add AI response to conversation session (this is what gets displayed)
+            // Get current session ID from signals to avoid stale closure issues
+            const currentSessionId = signals.activeSessionId.value;
+            console.log('🔍 [ORCHESTRATION] Current session ID from signals:', currentSessionId);
+            
+            if (currentSessionId && signalsAddMessage) {
+              console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', currentSessionId);         
+              await signalsAddMessage(currentSessionId, {
+                text: updateData.response,
+                sender: 'ai',
+                sessionId: currentSessionId,
+                metadata: {
+                  handledBy: updateData.handledBy,
+                  method: updateData.method,
+                  originalTimestamp: updateData.timestamp
+                }
+              });
+              console.log('✅ [ORCHESTRATION] AI response added to session successfully');
+            } else {
+              console.warn('⚠️ [ORCHESTRATION] No active session from signals; skipping adding AI response');
+              console.warn('🔍 [ORCHESTRATION] Debug - currentSessionId:', currentSessionId, 'signalsAddMessage:', !!signalsAddMessage);
+            }
           }
           
           // Clear loading and processing states
@@ -1076,6 +1223,11 @@ export default function ChatMessages() {
         }}
       >
         <div className="relative flex-1 flex flex-col min-h-0">
+        {/* Loaded counter overlay */}
+        <div className="absolute top-4 right-2 z-10 bg-gray-800/80 backdrop-blur-sm rounded-lg px-2 py-1 text-xs text-white/70">
+          Loaded: {displayMessages.length}/{totalMessageCount > 0 ? totalMessageCount : '?'}
+        </div>
+        
         <div 
           ref={messagesContainerRef}
           className="overflow-y-auto overflow-x-hidden p-4 flex-1"
@@ -1145,9 +1297,15 @@ export default function ChatMessages() {
                   )}
                 </div>
                 
-                {/* Action buttons at bottom - hide during edit mode */}
+                {/* Timestamp and Action buttons at bottom - hide during edit mode */}
                 {editingMessageId !== message.id && (
-                  <div className={`flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`flex items-center gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {/* Timestamp */}
+                  <span className="text-xs text-white/40">
+                    {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                  
+                  <div className="flex gap-1">
                   {/* Copy button for all messages */}
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -1237,6 +1395,7 @@ export default function ChatMessages() {
                     </Tooltip>
                   )}
                   </div>
+                  </div>
                 )}
               </div>
             ))}
@@ -1309,8 +1468,6 @@ export default function ChatMessages() {
           </div>
         )}
         
-        {/* Invisible element to scroll to */}
-        <div ref={messagesEndRef} />
         </div>
       </div>
       

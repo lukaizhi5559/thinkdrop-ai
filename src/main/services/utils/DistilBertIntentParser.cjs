@@ -63,10 +63,35 @@ class DistilBertIntentParser {
       
       // Initialize NER model for enhanced entity extraction
       console.log('🏷️ Initializing NER entity classifier...');
-      this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/bert-base-NER', {
-        cache_dir: './models'
-      });
-      this.isNerReady = true;
+      try {
+        // Try primary NER model first
+        this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/bert-base-NER', {
+          cache_dir: './models',
+          local_files_only: false,
+          revision: 'main'
+        });
+        this.isNerReady = true;
+        console.log('✅ NER classifier (bert-base-NER) loaded successfully');
+      } catch (nerError) {
+        console.warn('⚠️ Primary NER model failed:', nerError.message);
+        
+        // Try fallback NER model
+        try {
+          console.log('🔄 Trying fallback NER model...');
+          this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/distilbert-base-NER', {
+            cache_dir: './models',
+            local_files_only: false
+          });
+          this.isNerReady = true;
+          console.log('✅ NER classifier (distilbert-base-NER) loaded successfully');
+        } catch (fallbackError) {
+          console.warn('⚠️ Fallback NER model also failed:', fallbackError.message);
+          console.warn('🔍 NER Error details:', { primary: nerError.message, fallback: fallbackError.message });
+          this.nerClassifier = null;
+          this.isNerReady = false;
+          console.log('📝 Continuing without NER - using enhanced rule-based entity extraction only');
+        }
+      }
       
       console.log('🎯 Setting up intent classification...');
       await this.setupIntentClassifier();
@@ -80,25 +105,16 @@ class DistilBertIntentParser {
       console.error('❌ Failed to initialize DistilBERT Intent Parser:', error);
       this.isInitializing = false;
       
-      // If NER fails, continue without it
-      if (error.message.includes('NER') || error.message.includes('bert-base-NER')) {
-        console.warn('⚠️ NER model failed to load, using rule-based entity extraction only');
-        this.nerClassifier = null;
-        this.isNerReady = false;
-        
-        // Try to continue with just the embedder
-        try {
-          await this.setupIntentClassifier();
-          this.isReady = true;
-          this.isInitializing = false;
-          console.log('✅ DistilBERT Intent Parser ready (without NER)');
-          return true;
-        } catch (setupError) {
-          console.error('❌ Failed to setup intent classifier:', setupError);
-          this.isReady = false;
-          return false;
-        }
-      } else {
+      // Try to continue with just the embedder (NER errors are now handled separately above)
+      try {
+        console.log('🔄 Attempting to continue without failed components...');
+        await this.setupIntentClassifier();
+        this.isReady = true;
+        this.isInitializing = false;
+        console.log('✅ DistilBERT Intent Parser ready (partial initialization)');
+        return true;
+      } catch (setupError) {
+        console.error('❌ Failed to setup intent classifier:', setupError);
         this.isReady = false;
         return false;
       }
@@ -385,6 +401,13 @@ class DistilBertIntentParser {
         
         if (nerResults && nerResults.length > 0) {
           console.log('✅ NER transformer found entities:', nerResults.length);
+          console.log('🔍 [NER-DEBUG] Raw NER results:', nerResults.slice(0, 5).map(r => ({
+            word: r.word,
+            entity: r.entity,
+            score: r.score.toFixed(3),
+            start: r.start,
+            end: r.end
+          })));
           const transformerEntities = this.processNerResults(nerResults, message);
           
           // Merge transformer results into our format
@@ -591,12 +614,26 @@ class DistilBertIntentParser {
       // Sports & Recreation
       /\b(bike?s?|bicycle?s?|ball?s?|equipment|gear)\b/g,
       
-      // General patterns
-      /\bneed (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
-      /\bwant (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
-      /\bbuy (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
-      /\bget (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g,
-      /\blooking for (?:some |a |an |new |more )?([a-zA-Z]+(?:\s+[a-zA-Z]+)?)\b/g
+      // Technology & Programming
+      /\b(React|ReactJS|Vue|VueJS|Angular|AngularJS|Svelte|SvelteJS|SvelteKit)\b/g,
+      /\b(JavaScript|TypeScript|Python|Java|C\+\+|C#|PHP|Ruby|Go|Rust)\b/g,
+      /\b(Node\.?js|Express|Django|Flask|Spring|Laravel|Rails)\b/g,
+      /\b(HTML|CSS|SCSS|SASS|Bootstrap|Tailwind|Material-UI|Chakra)\b/g,
+      /\b(MongoDB|MySQL|PostgreSQL|SQLite|Redis|Firebase|Supabase)\b/g,
+      /\b(Docker|Kubernetes|AWS|Azure|GCP|Vercel|Netlify|Heroku)\b/g,
+      /\b(Git|GitHub|GitLab|VS Code|Visual Studio|IntelliJ|WebStorm)\b/g,
+      /\b(Next\.?js|Nuxt\.?js|Gatsby|Remix|Astro|Vite|Webpack|Rollup)\b/g,
+      /\b(GraphQL|REST API|API|SDK|CLI|npm|yarn|pip|composer)\b/g,
+      /\b(machine learning|ML|AI|artificial intelligence|deep learning)\b/g,
+      
+      // General patterns (capture nouns after action verbs)
+      /\bneed (?:to )?(?:learn |start |use |work with |study )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\bwant (?:to )?(?:learn |start |use |work with |study )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\blearning (?:about )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\bstart (?:learning |using |with )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\bworking (?:on |with )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\busing ([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
+      /\bstudying ([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g
     ];
     
     itemPatterns.forEach(pattern => {
@@ -842,8 +879,14 @@ class DistilBertIntentParser {
           end: end
         };
       } else {
-        // Continue current entity
-        currentEntity.text += word.replace(/^##/, '');
+        // Continue current entity (handle subword tokens properly)
+        const cleanWord = word.replace(/^##/, '');
+        // Add space only if the word doesn't start with ## (subword marker)
+        if (word.startsWith('##')) {
+          currentEntity.text += cleanWord;
+        } else {
+          currentEntity.text += ' ' + cleanWord;
+        }
         currentEntity.confidence = Math.min(currentEntity.confidence, score);
         currentEntity.end = end;
       }
@@ -871,14 +914,14 @@ class DistilBertIntentParser {
       'PERSON': 'person',
       'LOC': 'location', 
       'LOCATION': 'location',
-      'ORG': 'location', // Map organizations to locations for our schema
-      'ORGANIZATION': 'location',
-      'MISC': 'event', // Map misc to events as they're often event-related
+      'ORG': 'items', // Map organizations to items (many are tech companies/frameworks)
+      'ORGANIZATION': 'items',
+      'MISC': 'items', // Map misc to items (often technologies, frameworks, tools)
       'DATE': 'datetime',
       'TIME': 'datetime'
     };
     
-    return mapping[nerType.toUpperCase()] || 'event';
+    return mapping[nerType.toUpperCase()] || 'items'; // Default to items instead of event
   }
 
   /**
