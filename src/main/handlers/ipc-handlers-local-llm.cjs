@@ -7,6 +7,10 @@
 // Import IntentParser factory for centralized parser management
 const parserFactory = require('../services/utils/IntentParserFactory.cjs');
 
+// ========================================
+// LIGHTWEIGHT IPC HANDLERS - BUSINESS LOGIC IN ORCHESTRATOR
+// ========================================
+
 // Configure parser preferences (can be changed at runtime)
 parserFactory.configure({
   useHybrid: true,   // Best: TensorFlow.js + USE + Compromise + Natural
@@ -146,6 +150,70 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       }
 
       ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP -0.5: QUICK LEARNING GOAL DETECTION - Check if this should be memory_store
+      ////////////////////////////////////////////////////////////////////////
+      let isLearningGoal = false;
+      if (currentParser && currentParser.checkSemanticStorageIntent) {
+        try {
+          console.log('🔍 [LEARNING-CHECK] Quick learning goal detection for:', prompt);
+          const learningCheck = await currentParser.checkSemanticStorageIntent(prompt);
+          isLearningGoal = learningCheck.isLearningGoal;
+          console.log(`🎯 [LEARNING-CHECK] Result: ${isLearningGoal} (confidence: ${learningCheck.confidence?.toFixed(3) || 'N/A'}, method: ${learningCheck.method})`);
+        } catch (error) {
+          console.warn('⚠️ Learning goal detection failed:', error.message);
+        }
+      }
+
+      ////////////////////////////////////////////////////////////////////////
+      // 🎯 STEP -1: STAGED SEMANTIC SEARCH (Current → Session → Cross-Session)
+      // Skip for learning goals - they should go to memory storage
+      ////////////////////////////////////////////////////////////////////////
+      if (!isLearningGoal) {
+        const stagedSearchResult = await coreAgent.trySemanticSearchFirst(prompt, options, {
+          conversationContext: conversationContext,
+          currentSessionId: currentSessionId
+        });
+        if (stagedSearchResult) {
+        // Extract the response text properly to avoid JSON object storage
+        let responseText = stagedSearchResult.data?.response || stagedSearchResult.response || stagedSearchResult;
+        
+        console.log('🔍 [STAGED-SEARCH] Raw response type:', typeof responseText);
+        console.log('🔍 [STAGED-SEARCH] Raw response value:', responseText);
+        
+        // Handle nested response objects recursively
+        while (typeof responseText === 'object' && responseText !== null) {
+          if (responseText.response) {
+            responseText = responseText.response;
+            console.log('🔧 [STAGED-SEARCH] Extracted nested response:', responseText);
+          } else {
+            // If it's an object but no 'response' property, stringify it
+            responseText = JSON.stringify(responseText);
+            console.log('🔧 [STAGED-SEARCH] Stringified object response:', responseText);
+            break;
+          }
+        }
+        
+        // Remove surrounding quotes if present
+        if (typeof responseText === 'string' && responseText.startsWith('"') && responseText.endsWith('"')) {
+          responseText = responseText.slice(1, -1);
+          console.log('🔧 [STAGED-SEARCH] Removed surrounding quotes:', responseText);
+        }
+        
+        // Ensure we return a plain string
+        const finalResponse = typeof responseText === 'string' ? responseText : String(responseText);
+        
+        console.log('✅ [STAGED-SEARCH] Final response:', finalResponse);
+        
+          return { 
+            success: true, 
+            data: { 
+              response: finalResponse
+            } 
+          };
+        }
+      }
+
+      ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 0: NER-FIRST ROUTING - Smart routing based on entities
       ////////////////////////////////////////////////////////////////////////
       let routingDecision = null;
@@ -197,22 +265,9 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
       }
 
       ////////////////////////////////////////////////////////////////////////
-      // 🎯 STEP 1: CONDITIONAL SEMANTIC SEARCH - Only when NER suggests it
+      // 🎯 STEP 1: (Disabled) Old single-call semantic path replaced by staged search
       ////////////////////////////////////////////////////////////////////////
-      if (!routingDecision || routingDecision.needsSemanticSearch) {
-        console.log('🔍 NER suggests semantic search - checking memories...');
-        const semanticResponse = await coreAgent.trySemanticSearchFirst(prompt, options, {
-          executeAgent: coreAgent.executeAgent.bind(coreAgent),
-          database: coreAgent.context?.database,
-          conversationContext: conversationContext,
-          currentSessionId: currentSessionId // Add session scoping to prevent cross-session contamination
-        });
-        if (semanticResponse) {
-          return semanticResponse;
-        }
-      } else {
-        console.log('⚡ NER routing: Skipping semantic search - not needed for this query type');
-      }
+      console.log('⏭️  [STAGED] Skipping old STEP 1 semantic path (using staged search)');
 
       ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 1.5: EARLY QUESTION HANDLER - Direct LLM for general knowledge
@@ -338,9 +393,40 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         if (result && result.response && windows) {
           console.log('📡 [BROADCAST] Broadcasting orchestration update to frontend...');
           
+          // Extract response text properly - handle both string and object formats
+          let responseText = result.response;
+          console.log('🔍 [BROADCAST] Raw result.response type:', typeof result.response);
+          console.log('🔍 [BROADCAST] Raw result.response value:', result.response);
+          
+          // Handle nested response objects recursively
+          while (typeof responseText === 'object' && responseText !== null) {
+            if (responseText.response) {
+              responseText = responseText.response;
+              console.log('🔧 [BROADCAST] Extracted nested response:', responseText);
+            } else if (responseText.data && responseText.data.response) {
+              responseText = responseText.data.response;
+              console.log('🔧 [BROADCAST] Extracted data.response:', responseText);
+            } else {
+              // If it's an object but no 'response' property, stringify it
+              responseText = JSON.stringify(responseText);
+              console.log('🔧 [BROADCAST] Stringified object response:', responseText);
+              break;
+            }
+          }
+          
+          // Remove surrounding quotes if present
+          if (typeof responseText === 'string' && responseText.startsWith('"') && responseText.endsWith('"')) {
+            responseText = responseText.slice(1, -1);
+            console.log('🔧 [BROADCAST] Removed surrounding quotes:', responseText);
+          }
+          
+          // Ensure we have a plain string
+          responseText = typeof responseText === 'string' ? responseText : String(responseText);
+          console.log('✅ [BROADCAST] Final extracted response:', responseText);
+          
           const updateData = {
             type: 'orchestration-complete',
-            response: result.response,
+            response: responseText,
             handledBy: result.handledBy,
             method: result.method,
             timestamp: result.timestamp

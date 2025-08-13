@@ -1081,19 +1081,286 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Semantic-first processing: Try semantic search before intent classification
+   * STAGED SEMANTIC SEARCH: Progressive search from current scope to cross-session
    * @param {string} prompt - User message
    * @param {Object} options - Processing options
-   * @param {Object} context - Execution context
+   * @param {Object} context - Execution context with conversationContext and currentSessionId
    * @returns {Object|null} - Enhanced response if memories found, null if should continue to intent classification
    */
   async trySemanticSearchFirst(prompt, options = {}, context = {}) {
     if (options.preferSemanticSearch === false) {
-      console.log('🔍 [SEMANTIC-FIRST] Semantic search disabled by options, skipping...');
+      console.log('🔕 [STAGED] preferSemanticSearch=false, skipping staged search');
       return null;
     }
 
-    console.log('🔍 [SEMANTIC-FIRST] Attempting semantic search before intent classification...');
+    console.log('🔍 [STAGED-SEARCH] Starting progressive staged search: Current → Session → Cross-Session');
+    
+    // Detect if this is a cross-session query that should search across all sessions
+    const isCrossSessionQuery = /\b(recently|before|earlier|previously|talked about|discussed|mentioned|food|pizza|conversation|chat)\b/i.test(prompt);
+    console.log('🔍 [STAGED-SEARCH] Cross-session query detected:', isCrossSessionQuery);
+    
+    try {
+      let stage1Result = null;
+      
+      // Stage 1: Current Scope (recent conversation only)
+      const stage1 = await this.stageCurrentScope(prompt, { conversationContext: context.conversationContext });
+      if (stage1 && stage1.success) {
+        console.log('✅ [STAGE-1] Current scope success');
+        stage1Result = stage1.data.response;
+        
+        // For non-cross-session queries, return immediately
+        if (!isCrossSessionQuery) {
+          console.log('🔍 [STAGE-1] Non-cross-session query, returning current scope result');
+          return { success: true, data: { response: stage1.data.response } };
+        } else {
+          console.log('🔍 [STAGE-1] Cross-session query detected, continuing to search other sessions...');
+        }
+      }
+
+      let stage2Result = null;
+      let stage3Result = null;
+      
+      // Stage 2: Session Scope (semantic search within current session)
+      if (context.currentSessionId) {
+        const s2 = await this.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
+        if (s2 && s2.success) {
+          const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: context.conversationContext, memorySnippets: s2.data.snippets });
+          const resp = await this.executeAgent('Phi3Agent', {
+            action: 'query-phi3-fast',
+            prompt: phiPrompt,
+            options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+          });
+          if (resp.success && resp.result?.response) {
+            console.log('✅ [STAGE-2] Session scope success');
+            stage2Result = resp.result.response;
+            
+            // For non-cross-session queries, return immediately
+            if (!isCrossSessionQuery) {
+              console.log('🔍 [STAGE-2] Non-cross-session query, returning session scope result');
+              return { success: true, data: { response: resp.result.response } };
+            } else {
+              console.log('🔍 [STAGE-2] Cross-session query, continuing to search all sessions...');
+            }
+          }
+        }
+      }
+
+      // Stage 3: Cross-Session (semantic search across all sessions)
+      const s3 = await this.stageSemanticMemory(prompt, { sessionId: null });
+      if (s3 && s3.success) {
+        const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: context.conversationContext, memorySnippets: s3.data.snippets });
+        const resp = await this.executeAgent('Phi3Agent', {
+          action: 'query-phi3-fast',
+          prompt: phiPrompt,
+          options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
+        });
+        if (resp.success && resp.result?.response) {
+          console.log('✅ [STAGE-3] Cross-session success');
+          stage3Result = resp.result.response;
+        }
+      }
+      
+      // Combine results from multiple stages for cross-session queries
+      if (isCrossSessionQuery && (stage1Result || stage2Result || stage3Result)) {
+        console.log('🔍 [STAGED-SEARCH] Combining results from multiple stages');
+        const combinedResults = [stage1Result, stage2Result, stage3Result].filter(Boolean);
+        
+        if (combinedResults.length > 0) {
+          // For cross-session queries, prefer the most comprehensive result
+          const finalResult = stage3Result || stage2Result || stage1Result;
+          console.log('✅ [STAGED-SEARCH] Cross-session query completed, returning combined result');
+          return { success: true, data: { response: finalResult } };
+        }
+      }
+      
+      // Fallback: return any single result we found
+      if (stage1Result) {
+        console.log('✅ [STAGED-SEARCH] Returning Stage 1 result as fallback');
+        return { success: true, data: { response: stage1Result } };
+      }
+      if (stage2Result) {
+        console.log('✅ [STAGED-SEARCH] Returning Stage 2 result as fallback');
+        return { success: true, data: { response: stage2Result } };
+      }
+      if (stage3Result) {
+        console.log('✅ [STAGED-SEARCH] Returning Stage 3 result as fallback');
+        return { success: true, data: { response: stage3Result } };
+      }
+      
+      console.log('📝 [STAGED-SEARCH] No sufficient results from any stage, proceeding to intent classification');
+      return null;
+      
+    } catch (error) {
+      console.warn('⚠️ [STAGED-SEARCH] Staged search failed, proceeding to intent classification:', error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Build a concise Phi3 prompt using conversation context and/or memory snippets
+   */
+  buildStagedPrompt(prompt, { conversationContext = '', memorySnippets = [] } = {}) {
+    const maxCtx = 1500;
+    const convo = conversationContext ? (conversationContext.length > maxCtx ? conversationContext.slice(0, maxCtx) + '...[truncated]' : conversationContext) : '';
+    const mem = memorySnippets.join('\n\n');
+    const memTrunc = mem.length > maxCtx ? mem.slice(0, maxCtx) + '...[truncated]' : mem;
+
+    if (convo && !memTrunc) {
+      return `You are ThinkDrop AI. Answer based on our recent conversation.\n\nRECENT CONVERSATION:\n${convo}\n\nQUESTION: ${prompt}\n\nBe concise (2-4 sentences).`;
+    }
+
+    if (convo && memTrunc) {
+      return `You are ThinkDrop AI. Use recent conversation and relevant history.\n\nRECENT CONVERSATION:\n${convo}\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer concisely, prioritizing directly relevant details.`;
+    }
+
+    return `You are ThinkDrop AI. Use relevant history to answer.\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer in 2-4 sentences, focused and specific.`;
+  }
+
+  /**
+   * Stage 1: Current-scope check using only recent conversation context
+   * Returns null if no meaningful context or low relevance
+   */
+  async stageCurrentScope(prompt, { conversationContext }) {
+    if (!conversationContext || conversationContext.length < 40) return null;
+    try {
+      // Light semantic check: compare embeddings of prompt vs convo sample
+      const sample = conversationContext.length > 1200
+        ? `${conversationContext.slice(0, 400)}\n...\n${conversationContext.slice(-400)}`
+        : conversationContext;
+
+      const [q, c] = await Promise.all([
+        this.executeAgent('SemanticEmbeddingAgent', { action: 'generate-embedding', text: prompt }),
+        this.executeAgent('SemanticEmbeddingAgent', { action: 'generate-embedding', text: sample })
+      ]);
+
+      if (!q.success || !c.success) return null;
+      const qv = q.result.embedding, cv = c.result.embedding;
+      const dot = qv.reduce((s, v, i) => s + v * cv[i], 0);
+      const n1 = Math.sqrt(qv.reduce((s, v) => s + v * v, 0));
+      const n2 = Math.sqrt(cv.reduce((s, v) => s + v * v, 0));
+      const sim = dot / (n1 * n2 + 1e-8);
+
+      // Lower threshold for conversational recency
+      if (sim >= 0.18) {
+        const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: sample, memorySnippets: [] });
+        const resp = await this.executeAgent('Phi3Agent', {
+          action: 'query-phi3-fast',
+          prompt: phiPrompt,
+          options: { timeout: 10000, maxTokens: 140, temperature: 0.2 }
+        });
+        if (resp.success && resp.result?.response) {
+          return { success: true, data: { response: resp.result.response, stage: 'current_scope' } };
+        }
+      }
+    } catch (e) {
+      console.warn('⚠️ [STAGE-1] Current scope check failed:', e.message);
+    }
+    return null;
+  }
+
+  /**
+   * Stage 2/3: Session or Cross-session semantic search via UserMemoryAgent
+   */
+  async stageSemanticMemory(prompt, { sessionId = null }) {
+    const params = {
+      action: 'memory-semantic-search',
+      query: prompt,
+      limit: 20,
+      minSimilarity: sessionId ? 0.26 : 0.32
+    };
+    if (sessionId) params.sessionId = sessionId;
+
+    // Use entity-aware database search
+    const res = await this.getEntityFilteredMemories(prompt, params);
+    if (!res.success || !res.result?.results?.length) return null;
+    
+    const memories = res.result.results;
+    const top = Math.max(...memories.map(m => m.similarity));
+    const avg3 = memories.slice(0, 3).reduce((s, m) => s + m.similarity, 0) / Math.min(3, memories.length);
+    const sufficient = top >= (sessionId ? 0.28 : 0.34) || avg3 >= (sessionId ? 0.25 : 0.30);
+    if (!sufficient) return null;
+
+    const snippets = memories.slice(0, 3).map((m, i) => {
+      const txt = (m.source_text || '').slice(0, 220);
+      return `Memory ${i + 1} (${Math.round((m.similarity || 0) * 100)}%): ${txt}${(m.source_text || '').length > 220 ? '...' : ''}`;
+    });
+
+    return { success: true, data: { snippets, memories, stage: sessionId ? 'session_scope' : 'cross_session' } };
+  }
+
+  /**
+   * Extract entities from query using NER, then use them for database-optimized memory filtering
+   * Leverages existing memory_entities table with proper joins and indexing
+   */
+  async getEntityFilteredMemories(prompt, searchParams) {
+    try {
+      // First extract entities from the query using existing NER system
+      const { createRequire } = await import('module');
+      const require = createRequire(import.meta.url);
+      const DistilBertIntentParser = require('../utils/DistilBertIntentParser.cjs');
+      
+      const parser = new DistilBertIntentParser();
+      await parser.initialize();
+      
+      const entities = await parser.extractEntities(prompt);
+      console.log(`🏷️ [ENTITY-EXTRACT] Query: "${prompt}" -> Entities:`, entities);
+      
+      // Collect relevant entity terms
+      const relevantTerms = [];
+      if (entities.TECHNOLOGY && entities.TECHNOLOGY.length > 0) {
+        relevantTerms.push(...entities.TECHNOLOGY);
+      }
+      if (entities.PROGRAMMING_LANGUAGE && entities.PROGRAMMING_LANGUAGE.length > 0) {
+        relevantTerms.push(...entities.PROGRAMMING_LANGUAGE);
+      }
+      if (entities.FRAMEWORK && entities.FRAMEWORK.length > 0) {
+        relevantTerms.push(...entities.FRAMEWORK);
+      }
+      
+      if (relevantTerms.length === 0) {
+        // No entities found, use regular semantic search
+        console.log('📝 [ENTITY-FILTER] No relevant entities found, using standard semantic search');
+        return await this.executeAgent('UserMemoryAgent', searchParams);
+      }
+      
+      // Use database query to find memories with matching entities
+      console.log(`🎯 [ENTITY-FILTER] Searching memories with entities: [${relevantTerms.join(', ')}]`);
+      
+      // Create entity-aware search parameters
+      const entitySearchParams = {
+        ...searchParams,
+        action: 'memory-semantic-search-with-entities',
+        entities: relevantTerms
+      };
+      
+      const result = await this.executeAgent('UserMemoryAgent', entitySearchParams);
+      
+      if (result.success && result.result?.results?.length > 0) {
+        console.log(`✅ [ENTITY-FILTER] Found ${result.result.results.length} entity-filtered memories`);
+        return result;
+      } else {
+        // Fallback to regular search if entity search fails
+        console.log('⚠️ [ENTITY-FILTER] Entity search failed, falling back to standard search');
+        return await this.executeAgent('UserMemoryAgent', searchParams);
+      }
+      
+    } catch (error) {
+      console.warn('⚠️ [ENTITY-FILTER] Entity filtering failed, using standard search:', error.message);
+      return await this.executeAgent('UserMemoryAgent', searchParams);
+    }
+  }
+
+  /**
+   * LEGACY: Old semantic-first processing (kept for compatibility)
+   * @deprecated Use the new staged search above
+   */
+  async trySemanticSearchFirstLegacy(prompt, options = {}, context = {}) {
+    if (options.preferSemanticSearch === false) {
+      console.log('🔍 [LEGACY-SEMANTIC] Semantic search disabled by options, skipping...');
+      return null;
+    }
+
+    console.log('🔍 [LEGACY-SEMANTIC] Attempting legacy semantic search before intent classification...');
     try {
       // For cross-session queries, don't scope to current session
       const searchParams = {
@@ -1622,30 +1889,30 @@ ANSWER:`.trim();
     }
 
     console.log('🚀 [EARLY-QUESTION] All checks passed - handling evergreen GK question directly with Phi3...');
-console.log('🔍 [EARLY-QUESTION] Question text:', text);
-  try {
-    const phi3Agent = this.getAgent('Phi3Agent');
-    if (!phi3Agent) {
-      console.warn('⚠️ [EARLY-QUESTION] Phi3Agent not available, falling back to orchestration');
-      return null;
-    }
+    console.log('🔍 [EARLY-QUESTION] Question text:', text);
+    try {
+      const phi3Agent = this.getAgent('Phi3Agent');
+      if (!phi3Agent) {
+        console.warn('⚠️ [EARLY-QUESTION] Phi3Agent not available, falling back to orchestration');
+        return null;
+      }
 
-    // Add timeout for safety
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1600);
+      // Add timeout for safety
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 1600);
 
-    // Extract conversation context from options for chain awareness
-    const conversationContext = options.conversationContext ? `\n\nRECENT CONVERSATION CONTEXT:\n${options.conversationContext}\n` : '';
+      // Extract conversation context from options for chain awareness
+      const conversationContext = options.conversationContext ? `\n\nRECENT CONVERSATION CONTEXT:\n${options.conversationContext}\n` : '';
 
-    console.log(`🔍 [DIRECT-QUESTION-DEBUG] Context info:`, {
-      hasConversationContext: !!options.conversationContext,
-      contextLength: options.conversationContext?.length || 0,
-      contextPreview: options.conversationContext?.substring(0, 100) || 'NONE'
-    });
+      console.log(`🔍 [DIRECT-QUESTION-DEBUG] Context info:`, {
+        hasConversationContext: !!options.conversationContext,
+        contextLength: options.conversationContext?.length || 0,
+        contextPreview: options.conversationContext?.substring(0, 100) || 'NONE'
+      });
 
-    const directResponse = await phi3Agent.execute({
-      action: 'query-phi3-fast',
-      prompt: `You are answering an evergreen general-knowledge question.${conversationContext}
+      const directResponse = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: `You are answering an evergreen general-knowledge question.${conversationContext}
 - Be concise (2-4 sentences).
 - If there's conversation context above, use it to provide a more relevant response.
 - If the answer depends on current events or post-2023 facts, say you are not sure.
@@ -1653,13 +1920,13 @@ console.log('🔍 [EARLY-QUESTION] Question text:', text);
 
 Question: ${text}
 Answer:`,
-      options: {
-        temperature: 0.2,
-        maxTokens: 180,
-        timeout: options.timeoutMs ?? 1600,
-        signal: controller.signal
-      }
-    }).finally(() => clearTimeout(timeout));
+        options: {
+          temperature: 0.2,
+          maxTokens: 180,
+          timeout: options.timeoutMs ?? 1600,
+          signal: controller.signal
+        }
+      }).finally(() => clearTimeout(timeout));
       
       // Validate response quality
       const answer = directResponse?.response?.trim();

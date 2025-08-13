@@ -901,7 +901,31 @@ const AGENT_FORMAT = {
   async addMessage(options, context) {
     // Handle both direct options and nested options structure
     const actualOptions = options.options || options;
-    const { sessionId, text, sender, metadata = {} } = actualOptions;
+    const { sessionId, text: rawText, sender, metadata = {} } = actualOptions;
+
+    // Extract response text properly - handle both string and object formats
+    let text = rawText;
+    console.log('🔍 [CONVERSATION_ADD_MESSAGE] Raw text type:', typeof text);
+    console.log('🔍 [CONVERSATION_ADD_MESSAGE] Raw text value:', text);
+    
+    while (typeof text === 'object' && text !== null) {
+      if (text.response) {
+        text = text.response;
+        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Extracted nested response:', text);
+      } else if (text.data && text.data.response) {
+        text = text.data.response;
+        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Extracted data.response:', text);
+      } else {
+        // If it's an object but no 'response' property, stringify it
+        text = JSON.stringify(text);
+        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Stringified object response:', text);
+        break;
+      }
+    }
+    
+    // Ensure we have a plain string
+    text = typeof text === 'string' ? text : String(text);
+    console.log('✅ [CONVERSATION_ADD_MESSAGE] Final extracted text:', text);
 
     console.log('🔍 [DEBUG] addMessage received:', { sessionId, text, sender, metadata });
 

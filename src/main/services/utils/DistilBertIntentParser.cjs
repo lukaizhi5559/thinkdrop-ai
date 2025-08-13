@@ -938,7 +938,7 @@ class DistilBertIntentParser {
       const entities = await this.extractEntities(message);
       
       // Analyze entity patterns for routing decisions
-      const routingDecision = this.analyzeEntitiesForRouting(entities, message);
+      const routingDecision = await this.analyzeEntitiesForRouting(entities, message);
       
       console.log(`✅ NER Routing Decision: ${routingDecision.primaryIntent} (confidence: ${routingDecision.confidence})`);
       console.log(`📊 Entities found:`, entities);
@@ -959,12 +959,167 @@ class DistilBertIntentParser {
   }
 
   /**
+   * Extract memory_store examples from training data for semantic comparison
+   * @returns {string[]} Array of memory_store text examples
+   */
+  getMemoryStoreTrainingExamples() {
+    const allTrainingData = this.getTrainingData()
+    
+    // Extract only memory_store examples
+    const memoryStoreExamples = allTrainingData
+      .filter(item => item.intent === 'memory_store')
+      .map(item => item.text)
+      .filter(text => text && text.length > 5); // Filter out empty or very short examples
+    
+    console.log(`📊 [TRAINING-DATA] Extracted ${memoryStoreExamples.length} memory_store examples for semantic comparison`);
+    
+    // Return a diverse subset to avoid performance issues
+    const maxExamples = 50; // Reasonable number for semantic comparison
+    if (memoryStoreExamples.length > maxExamples) {
+      // Take every nth example to get a diverse subset
+      const step = Math.floor(memoryStoreExamples.length / maxExamples);
+      return memoryStoreExamples.filter((_, index) => index % step === 0).slice(0, maxExamples);
+    }
+    
+    return memoryStoreExamples;
+  }
+
+  /**
+   * Check if text indicates storage intent using TRUE semantic similarity
+   * @param {string} text - Input text to analyze
+   * @returns {Promise<Object>} - {isLearningGoal: boolean, confidence: number}
+   */
+  async checkSemanticStorageIntent(text) {
+    console.log(`🔍 [SEMANTIC-STORAGE] checkSemanticStorageIntent called with: "${text}"`);
+    console.log(`🔍 [SEMANTIC-STORAGE] Embedder available: ${!!this.embedder}, isEmbeddingReady: ${this.isEmbeddingReady}`);
+    
+    // Extract memory_store patterns from existing training data
+    const storagePatterns = this.getMemoryStoreTrainingExamples();
+    console.log(`🔍 [SEMANTIC-STORAGE] Found ${storagePatterns.length} storage patterns for comparison`);
+    
+    // Use TRUE semantic similarity with embeddings
+    if (this.embedder && this.isEmbeddingReady) {
+      try {
+        console.log('🧠 [SEMANTIC] Computing true semantic similarity for storage intent...');
+        
+        // Generate embedding for input text
+        const inputEmbedding = await this.embedder(text);
+        if (!inputEmbedding || !Array.isArray(inputEmbedding)) {
+          throw new Error('Failed to generate input embedding');
+        }
+        
+        // Generate embeddings for all storage patterns and compute similarities
+        const similarities = [];
+        for (const pattern of storagePatterns) {
+          try {
+            const patternEmbedding = await this.embedder(pattern);
+            if (patternEmbedding && Array.isArray(patternEmbedding)) {
+              const similarity = this.computeCosineSimilarity(inputEmbedding, patternEmbedding);
+              similarities.push(similarity);
+              console.log(`🔍 [SEMANTIC] "${text}" vs "${pattern}": ${similarity.toFixed(3)}`);
+            }
+          } catch (patternError) {
+            console.warn(`⚠️ Failed to embed pattern "${pattern}":`, patternError.message);
+          }
+        }
+        
+        if (similarities.length > 0) {
+          // Use the highest similarity as confidence
+          const maxSimilarity = Math.max(...similarities);
+          const avgTopThree = similarities
+            .sort((a, b) => b - a)
+            .slice(0, 3)
+            .reduce((sum, sim) => sum + sim, 0) / Math.min(3, similarities.length);
+          
+          // Combine max and average for more robust confidence
+          const confidence = (maxSimilarity * 0.7) + (avgTopThree * 0.3);
+          
+          console.log(`🎯 [SEMANTIC] Storage intent confidence: ${confidence.toFixed(3)} (max: ${maxSimilarity.toFixed(3)}, avg3: ${avgTopThree.toFixed(3)})`);
+          
+          return {
+            isLearningGoal: confidence > 0.65, // Semantic threshold
+            confidence: confidence,
+            method: 'true_semantic_similarity'
+          };
+        }
+        
+      } catch (error) {
+        console.warn('⚠️ Semantic storage detection failed:', error.message);
+      }
+    }
+    
+    // Fallback: Use training data similarity if embedder not available
+    return this.fallbackStorageDetection(text);
+  }
+  
+  /**
+   * Compute cosine similarity between two embedding vectors
+   * @param {number[]} vecA - First embedding vector
+   * @param {number[]} vecB - Second embedding vector  
+   * @returns {number} - Cosine similarity (-1 to 1)
+   */
+  computeCosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) {
+      return 0;
+    }
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    
+    const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
+    return magnitude === 0 ? 0 : dotProduct / magnitude;
+  }
+  
+  /**
+   * Fallback storage detection using training data patterns
+   * @param {string} text - Input text
+   * @returns {Object} - Detection result
+   */
+  fallbackStorageDetection(text) {
+    console.log(`🔍 [FALLBACK-STORAGE] Using fallback detection for: "${text}"`);
+    
+    // Training data heuristics - check for common patterns in memory_store examples
+    const trainingPatterns = this.getMemoryStoreTrainingExamples().slice(0, 10); // Sample for pattern matching
+    console.log(`🔍 [FALLBACK-STORAGE] Checking against ${trainingPatterns.length} training patterns`);
+    
+    const hasTrainingPattern = trainingPatterns.some(pattern => 
+      text.toLowerCase().includes(pattern.toLowerCase().substring(0, 20)) // Partial match
+    );
+
+    if (hasTrainingPattern) {
+      console.log(`✅ [FALLBACK-STORAGE] Found training pattern match`);
+      return {
+        isLearningGoal: true,
+        confidence: 0.75,
+        method: 'training_data_heuristics'
+      };
+    }
+
+    // Final fallback: simple pattern matching
+    const hasLearningIntent = /\b(need|want|plan|going)\s+to\s+(learn|study|start|begin|work on|practice)\b/i.test(text);
+    console.log(`🔍 [FALLBACK-STORAGE] Regex pattern match: ${hasLearningIntent}`);
+    
+    return {
+      isLearningGoal: hasLearningIntent,
+      confidence: hasLearningIntent ? 0.6 : 0.1,
+      method: 'regex_fallback'
+    };
+  }
+
+  /**
    * Analyze extracted entities to make routing decisions using scored approach
    * @param {Object} entities - Extracted entities by type
    * @param {string} message - Original message for context
-   * @returns {Object} Routing decision
+   * @returns {Promise<Object>} Routing decision
    */
-  analyzeEntitiesForRouting(entities, message) {
+  async analyzeEntitiesForRouting(entities, message) {
     const text = message.trim();
     const tokens = this.tokenize(text);
 
@@ -1042,10 +1197,39 @@ class DistilBertIntentParser {
       scores.question += 0.15; // Slight boost for question consideration
     }
 
-    // MEMORY STORE: Enhanced with more verbs and better speculative handling
+    // MEMORY STORE: Database-driven approach using semantic similarity instead of brittle regex
     const storeVerbIdxs = this.indexOfTokens(tokens, ["save","remember","note","record","log","track","journal","add"]);
     const speculative = /(should|can|could)\s+i\s+(save|log|record|remember)/i.test(text);
-    const storeCues = (firstPerson && (futureCue || pastCue || e.event || e.person || e.location || e.datetime)) || storeVerbIdxs.length > 0 || declarativeAbility;
+    
+    // Use semantic similarity to detect storage intents instead of hardcoded patterns
+    // Check for learning/goal-setting intent using TRUE semantic similarity
+    let semanticStorageBoost = 0;
+    console.log(`🔍 [SEMANTIC-STORAGE] Starting semantic storage detection for: "${text}"`);
+    try {
+      const learningIndicators = await this.checkSemanticStorageIntent(text);
+      console.log(`🔍 [SEMANTIC-STORAGE] Detection result:`, learningIndicators);
+      if (learningIndicators.isLearningGoal) {
+        semanticStorageBoost = learningIndicators.confidence;
+        console.log(`🎯 [SEMANTIC-STORAGE] Detected learning goal with confidence: ${semanticStorageBoost.toFixed(3)} (method: ${learningIndicators.method})`);
+      } else {
+        console.log(`❌ [SEMANTIC-STORAGE] Not detected as learning goal (confidence: ${learningIndicators.confidence?.toFixed(3) || 'N/A'})`);
+      }
+    } catch (error) {
+      console.warn('⚠️ Semantic storage detection failed:', error.message);
+      console.warn('⚠️ Error stack:', error.stack);
+      semanticStorageBoost = 0;
+    }
+    
+    // Debug individual storeCues components
+    const firstPersonCondition = firstPerson && (futureCue || pastCue || e.event || e.person || e.location || e.datetime);
+    const storeVerbCondition = storeVerbIdxs.length > 0;
+    const declarativeCondition = declarativeAbility;
+    const semanticCondition = semanticStorageBoost > 0.6;
+    
+    console.log(`🔍 [STORE-CUES] Components: firstPerson=${firstPerson}, futureCue=${futureCue}, pastCue=${pastCue}, entities=${Object.values(e).reduce((a,b)=>a+b,0)}`);
+    console.log(`🔍 [STORE-CUES] Conditions: firstPersonCondition=${firstPersonCondition}, storeVerbCondition=${storeVerbCondition}, declarativeCondition=${declarativeCondition}, semanticCondition=${semanticCondition} (boost=${semanticStorageBoost})`);
+    
+    const storeCues = firstPersonCondition || storeVerbCondition || declarativeCondition || semanticCondition;
     
     // CRITICAL FIX: Don't treat questions as storage operations
     // If user asks "what's coming up" or similar, it's a question, not a storage request
@@ -1055,6 +1239,13 @@ class DistilBertIntentParser {
     
     if (storeCues && !negated && !isQuestionNotStorage) {
       scores.memory_store += 0.70;
+      
+      // Add semantic storage boost for learning goals
+      if (semanticStorageBoost > 0) {
+        scores.memory_store += semanticStorageBoost * 0.3; // Scale semantic confidence
+        console.log(`🎯 [SEMANTIC-BOOST] Added ${(semanticStorageBoost * 0.3).toFixed(2)} to memory_store score`);
+      }
+      
       if (speculative) {
         scores.memory_store -= 0.15; // Reduced penalty - still boost memory_store but less
         scores.question += 0.25; // Boost question for speculative queries

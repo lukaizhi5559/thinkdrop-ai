@@ -18,6 +18,7 @@ const AGENT_FORMAT = {
             'memory-retrieve', 
             'memory-search',
             'memory-semantic-search',
+            'memory-semantic-search-with-entities',
             'memory-delete',
             'memory-update',
             'memory-list',
@@ -34,7 +35,8 @@ const AGENT_FORMAT = {
         limit: { type: 'integer', description: 'Maximum number of results to return', default: 25 },
         offset: { type: 'integer', description: 'Offset for pagination', default: 0 },
         metadata: { type: 'object', description: 'Additional metadata for memory operations' },
-        updates: { type: 'object', description: 'Fields to update for memory-update operations' }
+        updates: { type: 'object', description: 'Fields to update for memory-update operations' },
+        entities: { type: 'array', description: 'Entity terms for filtering memories' }
       },
       required: ['action']
     },
@@ -2087,6 +2089,172 @@ const AGENT_FORMAT = {
             } catch (error) {
               console.error('[ERROR] Semantic search failed:', error);
               throw new Error('Semantic search failed: ' + error.message);
+            }
+            
+          case 'memory-semantic-search-with-entities':
+            // DATABASE-OPTIMIZED ENTITY-AWARE SEMANTIC SEARCH
+            // Leverages memory_entities table with proper joins and indexing
+            const entityQuery = params.query || params.searchText || params.input || params.message;
+            const entityLimit = params.limit || params.options?.limit || 10;
+            const entityMinSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.25;
+            const entitySessionId = params.sessionId; // Session scoping
+            const entityTerms = params.entities || [];
+            
+            if (!entityQuery) {
+              throw new Error('Entity-aware semantic search requires query parameter');
+            }
+            
+            if (!entityTerms || entityTerms.length === 0) {
+              console.log('[INFO] No entities provided, falling back to standard semantic search');
+              // Fallback to standard semantic search
+              return await this.execute({
+                ...params,
+                action: 'memory-semantic-search'
+              }, context);
+            }
+            
+            try {
+              console.log(`[INFO] Entity-aware semantic search for: "${entityQuery}" with entities: [${entityTerms.join(', ')}]`);
+              
+              // Generate embedding for the search query
+              let entityQueryEmbedding = null;
+              if (context?.executeAgent) {
+                const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+                  action: 'generate-embedding',
+                  text: entityQuery
+                }, context);
+                
+                if (embeddingResult.success && embeddingResult.result?.embedding) {
+                  entityQueryEmbedding = embeddingResult.result.embedding;
+                  console.log(`[SUCCESS] Generated query embedding with ${entityQueryEmbedding.length} dimensions`);
+                } else {
+                  throw new Error('Failed to generate query embedding: ' + (embeddingResult.error || 'Unknown error'));
+                }
+              } else {
+                throw new Error('executeAgent not available for embedding generation');
+              }
+              
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              // Build entity-aware query with proper joins and indexing
+              let entitySql = `
+                SELECT DISTINCT m.*, 
+                       GROUP_CONCAT(DISTINCT e.entity) as entity_list,
+                       GROUP_CONCAT(DISTINCT e.entity_type) as entity_type_list
+                FROM memory m 
+                INNER JOIN memory_entities e ON m.id = e.memory_id 
+                WHERE m.embedding IS NOT NULL
+                  AND (
+              `;
+              
+              let entityParams = [];
+              const entityConditions = [];
+              
+              // Add entity matching conditions - prioritize exact matches
+              entityTerms.forEach(entity => {
+                entityConditions.push('LOWER(e.entity) = LOWER(?)');
+                entityConditions.push('LOWER(e.normalized_value) = LOWER(?)');
+                entityConditions.push('LOWER(m.source_text) LIKE LOWER(?)');
+                entityParams.push(entity, entity, `%${entity}%`);
+              });
+              
+              entitySql += entityConditions.join(' OR ') + ')';
+              
+              // Add session scoping if provided
+              if (entitySessionId) {
+                entitySql += ' AND m.metadata LIKE ?';
+                entityParams.push(`%"sessionId":"${entitySessionId}"%`);
+              }
+              
+              entitySql += `
+                GROUP BY m.id, m.user_id, m.type, m.primary_intent, m.source_text, 
+                         m.suggested_response, m.metadata, m.screenshot, m.extracted_text, 
+                         m.created_at, m.updated_at, m.synced_to_backend, m.backend_memory_id, 
+                         m.sync_attempts, m.last_sync_attempt, m.requires_memory_access, m.embedding
+                ORDER BY m.created_at DESC
+                LIMIT ?
+              `;
+              entityParams.push(entityLimit * 2); // Get more results for similarity filtering
+              
+              console.log(`[DEBUG] Entity-aware SQL query:`, entitySql.substring(0, 200) + '...');
+              console.log(`[DEBUG] Entity parameters:`, entityParams.slice(0, 6), '... (truncated)');
+              
+              const entityResults = await database.query(entitySql, entityParams);
+              
+              if (!entityResults || entityResults.length === 0) {
+                console.log('[INFO] No entity-matched memories found');
+                return {
+                  success: true,
+                  action: 'memory-semantic-search-with-entities',
+                  query: entityQuery,
+                  entities: entityTerms,
+                  results: [],
+                  count: 0,
+                  message: 'No memories found matching the specified entities'
+                };
+              }
+              
+              console.log(`[INFO] Found ${entityResults.length} entity-matched memories, calculating similarities...`);
+              
+              // Calculate semantic similarities for entity-matched memories
+              const entityScoredResults = [];
+              for (const memory of entityResults) {
+                try {
+                  if (memory.embedding) {
+                    const memoryEmbedding = Array.isArray(memory.embedding) 
+                      ? memory.embedding 
+                      : JSON.parse(memory.embedding);
+                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(entityQueryEmbedding, memoryEmbedding);
+                    
+                    if (similarity >= entityMinSimilarity) {
+                      // Process entities from the joined query
+                      let entities = [];
+                      if (memory.entity_list && memory.entity_list.trim()) {
+                        entities = memory.entity_list.split(',').filter(entity => entity && entity.trim()).map(entity => entity.trim());
+                      }
+                      
+                      entityScoredResults.push({
+                        ...memory,
+                        similarity: similarity,
+                        entities: entities,
+                        entity_list: undefined, // Remove concatenated field
+                        entity_type_list: undefined
+                      });
+                    }
+                  }
+                } catch (error) {
+                  console.warn(`[WARN] Failed to process memory ${memory.id}:`, error.message);
+                }
+              }
+              
+              // Sort by similarity and limit results
+              entityScoredResults.sort((a, b) => b.similarity - a.similarity);
+              const finalEntityResults = entityScoredResults.slice(0, entityLimit);
+              
+              console.log(`[SUCCESS] Entity-aware search returned ${finalEntityResults.length} results (min similarity: ${entityMinSimilarity})`);
+              
+              return {
+                success: true,
+                action: 'memory-semantic-search-with-entities',
+                query: entityQuery,
+                entities: entityTerms,
+                result: {
+                  results: finalEntityResults,
+                  count: finalEntityResults.length,
+                  totalEntityMatches: entityResults.length,
+                  minSimilarity: entityMinSimilarity,
+                  sessionScoped: !!entitySessionId
+                },
+                count: finalEntityResults.length,
+                message: `Found ${finalEntityResults.length} entity-filtered memories`
+              };
+              
+            } catch (error) {
+              console.error('[ERROR] Entity-aware semantic search failed:', error);
+              throw new Error('Entity-aware semantic search failed: ' + error.message);
             }
             
           case 'memory-delete':
