@@ -1217,6 +1217,226 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Detect if query requires cross-session search using semantic analysis
+   */
+  async detectCrossSessionQuery(prompt) {
+    try {
+      // Use existing Phi3 agent for semantic intent classification
+      const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history that might span multiple chat sessions.
+
+Query: "${prompt}"
+
+Consider these indicators:
+- References to past conversations ("have we talked", "did we discuss", "we mentioned")
+- Temporal references ("before", "previously", "recently", "last time")
+- Memory requests ("remember when", "recall", "what did we say")
+- Historical context ("in another conversation", "past sessions")
+
+Respond with only "true" if this query likely needs cross-session search, or "false" if it's about current context only.`;
+
+      const result = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: classificationPrompt,
+        options: { timeout: 3000, maxTokens: 10, temperature: 0.1 }
+      });
+
+      if (result.success && result.result?.response) {
+        const response = result.result.response.toLowerCase().trim();
+        return response.includes('true');
+      }
+
+      // Fallback to simple keyword detection if LLM fails
+      const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
+      return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
+
+    } catch (error) {
+      console.log('⚠️ [CROSS-SESSION-DETECT] Error in semantic detection, using keyword fallback');
+      // Simple keyword fallback
+      const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
+      return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
+    }
+  }
+
+  /**
+   * Progressive three-stage search with intermediate user feedback
+   */
+  async tryProgressiveSemanticSearch(prompt, context, sendIntermediateCallback) {
+    console.log('🔍 [PROGRESSIVE-SEARCH] Starting three-stage progressive search');
+    
+    // Check if this is a cross-session query that needs progressive search
+    const isCrossSessionQuery = await this.detectCrossSessionQuery(prompt);
+    console.log(`🔍 [PROGRESSIVE-SEARCH] Cross-session query detected: ${isCrossSessionQuery}`);
+    
+    // Stage 1: Current Scope
+    console.log('🔍 [STAGE-1] Checking current conversation scope...');
+    const stage1 = await this.stageCurrentScope(prompt, context);
+    
+    if (stage1?.success && !isCrossSessionQuery) {
+      console.log('✅ [STAGE-1] Found result in current scope (non-cross-session query)');
+      return {
+        stage: 1,
+        positive: true,
+        success: true,
+        data: { response: stage1.data.response },
+        continueToNextStage: false
+      };
+    }
+    
+    // Stage 1 result - Send intermediate response for cross-session queries
+    if (isCrossSessionQuery) {
+      console.log('🔍 [STAGE-1] Cross-session query, continuing to broader search...');
+      if (sendIntermediateCallback) {
+        const intermediateMessage = stage1?.success 
+          ? "I found something in our current conversation, but let me also check our session history for more context..."
+          : "I didn't find anything about that in our current conversation, let me check this session's history...";
+        
+        await sendIntermediateCallback({
+          stage: 1,
+          positive: stage1?.success || false,
+          response: intermediateMessage,
+          continueToNextStage: true
+        });
+      }
+    } else if (!stage1?.success) {
+      // Non-cross-session query that failed Stage 1 - send intermediate
+      console.log('❌ [STAGE-1] Nothing found in current scope, checking session history...');
+      if (sendIntermediateCallback) {
+        await sendIntermediateCallback({
+          stage: 1,
+          positive: false,
+          response: "I didn't find anything about that in our current conversation, let me check this session's history...",
+          continueToNextStage: true
+        });
+      }
+    }
+    
+    // Stage 2: Session Scope
+    console.log('🔍 [STAGE-2] Checking session scope...');
+    const stage2 = await this.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
+    
+    if (stage2?.success && !isCrossSessionQuery) {
+      console.log('✅ [STAGE-2] Found result in session scope (non-cross-session query)');
+      const phiPrompt = this.buildStagedPrompt(prompt, { 
+        conversationContext: context.conversationContext, 
+        memorySnippets: stage2.data.snippets 
+      });
+      const resp = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+      });
+      
+      if (resp.success && resp.result?.response) {
+        return {
+          stage: 2,
+          positive: true,
+          success: true,
+          data: { response: resp.result.response },
+          continueToNextStage: false
+        };
+      }
+    }
+    
+    // Stage 2 result - Send intermediate response if continuing to Stage 3
+    if (isCrossSessionQuery) {
+      console.log('🔍 [STAGE-2] Cross-session query, continuing to cross-session search...');
+      if (sendIntermediateCallback) {
+        const intermediateMessage = stage2?.success
+          ? "Found some context in this session, but let me also check all our previous conversations for complete history..."
+          : "Still searching... give me a moment while I check all our previous conversations...";
+        
+        await sendIntermediateCallback({
+          stage: 2,
+          positive: stage2?.success || false,
+          response: intermediateMessage,
+          continueToNextStage: true
+        });
+      }
+    } else if (!stage2?.success) {
+      // Non-cross-session query that failed Stage 2 - send intermediate
+      console.log('❌ [STAGE-2] Nothing found in session scope, checking all conversations...');
+      if (sendIntermediateCallback) {
+        await sendIntermediateCallback({
+          stage: 2,
+          positive: false,
+          response: "Still searching... give me a moment while I check all our previous conversations...",
+          continueToNextStage: true
+        });
+      }
+    }
+    
+    // Stage 3: Cross-Session Scope
+    console.log('🔍 [STAGE-3] Checking cross-session scope...');
+    const stage3 = await this.stageSemanticMemory(prompt, { sessionId: null });
+    
+    // Combine results from all successful stages for cross-session queries
+    let finalResponse = null;
+    let finalStage = 3;
+    let finalPositive = false;
+    
+    if (stage3?.success) {
+      console.log('✅ [STAGE-3] Found result in cross-session scope');
+      const phiPrompt = this.buildStagedPrompt(prompt, { 
+        conversationContext: context.conversationContext, 
+        memorySnippets: stage3.data.snippets 
+      });
+      const resp = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
+      });
+      
+      if (resp.success && resp.result?.response) {
+        finalResponse = resp.result.response;
+        finalPositive = true;
+      }
+    } else if (stage2?.success) {
+      console.log('✅ [STAGE-2] Using session scope result as fallback');
+      const phiPrompt = this.buildStagedPrompt(prompt, { 
+        conversationContext: context.conversationContext, 
+        memorySnippets: stage2.data.snippets 
+      });
+      const resp = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+      });
+      
+      if (resp.success && resp.result?.response) {
+        finalResponse = resp.result.response;
+        finalStage = 2;
+        finalPositive = true;
+      }
+    } else if (stage1?.success) {
+      console.log('✅ [STAGE-1] Using current scope result as fallback');
+      finalResponse = stage1.data.response;
+      finalStage = 1;
+      finalPositive = true;
+    }
+    
+    // Final response
+    if (finalResponse) {
+      console.log(`✅ [PROGRESSIVE-SEARCH] Completed successfully at Stage ${finalStage}`);
+      return {
+        stage: finalStage,
+        positive: finalPositive,
+        success: true,
+        data: { response: finalResponse },
+        continueToNextStage: false
+      };
+    } else {
+      console.log('❌ [PROGRESSIVE-SEARCH] Nothing found in any scope');
+      return {
+        stage: 3,
+        positive: false,
+        success: true,
+        data: { response: "I couldn't find any previous discussions about that topic in our conversation history." },
+        continueToNextStage: false
+      };
+    }
+  }
+
+  /**
    * Stage 1: Current-scope check using only recent conversation context
    * Returns null if no meaningful context or low relevance
    */

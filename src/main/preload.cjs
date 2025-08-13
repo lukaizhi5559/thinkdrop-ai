@@ -75,6 +75,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   llmGetCachedAgents: () => ipcRenderer.invoke('llm-get-cached-agents'),
   llmGetCommunications: (limit) => ipcRenderer.invoke('llm-get-communications', limit),
   llmClearCache: () => ipcRenderer.invoke('llm-clear-cache'),
+
+  // Progressive search APIs
+  localLLMProgressiveSearch: (prompt, context) => ipcRenderer.invoke('local-llm-progressive-search', { prompt, context }),
+  localLLMStage1Search: (prompt, context) => ipcRenderer.invoke('local-llm-stage1-search', { prompt, context }),
+  localLLMStage2Search: (prompt, context) => ipcRenderer.invoke('local-llm-stage2-search', { prompt, context }),
+  localLLMStage3Search: (prompt, context) => ipcRenderer.invoke('local-llm-stage3-search', { prompt, context }),
+  onProgressiveSearchIntermediate: (callback) => ipcRenderer.on('progressive-search-intermediate', callback),
   
   // Orchestration workflow communication
   onOrchestrationUpdate: (callback) => ipcRenderer.on('orchestration-update', callback),

@@ -498,6 +498,211 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
     return { success: true, data: [] };
   });
 
+  // ========================================
+  // PROGRESSIVE SEARCH HANDLERS
+  // ========================================
+
+  // Progressive search handler - three-stage search with intermediate feedback
+  ipcMain.handle('local-llm-progressive-search', async (event, { prompt, context = {} }) => {
+    try {
+      console.log('🔍 [PROGRESSIVE-IPC] Starting progressive search for:', { prompt, context });
+      
+      if (!coreAgent || !coreAgent.initialized) {
+        console.log('❌ [PROGRESSIVE-IPC] CoreAgent not initialized');
+        return { success: false, error: 'CoreAgent not initialized' };
+      }
+
+      // Extract the actual prompt string - handle nested prompt object
+      let actualPrompt = prompt;
+      if (typeof prompt === 'object' && prompt.prompt) {
+        actualPrompt = prompt.prompt;
+        console.log('🔧 [PROGRESSIVE-IPC] Extracted nested prompt:', actualPrompt);
+      }
+      
+      // Extract the actual context - handle nested context object
+      let actualContext = context;
+      if (typeof prompt === 'object' && prompt.context) {
+        actualContext = { ...context, ...prompt.context };
+        console.log('🔧 [PROGRESSIVE-IPC] Merged context from prompt object');
+      }
+
+      console.log('🔍 [PROGRESSIVE-IPC] Final parameters:', { 
+        actualPrompt: typeof actualPrompt === 'string' ? actualPrompt : '[NOT STRING]', 
+        contextKeys: Object.keys(actualContext) 
+      });
+
+      // Check if coreAgent has the progressive search method
+      console.log('🔍 [PROGRESSIVE-IPC] Checking for tryProgressiveSemanticSearch on coreAgent...');
+      if (typeof coreAgent.tryProgressiveSemanticSearch !== 'function') {
+        console.log('❌ [PROGRESSIVE-IPC] tryProgressiveSemanticSearch method not found on coreAgent');
+        console.log('🔍 [PROGRESSIVE-IPC] Available coreAgent methods:', Object.getOwnPropertyNames(coreAgent).filter(name => typeof coreAgent[name] === 'function'));
+        return { success: false, error: 'Progressive search method not available' };
+      }
+
+      console.log('✅ [PROGRESSIVE-IPC] Found tryProgressiveSemanticSearch on coreAgent');
+
+      // Callback to send intermediate responses to frontend
+      const sendIntermediateCallback = async (intermediateResult) => {
+        console.log(`📡 [PROGRESSIVE-IPC] Sending intermediate response:`, intermediateResult);
+        event.sender.send('progressive-search-intermediate', {
+          response: intermediateResult.response,
+          continueToNextStage: intermediateResult.continueToNextStage
+        });
+      };
+
+      // Execute progressive search with corrected parameters
+      console.log('🚀 [PROGRESSIVE-IPC] Calling coreAgent.tryProgressiveSemanticSearch...');
+      const result = await coreAgent.tryProgressiveSemanticSearch(
+        actualPrompt, 
+        actualContext, 
+        sendIntermediateCallback
+      );
+
+      console.log(`✅ [PROGRESSIVE-IPC] Progressive search completed:`, result);
+      
+      return {
+        success: true,
+        data: {
+          response: result.data?.response || result.response,
+          continueToNextStage: result.continueToNextStage
+        }
+      };
+
+    } catch (error) {
+      console.error('❌ [PROGRESSIVE-IPC] Progressive search error:', error);
+      console.error('❌ [PROGRESSIVE-IPC] Error stack:', error.stack);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Individual stage handlers for more granular control (optional)
+  ipcMain.handle('local-llm-stage1-search', async (event, { prompt, context = {} }) => {
+    try {
+      if (!coreAgent || !coreAgent.initialized) {
+        return { success: false, error: 'CoreAgent not initialized' };
+      }
+
+      const orchestrator = coreAgent.getAgent('AgentOrchestrator');
+      if (!orchestrator) {
+        return { success: false, error: 'AgentOrchestrator not available' };
+      }
+
+      const result = await orchestrator.stageCurrentScope(prompt, context);
+      
+      if (result?.success) {
+        return {
+          success: true,
+          positive: true,
+          data: { response: result.data.response },
+          continueToStage2: false
+        };
+      } else {
+        return {
+          success: true,
+          positive: false,
+          data: { response: "I didn't find anything about that in our current conversation, let me check this session's history..." },
+          continueToStage2: true
+        };
+      }
+
+    } catch (error) {
+      console.error('❌ Stage 1 search error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('local-llm-stage2-search', async (event, { prompt, context = {} }) => {
+    try {
+      if (!coreAgent || !coreAgent.initialized) {
+        return { success: false, error: 'CoreAgent not initialized' };
+      }
+
+      const orchestrator = coreAgent.getAgent('AgentOrchestrator');
+      if (!orchestrator) {
+        return { success: false, error: 'AgentOrchestrator not available' };
+      }
+
+      const stage2 = await orchestrator.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
+      
+      if (stage2?.success) {
+        const phiPrompt = orchestrator.buildStagedPrompt(prompt, { 
+          conversationContext: context.conversationContext, 
+          memorySnippets: stage2.data.snippets 
+        });
+        const resp = await orchestrator.executeAgent('Phi3Agent', {
+          action: 'query-phi3-fast',
+          prompt: phiPrompt,
+          options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+        });
+        
+        if (resp.success && resp.result?.response) {
+          return {
+            success: true,
+            positive: true,
+            data: { response: resp.result.response },
+            continueToStage3: false
+          };
+        }
+      }
+      
+      return {
+        success: true,
+        positive: false,
+        data: { response: "Apologize, still searching... give me a minute while I check all our previous conversations..." },
+        continueToStage3: true
+      };
+
+    } catch (error) {
+      console.error('❌ Stage 2 search error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('local-llm-stage3-search', async (event, { prompt, context = {} }) => {
+    try {
+      if (!coreAgent || !coreAgent.initialized) {
+        return { success: false, error: 'CoreAgent not initialized' };
+      }
+
+      const orchestrator = coreAgent.getAgent('AgentOrchestrator');
+      if (!orchestrator) {
+        return { success: false, error: 'AgentOrchestrator not available' };
+      }
+
+      const stage3 = await orchestrator.stageSemanticMemory(prompt, { sessionId: null });
+      
+      if (stage3?.success) {
+        const phiPrompt = orchestrator.buildStagedPrompt(prompt, { 
+          conversationContext: context.conversationContext, 
+          memorySnippets: stage3.data.snippets 
+        });
+        const resp = await orchestrator.executeAgent('Phi3Agent', {
+          action: 'query-phi3-fast',
+          prompt: phiPrompt,
+          options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
+        });
+        
+        if (resp.success && resp.result?.response) {
+          return {
+            success: true,
+            positive: true,
+            data: { response: resp.result.response }
+          };
+        }
+      }
+      
+      return {
+        success: true,
+        positive: false,
+        data: { response: "I couldn't find any previous discussions about that topic in our conversation history." }
+      };
+
+    } catch (error) {
+      console.error('❌ Stage 3 search error:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Legacy communications handler - returns empty for now
   ipcMain.handle('llm-get-communications', async (event, limit = 10) => {
     return { success: true, data: [] };

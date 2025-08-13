@@ -199,6 +199,60 @@ export default function ChatMessages() {
       loadInitialMessages();
     }
   }, [activeSessionId]);
+
+  // Enhanced scroll to bottom function with smooth WebSocket chunk handling
+  const scrollToBottom = useCallback((options: { smooth?: boolean; force?: boolean; onComplete?: (() => void) | null } = {}) => {
+    const { smooth = true, force = false, onComplete = null } = options;
+    // Don't auto-scroll if user is manually scrolling (unless forced)
+    if (!force && isUserScrolling) {
+      if (onComplete) onComplete();
+      return;
+    }
+    
+    // Mark as programmatic scrolling to avoid triggering user scroll detection
+    isProgrammaticScrolling.current = true;
+    
+    // Use requestAnimationFrame to ensure DOM is updated
+    requestAnimationFrame(() => {
+      if (messagesEndRef.current && messagesContainerRef.current) {
+        const container = messagesContainerRef.current;
+        const target = messagesEndRef.current;
+        
+        // Enhanced smooth scrolling for WebSocket chunks
+        if (smooth) {
+          // Calculate the distance to scroll
+          const scrollDistance = target.offsetTop - container.scrollTop - container.clientHeight + target.offsetHeight;
+
+          if (scrollDistance > 0) {
+            // Smooth scroll animation for streaming content
+            container.scrollTo({
+              top: container.scrollTop + scrollDistance,
+              behavior: 'smooth'
+            });
+            
+            // Reset programmatic flag and call callback after scroll completes
+            setTimeout(() => {
+              isProgrammaticScrolling.current = false;
+              if (onComplete) onComplete();
+            }, 300); // Give time for smooth scroll to complete
+          } else {
+            isProgrammaticScrolling.current = false;
+            if (onComplete) onComplete();
+          }
+        } else {
+          // Instant scroll fallback
+          target.scrollIntoView({ 
+            behavior: 'auto',
+            block: 'end'
+          });
+          isProgrammaticScrolling.current = false;
+          if (onComplete) onComplete();
+        }
+      } else {
+        if (onComplete) onComplete();
+      }
+    });
+  }, [isUserScrolling]);
   
   // Load initial batch of messages
   const loadInitialMessages = useCallback(async () => {
@@ -578,8 +632,15 @@ export default function ChatMessages() {
       console.log('🧠 [ENHANCED-PIPELINE] Starting message processing with existing backend...');
       
       if (!wsState.isConnected) {
-        console.warn('⚠️ WebSocket not connected, using enhanced local LLM pipeline');
-        await handleLocalLLMCall(messageText);
+        console.warn('⚠️ WebSocket not connected, trying progressive search first...');
+        
+        // Try progressive search for cross-session queries
+        const progressiveSuccess = await useProgressiveSearch(messageText);
+        
+        if (!progressiveSuccess) {
+          console.log('🔄 Progressive search failed or not applicable, falling back to local LLM');
+          await handleLocalLLMCall(messageText);
+        }
         return;
       }
       
@@ -649,32 +710,30 @@ export default function ChatMessages() {
           }
         }
         
-        // Check for early question handler response first
-        if (!aiResponseText && result.response) {
-          aiResponseText = result.response;
+        // Fallback: try to extract from data.response
+        if (!aiResponseText && result.data?.response) {
+          aiResponseText = result.data.response;
         }
         
-        // result.data or suggestedResponse
+        // Final fallback: use the full result as string
         if (!aiResponseText) {
-          aiResponseText = result.data || result.intentClassificationPayload?.suggestedResponse || 'I processed your request using local capabilities.';
+          aiResponseText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
         }
         
-        console.log('🎯 [RESPONSE] Extracted AI response:', aiResponseText);
-        console.log('🎯 [RESPONSE] Intent classification:', result.intentClassificationPayload?.primaryIntent);
-         
-        
+        console.log('✅ [LOCAL-LLM] Extracted AI response:', aiResponseText);
+
         // For question intents, memory operations, show suggested response in ThinkingIndicator while processing
         if (
-            result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
-            result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
-            result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
-            result.intentClassificationPayload?.primaryIntent === 'question' ||
-            result.intentClassificationPayload?.primaryIntent === 'command'
+          result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
+          result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
+          result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
+          result.intentClassificationPayload?.primaryIntent === 'question' ||
+          result.intentClassificationPayload?.primaryIntent === 'command'
         ) {
           isThinkingMsg = true;
           // Set the thinking message to the suggested response
           const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-          setInitialThinkingMessage(thinkingMsg); 
+          setInitialThinkingMessage(thinkingMsg);
           
           // Ensure we stay in processing state to keep ThinkingIndicator visible
           console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
@@ -682,60 +741,147 @@ export default function ChatMessages() {
           return;
         }
         
-        // Add to conversation context if we have an active session (only for non-orchestrated responses)
-        // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
-        const currentSessionId = signals.activeSessionId.value;
-        if (currentSessionId && signalsAddMessage) {
-          await signalsAddMessage(currentSessionId, {
+        // Add AI response to conversation
+        if (signalsAddMessage && signals.activeSessionId.value) {
+          await signalsAddMessage(signals.activeSessionId.value, {
             text: aiResponseText,
             sender: 'ai',
-            sessionId: currentSessionId,
-            metadata: { intent: result.intentClassificationPayload?.primaryIntent }
+            sessionId: signals.activeSessionId.value,
+            metadata: {
+              source: 'local_llm',
+              processingTime: Date.now(),
+              model: 'phi3'
+            }
           });
-          console.log('📝 [LOCAL-LLM] AI response added to session:', currentSessionId);
-        } else {
-          // No active session - message will be handled by orchestration
-          console.log('⚠️ [LOCAL-LLM] No active session for AI response - currentSessionId:', currentSessionId, 'signalsAddMessage:', !!signalsAddMessage);
+          console.log('✅ [LOCAL-LLM] AI response added to conversation');
         }
         
-        console.log('✅ Local LLM processing completed successfully');
+        scrollToBottom({ smooth: true, force: true });
       } else {
-        throw new Error(result.error || 'Local LLM processing failed');
+        console.error('❌ [LOCAL-LLM] Local LLM query failed:', result.error);
+        setLocalLLMError(result.error || 'Local LLM processing failed');
       }
       
     } catch (error) {
-      console.error('❌ Local LLM fallback failed:', error);
-      setLocalLLMError('Local processing failed. Please check if Ollama is running.');
-      
-      // Add error message to chat
-      const errorMessage: ChatMessage = {
-        id: `ai-error-${Date.now()}`,
-        text: 'I\'m having trouble processing your request locally. Please ensure Ollama is running or try again when connected to the backend.',
-        sender: 'ai',
-        timestamp: new Date()
-      };
-      
-      // Add error message to conversation context if we have an active session
-      if (activeSessionId && signalsAddMessage) {
-        await signalsAddMessage(activeSessionId, {
-          text: errorMessage.text,
-          sender: 'ai',
-          sessionId: activeSessionId,
-          metadata: { error: true }
-        });
-      }
+      console.error('❌ [LOCAL-LLM] Local LLM processing error:', error);
+      setLocalLLMError('Failed to process with local LLM. Please try again.');
     } finally {
       // Only clear processing state if not waiting for memory retrieve or question orchestration
       if (!isThinkingMsg) {
-      console.log('🎯 [THINKING] Clearing processing state in finally block');
-      setIsProcessingLocally(false);
-      setIsLoading(false);
+        console.log('🎯 [THINKING] Clearing processing state in finally block');
+        setIsProcessingLocally(false);
+        setIsLoading(false);
       } else {
         console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory, question, command:', isThinkingMsg);
       }
       scrollToBottom({ smooth: true, force: true });
     }
-  }, []);
+  }, [signalsAddMessage, scrollToBottom]);
+
+
+
+  // Add progressive search option to existing message handling
+  const useProgressiveSearch = useCallback(async (messageText: string) => {
+    try {
+      console.log('🔍 [PROGRESSIVE] Starting progressive search (backend will handle detection)...');
+      
+      // Check if progressive search API is available
+      if (!(window.electronAPI as any)?.localLLMProgressiveSearch) {
+        console.warn('⚠️ Progressive search not available, using fallback');
+        return false;
+      }
+
+      // Keep loading states active to show "Thinking..." until first intermediate response
+      console.log('🔍 [PROGRESSIVE] Keeping loading states active for initial thinking indicator...');
+      // Don't clear loading states here - let them show the thinking indicator
+
+      // Set up context
+      const context = {
+        currentSessionId: signals.activeSessionId.value,
+        conversationContext: (signals.activeMessages.value || [])
+          .slice(-10)
+          .map((msg: any) => `${msg.sender}: ${msg.text}`)
+          .join('\n'),
+        userId: 'user'
+      };
+
+      // Set up intermediate response handler
+      const handleIntermediate = async (_event: any, data: any) => {
+        console.log('📨 [PROGRESSIVE] Received intermediate response:', data);
+        
+        // Only clear loading states if this is the final response (continueToNextStage: false)
+        if (data?.continueToNextStage === false) {
+          console.log('🔍 [PROGRESSIVE] Final stage reached, clearing loading states...');
+          setIsLoading(false);
+          setIsProcessingLocally(false);
+        } else {
+          console.log('🔍 [PROGRESSIVE] Intermediate stage, keeping loading states active...');
+        }
+        
+        if (data?.response && signalsAddMessage && signals.activeSessionId.value) {
+          await signalsAddMessage(signals.activeSessionId.value, {
+            text: data.response,
+            sender: 'ai',
+            sessionId: signals.activeSessionId.value,
+            metadata: { 
+              isIntermediate: data?.continueToNextStage !== false,
+              isFinal: data?.continueToNextStage === false,
+              stage: data?.stage 
+            }
+          });
+          scrollToBottom({ smooth: true, force: true });
+          console.log('✅ [PROGRESSIVE] Response added to conversation - Stage:', data?.stage, 'Final:', data?.continueToNextStage === false);
+        }
+      };
+
+      if ((window.electronAPI as any).onProgressiveSearchIntermediate) {
+        (window.electronAPI as any).onProgressiveSearchIntermediate(handleIntermediate);
+      } else {
+        console.warn('⚠️ [PROGRESSIVE] onProgressiveSearchIntermediate not available');
+        console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
+        setIsLoading(false);
+        setIsProcessingLocally(false);
+      }
+
+      // Execute progressive search
+      console.log('🚀 [PROGRESSIVE] Calling localLLMProgressiveSearch API...');
+      const result = await (window.electronAPI as any).localLLMProgressiveSearch({
+        prompt: messageText,
+        context: context
+      });
+
+      // Cleanup
+      if ((window.electronAPI as any).removeAllListeners) {
+        (window.electronAPI as any).removeAllListeners('progressive-search-intermediate');
+      }
+
+      if (result.success && signalsAddMessage && signals.activeSessionId.value) {
+        await signalsAddMessage(signals.activeSessionId.value, {
+          text: result.data.response,
+          sender: 'ai',
+          sessionId: signals.activeSessionId.value,
+          metadata: { isFinal: true }
+        });
+        
+        // Clear loading states after final response is added
+        console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
+        setIsLoading(false);
+        setIsProcessingLocally(false);
+        
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      console.error('❌ Progressive search failed:', error);
+      // Clear loading states on error
+      setIsLoading(false);
+      setIsProcessingLocally(false);
+      return false;
+    }
+  }, [signalsAddMessage]);
+
+
 
   // Clear local LLM error when connection is restored
   useEffect(() => {
@@ -1001,61 +1147,6 @@ export default function ChatMessages() {
       clearTimeout(timeoutId);
     };
   }, []); // Remove dependencies to prevent re-mounting
-
-
-  // Enhanced scroll to bottom function with smooth WebSocket chunk handling
-  const scrollToBottom = useCallback((options: { smooth?: boolean; force?: boolean; onComplete?: (() => void) | null } = {}) => {
-    const { smooth = true, force = false, onComplete = null } = options;
-    // Don't auto-scroll if user is manually scrolling (unless forced)
-    if (!force && isUserScrolling) {
-      if (onComplete) onComplete();
-      return;
-    }
-    
-    // Mark as programmatic scrolling to avoid triggering user scroll detection
-    isProgrammaticScrolling.current = true;
-    
-    // Use requestAnimationFrame to ensure DOM is updated
-    requestAnimationFrame(() => {
-      if (messagesEndRef.current && messagesContainerRef.current) {
-        const container = messagesContainerRef.current;
-        const target = messagesEndRef.current;
-        
-        // Enhanced smooth scrolling for WebSocket chunks
-        if (smooth) {
-          // Calculate the distance to scroll
-          const scrollDistance = target.offsetTop - container.scrollTop - container.clientHeight + target.offsetHeight;
-
-          if (scrollDistance > 0) {
-            // Smooth scroll animation for streaming content
-            container.scrollTo({
-              top: container.scrollTop + scrollDistance,
-              behavior: 'smooth'
-            });
-            
-            // Reset programmatic flag and call callback after scroll completes
-            setTimeout(() => {
-              isProgrammaticScrolling.current = false;
-              if (onComplete) onComplete();
-            }, 300); // Give time for smooth scroll to complete
-          } else {
-            isProgrammaticScrolling.current = false;
-            if (onComplete) onComplete();
-          }
-        } else {
-          // Instant scroll fallback
-          target.scrollIntoView({ 
-            behavior: 'auto',
-            block: 'end'
-          });
-          isProgrammaticScrolling.current = false;
-          if (onComplete) onComplete();
-        }
-      } else {
-        if (onComplete) onComplete();
-      }
-    });
-  }, [isUserScrolling]);
 
   // Auto-scroll to bottom when new messages arrive (only if user is not manually scrolling)
   useEffect(() => {
