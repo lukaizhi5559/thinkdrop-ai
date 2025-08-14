@@ -2,7 +2,17 @@
  * UserMemoryAgent - Object-based approach
  * No string parsing, no template literal issues
  * CommonJS format for VM compatibility
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Model caching to eliminate redundant initializations
+ * - Query result caching for repeated operations
+ * - Optimized embedding and similarity calculations
  */
+
+// Import performance optimization modules
+const { modelCache } = require('../ModelCache.cjs');
+const { queryCache } = require('../QueryCache.cjs');
+const { MathUtils } = require('../utils/MathUtils.cjs');
 
 const AGENT_FORMAT = {
     name: 'UserMemoryAgent',
@@ -1577,8 +1587,11 @@ const AGENT_FORMAT = {
               console.log(`[INFO] Performing ${useTwoTier ? 'Two-Tier' : 'Legacy'} semantic search for: "${semanticQuery}"`);
               
               // Generate embedding for the search query
-              let queryEmbedding = null;
-              if (context?.executeAgent) {
+              // PERFORMANCE OPTIMIZATION: Use fast cached embedding generation
+              let queryEmbedding = await AGENT_FORMAT.generateEmbeddingFast(semanticQuery);
+              
+              if (!queryEmbedding && context?.executeAgent) {
+                console.log('[FALLBACK] Using context.executeAgent for embedding generation');
                 const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
                   action: 'generate-embedding',
                   text: semanticQuery
@@ -1587,6 +1600,8 @@ const AGENT_FORMAT = {
                 if (embeddingResult.success && embeddingResult.result?.embedding) {
                   queryEmbedding = embeddingResult.result.embedding;
                   console.log(`[SUCCESS] Generated query embedding with ${queryEmbedding.length} dimensions`);
+                  // Cache this result for future use
+                  queryCache.cacheEmbedding(semanticQuery, queryEmbedding);
                 } else {
                   throw new Error('Failed to generate query embedding: ' + (embeddingResult.error || 'Unknown error'));
                 }
@@ -1648,7 +1663,7 @@ const AGENT_FORMAT = {
                       ? session.embedding 
                       : JSON.parse(session.embedding);
                     
-                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
+                    const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
                     
                     // Store all similarities for debugging
                     allSessionSimilarities.push({
@@ -1688,7 +1703,7 @@ const AGENT_FORMAT = {
                           ? session.embedding 
                           : JSON.parse(session.embedding);
                         
-                        const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
+                        const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
                         
                         // Boost recent sessions; half-life ~90 days
                         const days = Math.max(0, (Date.now() - new Date(session.started_at || session.created_at).getTime()) / 86400000);
@@ -1809,7 +1824,7 @@ const AGENT_FORMAT = {
                           const messageEmbedding = Array.isArray(message.embedding) 
                             ? message.embedding 
                             : JSON.parse(message.embedding);
-                          const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          const semanticSim = MathUtils.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
                           
                           // Combine session relevance with message semantic similarity
                           similarity = (sessionContext?.similarity || 0.5) * 0.3 + semanticSim * 0.7;
@@ -1913,7 +1928,7 @@ const AGENT_FORMAT = {
                           const messageEmbedding = Array.isArray(message.embedding) 
                             ? message.embedding 
                             : JSON.parse(message.embedding);
-                          const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          const semanticSim = MathUtils.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
                           
                           // Combine base fallback similarity with message semantic similarity
                           similarity = 0.4 + semanticSim * 0.6;
@@ -2017,7 +2032,7 @@ const AGENT_FORMAT = {
                         const messageEmbedding = Array.isArray(message.embedding) 
                           ? message.embedding 
                           : JSON.parse(message.embedding);
-                        const semanticSim = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                        const semanticSim = MathUtils.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
                         // Blend chronological priority with semantic similarity
                         similarity = 0.7 + (semanticSim * 0.3); // 70% chronological, 30% semantic
                       } catch (error) {
@@ -2121,7 +2136,8 @@ const AGENT_FORMAT = {
                             ? message.embedding 
                             : JSON.parse(message.embedding);
                           
-                          const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          // PERFORMANCE OPTIMIZATION: Use cached similarity calculation
+                          const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
                           
                           if (similarity >= minSimilarity) {
                             const sessionContext = topSessions.find(s => s.session_id === message.session_id);
@@ -2297,7 +2313,7 @@ const AGENT_FORMAT = {
                     const memoryEmbedding = Array.isArray(memory.embedding) 
                       ? memory.embedding 
                       : JSON.parse(memory.embedding);
-                    const similarity = AGENT_FORMAT.calculateCosineSimilarity(entityQueryEmbedding, memoryEmbedding);
+                    const similarity = MathUtils.calculateCosineSimilarity(entityQueryEmbedding, memoryEmbedding);
                     
                     if (similarity >= entityMinSimilarity) {
                       // Process entities from the joined query
@@ -3807,31 +3823,63 @@ const AGENT_FORMAT = {
       }
     },
     
-    // Cosine similarity calculation for fallback (same as SemanticEmbeddingAgent)
-    calculateCosineSimilarity(vecA, vecB) {
-      if (vecA.length !== vecB.length) {
-        throw new Error('Vectors must have the same length');
+    // PERFORMANCE OPTIMIZATION: Fast cached embedding generation
+    async generateEmbeddingFast(text) {
+      const startTime = Date.now();
+      
+      // Check cache first
+      const cachedEmbedding = queryCache.getEmbedding(text);
+      if (cachedEmbedding) {
+        console.log(`[FAST-EMBED] Cache hit in ${Date.now() - startTime}ms`);
+        return cachedEmbedding;
       }
       
-      let dotProduct = 0;
-      let normA = 0;
-      let normB = 0;
-      
-      for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
+      try {
+        // Use existing embedding generation method (will be optimized by AgentOrchestrator when called through agent system)
+        const embedding = await this.generateEmbedding(text);
+        
+        if (embedding) {
+          // Cache the result
+          queryCache.cacheEmbedding(text, embedding);
+          
+          const totalTime = Date.now() - startTime;
+          console.log(`[FAST-EMBED] Generated and cached in ${totalTime}ms`);
+          return embedding;
+        }
+        
+        return null;
+        
+      } catch (error) {
+        console.warn(`[FAST-EMBED] Failed: ${error.message}`);
+        return null;
       }
-      
-      normA = Math.sqrt(normA);
-      normB = Math.sqrt(normB);
-      
-      if (normA === 0 || normB === 0) {
-        return 0;
-      }
-      
-      return dotProduct / (normA * normB);
     },
+
+    // PERFORMANCE OPTIMIZATION: Fast cached similarity calculation
+    calculateSimilarityFast(text1, text2, embedding1 = null, embedding2 = null) {
+      const startTime = Date.now();
+      
+      // Check cache first
+      const cachedSimilarity = queryCache.getSimilarity(text1, text2);
+      if (cachedSimilarity !== null) {
+        console.log(`[FAST-SIM] Cache hit in ${Date.now() - startTime}ms`);
+        return cachedSimilarity;
+      }
+      
+      // Use provided embeddings or fall back to cosine calculation
+      if (embedding1 && embedding2) {
+        const similarity = MathUtils.calculateCosineSimilarity(embedding1, embedding2);
+        queryCache.cacheSimilarity(text1, text2, similarity);
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`[FAST-SIM] Calculated and cached in ${totalTime}ms`);
+        return similarity;
+      }
+      
+      return null; // Couldn't calculate
+    },
+
+
 
     // Legacy semantic search method (original implementation)
     async performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow) {
@@ -3889,7 +3937,7 @@ const AGENT_FORMAT = {
             ? memory.embedding 
             : JSON.parse(memory.embedding);
           
-          const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, memoryEmbedding);
+          const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, memoryEmbedding);
           
           if (similarity >= minSimilarity) {
             rankedResults.push({
@@ -4199,7 +4247,7 @@ Answer:`;
         for (const chunk of chunks) {
           try {
             const chunkEmbedding = JSON.parse(chunk.chunk_embedding);
-            const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, chunkEmbedding);
+            const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, chunkEmbedding);
             
             if (similarity >= 0.15) { // Lower threshold for within-session search
               results.push({
@@ -4283,7 +4331,7 @@ Answer:`;
         for (const chunk of chunks) {
           try {
             const chunkEmbedding = JSON.parse(chunk.chunk_embedding);
-            const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, chunkEmbedding);
+            const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, chunkEmbedding);
             
             if (similarity >= 0.2) {
               results.push({

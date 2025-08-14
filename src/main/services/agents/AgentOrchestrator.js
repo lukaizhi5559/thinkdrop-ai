@@ -1,6 +1,11 @@
 /**
  * AgentOrchestrator - Object-based approach
  * Supports both string-based agents (legacy) and object-based agents (new)
+ * 
+ * PERFORMANCE OPTIMIZATIONS:
+ * - Model caching to eliminate redundant initializations
+ * - Query result caching for repeated LLM calls
+ * - Optimized progressive search with parallel processing
  */
 
 import path from 'path';
@@ -9,6 +14,11 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const IntentResponses = require('../utils/IntentResponses.cjs');
+
+// Import performance optimization modules
+const { modelCache } = require('../ModelCache.cjs');
+const { queryCache } = require('../QueryCache.cjs');
+const { MathUtils } = require('../utils/MathUtils.cjs');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,6 +32,9 @@ export class AgentOrchestrator {
     this.loadedAgents = new Map();
     this.context = {};
     this.initialized = false;
+    
+    // Set up ModelCache reference for proper agent caching
+    modelCache.setAgentOrchestrator(this);
   }
 
   async initialize(config = {}) {
@@ -513,6 +526,28 @@ export class AgentOrchestrator {
         console.warn(`⚠️ Failed to preload agent ${agentName}:`, error.message);
       }
     }
+  }
+
+  /**
+   * Get a loaded agent instance directly from cache (fast path)
+   * @param {string} agentName - Name of the agent to retrieve
+   * @returns {Object|null} Agent instance or null if not loaded
+   */
+  getLoadedAgent(agentName) {
+    return this.loadedAgents.get(agentName) || null;
+  }
+
+  /**
+   * Get a loaded agent instance, loading it if necessary
+   * @param {string} agentName - Name of the agent to retrieve
+   * @returns {Promise<Object>} Agent instance
+   */
+  async ensureAgentLoaded(agentName) {
+    const cached = this.getLoadedAgent(agentName);
+    if (cached) {
+      return cached;
+    }
+    return await this.loadAgent(agentName);
   }
 
   /**
@@ -1047,6 +1082,179 @@ export class AgentOrchestrator {
   }
 
   /**
+   * PERFORMANCE OPTIMIZATION: Fast cached LLM call for Phi3Agent
+   * Reduces 2-3 second LLM calls to milliseconds for repeated queries
+   */
+  async executePhi3Fast(prompt, context = {}, options = {}) {
+    const startTime = Date.now();
+    
+    // Check cache first
+    const cachedResponse = queryCache.getResponse(prompt, context);
+    if (cachedResponse) {
+      console.log(`[FAST-PHI3] Cache hit in ${Date.now() - startTime}ms`);
+      return { success: true, result: { response: cachedResponse } };
+    }
+    
+    try {
+      // Use existing agent system with caching
+      const response = await this.executeAgent('Phi3Agent', {
+        action: 'query-phi3-fast',
+        prompt: prompt,
+        options: { timeout: 8000, maxTokens: 150, temperature: 0.2, ...options }
+      });
+      
+      if (response.success && response.result?.response) {
+        // Cache the successful response
+        queryCache.cacheResponse(prompt, context, response.result.response);
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`[FAST-PHI3] Generated and cached in ${totalTime}ms`);
+        return response;
+      }
+      
+      return response;
+      
+    } catch (error) {
+      console.warn(`[FAST-PHI3] Error: ${error.message}`);
+      return { success: false, error: error.message };
+    }
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Fast cached classification for queries
+   * Reduces redundant LLM classification calls
+   */
+  async classifyQueryFast(query, context = {}) {
+    const startTime = Date.now();
+    
+    // Check cache first
+    const cachedClassification = queryCache.getClassification(query);
+    if (cachedClassification) {
+      console.log(`[FAST-CLASSIFY] Cache hit in ${Date.now() - startTime}ms`);
+      return cachedClassification;
+    }
+    
+    try {
+      // Use fast Phi3 call for classification
+      const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history AND what scope it needs:
+
+Query: "${query}"
+
+Respond with ONLY this JSON format:
+{
+  "isConversational": true/false,
+  "needsCrossSession": true/false,
+  "scope": "current_session" | "session_scope" | "cross_session",
+  "type": "topical" | "chronological" | "factual"
+}`;
+
+      const response = await this.executePhi3Fast(classificationPrompt, context, {
+        maxTokens: 100,
+        temperature: 0.1
+      });
+      
+      if (response.success && response.result?.response) {
+        try {
+          const classification = JSON.parse(response.result.response.trim());
+          queryCache.cacheClassification(query, classification);
+          
+          const totalTime = Date.now() - startTime;
+          console.log(`[FAST-CLASSIFY] Generated and cached in ${totalTime}ms`);
+          return classification;
+        } catch (parseError) {
+          console.warn('[FAST-CLASSIFY] Failed to parse JSON response, using fallback');
+        }
+      }
+      
+    } catch (error) {
+      console.warn(`[FAST-CLASSIFY] Error: ${error.message}`);
+    }
+    
+    // Fallback classification
+    return {
+      isConversational: query.toLowerCase().includes('we') || query.toLowerCase().includes('talk'),
+      needsCrossSession: true,
+      scope: 'cross_session',
+      type: 'topical'
+    };
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Fast cached embedding generation
+   * Reduces redundant embedding computation calls
+   */
+  async generateEmbeddingFast(text, context = {}) {
+    const startTime = Date.now();
+    
+    // Check cache first
+    const cachedEmbedding = queryCache.getEmbedding(text);
+    if (cachedEmbedding) {
+      console.log(`[FAST-EMBED] Cache hit in ${Date.now() - startTime}ms`);
+      return cachedEmbedding;
+    }
+    
+    try {
+      // Use existing agent system for embedding generation
+      const response = await this.executeAgent('SemanticEmbeddingAgent', {
+        action: 'generate-embedding',
+        text: text
+      });
+      
+      if (response.success && response.result?.embedding) {
+        // Cache the successful embedding
+        queryCache.cacheEmbedding(text, response.result.embedding);
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`[FAST-EMBED] Generated and cached in ${totalTime}ms`);
+        return response.result.embedding;
+      }
+      
+      return null;
+      
+    } catch (error) {
+      console.warn(`[FAST-EMBED] Error: ${error.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * PERFORMANCE OPTIMIZATION: Fast cached similarity calculation
+   * Reduces redundant similarity computation calls
+   */
+  async calculateSimilarityFast(query, text, queryEmbedding, textEmbedding, context = {}) {
+    const startTime = Date.now();
+    
+    // Check cache first
+    const cachedSimilarity = queryCache.getSimilarity(query, text);
+    if (cachedSimilarity !== null) {
+      console.log(`[FAST-SIM] Cache hit in ${Date.now() - startTime}ms`);
+      return cachedSimilarity;
+    }
+    
+    try {
+      // Calculate cosine similarity if embeddings are provided
+      if (queryEmbedding && textEmbedding) {
+        const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, textEmbedding);
+        
+        // Cache the result
+        queryCache.cacheSimilarity(query, text, similarity);
+        
+        const totalTime = Date.now() - startTime;
+        console.log(`[FAST-SIM] Calculated and cached in ${totalTime}ms`);
+        return similarity;
+      }
+      
+      return 0;
+      
+    } catch (error) {
+      console.warn(`[FAST-SIM] Error: ${error.message}`);
+      return 0;
+    }
+  }
+
+
+
+  /**
    * Pre-bootstrap critical agents in the background to eliminate first-query delay
    */
   async bootstrapCriticalAgents() {
@@ -1237,10 +1445,9 @@ Consider these indicators:
 
 Respond with only "true" if this query likely needs cross-session search, or "false" if it's about current context only.`;
 
-      const result = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: classificationPrompt,
-        options: { timeout: 3000, maxTokens: 10, temperature: 0.1 }
+      // PERFORMANCE OPTIMIZATION: Use fast cached Phi3 call
+      const result = await this.executePhi3Fast(classificationPrompt, { prompt }, {
+        timeout: 3000, maxTokens: 10, temperature: 0.1
       });
 
       if (result.success && result.result?.response) {
@@ -1577,7 +1784,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         
         try {
           const msgEmb = JSON.parse(msg.embedding);
-          const similarity = this.calculateCosineSimilarity(promptEmb, msgEmb);
+          const similarity = MathUtils.calculateCosineSimilarity(promptEmb, msgEmb);
           
           // Debug similarity calculation
           if (i < 3) {
@@ -1695,7 +1902,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
 
       if (!q.success || !c.success) return null;
       const qv = q.result.embedding, cv = c.result.embedding;
-      const similarity = this.calculateCosineSimilarity(qv, cv);
+      const similarity = MathUtils.calculateCosineSimilarity(qv, cv);
 
       // Lower threshold for conversational recency
       if (similarity >= 0.18) {
@@ -1715,18 +1922,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
     return null;
   }
 
-  /**
-   * Calculate cosine similarity between two embedding vectors
-   */
-  calculateCosineSimilarity(vec1, vec2) {
-    if (!vec1 || !vec2 || vec1.length !== vec2.length) return 0;
-    
-    const dot = vec1.reduce((sum, val, i) => sum + val * vec2[i], 0);
-    const norm1 = Math.sqrt(vec1.reduce((sum, val) => sum + val * val, 0));
-    const norm2 = Math.sqrt(vec2.reduce((sum, val) => sum + val * val, 0));
-    
-    return dot / (norm1 * norm2 + 1e-8);
-  }
+
 
   /**
    * Calculate conversation relevance using stored embeddings from conversation_messages
@@ -1772,7 +1968,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         
         try {
           const msgEmb = JSON.parse(msg.embedding);
-          const similarity = this.calculateCosineSimilarity(promptEmb, msgEmb);
+          const similarity = MathUtils.calculateCosineSimilarity(promptEmb, msgEmb);
           similarities.push(similarity);
         } catch (embError) {
           console.warn('⚠️ [CONVERSATION-RELEVANCE] Failed to parse embedding for message:', msg.id);

@@ -7,6 +7,7 @@ const IntentResponses = require('./IntentResponses.cjs');
 const trainingData = require('./training-data/thinkdrop-training-data.cjs');
 const enhancedTrainingData = require('./training-data/enhanced-training-data.cjs');
 const edgeCaseTrainingData = require('./training-data/edge-case-training-data.cjs');
+const { MathUtils } = require('./MathUtils.cjs');
 
 class DistilBertIntentParser {
   constructor() {
@@ -364,20 +365,10 @@ class DistilBertIntentParser {
   }
   
   /**
-   * Calculate cosine similarity between two vectors
+   * Calculate cosine similarity between two vectors using centralized MathUtils
    */
   cosineSimilarity(vecA, vecB) {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    return MathUtils.calculateCosineSimilarity(vecA, vecB);
   }
   
   /**
@@ -1059,22 +1050,7 @@ class DistilBertIntentParser {
    * @returns {number} - Cosine similarity (-1 to 1)
    */
   computeCosineSimilarity(vecA, vecB) {
-    if (!vecA || !vecB || vecA.length !== vecB.length) {
-      return 0;
-    }
-    
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    
-    for (let i = 0; i < vecA.length; i++) {
-      dotProduct += vecA[i] * vecB[i];
-      normA += vecA[i] * vecA[i];
-      normB += vecB[i] * vecB[i];
-    }
-    
-    const magnitude = Math.sqrt(normA) * Math.sqrt(normB);
-    return magnitude === 0 ? 0 : dotProduct / magnitude;
+    return MathUtils.calculateCosineSimilarity(vecA, vecB);
   }
   
   /**

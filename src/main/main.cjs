@@ -269,6 +269,12 @@ async function initializeServices() {
       });
       console.log('✅ Step 5: CoreAgent initialized successfully:', initResult);
 
+      // Initialize performance optimizations
+      console.log('🔄 Step 6: Initializing performance optimizations...');
+      const { optimizationManager } = require('./services/OptimizationManager.cjs');
+      await optimizationManager.initialize();
+      console.log('✅ Step 6: Performance optimizations ready');
+
       // Start the embedding daemon for automatic background embedding generation
       try {
         console.log('🤖 Starting embedding daemon for semantic search...');
