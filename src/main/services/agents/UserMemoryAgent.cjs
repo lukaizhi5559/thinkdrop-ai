@@ -1775,7 +1775,7 @@ const AGENT_FORMAT = {
                       ORDER BY session_id, created_at DESC
                     `;
                     
-                    const messages = await database.query(messagesSql, sessionIds);
+                    const messages = await database.query(messagesSql, [...sessionIds, ...sessionIds]);
                     console.log(`[INFO] Found ${messages.length} conversation messages`);
                     
                     // Debug: Show session distribution in retrieved messages
@@ -1973,6 +1973,7 @@ const AGENT_FORMAT = {
                 const placeholders = sessionIds.map(() => '?').join(',');
                 const messageResults = [];
                 let messages = []; // Initialize messages variable for all code paths
+                let totalMessagesProcessed = 0; // Track total messages across all paths
                 
                 // Check if this is a chronological query (first, last, etc.)
                 const isFirstQuery = /\b(first|earliest|initial|start|begin)\b/i.test(semanticQuery);
@@ -1982,22 +1983,30 @@ const AGENT_FORMAT = {
                 if (isChronologicalQuery) {
                   console.log(`[DEBUG] Chronological query detected: ${isFirstQuery ? 'FIRST' : 'LAST'}`);
                   
-                  // For chronological queries, get messages in chronological order
-                  const chronoSql = `
-                    SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
-                           created_at, metadata, embedding
-                    FROM conversation_messages
-                    WHERE session_id IN (${placeholders})
-                    ORDER BY created_at ${isFirstQuery ? 'ASC' : 'DESC'}
-                    LIMIT ${semanticLimit * 2}
-                  `;
-                  
-                  const chronoMessages = await database.query(chronoSql, sessionIds);
-                  messages = chronoMessages; // Assign to messages variable for later reference
-                  console.log(`[INFO] Found ${chronoMessages.length} chronological messages`);
+                  try {
+                    // For chronological queries, get messages in chronological order
+                    const chronoSql = `
+                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                             created_at, metadata, embedding
+                      FROM conversation_messages
+                      WHERE session_id IN (${placeholders})
+                      ORDER BY created_at ${isFirstQuery ? 'ASC' : 'DESC'}
+                      LIMIT ${semanticLimit * 2}
+                    `;
+                    
+                    const chronoMessages = await database.query(chronoSql, sessionIds);
+                    messages = chronoMessages; // Assign to messages variable for later reference
+                    totalMessagesProcessed = chronoMessages.length;
+                    console.log(`[INFO] Found ${chronoMessages.length} chronological messages`);
+                  } catch (chronoError) {
+                    console.warn(`[WARN] Chronological query failed, falling back to regular search: ${chronoError.message}`);
+                    // Fall back to regular semantic search if chronological query fails
+                    messages = [];
+                    totalMessagesProcessed = 0;
+                  }
                   
                   // For chronological queries, prioritize time order over semantic similarity
-                  for (const message of chronoMessages) {
+                  for (const message of messages) {
                     const sessionContext = topSessions.find(s => s.session_id === message.session_id);
                     
                     // Calculate similarity but give high weight to chronological position
@@ -2037,32 +2046,102 @@ const AGENT_FORMAT = {
                     ORDER BY created_at DESC
                   `;
                   
-                  const messages = await database.query(messageSql, sessionIds);
-                  console.log(`[INFO] Found ${messages.length} messages in relevant sessions`);
+                  // TRUE SQL-level semantic filtering - MUCH faster!
+                  console.log(`[INFO] Using SQL-level semantic filtering with threshold ${minSimilarity}`);
                   
-                  // Calculate message similarities
-                  for (const message of messages) {
+                  // Create query embedding as array literal for SQL
+                  const queryEmbeddingArray = `[${queryEmbedding.join(',')}]`;
+                  
+                  const semanticFilterSql = `
+                    WITH message_similarities AS (
+                      SELECT 
+                        'conversation' as source, 
+                        id, 
+                        text as source_text, 
+                        sender, 
+                        session_id, 
+                        created_at, 
+                        metadata,
+                        -- SQL-level cosine similarity using DuckDB array operations
+                        list_dot_product(
+                          CAST(embedding AS DOUBLE[]), 
+                          CAST(${queryEmbeddingArray} AS DOUBLE[])
+                        ) / (
+                          sqrt(list_dot_product(CAST(embedding AS DOUBLE[]), CAST(embedding AS DOUBLE[]))) * 
+                          sqrt(list_dot_product(CAST(${queryEmbeddingArray} AS DOUBLE[]), CAST(${queryEmbeddingArray} AS DOUBLE[])))
+                        ) as similarity
+                      FROM conversation_messages
+                      WHERE session_id IN (${placeholders})
+                        AND embedding IS NOT NULL
+                        AND length(CAST(embedding AS DOUBLE[])) = ${queryEmbedding.length}
+                    )
+                    SELECT source, id, source_text, sender, session_id, created_at, metadata, similarity
+                    FROM message_similarities
+                    WHERE similarity >= ?
+                    ORDER BY similarity DESC
+                    LIMIT ?
+                  `;
+                  
+                  const semanticParams = [
+                    ...sessionIds,           // For session filtering
+                    minSimilarity,           // Similarity threshold
+                    semanticLimit * 2        // Get extra results for final ranking
+                  ];
+                  
+                  try {
+                    const sqlMessages = await database.query(semanticFilterSql, semanticParams);
+                    messages = sqlMessages; // Assign to shared messages variable
+                    totalMessagesProcessed = sqlMessages.length;
+                    console.log(`[SUCCESS] SQL-level filtering found ${sqlMessages.length} relevant messages (${sqlMessages.length > 0 ? sqlMessages[0].similarity?.toFixed(3) : 'N/A'} max similarity)`);
+                    
+                    // Add session context to pre-filtered results
+                    for (const message of sqlMessages) {
+                      const sessionContext = topSessions.find(s => s.session_id === message.session_id);
+                      messageResults.push({
+                        ...message,
+                        sessionTitle: sessionContext?.title,
+                        sessionType: sessionContext?.type,
+                        sessionSimilarity: sessionContext?.similarity
+                      });
+                    }
+                    
+                  } catch (sqlError) {
+                    console.warn(`[WARN] SQL-level filtering failed, falling back to JavaScript: ${sqlError.message}`);
+                    
                     try {
-                      const messageEmbedding = Array.isArray(message.embedding) 
-                        ? message.embedding 
-                        : JSON.parse(message.embedding);
+                      // Fallback to JavaScript processing if SQL fails
+                      const fallbackMessages = await database.query(messageSql, sessionIds);
+                        messages = fallbackMessages; // Assign to shared messages variable
+                      totalMessagesProcessed = fallbackMessages.length;
+                      console.log(`[INFO] Fallback: Processing ${fallbackMessages.length} messages in JavaScript`);
                       
-                      const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
-                      
-                      if (similarity >= minSimilarity) {
-                        // Add session context
-                        const sessionContext = topSessions.find(s => s.session_id === message.session_id);
-                        messageResults.push({
-                          ...message,
-                          similarity: similarity,
-                          embedding: undefined,
-                          sessionTitle: sessionContext?.title,
-                          sessionType: sessionContext?.type,
-                          sessionSimilarity: sessionContext?.similarity
-                        });
+                      for (const message of fallbackMessages) {
+                        try {
+                          const messageEmbedding = Array.isArray(message.embedding) 
+                            ? message.embedding 
+                            : JSON.parse(message.embedding);
+                          
+                          const similarity = AGENT_FORMAT.calculateCosineSimilarity(queryEmbedding, messageEmbedding);
+                          
+                          if (similarity >= minSimilarity) {
+                            const sessionContext = topSessions.find(s => s.session_id === message.session_id);
+                            messageResults.push({
+                              ...message,
+                              similarity: similarity,
+                              embedding: undefined,
+                              sessionTitle: sessionContext?.title,
+                              sessionType: sessionContext?.type,
+                              sessionSimilarity: sessionContext?.similarity
+                            });
+                          }
+                        } catch (error) {
+                          console.warn(`[WARN] Failed to process message ${message.id}:`, error.message);
+                        }
                       }
-                    } catch (error) {
-                      console.warn(`[WARN] Failed to process message ${message.id}:`, error.message);
+                    } catch (fallbackError) {
+                      console.error(`[ERROR] Both SQL and JavaScript fallback failed: ${fallbackError.message}`);
+                      messages = [];
+                      totalMessagesProcessed = 0;
                     }
                   }
                 }
@@ -2081,7 +2160,7 @@ const AGENT_FORMAT = {
                   count: topResults.length,
                   totalSessions: sessions.length,
                   relevantSessions: topSessions.length,
-                  totalMessages: messages.length,
+                  totalMessages: totalMessagesProcessed, // Use consistent variable
                   minSimilarity: minSimilarity,
                   timeWindow: timeWindow,
                   searchType: 'two-tier',
