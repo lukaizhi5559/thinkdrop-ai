@@ -54,44 +54,53 @@ class DistilBertIntentParser {
     try {
       console.log('🤖 Initializing DistilBERT Intent Parser...');
       
+      // Configure transformers for WASM-only execution
+      const { configureTransformers } = require('./transformers-config.cjs');
+      const transformers = await configureTransformers();
+      
       // Initialize embedding pipeline
       console.log('🔄 Loading DistilBERT embedder (using existing pattern)...');
       console.log('📦 Creating embedding pipeline...');
-      const transformers = await import('@xenova/transformers');
       this.embedder = await transformers.pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-        cache_dir: './models'
+        cache_dir: './models',
+        device: 'wasm',
+        dtype: 'fp32'
       });
       
       // Initialize NER model for enhanced entity extraction
       console.log('🏷️ Initializing NER entity classifier...');
-      try {
-        // Try primary NER model first
-        this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/bert-base-NER', {
-          cache_dir: './models',
-          local_files_only: false,
-          revision: 'main'
-        });
-        this.isNerReady = true;
-        console.log('✅ NER classifier (bert-base-NER) loaded successfully');
-      } catch (nerError) {
-        console.warn('⚠️ Primary NER model failed:', nerError.message);
-        
-        // Try fallback NER model
+      
+      // List of NER models to try in order of preference
+      const nerModels = [
+        { name: 'Xenova/bert-base-multilingual-cased-ner-hrl', task: 'token-classification' },
+        { name: 'Xenova/distilbert-base-uncased', task: 'token-classification' },
+        { name: 'Xenova/all-MiniLM-L6-v2', task: 'feature-extraction' } // Fallback to embeddings-based
+      ];
+      
+      this.nerClassifier = null;
+      this.isNerReady = false;
+      
+      for (const model of nerModels) {
         try {
-          console.log('🔄 Trying fallback NER model...');
-          this.nerClassifier = await transformers.pipeline('token-classification', 'Xenova/distilbert-base-NER', {
+          console.log(`🔄 Trying NER model: ${model.name}...`);
+          this.nerClassifier = await transformers.pipeline(model.task, model.name, {
             cache_dir: './models',
-            local_files_only: false
+            local_files_only: false,
+            device: 'wasm',
+            dtype: 'fp32'
           });
           this.isNerReady = true;
-          console.log('✅ NER classifier (distilbert-base-NER) loaded successfully');
-        } catch (fallbackError) {
-          console.warn('⚠️ Fallback NER model also failed:', fallbackError.message);
-          console.warn('🔍 NER Error details:', { primary: nerError.message, fallback: fallbackError.message });
-          this.nerClassifier = null;
-          this.isNerReady = false;
-          console.log('📝 Continuing without NER - using enhanced rule-based entity extraction only');
+          console.log(`✅ NER classifier (${model.name}) loaded successfully`);
+          break;
+        } catch (error) {
+          console.warn(`⚠️ NER model ${model.name} failed:`, error.message);
+          continue;
         }
+      }
+      
+      if (!this.nerClassifier) {
+        console.log('📝 All NER models failed - using enhanced rule-based entity extraction only');
+        this.isNerReady = false;
       }
       
       console.log('🎯 Setting up intent classification...');

@@ -176,15 +176,41 @@ class ModelCache {
    * Private method to initialize NER
    */
   async _initializeNER() {
-    // Import NER initialization logic
-    // This would need to be extracted from the current initialization code
-    const { pipeline } = require('@huggingface/transformers');
+    // Import NER initialization logic using dynamic import for ES modules
+    const transformers = await import('@xenova/transformers');
     
-    const classifier = await pipeline('ner', 'bert-base-NER', {
-      aggregation_strategy: 'simple'
-    });
+    // Force WASM backend to avoid ONNX issues
+    transformers.env.backends = {
+      onnx: false,
+      wasm: true,
+      webgl: false
+    };
     
-    return classifier;
+    // List of NER models to try in order of preference
+    const nerModels = [
+      'Xenova/bert-base-multilingual-cased-ner-hrl',
+      'Xenova/distilbert-base-uncased',
+      'Xenova/all-MiniLM-L6-v2'
+    ];
+    
+    for (const modelName of nerModels) {
+      try {
+        console.log(`[CACHE] Trying NER model: ${modelName}...`);
+        const classifier = await transformers.pipeline('token-classification', modelName, {
+          cache_dir: './models',
+          device: 'wasm',
+          dtype: 'fp32'
+        });
+        console.log(`[CACHE] NER model ${modelName} loaded successfully`);
+        return classifier;
+      } catch (error) {
+        console.warn(`[CACHE] NER model ${modelName} failed:`, error.message);
+        continue;
+      }
+    }
+    
+    console.warn('[CACHE] All NER models failed - returning null');
+    return null;
   }
 
   /**

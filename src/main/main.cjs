@@ -1,8 +1,15 @@
 // Entry point for Thinkdrop AI Electron overlay app
-const { app, BrowserWindow, ipcMain, globalShortcut, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+
+// Force WASM-only execution for all transformers to prevent ONNX runtime issues
+process.env.ONNXJS_LOG_LEVEL = 'error';
+process.env.TRANSFORMERS_CACHE = path.join(__dirname, '../../models');
+process.env.HF_HUB_DISABLE_TELEMETRY = '1';
+// Disable ONNX runtime entirely
+process.env.ONNXRUNTIME_DISABLE = '1';
 require('dotenv').config(); // Load .env variables
 
 // Handle EPIPE errors gracefully to prevent process crashes
@@ -372,6 +379,9 @@ async function setupIPCHandlers() {
     windows
   });
 
+  // Setup conversation persistence handlers FIRST (required by frontend)
+  setupConversationHandlers(ipcMain, coreAgent);
+  
   // Initialize local LLM handlers
   initializeLocalLLMHandlers({
     ipcMain,
@@ -383,9 +393,6 @@ async function setupIPCHandlers() {
   // Setup orchestration workflow handlers
   const { sendClarificationRequest: sendWorkflowClarification } = 
     setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
-  
-  // Setup conversation persistence handlers
-  setupConversationHandlers(ipcMain, coreAgent);
   
   // Setup database notification handlers
   await setupDatabaseNotificationHandlers();

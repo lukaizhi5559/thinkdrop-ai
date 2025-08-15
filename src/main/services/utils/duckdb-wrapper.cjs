@@ -87,7 +87,7 @@ function handleWALCorruption(dbPath) {
         
         // Create a temporary connection to commit the WAL
         const tempDb = new duckdb.Database(dbPath);
-        tempDb.run('PRAGMA wal_checkpoint(TRUNCATE)', (checkpointErr) => {
+        tempDb.run('PRAGMA force_checkpoint', (checkpointErr) => {
           if (checkpointErr) {
             console.warn('⚠️ WAL checkpoint failed, proceeding with backup approach:', checkpointErr.message);
           } else {
