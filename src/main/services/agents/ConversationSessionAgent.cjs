@@ -6,6 +6,12 @@
 const path = require('path');
 const fs = require('fs').promises;
 
+// Import DatabaseManager for proper connection management and corruption handling
+let databaseManager = null;
+
+// Simple flag to track if we should try to import DatabaseManager
+let shouldTryDatabaseManager = true;
+
 const AGENT_FORMAT = {
   name: 'ConversationSessionAgent',
   description: 'Manages multi-chat conversation sessions with context awareness and auto-initiation',
@@ -59,9 +65,39 @@ const AGENT_FORMAT = {
       
       AGENT_FORMAT.bootstrapping = true;
       
-      AGENT_FORMAT.database = context.database;
+      // Try to import and use DatabaseManager for corruption protection
+      if (shouldTryDatabaseManager && context.dbPath) {
+        try {
+          console.log('🛡️ ConversationSessionAgent: Attempting to import DatabaseManager...');
+          const dbManagerModule = await import('../utils/DatabaseManager.js');
+          databaseManager = dbManagerModule.default;
+          console.log('✅ ConversationSessionAgent: DatabaseManager imported successfully');
+          
+          if (databaseManager) {
+            console.log('🛡️ ConversationSessionAgent: Using DatabaseManager for protected database connection...');
+            // Initialize DatabaseManager with the database path
+            await databaseManager.initialize(context.dbPath);
+            
+            // Get the managed connection
+            AGENT_FORMAT.database = databaseManager.getConnection();
+            
+            console.log('✅ ConversationSessionAgent: DatabaseManager connection established with corruption protection');
+          }
+        } catch (dbManagerError) {
+          console.error('❌ ConversationSessionAgent: DatabaseManager import/initialization failed:', dbManagerError.message);
+          console.warn('⚠️ ConversationSessionAgent: Falling back to context database connection...');
+          shouldTryDatabaseManager = false; // Don't try again
+          databaseManager = null;
+        }
+      }
+      
+      // Fallback to context database if DatabaseManager is not available or failed
       if (!AGENT_FORMAT.database) {
-        throw new Error('Database connection required for ConversationSessionAgent');
+        AGENT_FORMAT.database = context.database;
+        if (!AGENT_FORMAT.database) {
+          throw new Error('Database connection required for ConversationSessionAgent');
+        }
+        console.log('⚠️ ConversationSessionAgent: Using context database connection (no corruption protection)');
       }
 
       // Create conversation sessions table

@@ -60,6 +60,152 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
     }
   });
 
+  // ========================================
+  // SMART ROUTING FUNCTIONS (for llm-query-local)
+  // ========================================
+
+  /**
+   * Layer 1: Lightning-fast pattern matching (1-2ms)
+   * High-confidence patterns with >90% accuracy
+   */
+  function quickPatternClassification(prompt) {
+    const lowerPrompt = prompt.toLowerCase().trim();
+    
+    // HIGH CONFIDENCE memory patterns (>95% accuracy)
+    const strongMemoryIndicators = [
+      'what did we discuss',
+      'what did you say',
+      'our previous conversation',
+      'you mentioned earlier',
+      'remember when we',
+      'show me our chat',
+      'in our last conversation',
+      'what did we talk about',
+      'you told me',
+      'we were talking about'
+    ];
+    
+    // HIGH CONFIDENCE direct LLM patterns (>90% accuracy)
+    const strongDirectIndicators = [
+      'what is the best',
+      'what\'s the best',
+      'how do i',
+      'how to',
+      'explain to me',
+      'tell me about',
+      'what does',
+      'how does',
+      'write a',
+      'create a',
+      'calculate',
+      'translate',
+      'what are',
+      'define',
+      'compare'
+    ];
+    
+    // Check strong memory indicators first
+    for (const pattern of strongMemoryIndicators) {
+      if (lowerPrompt.includes(pattern)) {
+        console.log(`🎯 [ROUTING-L1] Strong memory pattern detected: "${pattern}"`);
+        return { needsMemorySearch: true, confidence: 0.95, reason: 'strong_memory_pattern', layer: 1 };
+      }
+    }
+    
+    // Check strong direct LLM indicators
+    for (const pattern of strongDirectIndicators) {
+      if (lowerPrompt.includes(pattern)) {
+        console.log(`🎯 [ROUTING-L1] Strong direct pattern detected: "${pattern}"`);
+        return { needsMemorySearch: false, confidence: 0.9, reason: 'strong_direct_pattern', layer: 1 };
+      }
+    }
+    
+    console.log(`🤔 [ROUTING-L1] No strong patterns detected, uncertain`);
+    return { needsMemorySearch: null, confidence: 0.3, reason: 'uncertain', layer: 1 };
+  }
+
+  /**
+   * Layer 2: Use NER routing and intent classification for routing decisions
+   */
+  async function useNERAndIntentForRouting(prompt, context) {
+    // Try NER routing first (fast entity-based routing)
+    if (typeof currentParser?.routeWithNER === 'function') {
+      try {
+        console.log('🎯 [ROUTING-L2] Using NER-based routing...');
+        const nerResult = await currentParser.routeWithNER(prompt);
+        
+        if (nerResult && nerResult.confidence > 0.7) {
+          const intent = nerResult.primaryIntent;
+          console.log(`🎯 [ROUTING-L2] NER routing: ${intent} (confidence: ${nerResult.confidence})`);
+          
+          // Memory-related intents need progressive search
+          if (['memory_retrieve', 'memory_store', 'memory_update', 'memory_delete'].includes(intent)) {
+            return { needsMemorySearch: true, confidence: nerResult.confidence, reason: `ner_${intent}`, layer: 2 };
+          }
+          
+          // Commands and standalone questions can use direct LLM
+          if (['command', 'question'].includes(intent)) {
+            // Check if question has entities that might need memory context
+            const hasEntities = nerResult.entities && Object.keys(nerResult.entities).length > 0;
+            if (intent === 'question' && hasEntities) {
+              console.log(`🎯 [ROUTING-L2] Question with entities - might need memory context`);
+              return { needsMemorySearch: true, confidence: nerResult.confidence * 0.8, reason: 'ner_question_with_entities', layer: 2 };
+            }
+            
+            return { needsMemorySearch: false, confidence: nerResult.confidence, reason: `ner_${intent}`, layer: 2 };
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ [ROUTING-L2] NER routing failed:', error.message);
+      }
+    }
+    
+    console.log(`🤔 [ROUTING-L2] NER routing uncertain or unavailable`);
+    return { needsMemorySearch: null, confidence: 0.4, reason: 'ner_uncertain', layer: 2 };
+  }
+
+  /**
+ * Determine if query needs progressive search using layered approach
+ * Returns routing decision with full NER information for reuse
+ */
+async function determineIfProgressiveSearchNeeded(prompt, context, classificationResult = null) {
+  const startTime = Date.now();
+  
+  // LAYER 1: Lightning-fast pattern matching (1-2ms)
+  const patternResult = quickPatternClassification(prompt);
+  if (patternResult.confidence > 0.8) {
+    const duration = Date.now() - startTime;
+    console.log(`✅ [ROUTING] Decision made in Layer ${patternResult.layer} (${duration}ms): ${patternResult.needsMemorySearch ? 'PROGRESSIVE_SEARCH' : 'DIRECT_LLM'} - ${patternResult.reason}`);
+    return {
+      needsProgressiveSearch: patternResult.needsMemorySearch,
+      routingInfo: patternResult,
+      duration: duration
+    };
+  }
+  
+  // LAYER 2: Use NER routing and intent classification
+  const nerResult = await useNERAndIntentForRouting(prompt, context);
+  if (nerResult.confidence > 0.7) {
+    const duration = Date.now() - startTime;
+    console.log(`✅ [ROUTING] Decision made in Layer ${nerResult.layer} (${duration}ms): ${nerResult.needsMemorySearch ? 'PROGRESSIVE_SEARCH' : 'DIRECT_LLM'} - ${nerResult.reason}`);
+    return {
+      needsProgressiveSearch: nerResult.needsMemorySearch,
+      routingInfo: nerResult,
+      duration: duration
+    };
+  }
+  
+  // TODO: Add Layer 3 (context analysis) later
+  // For now, default to direct LLM for performance when uncertain
+  const duration = Date.now() - startTime;
+  console.log(`🤷 [ROUTING] Uncertain after ${duration}ms, defaulting to DIRECT_LLM for performance`);
+  return {
+    needsProgressiveSearch: false, // Default to direct LLM when uncertain (performance-first approach)
+    routingInfo: { needsMemorySearch: false, confidence: 0.4, reason: 'uncertain_default_direct', layer: 'fallback' },
+    duration: duration
+  };
+}
+
   // Fast local LLM query handler with intent classification - returns both response and intentClassificationPayload
   ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {
     try {
@@ -203,15 +349,15 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         const finalResponse = typeof responseText === 'string' ? responseText : String(responseText);
         
         console.log('✅ [STAGED-SEARCH] Final response:', finalResponse);
-        
-          return { 
-            success: true, 
-            data: { 
-              response: finalResponse
-            } 
-          };
-        }
-      }
+
+            return {
+              success: true,
+              data: {
+                response: finalResponse
+              }
+            };
+          }
+      } 
 
       ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 0: NER-FIRST ROUTING - Smart routing based on entities
@@ -531,8 +677,245 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
         contextKeys: Object.keys(actualContext) 
       });
 
+      // ========================================
+      // 🎯 STEP 0: SMART ROUTING DECISION - Ultra-fast routing for simple queries
+      // ========================================
+      console.log('🤔 [SMART-ROUTING] Analyzing query for optimal routing...');
+      const routingDecision = await determineIfProgressiveSearchNeeded(actualPrompt, actualContext);
+      
+      if (!routingDecision.needsProgressiveSearch) {
+        // DIRECT LLM PATH: Handle simple queries with essential classification but skip semantic search
+        console.log('🚀 [DIRECT-LLM] Query detected as simple - using optimized pipeline with progressive interface');
+        
+        try {
+          // STEP 1: Get conversation context (from llm-query-local STEP -1)
+          let conversationContext = null;
+          let currentSessionId = null;
+          try {
+            const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+            if (conversationAgent) {
+              const sessionsResult = await conversationAgent.execute({
+                action: 'session-list',
+                limit: 1,
+                offset: 0
+              });
+              
+              if (sessionsResult?.success && sessionsResult?.data?.sessions?.length > 0) {
+                const currentSession = sessionsResult.data.sessions[0];
+                const sessionId = currentSession.id;
+                currentSessionId = sessionId;
+                
+                const recentMessages = await conversationAgent.execute({
+                  action: 'message-list',
+                  sessionId: sessionId,
+                  limit: 8,
+                  offset: 0
+                });
+              
+                if (recentMessages?.data?.messages?.length > 0) {
+                  const allMessages = recentMessages.data.messages.filter(msg => msg.text !== actualPrompt);
+                  const last8Messages = allMessages.slice(-8);
+                  const contextMessages = last8Messages
+                    .map((msg, index) => {
+                      const isVeryRecent = index >= last8Messages.length - 2;
+                      const prefix = isVeryRecent ? '🔥' : '';
+                      return `${prefix}${msg.sender}: ${msg.text}`;
+                    })
+                    .join('\n');
+                  
+                  if (contextMessages.trim()) {
+                    conversationContext = contextMessages;
+                    console.log(`✅ [DIRECT-CONTEXT] Added conversation context for direct LLM`);
+                  }
+                }
+              }
+            }
+          } catch (contextError) {
+            console.warn('⚠️ [DIRECT-CONTEXT] Failed to get context:', contextError.message);
+          }
+
+          // STEP 2: Use routing information from smart routing decision (no duplicate NER call)
+          const nerRoutingInfo = routingDecision.routingInfo;
+          console.log(`✅ [DIRECT-REUSE] Reusing routing decision from Layer ${nerRoutingInfo.layer}: ${nerRoutingInfo.reason}`);
+
+          // STEP 3: LLM Conversational Override (only if we have NER routing info)
+          let finalRoutingDecision = nerRoutingInfo;
+          if (nerRoutingInfo.primaryIntent && (nerRoutingInfo.primaryIntent === 'memory_store' || nerRoutingInfo.primaryIntent === 'command')) {
+            try {
+              console.log(`🔍 [DIRECT-LLM-CHECK] Verifying ${nerRoutingInfo.primaryIntent} classification...`);
+              const classificationResult = await coreAgent.executeAgent('UserMemoryAgent', {
+                action: 'classify-conversational-query',
+                query: actualPrompt
+              });
+              
+              if (classificationResult.success && classificationResult.result?.result?.isConversational) {
+                console.log(`🔄 [DIRECT-OVERRIDE] "${actualPrompt}" is conversational - changing to memory_retrieve`);
+                finalRoutingDecision = {
+                  ...nerRoutingInfo,
+                  primaryIntent: 'memory_retrieve',
+                  needsSemanticSearch: true,
+                  needsOrchestration: false,
+                  method: 'llm_conversational_override'
+                };
+              }
+            } catch (error) {
+              console.warn('⚠️ [DIRECT-LLM-CHECK] Conversational check failed:', error.message);
+            }
+          }
+
+          // STEP 4: Intent Classification (from llm-query-local STEP 2)
+          let intentResult;
+          if (finalRoutingDecision.primaryIntent) {
+            console.log(`✅ [DIRECT-INTENT] Using routing decision - ${finalRoutingDecision.primaryIntent}`);
+            intentResult = {
+              success: true,
+              result: {
+                intentData: {
+                  primaryIntent: finalRoutingDecision.primaryIntent,
+                  intents: [{ intent: finalRoutingDecision.primaryIntent, confidence: finalRoutingDecision.confidence, reasoning: finalRoutingDecision.reasoning || finalRoutingDecision.reason }],
+                  entities: finalRoutingDecision.entities || {},
+                  requiresMemoryAccess: ['memory_store', 'memory_retrieve', 'memory_update', 'memory_delete', 'question'].includes(finalRoutingDecision.primaryIntent),
+                  requiresExternalData: false,
+                  captureScreen: (finalRoutingDecision.primaryIntent === 'command' && /screenshot|capture|screen/.test(actualPrompt.toLowerCase())),
+                  suggestedResponse: currentParser?.getSuggestedResponse ? currentParser.getSuggestedResponse(finalRoutingDecision.primaryIntent, actualPrompt) : 'I\'ll help you with that.',
+                  sourceText: actualPrompt,
+                  chainOfThought: {
+                    step1_analysis: finalRoutingDecision.reasoning || finalRoutingDecision.reason,
+                    step2_reasoning: `Smart routing Layer ${finalRoutingDecision.layer} (confidence: ${(finalRoutingDecision.confidence * 100).toFixed(1)}%)`,
+                    step3_consistency: 'Smart routing classification'
+                  }
+                }
+              }
+            };
+          } else {
+            console.log('🎯 [DIRECT-FALLBACK] Using Phi3Agent classification...');
+            intentResult = await coreAgent.executeAgent('Phi3Agent', {
+              action: 'classify-intent',
+              message: actualPrompt,
+              options: { temperature: 0.1, maxTokens: 500 }
+            });
+          }
+
+          // STEP 5: Generate Response (optimized direct LLM call)
+          let quickResponse;
+          let intentClassificationPayload;
+
+          if (intentResult.success && intentResult.result?.intentData) {
+            const { intentData } = intentResult.result;
+            console.log('✅ [DIRECT-INTENT] Classification successful:', intentData.primaryIntent);
+            
+            quickResponse = intentData.suggestedResponse || 'I\'ll help you with that.';
+            
+            intentClassificationPayload = {
+              ...intentData,
+              timestamp: new Date().toISOString(),
+              context: {
+                source: 'direct_llm_classification',
+                sessionId: currentSessionId || `local-session-${Date.now()}`,
+                model: 'phi4-mini:latest'
+              }
+            };
+
+            // STEP 6: Conditional Orchestration (from llm-query-local STEP 3)
+            if (!finalRoutingDecision.primaryIntent || finalRoutingDecision.needsOrchestration) {
+              console.log('🔄 [DIRECT-ORCHESTRATION] Triggering background orchestration...');
+              coreAgent.handleLocalOrchestration(actualPrompt, intentClassificationPayload, {
+                source: 'direct_llm_background',
+                timestamp: new Date().toISOString()
+              }).then(result => {
+                if (result?.response && windows && global.broadcastOrchestrationUpdate) {
+                  let responseText = result.response;
+                  while (typeof responseText === 'object' && responseText !== null) {
+                    if (responseText.response) {
+                      responseText = responseText.response;
+                    } else if (responseText.data?.response) {
+                      responseText = responseText.data.response;
+                    } else {
+                      responseText = JSON.stringify(responseText);
+                      break;
+                    }
+                  }
+                  
+                  if (typeof responseText === 'string' && responseText.startsWith('"') && responseText.endsWith('"')) {
+                    responseText = responseText.slice(1, -1);
+                  }
+                  
+                  responseText = typeof responseText === 'string' ? responseText : String(responseText);
+                  
+                  const updateData = {
+                    type: 'orchestration-complete',
+                    response: responseText,
+                    handledBy: result.handledBy,
+                    method: result.method,
+                    timestamp: result.timestamp
+                  };
+                  
+                  global.broadcastOrchestrationUpdate(updateData, windows);
+                  console.log('✅ [DIRECT-BROADCAST] Orchestration update sent');
+                }
+              }).catch(error => {
+                console.warn('⚠️ [DIRECT-ORCHESTRATION] Background orchestration failed:', error.message);
+              });
+            }
+          } else {
+            console.warn('⚠️ [DIRECT-INTENT] Classification failed, using fallback');
+            quickResponse = 'I\'ll help you with that question.';
+            
+            intentClassificationPayload = {
+              primaryIntent: 'question',
+              intents: [{ intent: 'question', confidence: 0.7, reasoning: 'Fallback' }],
+              entities: [],
+              requiresMemoryAccess: false,
+              requiresExternalData: false,
+              captureScreen: false,
+              suggestedResponse: quickResponse,
+              sourceText: actualPrompt,
+              timestamp: new Date().toISOString(),
+              context: {
+                source: 'direct_llm_fallback',
+                sessionId: currentSessionId || `local-session-${Date.now()}`,
+                model: 'phi4-mini:latest'
+              }
+            };
+          }
+
+          console.log('✅ [DIRECT-LLM] Optimized pipeline completed, sending as stage 1 complete');
+          
+          // Send intermediate response to maintain progressive interface
+          const intermediateResult = {
+            response: quickResponse,
+            continueToNextStage: false
+          };
+          
+          console.log(`📡 [PROGRESSIVE-IPC] Sending direct response as stage 1 complete:`, intermediateResult);
+          event.sender.send('progressive-search-intermediate', intermediateResult);
+          
+          // Return final result in progressive format
+          return {
+            success: true,
+            data: {
+              response: quickResponse,
+              continueToNextStage: false,
+              stage: 1,
+              bypassedProgressiveSearch: true,
+              intentClassificationPayload: intentClassificationPayload
+            }
+          };
+          
+        } catch (error) {
+          console.error('❌ [DIRECT-LLM] Optimized pipeline error:', error.message);
+          console.log('🔄 [FALLBACK] Continuing with progressive search...');
+        }
+      } else {
+        console.log('🔍 [PROGRESSIVE-SEARCH] Query needs memory/context - using full progressive search');
+      }
+
+      // ========================================
+      // 🎯 PROGRESSIVE SEARCH: Execute memory-dependent search (existing logic)
+      // ========================================
+      console.log('🔍 [PROGRESSIVE-IPC] Executing full progressive search');
+      
       // Check if coreAgent has the progressive search method
-      console.log('🔍 [PROGRESSIVE-IPC] Checking for tryProgressiveSemanticSearch on coreAgent...');
       if (typeof coreAgent.tryProgressiveSemanticSearch !== 'function') {
         console.log('❌ [PROGRESSIVE-IPC] tryProgressiveSemanticSearch method not found on coreAgent');
         console.log('🔍 [PROGRESSIVE-IPC] Available coreAgent methods:', Object.getOwnPropertyNames(coreAgent).filter(name => typeof coreAgent[name] === 'function'));

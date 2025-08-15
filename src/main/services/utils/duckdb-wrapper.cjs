@@ -87,7 +87,7 @@ function handleWALCorruption(dbPath) {
         
         // Create a temporary connection to commit the WAL
         const tempDb = new duckdb.Database(dbPath);
-        tempDb.run('PRAGMA wal_checkpoint(TRUNCATE)', (checkpointErr) => {
+        tempDb.run('PRAGMA force_checkpoint', (checkpointErr) => {
           if (checkpointErr) {
             console.warn('⚠️ WAL checkpoint failed, proceeding with backup approach:', checkpointErr.message);
           } else {
@@ -113,19 +113,31 @@ function handleWALCorruption(dbPath) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const backupPath = `${walPath}.bak-${timestamp}`;
         try {
-          fs.copyFileSync(walPath, backupPath);
-          console.log(`💾 Backed up WAL to: ${backupPath}`);
+          if (fs.existsSync(walPath)) {
+            fs.copyFileSync(walPath, backupPath);
+            console.log(`💾 Backed up WAL to: ${backupPath}`);
+          }
         } catch (backupErr) {
           console.log('⚠️ Could not backup WAL file:', backupErr.message);
         }
         
-        // Remove WAL and SHM files
-        fs.unlinkSync(walPath);
-        console.log('🗑️ Removed WAL file after data preservation attempt');
+        // Remove WAL and SHM files safely
+        try {
+          if (fs.existsSync(walPath)) {
+            fs.unlinkSync(walPath);
+            console.log('🗑️ Removed WAL file after data preservation attempt');
+          }
+        } catch (removeErr) {
+          console.log('⚠️ Could not remove WAL file:', removeErr.message);
+        }
         
-        if (fs.existsSync(shmPath)) {
-          fs.unlinkSync(shmPath);
-          console.log('🗑️ Removed WAL-SHM file');
+        try {
+          if (fs.existsSync(shmPath)) {
+            fs.unlinkSync(shmPath);
+            console.log('🗑️ Removed WAL-SHM file');
+          }
+        } catch (removeErr) {
+          console.log('⚠️ Could not remove WAL-SHM file:', removeErr.message);
         }
       }
     }

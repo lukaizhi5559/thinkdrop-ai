@@ -118,7 +118,7 @@ class QueryCache {
     this.responseCache.set(key, {
       response,
       query,
-      contextHash: this._generateKey(JSON.stringify(context)),
+      context,
       timestamp: Date.now()
     });
     
@@ -139,12 +139,9 @@ class QueryCache {
       return null;
     }
     
-    // Verify context hasn't changed significantly
-    const currentContextHash = this._generateKey(JSON.stringify(context));
-    if (entry.contextHash !== currentContextHash) {
-      if (this.enableMetrics) this.metrics.response.misses++;
-      return null;
-    }
+    // OPTIMIZATION: Remove strict context hash verification that was causing 0% hit rates
+    // The contextKey already includes the stable context elements we care about
+    // No need for additional hash verification that fails due to dynamic timestamps
     
     if (this.enableMetrics) this.metrics.response.hits++;
     console.log(`[CACHE-HIT] Retrieved response for key: ${key}`);

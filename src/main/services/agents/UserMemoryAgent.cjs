@@ -9,10 +9,20 @@
  * - Optimized embedding and similarity calculations
  */
 
+// Import Node.js modules
+const path = require('path');
+const fs = require('fs');
+
 // Import performance optimization modules
 const { modelCache } = require('../ModelCache.cjs');
 const { queryCache } = require('../QueryCache.cjs');
 const { MathUtils } = require('../utils/MathUtils.cjs');
+
+// Import DatabaseManager for proper connection management and corruption handling
+let databaseManager = null;
+
+// Simple flag to track if we should try to import DatabaseManager
+let shouldTryDatabaseManager = true;
 
 const AGENT_FORMAT = {
     name: 'UserMemoryAgent',
@@ -412,20 +422,26 @@ const AGENT_FORMAT = {
         if (config.dbPath) {
           dbPath = config.dbPath;
         } else {
-          const __dirname = path.dirname(__filename);
-          const projectRoot = path.dirname(path.dirname(path.dirname(path.dirname(__dirname))));
-          dbPath = path.join(projectRoot, 'data', 'agent_memory.duckdb');
+          // Debug: Check if path module is available
+          console.log('DEBUG: path module available?', typeof path, typeof path?.dirname);
+          
+          // Use require to ensure path module is available in this scope
+          const pathModule = require('path');
+          const projectRoot = pathModule.dirname(pathModule.dirname(pathModule.dirname(pathModule.dirname(__dirname))));
+          dbPath = pathModule.join(projectRoot, 'data', 'agent_memory.duckdb');
         }
         this.dbPath = dbPath;
         
         console.log('UserMemoryAgent: Database path: ' + this.dbPath);
         
         // Ensure data directory exists
-        const dataDir = path.dirname(this.dbPath);
+        const pathModule = require('path');
+        const fsModule = require('fs');
+        const dataDir = pathModule.dirname(this.dbPath);
         
-        if (!fs.existsSync(dataDir)) {
+        if (!fsModule.existsSync(dataDir)) {
           console.log('Creating data directory: ' + dataDir);
-          fs.mkdirSync(dataDir, { recursive: true });
+          fsModule.mkdirSync(dataDir, { recursive: true });
         }
         
         // PRIORITY 1: Use connection from context if available
@@ -453,55 +469,85 @@ const AGENT_FORMAT = {
         
         // PRIORITY 2: Create new connection if needed
         if (!this.connection || !this.db) {
-          // Import DuckDB and set up connection
-          console.log('[INFO] Importing DuckDB module...');
-          console.log('[SUCCESS] DuckDB module imported');
+          console.log('[INFO] Setting up database connection...');
           
-          if (!duckdb.Database) {
-            throw new Error('DuckDB Database constructor not found. Available properties: ' + Object.keys(duckdb).join(', '));
-          }
-          
-          // Create database connection with retry logic
-          console.log('[INFO] Creating new DuckDB database instance...');
-          const MAX_RETRIES = 3;
-          let retries = 0;
-          let lastError = null;
-          
-          while (retries < MAX_RETRIES) {
+          // Try to import and use DatabaseManager for corruption protection
+          if (shouldTryDatabaseManager) {
             try {
-              this.db = new duckdb.Database(this.dbPath);
+              console.log('🛡️ [INFO] Attempting to import DatabaseManager...');
+              const dbManagerModule = await import('../utils/DatabaseManager.js');
+              databaseManager = dbManagerModule.default;
+              console.log('✅ [SUCCESS] DatabaseManager imported successfully');
               
-              this.connection = this.db.connect();
-              
-              // Test the connection
-              const result = await new Promise((resolve, reject) => {
-                this.connection.all('SELECT 1 as test', (err, result) => {
-                  if (err) {
-                    console.error('[ERROR] Connection test query failed:', err.message);
-                    reject(err);
-                  } else {
-                    console.log('[SUCCESS] Connection test passed');
-                    resolve(result);
-                  }
-                });
-              });
-              
-              break;
-              
-            } catch (err) {
-              lastError = err;
-              retries++;
-              console.error('DuckDB connection attempt ' + retries + ' failed: ' + err.message);
-              
-              if (retries < MAX_RETRIES) {
-                console.log('Retrying in 1 second... (Attempt ' + (retries + 1) + '/' + MAX_RETRIES + ')');
-                await new Promise(resolve => setTimeout(resolve, 1000));
+              if (databaseManager) {
+                console.log('🛡️ [INFO] Using DatabaseManager for protected database connection...');
+                // Initialize DatabaseManager with our database path
+                await databaseManager.initialize(this.dbPath);
+                
+                // Get the managed connection
+                this.connection = databaseManager.getConnection();
+                this.db = this.connection; // For compatibility
+                
+                console.log('✅ [SUCCESS] DatabaseManager connection established with corruption protection');
               }
+            } catch (dbManagerError) {
+              console.error('❌ [ERROR] DatabaseManager import/initialization failed:', dbManagerError.message);
+              console.warn('⚠️ [WARN] Falling back to direct DuckDB connection...');
+              shouldTryDatabaseManager = false; // Don't try again
+              databaseManager = null;
             }
           }
           
+          // Fallback to direct DuckDB connection if DatabaseManager is not available or failed
           if (!this.connection) {
-            throw new Error('Database connection failed after ' + MAX_RETRIES + ' attempts: ' + (lastError ? lastError.message : 'Unknown error'));
+            console.log('[INFO] Using direct DuckDB connection (no corruption protection)');
+            
+            if (!duckdb.Database) {
+              throw new Error('DuckDB Database constructor not found. Available properties: ' + Object.keys(duckdb).join(', '));
+            }
+            
+            // Create database connection with retry logic
+            console.log('[INFO] Creating new DuckDB database instance...');
+            const MAX_RETRIES = 3;
+            let retries = 0;
+            let lastError = null;
+            
+            while (retries < MAX_RETRIES) {
+                try {
+                  this.db = new duckdb.Database(this.dbPath);
+                  
+                  this.connection = this.db.connect();
+                
+                // Test the connection
+                const result = await new Promise((resolve, reject) => {
+                  this.connection.all('SELECT 1 as test', (err, result) => {
+                    if (err) {
+                      console.error('[ERROR] Connection test query failed:', err.message);
+                      reject(err);
+                    } else {
+                      console.log('[SUCCESS] Connection test passed');
+                      resolve(result);
+                    }
+                  });
+                });
+                
+                break;
+                
+              } catch (err) {
+                lastError = err;
+                retries++;
+                console.error('DuckDB connection attempt ' + retries + ' failed: ' + err.message);
+                
+                if (retries < MAX_RETRIES) {
+                  console.log('Retrying in 1 second... (Attempt ' + (retries + 1) + '/' + MAX_RETRIES + ')');
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+              }
+            }
+          
+            if (!this.connection) {
+              throw new Error('Database connection failed after ' + MAX_RETRIES + ' attempts: ' + (lastError ? lastError.message : 'Unknown error'));
+            }
           }
         }
         

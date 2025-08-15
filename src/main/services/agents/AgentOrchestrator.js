@@ -37,6 +37,8 @@ export class AgentOrchestrator {
     modelCache.setAgentOrchestrator(this);
   }
 
+
+
   async initialize(config = {}) {
     try {
       
@@ -1096,159 +1098,111 @@ export class AgentOrchestrator {
     }
     
     try {
-      // Use existing agent system with caching
-      const response = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: prompt,
-        options: { timeout: 8000, maxTokens: 150, temperature: 0.2, ...options }
-      });
-      
-      if (response.success && response.result?.response) {
-        // Cache the successful response
-        queryCache.cacheResponse(prompt, context, response.result.response);
+      // OPTIMIZATION: Use direct agent access for faster Phi3 calls
+      const agent = this.getLoadedAgent('Phi3Agent');
+      if (agent && agent.queryPhi3Fast) {
+        // Direct method call - much faster than executeAgent
+        const result = await agent.queryPhi3Fast({
+          prompt: prompt,
+          options: { timeout: 8000, maxTokens: 150, temperature: 0.2, ...options }
+        });
         
-        const totalTime = Date.now() - startTime;
-        console.log(`[FAST-PHI3] Generated and cached in ${totalTime}ms`);
-        return response;
-      }
-      
-      return response;
-      
-    } catch (error) {
-      console.warn(`[FAST-PHI3] Error: ${error.message}`);
-      return { success: false, error: error.message };
-    }
-  }
-
-  /**
-   * PERFORMANCE OPTIMIZATION: Fast cached classification for queries
-   * Reduces redundant LLM classification calls
-   */
-  async classifyQueryFast(query, context = {}) {
-    const startTime = Date.now();
-    
-    // Check cache first
-    const cachedClassification = queryCache.getClassification(query);
-    if (cachedClassification) {
-      console.log(`[FAST-CLASSIFY] Cache hit in ${Date.now() - startTime}ms`);
-      return cachedClassification;
-    }
-    
-    try {
-      // Use fast Phi3 call for classification
-      const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history AND what scope it needs:
-
-Query: "${query}"
-
-Respond with ONLY this JSON format:
-{
-  "isConversational": true/false,
-  "needsCrossSession": true/false,
-  "scope": "current_session" | "session_scope" | "cross_session",
-  "type": "topical" | "chronological" | "factual"
-}`;
-
-      const response = await this.executePhi3Fast(classificationPrompt, context, {
-        maxTokens: 100,
-        temperature: 0.1
-      });
-      
-      if (response.success && response.result?.response) {
-        try {
-          const classification = JSON.parse(response.result.response.trim());
-          queryCache.cacheClassification(query, classification);
+        if (result && result.response) {
+          // Cache the successful response
+          queryCache.cacheResponse(prompt, context, result.response);
           
           const totalTime = Date.now() - startTime;
-          console.log(`[FAST-CLASSIFY] Generated and cached in ${totalTime}ms`);
-          return classification;
-        } catch (parseError) {
-          console.warn('[FAST-CLASSIFY] Failed to parse JSON response, using fallback');
+          console.log(`[FAST-PHI3] Direct call generated and cached in ${totalTime}ms`);
+          return { success: true, result: result };
         }
       }
+    
+    // Fallback to executeAgent if direct access fails
+    const phi3Agent = this.getLoadedAgent('Phi3Agent');
+    if (!phi3Agent) {
+      throw new Error('Phi3Agent not available for fallback query');
+    }
+    const response = await phi3Agent.queryPhi3({
+      prompt: prompt,
+      options: {
+        maxTokens: 60,
+        temperature: 0.2
+      }
+    });
+    
+    if (response.success && response.result?.response) {
+      // Cache the successful response
+      queryCache.cacheResponse(prompt, context, response.result.response);
       
-    } catch (error) {
-      console.warn(`[FAST-CLASSIFY] Error: ${error.message}`);
+      const totalTime = Date.now() - startTime;
+      console.log(`[FAST-PHI3] Fallback generated and cached in ${totalTime}ms`);
+      return response;
     }
     
-    // Fallback classification
-    return {
-      isConversational: query.toLowerCase().includes('we') || query.toLowerCase().includes('talk'),
-      needsCrossSession: true,
-      scope: 'cross_session',
-      type: 'topical'
-    };
+    return response;
+    
+  } catch (error) {
+    console.warn(`[FAST-PHI3] Error: ${error.message}`);
+    return { success: false, error: error.message };
   }
+}
 
-  /**
-   * PERFORMANCE OPTIMIZATION: Fast cached embedding generation
-   * Reduces redundant embedding computation calls
-   */
-  async generateEmbeddingFast(text, context = {}) {
-    const startTime = Date.now();
-    
-    // Check cache first
-    const cachedEmbedding = queryCache.getEmbedding(text);
-    if (cachedEmbedding) {
-      console.log(`[FAST-EMBED] Cache hit in ${Date.now() - startTime}ms`);
-      return cachedEmbedding;
-    }
-    
-    try {
-      // Use existing agent system for embedding generation
-      const response = await this.executeAgent('SemanticEmbeddingAgent', {
-        action: 'generate-embedding',
+/**
+ * PERFORMANCE OPTIMIZATION: Fast cached embedding generation
+ * Reduces redundant embedding computation calls
+ */
+async generateEmbeddingFast(text, context = {}) {
+  const startTime = Date.now();
+  
+  // Check cache first
+  const cachedEmbedding = queryCache.getEmbedding(text);
+  if (cachedEmbedding) {
+    console.log(`[FAST-EMBED] Cache hit in ${Date.now() - startTime}ms`);
+    return cachedEmbedding;
+  }
+  
+  try {
+    // OPTIMIZATION: Use direct agent access for faster embedding generation
+    const agent = this.getLoadedAgent('SemanticEmbeddingAgent');
+    if (agent && agent.generateEmbedding) {
+      // Direct method call - much faster than executeAgent
+      const embedding = await agent.generateEmbedding({
         text: text
       });
       
-      if (response.success && response.result?.embedding) {
+      if (embedding) {
         // Cache the successful embedding
-        queryCache.cacheEmbedding(text, response.result.embedding);
+        queryCache.cacheEmbedding(text, embedding);
         
         const totalTime = Date.now() - startTime;
-        console.log(`[FAST-EMBED] Generated and cached in ${totalTime}ms`);
-        return response.result.embedding;
+        console.log(`[FAST-EMBED] Direct call generated and cached in ${totalTime}ms`);
+        return embedding;
       }
+    }
+    
+    // Fallback to executeAgent if direct access fails
+    const embeddingAgent = this.getLoadedAgent('SemanticEmbeddingAgent');
+    if (!embeddingAgent) {
+      throw new Error('SemanticEmbeddingAgent not available for fallback');
+    }
+    const response = await embeddingAgent.generateEmbedding({
+      text: prompt
+    });
+    
+    if (response.success && response.result?.embedding) {
+      // Cache the successful embedding
+      queryCache.cacheEmbedding(text, response.result.embedding);
       
+      const totalTime = Date.now() - startTime;
+      console.log(`[FAST-EMBED] Fallback generated and cached in ${totalTime}ms`);
+      return response.result.embedding;
+    }
+    
       return null;
       
     } catch (error) {
       console.warn(`[FAST-EMBED] Error: ${error.message}`);
       return null;
-    }
-  }
-
-  /**
-   * PERFORMANCE OPTIMIZATION: Fast cached similarity calculation
-   * Reduces redundant similarity computation calls
-   */
-  async calculateSimilarityFast(query, text, queryEmbedding, textEmbedding, context = {}) {
-    const startTime = Date.now();
-    
-    // Check cache first
-    const cachedSimilarity = queryCache.getSimilarity(query, text);
-    if (cachedSimilarity !== null) {
-      console.log(`[FAST-SIM] Cache hit in ${Date.now() - startTime}ms`);
-      return cachedSimilarity;
-    }
-    
-    try {
-      // Calculate cosine similarity if embeddings are provided
-      if (queryEmbedding && textEmbedding) {
-        const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, textEmbedding);
-        
-        // Cache the result
-        queryCache.cacheSimilarity(query, text, similarity);
-        
-        const totalTime = Date.now() - startTime;
-        console.log(`[FAST-SIM] Calculated and cached in ${totalTime}ms`);
-        return similarity;
-      }
-      
-      return 0;
-      
-    } catch (error) {
-      console.warn(`[FAST-SIM] Error: ${error.message}`);
-      return 0;
     }
   }
 
@@ -1288,152 +1242,33 @@ Respond with ONLY this JSON format:
     }
   }
 
-  /**
-   * STAGED SEMANTIC SEARCH: Progressive search from current scope to cross-session
-   * @param {string} prompt - User message
-   * @param {Object} options - Processing options
-   * @param {Object} context - Execution context with conversationContext and currentSessionId
-   * @returns {Object|null} - Enhanced response if memories found, null if should continue to intent classification
-   */
-  async trySemanticSearchFirst(prompt, options = {}, context = {}) {
-    if (options.preferSemanticSearch === false) {
-      console.log('🔕 [STAGED] preferSemanticSearch=false, skipping staged search');
-      return null;
-    }
-
-    console.log('🔍 [STAGED-SEARCH] Starting progressive staged search: Current → Session → Cross-Session');
-    
-    // Detect if this is a cross-session query that should search across all sessions
-    const isCrossSessionQuery = /\b(recently|before|earlier|previously|talked about|discussed|mentioned|food|pizza|conversation|chat)\b/i.test(prompt);
-    console.log('🔍 [STAGED-SEARCH] Cross-session query detected:', isCrossSessionQuery);
-    
-    try {
-      let stage1Result = null;
-      
-      // Stage 1: Current Scope (recent conversation only)
-      const stage1 = await this.stageCurrentScope(prompt, { 
-        conversationContext: context.conversationContext,
-        currentSessionId: context.currentSessionId 
-      });
-      if (stage1 && stage1.success) {
-        console.log('✅ [STAGE-1] Current scope success');
-        stage1Result = stage1.data.response;
-        
-        // For non-cross-session queries, return immediately
-        if (!isCrossSessionQuery) {
-          console.log('🔍 [STAGE-1] Non-cross-session query, returning current scope result');
-          return { success: true, data: { response: stage1.data.response } };
-        } else {
-          console.log('🔍 [STAGE-1] Cross-session query detected, continuing to search other sessions...');
-        }
-      }
-
-      let stage2Result = null;
-      let stage3Result = null;
-      
-      // Stage 2: Session Scope (semantic search within current session)
-      if (context.currentSessionId) {
-        const s2 = await this.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
-        if (s2 && s2.success) {
-          const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: context.conversationContext, memorySnippets: s2.data.snippets });
-          const resp = await this.executeAgent('Phi3Agent', {
-            action: 'query-phi3-fast',
-            prompt: phiPrompt,
-            options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
-          });
-          if (resp.success && resp.result?.response) {
-            console.log('✅ [STAGE-2] Session scope success');
-            stage2Result = resp.result.response;
-            
-            // For non-cross-session queries, return immediately
-            if (!isCrossSessionQuery) {
-              console.log('🔍 [STAGE-2] Non-cross-session query, returning session scope result');
-              return { success: true, data: { response: resp.result.response } };
-            } else {
-              console.log('🔍 [STAGE-2] Cross-session query, continuing to search all sessions...');
-            }
-          }
-        }
-      }
-
-      // Stage 3: Cross-Session (semantic search across all sessions)
-      const s3 = await this.stageSemanticMemory(prompt, { sessionId: null });
-      if (s3 && s3.success) {
-        const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: context.conversationContext, memorySnippets: s3.data.snippets });
-        const resp = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3-fast',
-          prompt: phiPrompt,
-          options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
-        });
-        if (resp.success && resp.result?.response) {
-          console.log('✅ [STAGE-3] Cross-session success');
-          stage3Result = resp.result.response;
-        }
-      }
-      
-      // Combine results from multiple stages for cross-session queries
-      if (isCrossSessionQuery && (stage1Result || stage2Result || stage3Result)) {
-        console.log('🔍 [STAGED-SEARCH] Combining results from multiple stages');
-        const combinedResults = [stage1Result, stage2Result, stage3Result].filter(Boolean);
-        
-        if (combinedResults.length > 0) {
-          // For cross-session queries, prefer the most comprehensive result
-          const finalResult = stage3Result || stage2Result || stage1Result;
-          console.log('✅ [STAGED-SEARCH] Cross-session query completed, returning combined result');
-          return { success: true, data: { response: finalResult } };
-        }
-      }
-      
-      // Fallback: return any single result we found
-      if (stage1Result) {
-        console.log('✅ [STAGED-SEARCH] Returning Stage 1 result as fallback');
-        return { success: true, data: { response: stage1Result } };
-      }
-      if (stage2Result) {
-        console.log('✅ [STAGED-SEARCH] Returning Stage 2 result as fallback');
-        return { success: true, data: { response: stage2Result } };
-      }
-      if (stage3Result) {
-        console.log('✅ [STAGED-SEARCH] Returning Stage 3 result as fallback');
-        return { success: true, data: { response: stage3Result } };
-      }
-      
-      console.log('📝 [STAGED-SEARCH] No sufficient results from any stage, proceeding to intent classification');
-      return null;
-      
-    } catch (error) {
-      console.warn('⚠️ [STAGED-SEARCH] Staged search failed, proceeding to intent classification:', error.message);
-      return null;
-    }
-  }
-
-  /**
+/**
    * Build a concise Phi3 prompt using conversation context and/or memory snippets
    */
-  buildStagedPrompt(prompt, { conversationContext = '', memorySnippets = [] } = {}) {
-    const maxCtx = 1500;
-    const convo = conversationContext ? (conversationContext.length > maxCtx ? conversationContext.slice(0, maxCtx) + '...[truncated]' : conversationContext) : '';
-    const mem = memorySnippets.join('\n\n');
-    const memTrunc = mem.length > maxCtx ? mem.slice(0, maxCtx) + '...[truncated]' : mem;
+buildStagedPrompt(prompt, { conversationContext = '', memorySnippets = [] } = {}) {
+  const maxCtx = 1500;
+  const convo = conversationContext ? (conversationContext.length > maxCtx ? conversationContext.slice(0, maxCtx) + '...[truncated]' : conversationContext) : '';
+  const mem = memorySnippets.join('\n\n');
+  const memTrunc = mem.length > maxCtx ? mem.slice(0, maxCtx) + '...[truncated]' : mem;
 
-    if (convo && !memTrunc) {
-      return `You are ThinkDrop AI. Answer based on our recent conversation.\n\nRECENT CONVERSATION:\n${convo}\n\nQUESTION: ${prompt}\n\nBe concise (2-4 sentences).`;
-    }
-
-    if (convo && memTrunc) {
-      return `You are ThinkDrop AI. Use recent conversation and relevant history.\n\nRECENT CONVERSATION:\n${convo}\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer concisely, prioritizing directly relevant details.`;
-    }
-
-    return `You are ThinkDrop AI. Use relevant history to answer.\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer in 2-4 sentences, focused and specific.`;
+  if (convo && !memTrunc) {
+    return `You are ThinkDrop AI. Answer based on our recent conversation.\n\nRECENT CONVERSATION:\n${convo}\n\nQUESTION: ${prompt}\n\nBe concise (2-4 sentences).`;
   }
 
-  /**
-   * Detect if query requires cross-session search using semantic analysis
-   */
-  async detectCrossSessionQuery(prompt) {
-    try {
-      // Use existing Phi3 agent for semantic intent classification
-      const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history that might span multiple chat sessions.
+  if (convo && memTrunc) {
+    return `You are ThinkDrop AI. Use recent conversation and relevant history.\n\nRECENT CONVERSATION:\n${convo}\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer concisely, prioritizing directly relevant details.`;
+  }
+
+  return `You are ThinkDrop AI. Use relevant history to answer.\n\nRELEVANT HISTORY:\n${memTrunc}\n\nQUESTION: ${prompt}\n\nAnswer in 2-4 sentences, focused and specific.`;
+}
+
+/**
+ * Detect if query requires cross-session search using semantic analysis
+ */
+async detectCrossSessionQuery(prompt) {
+  try {
+    // Use existing Phi3 agent for semantic intent classification
+    const classificationPrompt = `Analyze this user query and determine if it's asking about conversation history that might span multiple chat sessions.
 
 Query: "${prompt}"
 
@@ -1445,47 +1280,62 @@ Consider these indicators:
 
 Respond with only "true" if this query likely needs cross-session search, or "false" if it's about current context only.`;
 
-      // PERFORMANCE OPTIMIZATION: Use fast cached Phi3 call
-      const result = await this.executePhi3Fast(classificationPrompt, { prompt }, {
-        timeout: 3000, maxTokens: 10, temperature: 0.1
-      });
-
-      if (result.success && result.result?.response) {
-        const response = result.result.response.toLowerCase().trim();
-        return response.includes('true');
-      }
-
-      // Fallback to simple keyword detection if LLM fails
-      const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
-      return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
-
-    } catch (error) {
-      console.log('⚠️ [CROSS-SESSION-DETECT] Error in semantic detection, using keyword fallback');
-      // Simple keyword fallback
-      const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
-      return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
-    }
-  }
-
-  /**
-   * Progressive three-stage search with intermediate user feedback
-   */
-  async tryProgressiveSemanticSearch(prompt, context, sendIntermediateCallback) {
-    console.log('🔍 [PROGRESSIVE-SEARCH] Starting three-stage progressive search');
-    
-    // Check if this is a cross-session query that needs progressive search
-    const isCrossSessionQuery = await this.detectCrossSessionQuery(prompt);
-    console.log(`🔍 [PROGRESSIVE-SEARCH] Cross-session query detected: ${isCrossSessionQuery}`);
-    
-    // Stage 1: Current Scope
-    console.log('🔍 [STAGE-1] Checking current conversation scope...');
-    const stage1 = await this.stageCurrentScope(prompt, { 
-      conversationContext: context.conversationContext,
-      currentSessionId: context.currentSessionId 
+    // PERFORMANCE OPTIMIZATION: Use fast cached Phi3 call
+    const result = await this.executePhi3Fast(classificationPrompt, { prompt }, {
+      timeout: 3000, maxTokens: 10, temperature: 0.1
     });
+
+    if (result.success && result.result?.response) {
+      const response = result.result.response.toLowerCase().trim();
+      return response.includes('true');
+    }
+
+    // Fallback to simple keyword detection if LLM fails
+    const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
+    return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
+
+  } catch (error) {
+    console.log('⚠️ [CROSS-SESSION-DETECT] Error in semantic detection, using keyword fallback');
+    // Simple keyword fallback
+    const keywords = ['have we', 'did we', 'we talked', 'we discussed', 'previously', 'before', 'recently', 'remember', 'recall', 'last time'];
+    return keywords.some(keyword => prompt.toLowerCase().includes(keyword));
+  }
+}
+
+/**
+ * Progressive three-stage search with intermediate user feedback
+ */
+async tryProgressiveSemanticSearch(prompt, context, sendIntermediateCallback) {
+  console.log('🔍 [PROGRESSIVE-SEARCH] Starting three-stage progressive search');
+  
+  // Check if this is a cross-session query that needs progressive search
+  const isCrossSessionQuery = await this.detectCrossSessionQuery(prompt);
+  console.log(`🔍 [PROGRESSIVE-SEARCH] Cross-session query detected: ${isCrossSessionQuery}`);
+  
+  // Stage 1: Current Scope
+  console.log('🔍 [STAGE-1] Checking current conversation scope...');
+  const stage1 = await this.stageCurrentScope(prompt, { 
+    conversationContext: context.conversationContext,
+    currentSessionId: context.currentSessionId 
+  });
+  
+  if (stage1?.success && !isCrossSessionQuery) {
+    console.log('✅ [STAGE-1] Found result in current scope (non-cross-session query)');
+    return {
+      stage: 1,
+      positive: true,
+      success: true,
+      data: { response: stage1.data.response },
+      continueToNextStage: false
+    };
+  }
+  
+  // For cross-session queries, evaluate if Stage 1 response is comprehensive enough
+  if (isCrossSessionQuery && stage1?.success) {
+    const isComprehensive = await this.evaluateResponseCompleteness(stage1.data.response, prompt, context);
     
-    if (stage1?.success && !isCrossSessionQuery) {
-      console.log('✅ [STAGE-1] Found result in current scope (non-cross-session query)');
+    if (isComprehensive) {
+      console.log('✅ [STAGE-1] Found comprehensive result in current scope (cross-session query) - stopping early');
       return {
         stage: 1,
         positive: true,
@@ -1493,73 +1343,86 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         data: { response: stage1.data.response },
         continueToNextStage: false
       };
-    }
-    
-    // For cross-session queries, evaluate if Stage 1 response is comprehensive enough
-    if (isCrossSessionQuery && stage1?.success) {
-      const isComprehensive = await this.evaluateResponseCompleteness(stage1.data.response, prompt, context);
-      
-      if (isComprehensive) {
-        console.log('✅ [STAGE-1] Found comprehensive result in current scope (cross-session query) - stopping early');
-        return {
+    } else {
+      console.log('🔍 [STAGE-1] Found partial result in current scope (cross-session query) - continuing search...');
+      if (sendIntermediateCallback) {
+        await sendIntermediateCallback({
           stage: 1,
           positive: true,
-          success: true,
-          data: { response: stage1.data.response },
-          continueToNextStage: false
-        };
-      } else {
-        console.log('🔍 [STAGE-1] Found partial result in current scope (cross-session query) - continuing search...');
-        if (sendIntermediateCallback) {
-          await sendIntermediateCallback({
-            stage: 1,
-            positive: true,
-            response: "I found something in our current conversation, but let me also check our session history for more complete context...",
-            continueToNextStage: true
-          });
-        }
-      }
-    } else if (isCrossSessionQuery && !stage1?.success) {
-      // Cross-session query with no Stage 1 results
-      console.log('🔍 [STAGE-1] No results in current scope (cross-session query) - continuing search...');
-      if (sendIntermediateCallback) {
-        await sendIntermediateCallback({
-          stage: 1,
-          positive: false,
-          response: "I didn't find anything about that in our current conversation, let me check this session's history...",
-          continueToNextStage: true
-        });
-      }
-    } else if (!stage1?.success) {
-      // Non-cross-session query that failed Stage 1 - send intermediate
-      console.log('❌ [STAGE-1] Nothing found in current scope, checking session history...');
-      if (sendIntermediateCallback) {
-        await sendIntermediateCallback({
-          stage: 1,
-          positive: false,
-          response: "I didn't find anything about that in our current conversation, let me check this session's history...",
+          response: "I found something in our current conversation, but let me also check our session history for more complete context...",
           continueToNextStage: true
         });
       }
     }
-    
-    // Stage 2: Session Scope
-    console.log('🔍 [STAGE-2] Checking session scope...');
-    const stage2 = await this.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
-    
-    if (stage2?.success && !isCrossSessionQuery) {
-      console.log('✅ [STAGE-2] Found result in session scope (non-cross-session query)');
-      const phiPrompt = this.buildStagedPrompt(prompt, { 
-        conversationContext: context.conversationContext, 
-        memorySnippets: stage2.data.snippets 
+  } else if (isCrossSessionQuery && !stage1?.success) {
+    // Cross-session query with no Stage 1 results
+    console.log('🔍 [STAGE-1] No results in current scope (cross-session query) - continuing search...');
+    if (sendIntermediateCallback) {
+      await sendIntermediateCallback({
+        stage: 1,
+        positive: false,
+        response: "I didn't find anything about that in our current conversation, let me check this session's history...",
+        continueToNextStage: true
       });
-      const resp = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: phiPrompt,
-        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+    }
+  } else if (!stage1?.success) {
+    // Non-cross-session query that failed Stage 1 - send intermediate
+    console.log('❌ [STAGE-1] Nothing found in current scope, checking session history...');
+    if (sendIntermediateCallback) {
+      await sendIntermediateCallback({
+        stage: 1,
+        positive: false,
+        response: "I didn't find anything about that in our current conversation, let me check this session's history...",
+        continueToNextStage: true
       });
+    }
+  }
+  
+  // Stage 2: Session Scope
+  console.log('🔍 [STAGE-2] Checking session scope...');
+  const stage2 = await this.stageSemanticMemory(prompt, { sessionId: context.currentSessionId });
+  
+  if (stage2?.success && !isCrossSessionQuery) {
+    console.log('✅ [STAGE-2] Found result in session scope (non-cross-session query)');
+    const phiPrompt = this.buildStagedPrompt(prompt, { 
+      conversationContext: context.conversationContext, 
+      memorySnippets: stage2.data.snippets 
+    });
+    const resp = await this.executeAgent('Phi3Agent', {
+      action: 'query-phi3-fast',
+      prompt: phiPrompt,
+      options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+    });
+    
+    if (resp.success && resp.result?.response) {
+      return {
+        stage: 2,
+        positive: true,
+        success: true,
+        data: { response: resp.result.response },
+        continueToNextStage: false
+      };
+    }
+  }
+  
+  // For cross-session queries, evaluate if Stage 2 response is comprehensive enough
+  if (isCrossSessionQuery && stage2?.success) {
+    // Generate Stage 2 response first
+    const phiPrompt = this.buildStagedPrompt(prompt, { 
+      conversationContext: context.conversationContext, 
+      memorySnippets: stage2.data.snippets 
+    });
+    const resp = await this.executeAgent('Phi3Agent', {
+      action: 'query-phi3-fast',
+      prompt: phiPrompt,
+      options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+    });
+    
+    if (resp.success && resp.result?.response) {
+      const isComprehensive = await this.evaluateResponseCompleteness(resp.result.response, prompt, context);
       
-      if (resp.success && resp.result?.response) {
+      if (isComprehensive) {
+        console.log('✅ [STAGE-2] Found comprehensive result in session scope (cross-session query) - stopping early');
         return {
           stage: 2,
           positive: true,
@@ -1567,185 +1430,163 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
           data: { response: resp.result.response },
           continueToNextStage: false
         };
-      }
-    }
-    
-    // For cross-session queries, evaluate if Stage 2 response is comprehensive enough
-    if (isCrossSessionQuery && stage2?.success) {
-      // Generate Stage 2 response first
-      const phiPrompt = this.buildStagedPrompt(prompt, { 
-        conversationContext: context.conversationContext, 
-        memorySnippets: stage2.data.snippets 
-      });
-      const resp = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: phiPrompt,
-        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
-      });
-      
-      if (resp.success && resp.result?.response) {
-        const isComprehensive = await this.evaluateResponseCompleteness(resp.result.response, prompt, context);
-        
-        if (isComprehensive) {
-          console.log('✅ [STAGE-2] Found comprehensive result in session scope (cross-session query) - stopping early');
-          return {
+      } else {
+        console.log('🔍 [STAGE-2] Found partial result in session scope (cross-session query) - continuing search...');
+        if (sendIntermediateCallback) {
+          await sendIntermediateCallback({
             stage: 2,
             positive: true,
-            success: true,
-            data: { response: resp.result.response },
-            continueToNextStage: false
-          };
-        } else {
-          console.log('🔍 [STAGE-2] Found partial result in session scope (cross-session query) - continuing search...');
-          if (sendIntermediateCallback) {
-            await sendIntermediateCallback({
-              stage: 2,
-              positive: true,
-              response: "Found some context in this session, but let me also check all our previous conversations for complete history...",
-              continueToNextStage: true
-            });
-          }
+            response: "Found some context in this session, but let me also check all our previous conversations for complete history...",
+            continueToNextStage: true
+          });
         }
       }
-    } else if (isCrossSessionQuery && !stage2?.success) {
-      // Cross-session query with no Stage 2 results
-      console.log('🔍 [STAGE-2] No results in session scope (cross-session query) - continuing search...');
-      if (sendIntermediateCallback) {
-        await sendIntermediateCallback({
-          stage: 2,
-          positive: false,
-          response: "Still searching... give me a moment while I check all our previous conversations...",
-          continueToNextStage: true
-        });
-      }
-    } else if (!stage2?.success) {
-      // Non-cross-session query that failed Stage 2 - send intermediate
-      console.log('❌ [STAGE-2] Nothing found in session scope, checking all conversations...');
-      if (sendIntermediateCallback) {
-        await sendIntermediateCallback({
-          stage: 2,
-          positive: false,
-          response: "Still searching... give me a moment while I check all our previous conversations...",
-          continueToNextStage: true
-        });
-      }
     }
-    
-    // Stage 3: Cross-Session Scope
-    console.log('🔍 [STAGE-3] Checking cross-session scope...');
-    const stage3 = await this.stageSemanticMemory(prompt, { sessionId: null });
-    
-    // Combine results from all successful stages for cross-session queries
-    let finalResponse = null;
-    let finalStage = 3;
-    let finalPositive = false;
-    
-    if (stage3?.success) {
-      console.log('✅ [STAGE-3] Found result in cross-session scope');
-      const phiPrompt = this.buildStagedPrompt(prompt, { 
-        conversationContext: context.conversationContext, 
-        memorySnippets: stage3.data.snippets 
-      });
-      const resp = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: phiPrompt,
-        options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
-      });
-      
-      if (resp.success && resp.result?.response) {
-        finalResponse = resp.result.response;
-        finalPositive = true;
-      }
-    } else if (stage2?.success) {
-      console.log('✅ [STAGE-2] Using session scope result as fallback');
-      const phiPrompt = this.buildStagedPrompt(prompt, { 
-        conversationContext: context.conversationContext, 
-        memorySnippets: stage2.data.snippets 
-      });
-      const resp = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
-        prompt: phiPrompt,
-        options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
-      });
-      
-      if (resp.success && resp.result?.response) {
-        finalResponse = resp.result.response;
-        finalStage = 2;
-        finalPositive = true;
-      }
-    } else if (stage1?.success) {
-      console.log('✅ [STAGE-1] Using current scope result as fallback');
-      finalResponse = stage1.data.response;
-      finalStage = 1;
-      finalPositive = true;
-    }
-    
-    // Final response
-    if (finalResponse) {
-      console.log(`✅ [PROGRESSIVE-SEARCH] Completed successfully at Stage ${finalStage}`);
-      return {
-        stage: finalStage,
-        positive: finalPositive,
-        success: true,
-        data: { response: finalResponse },
-        continueToNextStage: false
-      };
-    } else {
-      console.log('❌ [PROGRESSIVE-SEARCH] Nothing found in any scope');
-      return {
-        stage: 3,
+  } else if (isCrossSessionQuery && !stage2?.success) {
+    // Cross-session query with no Stage 2 results
+    console.log('🔍 [STAGE-2] No results in session scope (cross-session query) - continuing search...');
+    if (sendIntermediateCallback) {
+      await sendIntermediateCallback({
+        stage: 2,
         positive: false,
-        success: true,
-        data: { response: "I couldn't find any previous discussions about that topic in our conversation history." },
-        continueToNextStage: false
-      };
+        response: "Still searching... give me a moment while I check all our previous conversations...",
+        continueToNextStage: true
+      });
+    }
+  } else if (!stage2?.success) {
+    // Non-cross-session query that failed Stage 2 - send intermediate
+    console.log('❌ [STAGE-2] Nothing found in session scope, checking all conversations...');
+    if (sendIntermediateCallback) {
+      await sendIntermediateCallback({
+        stage: 2,
+        positive: false,
+        response: "Still searching... give me a moment while I check all our previous conversations...",
+        continueToNextStage: true
+      });
     }
   }
+  
+  // Stage 3: Cross-Session Scope
+  console.log('🔍 [STAGE-3] Checking cross-session scope...');
+  const stage3 = await this.stageSemanticMemory(prompt, { sessionId: null });
+  
+  // Combine results from all successful stages for cross-session queries
+  let finalResponse = null;
+  let finalStage = 3;
+  let finalPositive = false;
+  
+  if (stage3?.success) {
+    console.log('✅ [STAGE-3] Found result in cross-session scope');
+    const phiPrompt = this.buildStagedPrompt(prompt, { 
+      conversationContext: context.conversationContext, 
+      memorySnippets: stage3.data.snippets 
+    });
+    const resp = await this.executeAgent('Phi3Agent', {
+      action: 'query-phi3-fast',
+      prompt: phiPrompt,
+      options: { timeout: 13000, maxTokens: 160, temperature: 0.2 }
+    });
+    
+    if (resp.success && resp.result?.response) {
+      finalResponse = resp.result.response;
+      finalPositive = true;
+    }
+  } else if (stage2?.success) {
+    console.log('✅ [STAGE-2] Using session scope result as fallback');
+    const phiPrompt = this.buildStagedPrompt(prompt, { 
+      conversationContext: context.conversationContext, 
+      memorySnippets: stage2.data.snippets 
+    });
+    const resp = await this.executeAgent('Phi3Agent', {
+      action: 'query-phi3-fast',
+      prompt: phiPrompt,
+      options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+    });
+    
+    if (resp.success && resp.result?.response) {
+      finalResponse = resp.result.response;
+      finalStage = 2;
+      finalPositive = true;
+    }
+  } else if (stage1?.success) {
+    console.log('✅ [STAGE-1] Using current scope result as fallback');
+    finalResponse = stage1.data.response;
+    finalStage = 1;
+    finalPositive = true;
+  }
+  
+  // Final response
+  if (finalResponse) {
+    console.log(`✅ [PROGRESSIVE-SEARCH] Completed successfully at Stage ${finalStage}`);
+    return {
+      stage: finalStage,
+      positive: finalPositive,
+      success: true,
+      data: { response: finalResponse },
+      continueToNextStage: false
+    };
+  } else {
+    console.log('❌ [PROGRESSIVE-SEARCH] Nothing found in any scope');
+    return {
+      stage: 3,
+      positive: false,
+      success: true,
+      data: { response: "I couldn't find any previous discussions about that topic in our conversation history." },
+      continueToNextStage: false
+    };
+  }
+}
 
-  /**
-   * Stage 1: Current-scope check using stored embeddings from conversation_messages
-   * Returns null if no meaningful context or low relevance
-   */
-  async stageCurrentScope(prompt, { conversationContext, currentSessionId }) {
-    if (!currentSessionId) {
-      console.warn('⚠️ [STAGE-1] No session ID provided, falling back to text-based approach');
+/**
+ * Stage 1: Current-scope check using stored embeddings from conversation_messages
+ * Returns null if no meaningful context or low relevance
+ */
+async stageCurrentScope(prompt, { conversationContext, currentSessionId }) {
+  if (!currentSessionId) {
+    console.warn('⚠️ [STAGE-1] No session ID provided, falling back to text-based approach');
+    return this.stageCurrentScopeFallback(prompt, { conversationContext });
+  }
+
+  try {
+    // Generate embedding for the prompt only (not for conversation context)
+    const embeddingAgent = this.getLoadedAgent('SemanticEmbeddingAgent');
+    if (!embeddingAgent) {
+      throw new Error('SemanticEmbeddingAgent not available for prompt embedding');
+    }
+    const promptEmbedding = await embeddingAgent.generateEmbedding({
+      text: prompt 
+    });
+    
+    if (!promptEmbedding || !promptEmbedding.success) {
+      console.warn('⚠️ [STAGE-1] Failed to generate prompt embedding, using fallback');
       return this.stageCurrentScopeFallback(prompt, { conversationContext });
     }
 
-    try {
-      // Generate embedding for the prompt only (not for conversation context)
-      const promptEmbedding = await this.executeAgent('SemanticEmbeddingAgent', { 
-        action: 'generate-embedding', 
-        text: prompt 
+    // Query conversation messages with stored embeddings from current session
+    const conversationAgent = this.getLoadedAgent('ConversationSessionAgent');
+    if (!conversationAgent) {
+      throw new Error('ConversationSessionAgent not available for message retrieval');
+    }
+    const conversationResult = await conversationAgent.getConversationMessagesWithEmbeddings({
+      sessionId: currentSessionId,
+      limit: 1000 // High limit to get all messages, let semantic similarity filter relevance
+    });
+
+    // Debug: Log the exact response structure
+      console.log('🔍 [STAGE-1-DEBUG] ConversationResult response:', {
+        success: conversationResult.success,
+        hasResult: !!conversationResult.result,
+        hasMessages: !!conversationResult.result?.messages,
+        messagesLength: conversationResult.result?.messages?.length,
+        resultKeys: conversationResult.result ? Object.keys(conversationResult.result) : 'NO_RESULT'
       });
+
+      // Handle nested result structure: conversationResult.result.result.messages
+      const actualResult = conversationResult.result?.result || conversationResult.result;
       
-      if (!promptEmbedding.success) {
-        console.warn('⚠️ [STAGE-1] Failed to generate prompt embedding, using fallback');
-        return this.stageCurrentScopeFallback(prompt, { conversationContext });
-      }
-
-      // Query conversation messages with stored embeddings from current session
-      const conversationAgent = await this.executeAgent('ConversationSessionAgent', {
-        action: 'get-conversation-messages-with-embeddings',
-        sessionId: currentSessionId,
-        limit: 1000 // High limit to get all messages, let semantic similarity filter relevance
-      });
-
-      // Debug: Log the exact response structure
-      console.log('🔍 [STAGE-1-DEBUG] ConversationAgent response:', {
-        success: conversationAgent.success,
-        hasResult: !!conversationAgent.result,
-        hasMessages: !!conversationAgent.result?.messages,
-        messagesLength: conversationAgent.result?.messages?.length,
-        resultKeys: conversationAgent.result ? Object.keys(conversationAgent.result) : 'NO_RESULT'
-      });
-
-      // Handle nested result structure: conversationAgent.result.result.messages
-      const actualResult = conversationAgent.result?.result || conversationAgent.result;
-      
-      if (!conversationAgent.success || !actualResult?.messages?.length) {
+      if (!conversationResult.success || !actualResult?.messages?.length) {
         console.warn('⚠️ [STAGE-1] No conversation messages found');
-        console.warn('⚠️ [STAGE-1-DEBUG] Full response:', JSON.stringify(conversationAgent, null, 2));
+        console.warn('⚠️ [STAGE-1-DEBUG] Full response:', JSON.stringify(conversationResult, null, 2));
         return this.stageCurrentScopeFallback(prompt, { conversationContext });
       }
 
@@ -1895,23 +1736,20 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         ? `${conversationContext.slice(0, 400)}\n...\n${conversationContext.slice(-400)}`
         : conversationContext;
 
-      const [q, c] = await Promise.all([
-        this.executeAgent('SemanticEmbeddingAgent', { action: 'generate-embedding', text: prompt }),
-        this.executeAgent('SemanticEmbeddingAgent', { action: 'generate-embedding', text: sample })
+      // OPTIMIZATION: Use fast cached methods for embedding generation
+      const [qv, cv] = await Promise.all([
+        this.generateEmbeddingFast(prompt),
+        this.generateEmbeddingFast(sample)
       ]);
 
-      if (!q.success || !c.success) return null;
-      const qv = q.result.embedding, cv = c.result.embedding;
+      if (!qv || !cv) return null;
       const similarity = MathUtils.calculateCosineSimilarity(qv, cv);
 
       // Lower threshold for conversational recency
       if (similarity >= 0.18) {
         const phiPrompt = this.buildStagedPrompt(prompt, { conversationContext: sample, memorySnippets: [] });
-        const resp = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3-fast',
-          prompt: phiPrompt,
-          options: { timeout: 10000, maxTokens: 140, temperature: 0.2 }
-        });
+        // OPTIMIZATION: Use fast cached Phi3 method
+        const resp = await this.executePhi3Fast(phiPrompt, {}, { timeout: 10000, maxTokens: 140, temperature: 0.2 });
         if (resp.success && resp.result?.response) {
           return { success: true, data: { response: resp.result.response, stage: 'current_scope_fallback' } };
         }
@@ -1934,32 +1772,32 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
     }
 
     try {
-      // Generate embedding only for the prompt (not for conversation context)
-      const promptEmbedding = await this.executeAgent('SemanticEmbeddingAgent', {
-        action: 'generate-embedding',
-        text: prompt
-      });
+      // OPTIMIZATION: Use fast cached embedding generation for prompt
+      const promptEmbedding = await this.generateEmbeddingFast(prompt);
 
-      if (!promptEmbedding.success) {
+      if (!promptEmbedding) {
         return { success: false, error: 'Failed to generate prompt embedding' };
       }
 
-      // Get conversation messages with stored embeddings
-      const conversationAgent = await this.executeAgent('ConversationSessionAgent', {
-        action: 'get-conversation-messages-with-embeddings',
-        sessionId: context.currentSessionId,
-        limit: 1000 // High limit to get all messages, let semantic similarity filter relevance
-      });
-
-      // Handle nested result structure: conversationAgent.result.result.messages
-      const actualResult = conversationAgent.result?.result || conversationAgent.result;
+      // OPTIMIZATION: Use direct agent access for conversation messages
+      const conversationAgent = this.getLoadedAgent('ConversationSessionAgent');
+      let conversationResult;
       
-      if (!conversationAgent.success || !actualResult?.messages?.length) {
+      if (conversationAgent && conversationAgent.getConversationMessagesWithEmbeddings) {
+        // Direct method call for better performance
+        conversationResult = await conversationAgent.getConversationMessagesWithEmbeddings(context.currentSessionId, 1000);
+      } else {
+        // Fallback to executeAgent
+        throw new Error('ConversationSessionAgent not available for message retrieval');
+      }
+
+      // Handle the conversation result
+      if (!conversationResult?.messages?.length) {
         return { success: false, error: 'No conversation messages with embeddings found' };
       }
 
-      const messages = actualResult.messages;
-      const promptEmb = promptEmbedding.result.embedding;
+      const messages = conversationResult.messages;
+      const promptEmb = promptEmbedding;
       const similarities = [];
 
       // Calculate similarity with stored embeddings
@@ -2064,7 +1902,11 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       if (relevantTerms.length === 0) {
         // No entities found, use regular semantic search
         console.log('📝 [ENTITY-FILTER] No relevant entities found, using standard semantic search');
-        return await this.executeAgent('UserMemoryAgent', searchParams);
+        const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+        if (!memoryAgent) {
+          throw new Error('UserMemoryAgent not available for entity filtering');
+        }
+        return await memoryAgent.execute(searchParams, this.context);
       }
       
       // Use database query to find memories with matching entities
@@ -2077,7 +1919,12 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         entities: relevantTerms
       };
       
-      const result = await this.executeAgent('UserMemoryAgent', entitySearchParams);
+      const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+      if (!memoryAgent) {
+        throw new Error('UserMemoryAgent not available for entity search');
+      }
+      
+      const result = await memoryAgent.execute(entitySearchParams, this.context);
       
       if (result.success && result.result?.results?.length > 0) {
         console.log(`✅ [ENTITY-FILTER] Found ${result.result.results.length} entity-filtered memories`);
@@ -2085,12 +1932,16 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       } else {
         // Fallback to regular search if entity search fails
         console.log('⚠️ [ENTITY-FILTER] Entity search failed, falling back to standard search');
-        return await this.executeAgent('UserMemoryAgent', searchParams);
+        return await memoryAgent.execute(searchParams, this.context);
       }
       
     } catch (error) {
       console.warn('⚠️ [ENTITY-FILTER] Entity filtering failed, using standard search:', error.message);
-      return await this.executeAgent('UserMemoryAgent', searchParams);
+      const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+      if (!memoryAgent) {
+        throw new Error('UserMemoryAgent not available for fallback search');
+      }
+      return await memoryAgent.execute(searchParams, this.context);
     }
   }
 
@@ -2117,8 +1968,11 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       // Use LLM to determine if query needs cross-session scope
       let needsCrossSessionScope = false;
       try {
-        const scopeClassification = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3-fast',
+        const phi3Agent = this.getLoadedAgent('Phi3Agent');
+        if (!phi3Agent) {
+          throw new Error('Phi3Agent not available for scope classification');
+        }
+        const scopeClassification = await phi3Agent.queryPhi3Fast({
           prompt: `Analyze this user query and determine if it needs cross-session scope:
 
 Query: "${prompt}"
@@ -2153,7 +2007,7 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
             maxTokens: 5,
             temperature: 0.1
           }
-        }, context);
+        });
         
         if (scopeClassification.success && scopeClassification.result?.response) {
           needsCrossSessionScope = scopeClassification.result.response.trim().toUpperCase() === 'CROSS_SESSION';
@@ -2168,7 +2022,13 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
         searchParams.sessionId = context.currentSessionId; // Prevent cross-session contamination for current-session queries
       }
       
-      const semanticResult = await this.executeAgent('UserMemoryAgent', searchParams, {
+      const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+      if (!memoryAgent) {
+        throw new Error('UserMemoryAgent not available for semantic search');
+      }
+      
+      const semanticResult = await memoryAgent.execute(searchParams, {
+        ...this.context,
         source: 'semantic_first_orchestrator',
         timestamp: new Date().toISOString()
       });
@@ -2229,18 +2089,19 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
           let isPositionalQuery = false;
           
           try {
-            const classificationResult = await this.executeAgent('UserMemoryAgent', {
-              action: 'classify-conversational-query',
-              query: prompt
-            }, context);
+            const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+            if (!memoryAgent) {
+              throw new Error('UserMemoryAgent not available for conversational classification');
+            }
             
-            if (classificationResult.success && classificationResult.result && classificationResult.result.result) {
-              console.log(`🔍 [DEBUG] Raw classification result:`, classificationResult.result);
-              const actualResult = classificationResult.result.result;
-              isConversationalQuery = actualResult.isConversational;
-              isPositionalQuery = actualResult.type === 'positional';
+            const classificationResult = await memoryAgent.classifyConversationalQuery(prompt);
+            
+            if (classificationResult.isConversational !== undefined) {
+              console.log(`🔍 [DEBUG] Raw classification result:`, classificationResult);
+              isConversationalQuery = classificationResult.isConversational;
+              isPositionalQuery = classificationResult.type === 'positional';
               console.log(`🔍 [DEBUG] Processed values: isConversationalQuery=${isConversationalQuery}, isPositionalQuery=${isPositionalQuery}`);
-              console.log(`🔍 [DEBUG] LLM classified "${prompt}" as ${isConversationalQuery ? 'CONVERSATIONAL' : 'NON-CONVERSATIONAL'} (${actualResult.type || 'general'})`);
+              console.log(`🔍 [DEBUG] LLM classified "${prompt}" as ${isConversationalQuery ? 'CONVERSATIONAL' : 'NON-CONVERSATIONAL'} (${classificationResult.type || 'general'})`);
             } else {
               console.log(`🔍 [DEBUG] Classification failed:`, classificationResult);
               throw new Error('UserMemoryAgent classification failed');
@@ -2424,8 +2285,12 @@ ANSWER:`.trim();
         console.log(`🔍 [DEBUG] Final prompt being sent to Phi3:`, enhancedPrompt.substring(0, 800) + '...');
           
           try {
-            const phi3Result = await this.executeAgent('Phi3Agent', {
-              action: 'query-phi3-fast',
+            const phi3Agent = this.getLoadedAgent('Phi3Agent');
+            if (!phi3Agent) {
+              throw new Error('Phi3Agent not available for semantic response');
+            }
+            
+            const phi3Result = await phi3Agent.queryPhi3Fast({
               prompt: enhancedPrompt,
               options: { 
                 timeout: 15000, 
@@ -2437,7 +2302,7 @@ ANSWER:`.trim();
               timestamp: new Date().toISOString()
             });
             
-            if (phi3Result.success && phi3Result.result?.response) {
+            if (phi3Result.success && phi3Result.response) {
               console.log('🎉 [SEMANTIC-FIRST] FAST PATH SUCCESS - Returning enhanced response');
               
               // BACKGROUND PROCESSING: Store question context in memory for future retrieval
@@ -2462,7 +2327,7 @@ ANSWER:`.trim();
                   }
                   
                   // Store the AI response, not the user question
-                  const aiResponse = phi3Result.result.response;
+                  const aiResponse = phi3Result.response;
                   
                   // Also extract entities from the AI response for better context
                   let responseEntities = {};
@@ -2485,7 +2350,13 @@ ANSWER:`.trim();
                     ])];
                   });
                   
-                  const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
+                  const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+                  if (!memoryAgent) {
+                    console.warn('⚠️ [BACKGROUND] UserMemoryAgent not available for background storage');
+                    return;
+                  }
+                  
+                  const memoryStoreResult = await memoryAgent.execute({
                     action: 'memory-store',
                     sourceText: aiResponse, // Store the AI response, not the user question
                     entities: combinedEntities, // Use combined entities
@@ -2500,8 +2371,8 @@ ANSWER:`.trim();
                       method: 'semantic_first_fast_path'
                     }
                   }, {
-                    ...context,
-                    executeAgent: this.executeAgent.bind(this)
+                    ...this.context,
+                    ...context
                   });
                   
                   if (memoryStoreResult.success) {
@@ -2516,7 +2387,7 @@ ANSWER:`.trim();
               
               return {
                 success: true,
-                data: phi3Result.result.response,
+                data: phi3Result.response,
                 intentClassificationPayload: {
                   primaryIntent: 'semantic_enhanced_response',
                   intents: [{ intent: 'semantic_enhanced_response', confidence: 0.9, reasoning: 'Semantic search found relevant memories' }],
@@ -2524,7 +2395,7 @@ ANSWER:`.trim();
                   requiresMemoryAccess: true,
                   requiresExternalData: false,
                   captureScreen: false,
-                  suggestedResponse: phi3Result.result.response,
+                  suggestedResponse: phi3Result.response,
                   sourceText: prompt,
                   memoriesUsed: memories.length,
                   topSimilarity: topScore,
@@ -2636,7 +2507,7 @@ ANSWER:`.trim();
         prompt: `You are answering an evergreen general-knowledge question.${conversationContext}
 - Be concise (2-4 sentences).
 - If there's conversation context above, use it to provide a more relevant response.
-- If the answer depends on current events or post-2023 facts, say you are not sure.
+- If the answer depends on current events or post-2024 facts, say you are not sure.
 - Do NOT invent current prices, office holders, dates, or scores.
 
 Question: ${text}
@@ -2820,7 +2691,11 @@ Answer:`,
       
       try {
         // Execute agent with accumulated context and previous results
-        const stepResult = await this.executeAgent(agent, params, {
+        const agentInstance = this.getLoadedAgent(agent);
+        if (!agentInstance) {
+          throw new Error(`Agent ${agent} not available for workflow step`);
+        }
+        const stepResult = await agentInstance.execute(params, {
           ...context,
           ...stepContext,
           previousResults: workflowState.results,
@@ -3017,13 +2892,18 @@ Answer:`,
       console.log('🧠 Executing local intent parsing with Phi3...');
       
       // Use IntentParserAgent_phi3_embedded for local intent parsing
-      const intentResult = await this.executeAgent('IntentParserAgent_phi3_embedded', {
+      const intentAgent = this.getLoadedAgent('IntentParserAgent_phi3_embedded');
+      if (!intentAgent) {
+        throw new Error('IntentParserAgent_phi3_embedded not available for local parsing');
+      }
+      
+      const intentResult = await intentAgent.execute({
         action: 'parse-intent-enhanced',
         message: userMessage,
         userContext: context.userContext || {}
       }, {
-        ...context,
-        executeAgent: this.executeAgent.bind(this) // Provide agent-to-agent communication
+        ...this.context,
+        ...context
       });
       
       if (!intentResult.success) {
@@ -3185,7 +3065,13 @@ Answer:`,
       setImmediate(async () => {
         try {
           console.log('🚀 [BACKGROUND] Starting memory storage...');
-          const memoryResult = await this.executeAgent('UserMemoryAgent', {
+          const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+          if (!memoryAgent) {
+            console.warn('⚠️ [BACKGROUND] UserMemoryAgent not available for memory storage');
+            return;
+          }
+          
+          const memoryResult = await memoryAgent.execute({
             action: 'memory-store',
             sourceText: intentResult.sourceText || userMessage,
             suggestedResponse: intentResult.suggestedResponse || "I'll remember that for you.",
@@ -3195,7 +3081,10 @@ Answer:`,
               timestamp: new Date().toISOString(),
               source: 'local_orchestration'
             }
-          }, context);
+          }, {
+            ...this.context,
+            ...context
+          });
           
           if (memoryResult.success) {
             console.log('✅ [BACKGROUND] Memory storage completed successfully');
@@ -3257,12 +3146,20 @@ Answer:`,
         }
       }
       
-      const memoryResult = await this.executeAgent('UserMemoryAgent', {
+      const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+      if (!memoryAgent) {
+        throw new Error('UserMemoryAgent not available for memory retrieval');
+      }
+      
+      const memoryResult = await memoryAgent.execute({
         action: 'memory-semantic-search',
         query: searchQuery,
         limit: 5,
         minSimilarity: 0.11   // Optimized based on similarity testing for temporal queries
-      }, context);
+      }, {
+        ...this.context,
+        ...context
+      });
       
       console.log(`[INFO] Memory search completed: ${memoryResult.success ? 'success' : 'failed'}`);
       
@@ -3381,19 +3278,23 @@ Answer based on the memories above. If no relevant information is found, say "I 
   `.trim();
 }
           
-          const phi3Result = await this.executeAgent('Phi3Agent', {
-            action: 'query-phi3',
+          const phi3Agent = this.getLoadedAgent('Phi3Agent');
+          if (!phi3Agent) {
+            throw new Error('Phi3Agent not available for memory retrieval response');
+          }
+          
+          const phi3Result = await phi3Agent.queryPhi3Fast({
             prompt: prompt,
             options: {
               maxTokens: 60,
               temperature: 0.2
             }
-          }, context);
+          });
           
-          if (phi3Result.success && phi3Result.result?.response) {
+          if (phi3Result.success && phi3Result.response) {
             const result = {
               success: true,
-              response: phi3Result.result.response,
+              response: phi3Result.response,
               handledBy: 'UserMemoryAgent + Phi3Agent',
               method: 'local_memory_retrieve_with_llm',
               timestamp: new Date().toISOString(),
@@ -3523,15 +3424,23 @@ Answer based on the memories above. If no relevant information is found, say "I 
       if (intentResult.result?.captureScreen) {
         console.log('📸 Capturing screen for visual question...');
         try {
-          const screenshotResult = await this.executeAgent('ScreenCaptureAgent', {
-            action: 'capture_and_extract'
-          }, context);
-          
-          if (screenshotResult.success && screenshotResult.result) {
-            console.log('✅ Screenshot captured, adding to context');
-            context.screenshot = screenshotResult.result.screenshot;
-            context.extractedText = screenshotResult.result.extractedText;
-            userMessage += `\n\nScreen content: ${screenshotResult.result.extractedText?.substring(0, 500) || 'No text extracted'}`;
+          const screenAgent = this.getLoadedAgent('ScreenCaptureAgent');
+          if (!screenAgent) {
+            console.warn('⚠️ ScreenCaptureAgent not available for screen capture');
+          } else {
+            const screenshotResult = await screenAgent.execute({
+              action: 'capture_and_extract'
+            }, {
+              ...this.context,
+              ...context
+            });
+            
+            if (screenshotResult.success && screenshotResult.result) {
+              console.log('✅ Screenshot captured, adding to context');
+              context.screenshot = screenshotResult.result.screenshot;
+              context.extractedText = screenshotResult.result.extractedText;
+              userMessage += `\n\nScreen content: ${screenshotResult.result.extractedText?.substring(0, 500) || 'No text extracted'}`;
+            }
           }
         } catch (screenshotError) {
           console.warn('⚠️ Screenshot capture failed:', screenshotError.message);
@@ -3552,8 +3461,12 @@ Answer based on the memories above. If no relevant information is found, say "I 
           concisePrompt = `Answer briefly in 1-2 sentences:\n\nQuestion: ${userMessage}\n\nBrief answer:`
         }
         
-        const phi3Result = await this.executeAgent('Phi3Agent', {
-          action: 'query-phi3-fast',
+        const phi3Agent = this.getLoadedAgent('Phi3Agent');
+        if (!phi3Agent) {
+          throw new Error('Phi3Agent not available for question response');
+        }
+        
+        const phi3Result = await phi3Agent.queryPhi3Fast({
           prompt: concisePrompt,
           options: { 
             timeout: 10000, 
@@ -3561,17 +3474,14 @@ Answer based on the memories above. If no relevant information is found, say "I 
             temperature: 0.2,
             repeat_penalty: 1.1
           }
-        }, {
-          ...context,
-          executeAgent: this.executeAgent.bind(this)
         });
         
-        if (phi3Result.success && phi3Result.result && phi3Result.result.response) {
+        if (phi3Result.success && phi3Result.response) {
           console.log('✅ Phi3 provided response for question');
           
           const fastResponse = {
             success: true,
-            response: phi3Result.result.response,
+            response: phi3Result.response,
             handledBy: 'phi3_question_handler',
             method: 'phi3_response',
             confidence: intentResult.confidence,
@@ -3582,7 +3492,13 @@ Answer based on the memories above. If no relevant information is found, say "I 
           setImmediate(async () => {
             try {
               console.log('🚀 [BACKGROUND] Storing question context in memory...');
-              const memoryStoreResult = await this.executeAgent('UserMemoryAgent', {
+              const memoryAgent = this.getLoadedAgent('UserMemoryAgent');
+              if (!memoryAgent) {
+                console.warn('⚠️ [BACKGROUND] UserMemoryAgent not available for question storage');
+                return;
+              }
+              
+              const memoryStoreResult = await memoryAgent.execute({
                 action: 'memory-store',
                 sourceText: userMessage,
                 entities: intentResult.result?.entities || {},
@@ -3591,11 +3507,11 @@ Answer based on the memories above. If no relevant information is found, say "I 
                   intent: 'question',
                   timestamp: new Date().toISOString(),
                   confidence: intentResult.confidence,
-                  phi3Response: phi3Result.result.response
+                  phi3Response: phi3Result.response
                 }
               }, {
-                ...context,
-                executeAgent: this.executeAgent.bind(this)
+                ...this.context,
+                ...context
               });
               
               if (memoryStoreResult.success) {
@@ -4536,8 +4452,13 @@ INCOMPLETE - if the response doesn't adequately address the question OR contradi
 
 Your evaluation:`;
 
-      const evaluationResult = await this.executeAgent('Phi3Agent', {
-        action: 'query-phi3-fast',
+      const phi3Agent = this.getLoadedAgent('Phi3Agent');
+      if (!phi3Agent) {
+        console.warn('⚠️ Phi3Agent not available for completeness evaluation, using heuristic');
+        return score < INCOMPLETE_THRESHOLD;
+      }
+      
+      const evaluationResult = await phi3Agent.queryPhi3Fast({
         prompt: evaluationPrompt,
         options: { 
           timeout: 6000, 
@@ -4546,8 +4467,8 @@ Your evaluation:`;
         }
       });
 
-      if (evaluationResult.success && evaluationResult.result?.response) {
-        const aiEvaluation = evaluationResult.result.response.trim();
+      if (evaluationResult.success && evaluationResult.response) {
+        const aiEvaluation = evaluationResult.response.trim();
         let isComprehensive = false;
         
         // Handle both JSON and simple text responses
