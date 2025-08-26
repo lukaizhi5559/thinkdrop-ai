@@ -2077,7 +2077,11 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
         entities: relevantTerms
       };
       
-      const result = await this.executeAgent('UserMemoryAgent', entitySearchParams);
+      const result = await this.executeAgent('UserMemoryAgent', entitySearchParams, {
+        ...this.context,
+        executeAgent: this.executeAgent.bind(this),
+        database: this.context.database
+      });
       
       if (result.success && result.result?.results?.length > 0) {
         console.log(`✅ [ENTITY-FILTER] Found ${result.result.results.length} entity-filtered memories`);
@@ -2085,12 +2089,20 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       } else {
         // Fallback to regular search if entity search fails
         console.log('⚠️ [ENTITY-FILTER] Entity search failed, falling back to standard search');
-        return await this.executeAgent('UserMemoryAgent', searchParams);
+        return await this.executeAgent('UserMemoryAgent', searchParams, {
+          ...this.context,
+          executeAgent: this.executeAgent.bind(this),
+          database: this.context.database
+        });
       }
       
     } catch (error) {
       console.warn('⚠️ [ENTITY-FILTER] Entity filtering failed, using standard search:', error.message);
-      return await this.executeAgent('UserMemoryAgent', searchParams);
+      return await this.executeAgent('UserMemoryAgent', searchParams, {
+        ...this.context,
+        executeAgent: this.executeAgent.bind(this),
+        database: this.context.database
+      });
     }
   }
 
@@ -2169,6 +2181,9 @@ Respond with exactly: CURRENT_SESSION or CROSS_SESSION`.trim(),
       }
       
       const semanticResult = await this.executeAgent('UserMemoryAgent', searchParams, {
+        ...this.context,
+        executeAgent: this.executeAgent.bind(this),
+        database: this.context.database,
         source: 'semantic_first_orchestrator',
         timestamp: new Date().toISOString()
       });
