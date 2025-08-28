@@ -24,6 +24,8 @@ const AGENT_FORMAT = {
         description: 'Phi3 operation to perform',
         enum: [
           'query-phi3',
+          'query-phi3-fast',
+          'query-phi3-routing',
           'check-availability',
           'get-model-info'
         ]
@@ -121,6 +123,8 @@ const AGENT_FORMAT = {
           return await AGENT_FORMAT.queryPhi3(params, context);
         case 'query-phi3-fast':
           return await AGENT_FORMAT.queryPhi3Fast(params, context);
+        case 'query-phi3-routing':
+          return await AGENT_FORMAT.queryPhi3Routing(params, context);
         case 'classify-intent':
           return await AGENT_FORMAT.classifyIntent(params, context);
         case 'check-availability':
@@ -140,6 +144,47 @@ const AGENT_FORMAT = {
     }
   },
 
+  // Ultra-fast routing method - bypasses all prompt wrapping and conversational detection
+  async queryPhi3Routing(params, _context = {}) {
+    try {
+      const { prompt, options = {} } = params;
+      
+      if (!prompt) {
+        throw new Error('Prompt is required for routing query');
+      }
+      
+      if (!AGENT_FORMAT.isAvailable) {
+        throw new Error('Phi3 is not available');
+      }
+      
+      // Direct routing query - no system prompt wrapping, no conversational detection
+      const routingOptions = {
+        model: 'phi4-mini:latest',
+        timeout: options.timeout || 2000,     // Ultra-fast timeout
+        temperature: options.temperature || 0.0, // Deterministic
+        max_tokens: options.maxTokens || 3,   // Minimal tokens
+        top_p: 0.9,
+        repeat_penalty: 1.0,
+        seed: 42,  // Deterministic seed
+        stop: ["\n", ".", " "]  // Stop early for single word responses
+      };
+
+      // Single attempt - no retries for speed
+      const result = await AGENT_FORMAT.executeOllamaQuery(prompt, routingOptions);
+      
+      return {
+        success: true,
+        action: 'query-phi3-routing',
+        response: result.trim(),
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ Phi3 routing query failed:', error);
+      throw error;
+    }
+  },
+
   async queryPhi3Fast(params, _context = {}) {
     try {
       const { prompt, options = {} } = params;
@@ -152,79 +197,101 @@ const AGENT_FORMAT = {
         throw new Error('Phi3 is not available');
       }
       
-      console.log(`🤖 Querying Phi3 with prompt: "${prompt.substring(0, 100)}${prompt.length > 100 ? '...' : ''}"`);
-     
-      // For conversational queries with history, use specialized prompt handling
-      const isConversationalQuery = prompt.includes('CONVERSATION HISTORY:') || 
-                                   prompt.includes('You are ThinkDrop AI. You have access to the user') ||
-                                   prompt.includes('conversation history');
+      // Optimized: Check if this is a conversational query (only if prompt is long enough)
+      const isConversationalQuery = prompt.length > 50 && (
+        prompt.includes('CONVERSATION HISTORY:') || 
+        prompt.includes('You are ThinkDrop AI. You have access to the user') ||
+        prompt.includes('conversation history')
+      );
       
       let thinkdropPrompt;
-      let queryOptions = {};
+      let queryOptions;
 
       if (isConversationalQuery) {
         // For conversational queries, use the prompt as-is without base prompt to avoid conflicts
         thinkdropPrompt = prompt;
         queryOptions = {
           model: 'phi4-mini:latest',
-          timeout: 15000,
-          temperature: 0.1,     // very low for consistent responses
-          top_p: 0.8,           // focused responses
-          max_tokens: 300,      // enough for detailed conversation summaries
+          timeout: options.timeout || 12000,  // Reduced from 15000
+          temperature: options.temperature || 0.1,
+          top_p: 0.8,
+          max_tokens: options.maxTokens || 250,  // Reduced from 300
           repeat_penalty: 1.1
         };
       } else {
-        thinkdropPrompt = 
-`<|system|>
-You are ThinkDrop AI, a helpful assistant. For questions, provide a brief, direct answer (1-2 sentences max). For other requests, describe what the user wants to do.
-Be concise and to the point.<|end|>
-<|user|>
-${prompt}<|end|>
-<|assistant|> 
-`.trim();
-        // Use regular phi4-mini model for natural language responses - optimized for speed
+        // Simplified prompt wrapping for faster processing
+        thinkdropPrompt = `You are ThinkDrop AI. Answer concisely (1-2 sentences).\n\n${prompt}`;
+        
         queryOptions = {
           model: 'phi4-mini:latest',
-          timeout: 10000,
-          temperature: 0.05,  // Even lower for faster, more deterministic responses
-          max_tokens: 120,     // Reduced for faster generation
-          top_p: 0.9,         // Add top_p for faster sampling
-          repeat_penalty: 1.1, // Prevent repetition for concise responses
-          // nice-to-haves if your runner supports them:
-          seed: 7,           // deterministic runs
-          stop: ["<|end|>", "</s>"]
+          timeout: options.timeout || 8000,   // Reduced from 10000
+          temperature: options.temperature || 0.05,
+          max_tokens: options.maxTokens || 100, // Reduced from 120
+          top_p: 0.9,
+          repeat_penalty: 1.1,
+          seed: 7,
+          stop: ["\n\n", ".", "!"]  // Optimized stop tokens
         };
       } 
 
-      const maxRetries = options.maxRetries || AGENT_FORMAT.config.maxRetries;
+      // Optimized: Single attempt for speed, merge options efficiently
+      const finalOptions = { ...queryOptions, ...options };
+      const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, finalOptions);
       
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, { ...options, ...queryOptions });
-          
-          console.log('✅ Phi3 query successful');
-          
-          return {
-            success: true,
-            action: 'query-phi3',
-            response: result.trim(),
-            attempt,
-            timestamp: new Date().toISOString()
-          };
-        } catch (error) {
-          console.warn(`🔄 Phi3 attempt ${attempt}/${maxRetries} failed:`, error.message);
-          
-          if (attempt === maxRetries) {
-            throw new Error(`Phi3 failed after ${maxRetries} attempts: ${error.message}`);
-          }
-          
-          // Wait before retry (exponential backoff)
-          await AGENT_FORMAT.sleep(1000 * attempt);
-        }
-      }
+      return {
+        success: true,
+        action: 'query-phi3-fast',
+        response: result.trim(),
+        timestamp: new Date().toISOString()
+      };
+      
     } catch (error) {
-      console.error('❌ Phi3 query failed:', error);
+      console.error('❌ Phi3 fast query failed:', error);
       throw error;
+    }
+  },
+
+  async queryPhi3Routing(params, context) {
+    try {
+      const { prompt, options = {} } = params;
+      
+      if (!prompt) {
+        throw new Error('Prompt is required for query-phi3-routing action');
+      }
+      
+      if (!AGENT_FORMAT.isAvailable) {
+        throw new Error('Phi3 is not available');
+      }
+      
+      console.log(`🎯 Routing query with Phi3: "${prompt.substring(0, 50)}..."`);
+
+      // Ultra-fast routing with minimal tokens
+      const queryOptions = {
+        model: 'phi4-mini:latest',
+        timeout: options.timeout || 2000,
+        temperature: options.temperature || 0.0,
+        max_tokens: options.maxTokens || 3,
+        top_p: 0.9,
+        repeat_penalty: 1.0,
+        stop: ["\n", " ", "."]
+      };
+
+      const result = await AGENT_FORMAT.executeOllamaQuery(prompt, queryOptions);
+      
+      return {
+        success: true,
+        action: 'query-phi3-routing',
+        result: result.trim(),
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ Phi3 routing query failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        action: 'query-phi3-routing'
+      };
     }
   },
 

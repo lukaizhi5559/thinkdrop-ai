@@ -11,7 +11,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import MarkdownRenderer from './Markdown';
 import { useConversationSignals } from '../hooks/useConversationSignals';
-// import { useLocalLLM } from '../contexts/LocalLLMContext';
+import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 interface ChatMessage {
   id: string;
@@ -34,8 +34,8 @@ export default function ChatMessages() {
 
 
 
-  // LocalLLM integration comment out for now
-  // const { isInitialized, isLocalLLMAvailable } = useLocalLLM();
+  // LocalLLM integration for pipeline toggle
+  const { useNewPipeline } = useLocalLLM();
   
   // WebSocket integration for receiving streaming responses
   const {
@@ -65,13 +65,13 @@ export default function ChatMessages() {
     const stored = localStorage.getItem('lastKnownSessions');
     return stored ? JSON.parse(stored) : [];
   });
-  const [initialThinkingMessage, setInitialThinkingMessage] = useState<string>('Thinking');
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
-  const isStreamingEndedRef = useRef<boolean>(false);
-  
-  // Local LLM processing state
+  const [initialThinkingMessage, setInitialThinkingMessage] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [isProcessingLocally, setIsProcessingLocally] = useState(false);
   const [localLLMError, setLocalLLMError] = useState<string | null>(null);
+  const [currentStreamingMessage, setCurrentStreamingMessage] = useState('');
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const isStreamingEndedRef = useRef(false);
   
   // Input state from ChatWindow
   const [currentMessage, setCurrentMessage] = useState('');
@@ -85,10 +85,8 @@ export default function ChatMessages() {
   const [copiedMessageIds, setCopiedMessageIds] = useState<Set<string>>(new Set());
 
   // Load state
-  const [isLoading, setIsLoading] = useState(false);
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [processedOrchestrationMessages, setProcessedOrchestrationMessages] = useState<Set<string>>(new Set());
-  const [currentStreamingMessage, setCurrentStreamingMessage] = useState<string>('');
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -593,14 +591,11 @@ export default function ChatMessages() {
     
     // Clear any previous error states
     setProcessedMessageIds(new Set());
-    setCurrentStreamingMessage('');
-    setStreamingMessageId(null);
-    isStreamingEndedRef.current = false;
-    
     // Add to conversation context if we have an active session
     if (currentSessionId && signalsAddMessage) {
       console.log('📝 [USER-MESSAGE] Adding user message to session:', currentSessionId);
       console.log('📝 [USER-MESSAGE] Message text:', messageText);
+
       
       try {
         await signalsAddMessage(currentSessionId, {
@@ -632,14 +627,59 @@ export default function ChatMessages() {
       console.log('🧠 [ENHANCED-PIPELINE] Starting message processing with existing backend...');
       
       if (!wsState.isConnected) {
-        console.warn('⚠️ WebSocket not connected, trying progressive search first...');
+        console.warn('⚠️ WebSocket not connected, checking pipeline preference...');
         
-        // Try progressive search for cross-session queries
-        const progressiveSuccess = await useProgressiveSearch(messageText);
-        
-        if (!progressiveSuccess) {
-          console.log('🔄 Progressive search failed or not applicable, falling back to local LLM');
-          await handleLocalLLMCall(messageText);
+        // Check pipeline toggle setting
+        if (useNewPipeline) {
+          scrollToBottom({ smooth: true, force: true });
+      
+          console.log('🚀 [NEW-PIPELINE] Using direct llm-query handler...');
+          
+          // Use the NEW ultra-fast pipeline directly
+          if (!window.electronAPI?.llmQuery) {
+            throw new Error('NEW pipeline not available');
+          }
+          
+          const result = await window.electronAPI.llmQuery(messageText, {
+            currentSessionId: signals.activeSessionId.value,
+            conversationContext: Array.isArray(signals.messages.value) ? 
+              signals.messages.value.slice(-10).map((m: ChatMessage) => `${m.sender}: ${m.text}`).join('\n') : '',
+            userId: 'user'
+          });
+          
+          if (result.success) {
+            console.log('✅ [NEW-PIPELINE] Direct query successful:', result.response);
+            
+            // Add AI response to conversation
+            if (signalsAddMessage && signals.activeSessionId.value) {
+              await signalsAddMessage(signals.activeSessionId.value, {
+                text: result.response,
+                sender: 'ai',
+                sessionId: signals.activeSessionId.value,
+                metadata: { isFinal: true }
+              });
+            }
+            
+            // Stop loading and scroll to bottom
+            setIsLoading(false);
+            setIsProcessingLocally(false);
+            scrollToBottom({ smooth: true, force: true });
+          } else {
+            console.error('❌ [NEW-PIPELINE] Direct query failed:', result.error);
+            setIsLoading(false);
+            setIsProcessingLocally(false);
+            throw new Error(result.error);
+          }
+        } else {
+          console.log('🕐 [OLD-PIPELINE] Using legacy pipeline...');
+          
+          // Try progressive search for cross-session queries
+          const progressiveSuccess = await useProgressiveSearch(messageText);
+          
+          if (!progressiveSuccess) {
+            console.log('🔄 Progressive search failed or not applicable, falling back to local LLM');
+            await handleLocalLLMCall(messageText);
+          }
         }
         return;
       }
@@ -1516,7 +1556,7 @@ export default function ChatMessages() {
         })() ? (
           <ThinkingIndicator 
             isVisible={true} 
-            message={initialThinkingMessage} 
+            message={initialThinkingMessage || undefined} 
           />
         ) : isLoading && wsState.isConnected ? (
           <div className="flex justify-start">

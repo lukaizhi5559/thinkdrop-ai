@@ -80,6 +80,11 @@ export interface LocalLLMContextType {
   // Core orchestration
   orchestrateAgents: (userInput: string, context?: any) => Promise<OrchestrationResult>;
   queryLocalLLM: (prompt: string, options?: any) => Promise<string>;
+  queryLLM: (prompt: string, context?: any) => Promise<string>; // New ultra-fast pipeline
+  
+  // Configuration
+  useNewPipeline: boolean;
+  setUseNewPipeline: (enabled: boolean) => void;
   
   // Agent management
   cachedAgents: CachedAgent[];
@@ -118,6 +123,19 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
   const [isQuerying, setIsQuerying] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+  
+  // Configuration for pipeline selection
+  const [useNewPipeline, setUseNewPipeline] = useState<boolean>(() => {
+    const stored = localStorage.getItem('thinkdrop-use-new-pipeline');
+    return stored ? JSON.parse(stored) : false; // Default to old pipeline for stability
+  });
+  
+  // Update localStorage when pipeline preference changes
+  const handleSetUseNewPipeline = useCallback((enabled: boolean) => {
+    setUseNewPipeline(enabled);
+    localStorage.setItem('thinkdrop-use-new-pipeline', JSON.stringify(enabled));
+    console.log(`🔄 Pipeline switched to: ${enabled ? 'NEW (llm-query)' : 'OLD (llm-query-local)'}`);
+  }, []);
 
   // Computed properties
   const isInitialized = health?.initialized || false;
@@ -241,7 +259,7 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
     }
   }, [handleError, clearError, refreshCommunications]);
 
-  // Local LLM querying
+  // Local LLM querying (old pipeline)
   const queryLocalLLM = useCallback(async (prompt: string, options: any = {}): Promise<string> => {
     try {
       if (!window.electronAPI) {
@@ -260,6 +278,31 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
       }
     } catch (error) {
       handleError(error, 'Local LLM query error');
+      throw error;
+    } finally {
+      setIsQuerying(false);
+    }
+  }, [handleError, clearError]);
+
+  // New ultra-fast LLM querying
+  const queryLLM = useCallback(async (prompt: string, context: any = {}): Promise<string> => {
+    try {
+      if (!window.electronAPI) {
+        throw new Error('Electron API not available');
+      }
+      setIsQuerying(true);
+      clearError();
+      
+      const result = await window.electronAPI.llmQuery(prompt, context);
+      
+      if (result.success) {
+        return result.data;
+      } else {
+        handleError(result.error, 'New LLM query failed');
+        throw new Error(result.error);
+      }
+    } catch (error) {
+      handleError(error, 'New LLM query error');
       throw error;
     } finally {
       setIsQuerying(false);
@@ -356,6 +399,11 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
     // Core orchestration
     orchestrateAgents,
     queryLocalLLM,
+    queryLLM,
+    
+    // Configuration
+    useNewPipeline,
+    setUseNewPipeline: handleSetUseNewPipeline,
     
     // Agent management
     cachedAgents,
@@ -420,9 +468,18 @@ export const useOrchestration = () => {
   };
 };
 
-// Helper hook for local LLM queries
+// Helper hook for local LLM queries (automatically selects pipeline)
 export const useLocalLLMQuery = () => {
-  const { queryLocalLLM, isQuerying, isLocalLLMAvailable, lastError, clearError } = useLocalLLM();
+  const { 
+    queryLocalLLM, 
+    queryLLM, 
+    useNewPipeline, 
+    setUseNewPipeline,
+    isQuerying, 
+    isLocalLLMAvailable, 
+    lastError, 
+    clearError 
+  } = useLocalLLM();
   
   const query = useCallback(async (prompt: string, options?: any) => {
     if (!isLocalLLMAvailable) {
@@ -434,7 +491,17 @@ export const useLocalLLMQuery = () => {
     
     try {
       clearError();
-      const result = await queryLocalLLM(prompt, options);
+      
+      // Debug pipeline selection
+      console.log(`🔍 [PIPELINE-DEBUG] useNewPipeline state: ${useNewPipeline}`);
+      console.log(`🔍 [PIPELINE-DEBUG] About to call: ${useNewPipeline ? 'queryLLM (NEW)' : 'queryLocalLLM (OLD)'}`);
+      
+      // Automatically select pipeline based on configuration
+      const result = useNewPipeline 
+        ? await queryLLM(prompt, options) 
+        : await queryLocalLLM(prompt, options);
+        
+      console.log(`🚀 Query executed via ${useNewPipeline ? 'NEW' : 'OLD'} pipeline`);
       return { success: true, data: result };
     } catch (error) {
       return { 
@@ -442,14 +509,19 @@ export const useLocalLLMQuery = () => {
         error: error instanceof Error ? error.message : 'Unknown error' 
       };
     }
-  }, [queryLocalLLM, isLocalLLMAvailable, clearError]);
+  }, [queryLocalLLM, queryLLM, useNewPipeline, isLocalLLMAvailable, clearError]);
   
   return {
     query,
     isQuerying,
     isLocalLLMAvailable,
     lastError,
-    clearError
+    clearError,
+    useNewPipeline,
+    setUseNewPipeline,
+    // Direct access to both pipelines for testing
+    queryOld: queryLocalLLM,
+    queryNew: queryLLM
   };
 };
 

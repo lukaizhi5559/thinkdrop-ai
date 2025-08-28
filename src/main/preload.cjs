@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   processLocalLLMMessage: (message) => ipcRenderer.invoke('local-llm:process-message', message),
   llmOrchestrate: (userInput, context) => ipcRenderer.invoke('llm-orchestrate', userInput, context),
   llmQueryLocal: (prompt, options) => ipcRenderer.invoke('llm-query-local', prompt, options),
+  llmQuery: (prompt, context) => ipcRenderer.invoke('llm-query', prompt, context),
   llmGetHealth: () => ipcRenderer.invoke('llm-get-health'),
   llmGetCachedAgents: () => ipcRenderer.invoke('llm-get-cached-agents'),
   llmGetCommunications: (limit) => ipcRenderer.invoke('llm-get-communications', limit),

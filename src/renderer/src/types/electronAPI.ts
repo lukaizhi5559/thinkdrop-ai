@@ -37,6 +37,7 @@ declare global {
       // LocalLLMAgent methods
       llmOrchestrate: (userInput: string, context?: any) => Promise<any>;
       llmQueryLocal: (prompt: string, options?: any) => Promise<any>;
+      llmQuery: (prompt: string, context?: any) => Promise<any>; // New ultra-fast pipeline
       llmGetHealth: () => Promise<any>;
       llmGetCachedAgents: () => Promise<any>;
       llmGetCommunications: (limit?: number) => Promise<any>;
