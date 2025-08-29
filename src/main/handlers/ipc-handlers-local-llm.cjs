@@ -189,7 +189,12 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       const semanticAgent = coreAgent.getAgent('SemanticEmbeddingAgent');
       if (!semanticAgent) {
         console.warn('⚠️ [SEMANTIC-FILTER] SemanticEmbeddingAgent not available, falling back to recency');
-        return recentMessages.slice(-limit);
+        return recentMessages.slice(-limit).map(msg => ({
+          message: msg,
+          semanticScore: 0,
+          recencyScore: 1,
+          combinedScore: 0.3
+        }));
       }
 
       const queryResult = await semanticAgent.execute({
@@ -199,7 +204,12 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
 
       if (!queryResult.success || !queryResult.embedding) {
         console.warn('⚠️ [SEMANTIC-FILTER] Failed to generate query embedding, falling back to recency');
-        return recentMessages.slice(-limit);
+        return recentMessages.slice(-limit).map(msg => ({
+          message: msg,
+          semanticScore: 0,
+          recencyScore: 1,
+          combinedScore: 0.3
+        }));
       }
 
       const queryEmbedding = queryResult.embedding;
@@ -266,18 +276,23 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
         };
       });
 
-      // Sort by combined score and return top N
-      const topMessages = scoredMessages
+      // Sort by combined score and return top N with scores
+      const topScoredMessages = scoredMessages
         .sort((a, b) => b.combinedScore - a.combinedScore)
-        .slice(0, limit)
-        .map(item => item.message);
+        .slice(0, limit);
 
-      console.log(`🎯 [SEMANTIC-FILTER] Selected ${topMessages.length} most relevant messages`);
-      return topMessages;
+      console.log(`🎯 [SEMANTIC-FILTER] Selected ${topScoredMessages.length} most relevant messages`);
+      return topScoredMessages;
 
     } catch (error) {
       console.error('❌ [SEMANTIC-FILTER] Error in semantic filtering:', error);
-      return recentMessages.slice(-limit);
+      // Return messages in the same format as successful case
+      return recentMessages.slice(-limit).map(msg => ({
+        message: msg,
+        semanticScore: 0,
+        recencyScore: 1,
+        combinedScore: 0.3
+      }));
     }
   }
 
@@ -325,10 +340,25 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       console.log('🔍 [CURRENT-SCOPE] After filtering current prompt:', filteredMessages.map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
       
       // Use semantic similarity to find most relevant messages
-      const relevantMessages = await findRelevantRecentMessages(prompt, filteredMessages, coreAgent);
+      const relevantScoredMessages = await findRelevantRecentMessages(prompt, filteredMessages, coreAgent);
       
-      const messages = relevantMessages
-        .map(msg => `${msg.sender}: ${msg.text}`)
+      // Check if the best semantic similarity is high enough for Stage 1
+      const bestSimilarity = relevantScoredMessages.length > 0 ? relevantScoredMessages[0].semanticScore : 0;
+      console.log(`🎯 [CURRENT-SCOPE] Best semantic similarity: ${bestSimilarity.toFixed(3)}`);
+      
+      // Use semantic classification to detect if query likely needs cross-session search
+      const needsCrossSessionSearch = await detectCrossSessionIntent(prompt);
+      
+      const requiredSimilarity = needsCrossSessionSearch ? 0.65 : 0.35;
+      console.log(`🔍 [CURRENT-SCOPE] Query needs cross-session search: ${needsCrossSessionSearch}, required similarity: ${requiredSimilarity}`);
+      
+      if (bestSimilarity < requiredSimilarity) {
+        console.log(`⚠️ [CURRENT-SCOPE] Semantic similarity ${bestSimilarity.toFixed(3)} below threshold ${requiredSimilarity}, will try session scope`);
+        return null;
+      }
+      
+      const messages = relevantScoredMessages
+        .map(item => `${item.message.sender}: ${item.message.text}`)
         .join('\n');
       
       console.log('🔍 [CURRENT-SCOPE] Final formatted messages:', messages);
@@ -377,16 +407,14 @@ Answer based on what was just discussed. Be specific and accurate.`;
         return null;
       }
 
-      // Get current session ID for scoped search
-      const sessionId = context.sessionId;
-      
-      // Perform session-scoped semantic search
+      // Perform cross-session semantic search (no sessionId filter for broader scope)
+      console.log('🔍 [SESSION-SCOPE] Searching across all sessions...');
       const searchResult = await userMemoryAgent.execute({
         action: 'memory-semantic-search',
         query: prompt,
-        limit: 20,
-        minSimilarity: 0.26,
-        sessionId: sessionId
+        limit: 30,
+        minSimilarity: 0.26
+        // No sessionId - search across all sessions
       }, {
         database: coreAgent.context?.database || coreAgent.database,
         embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
@@ -402,13 +430,13 @@ Answer based on what was just discussed. Be specific and accurate.`;
         if (searchResult.result?.conversationMessages?.length) {
           contextData = searchResult.result.conversationMessages;
           contextType = 'conversation';
-          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} conversation messages`);
+          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} conversation messages across sessions`);
         }
         // Check for memory results
         else if (searchResult.result?.results?.length) {
           contextData = searchResult.result.results;
           contextType = 'memory';
-          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} memory results`);
+          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} memory results across sessions`);
         }
       }
 
@@ -420,11 +448,26 @@ Answer based on what was just discussed. Be specific and accurate.`;
       // Build context snippets based on type
       let contextSnippets;
       if (contextType === 'conversation') {
-        contextSnippets = contextData.slice(0, 5).map((msg, i) => {
+        // Prioritize current session messages, then other sessions
+        const currentSessionId = context.sessionId;
+        const currentSessionMessages = contextData.filter(msg => msg.session_id === currentSessionId);
+        const otherSessionMessages = contextData.filter(msg => msg.session_id !== currentSessionId);
+        
+        // Mix current session (up to 2) + other sessions (up to 3) = max 5 total
+        const prioritizedMessages = [
+          ...currentSessionMessages.slice(0, 2),
+          ...otherSessionMessages.slice(0, 3)
+        ].slice(0, 5);
+        
+        contextSnippets = prioritizedMessages.map((msg, i) => {
           const sender = msg.sender === 'user' ? 'You' : 'AI';
           const text = (msg.text || '').slice(0, 150);
-          return `${sender}: ${text}${(msg.text || '').length > 150 ? '...' : ''}`;
+          const isCurrentSession = msg.session_id === currentSessionId;
+          const prefix = isCurrentSession ? 'Recent' : 'Previous';
+          return `${prefix} - ${sender}: ${text}${(msg.text || '').length > 150 ? '...' : ''}`;
         });
+        
+        console.log(`🔍 [SESSION-SCOPE] Using ${currentSessionMessages.length} current + ${Math.min(3, otherSessionMessages.length)} other session messages`);
       } else {
         // Memory format
         const topSimilarity = contextData[0].similarity;
@@ -565,12 +608,22 @@ Answer based on what was just said in this conversation. Be specific and accurat
     }
   }
 
-  // Hybrid classification: keyword matching + zero-shot fallback
+  // Hybrid classification: zero-shot primary + keyword confidence boosting
   async function classifyQuery(prompt) {
     try {
       const queryLower = prompt.toLowerCase().trim();
       
-      // Stage 1: Simple keyword detection for high-confidence cases
+      // Stage 1: Primary zero-shot classification
+      console.log('🧠 [CLASSIFICATION] Using zero-shot classification...');
+      const zeroShotResult = await classifyWithZeroShot(prompt);
+      
+      if (zeroShotResult && zeroShotResult.confidence > 0.7) {
+        // High confidence zero-shot result, use it directly
+        console.log(`✅ [CLASSIFICATION] High confidence zero-shot: ${zeroShotResult.classification} (${zeroShotResult.confidence.toFixed(3)})`);
+        return zeroShotResult;
+      }
+      
+      // Stage 2: For lower confidence, check if keywords can boost confidence
       const keywords = {
         CONTEXT: [
           'what did i', 'what did you', 'what were we', 'earlier you', 'earlier i',
@@ -589,23 +642,76 @@ Answer based on what was just said in this conversation. Be specific and accurat
         ]
       };
 
-      // Check for keyword matches
+      // Check if keywords align with zero-shot prediction
+      let keywordMatch = null;
       for (const [category, keywordList] of Object.entries(keywords)) {
         for (const keyword of keywordList) {
           if (queryLower.includes(keyword)) {
-            console.log(`🎯 [KEYWORD-MATCH] "${prompt}" -> ${category} (matched: "${keyword}")`);
-            return { classification: category };
+            keywordMatch = category;
+            console.log(`🎯 [KEYWORD-BOOST] Found keyword "${keyword}" -> ${category}`);
+            break;
           }
         }
+        if (keywordMatch) break;
       }
 
-      // Stage 2: Zero-shot classification for ambiguous cases
-      console.log('🔄 [CLASSIFICATION] No keyword match found, trying zero-shot...');
-      return await classifyWithZeroShot(prompt);
+      if (keywordMatch && zeroShotResult && keywordMatch === zeroShotResult.classification) {
+        // Keywords align with zero-shot, boost confidence
+        console.log(`🚀 [CLASSIFICATION] Keyword-boosted confidence: ${zeroShotResult.classification}`);
+        return { ...zeroShotResult, confidence: Math.min(0.95, zeroShotResult.confidence + 0.2) };
+      } else if (keywordMatch && zeroShotResult && zeroShotResult.confidence < 0.5) {
+        // Low confidence zero-shot, strong keyword match - use keyword
+        console.log(`🎯 [CLASSIFICATION] Low confidence zero-shot (${zeroShotResult.confidence.toFixed(3)}), using keyword: ${keywordMatch}`);
+        return { classification: keywordMatch, confidence: 0.8 };
+      } else if (zeroShotResult) {
+        // Use zero-shot result even with moderate confidence
+        console.log(`🧠 [CLASSIFICATION] Using zero-shot: ${zeroShotResult.classification} (${zeroShotResult.confidence.toFixed(3)})`);
+        return zeroShotResult;
+      }
+
+      // Stage 3: Fallback to heuristics
+      console.log('🔄 [CLASSIFICATION] Falling back to heuristics...');
+      return classifyWithHeuristics(prompt);
       
     } catch (error) {
       console.error('❌ [ROUTING] Classification error:', error.message);
       return { classification: 'GENERAL' };
+    }
+  }
+
+  // Semantic detection for cross-session intent
+  async function detectCrossSessionIntent(prompt) {
+    try {
+      // Initialize zero-shot classifier if not already done
+      if (!global.zeroShotClassifier) {
+        const { pipeline } = await import('@xenova/transformers');
+        global.zeroShotClassifier = await pipeline(
+          'zero-shot-classification',
+          'Xenova/distilbert-base-uncased-mnli'
+        );
+      }
+      
+      const candidateLabels = [
+        'asking about something mentioned or discussed in previous conversations',
+        'asking about current conversation or recent messages only'
+      ];
+      
+      const result = await global.zeroShotClassifier(prompt, candidateLabels);
+      
+      if (result && result.labels && result.scores) {
+        const topLabel = result.labels[0];
+        const topScore = result.scores[0];
+        const needsCrossSession = topLabel.includes('previous conversations') && topScore > 0.6;
+        
+        console.log(`🧠 [CROSS-SESSION-DETECT] "${prompt}" -> ${needsCrossSession ? 'CROSS-SESSION' : 'CURRENT'} (confidence: ${topScore.toFixed(3)})`);
+        return needsCrossSession;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('❌ [CROSS-SESSION-DETECT] Error:', error.message);
+      // Fallback to conservative approach - assume current session only
+      return false;
     }
   }
 
@@ -627,18 +733,18 @@ Answer based on what was just said in this conversation. Be specific and accurat
       
       // Define candidate labels for intent classification
       const candidateLabels = [
-        'I want to ask about previous conversation or messages',
-        'I want to store information or share something that happened', 
-        'I want to execute a command or action',
-        'I have a general question that needs an answer'
+        'asking about previous conversations, messages, or what was discussed before',
+        'wanting to remember, store, or save information for later',
+        'requesting to write, create, generate, or build something',
+        'asking a general question that needs a direct answer'
       ];
       
       // Map labels back to our categories
       const labelMap = {
-        'I want to ask about previous conversation or messages': 'CONTEXT',
-        'I want to store information or share something that happened': 'MEMORY',
-        'I want to execute a command or action': 'COMMAND',
-        'I have a general question that needs an answer': 'GENERAL'
+        'asking about previous conversations, messages, or what was discussed before': 'CONTEXT',
+        'wanting to remember, store, or save information for later': 'MEMORY',
+        'requesting to write, create, generate, or build something': 'COMMAND',
+        'asking a general question that needs a direct answer': 'GENERAL'
       };
 
       const result = await global.zeroShotClassifier(prompt, candidateLabels);
