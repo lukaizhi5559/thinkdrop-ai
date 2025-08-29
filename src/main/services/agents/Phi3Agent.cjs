@@ -251,49 +251,6 @@ const AGENT_FORMAT = {
     }
   },
 
-  async queryPhi3Routing(params, context) {
-    try {
-      const { prompt, options = {} } = params;
-      
-      if (!prompt) {
-        throw new Error('Prompt is required for query-phi3-routing action');
-      }
-      
-      if (!AGENT_FORMAT.isAvailable) {
-        throw new Error('Phi3 is not available');
-      }
-      
-      console.log(`🎯 Routing query with Phi3: "${prompt.substring(0, 50)}..."`);
-
-      // Ultra-fast routing with minimal tokens
-      const queryOptions = {
-        model: 'phi4-mini:latest',
-        timeout: options.timeout || 2000,
-        temperature: options.temperature || 0.0,
-        max_tokens: options.maxTokens || 3,
-        top_p: 0.9,
-        repeat_penalty: 1.0,
-        stop: ["\n", " ", "."]
-      };
-
-      const result = await AGENT_FORMAT.executeOllamaQuery(prompt, queryOptions);
-      
-      return {
-        success: true,
-        action: 'query-phi3-routing',
-        result: result.trim(),
-        timestamp: new Date().toISOString()
-      };
-      
-    } catch (error) {
-      console.error('❌ Phi3 routing query failed:', error);
-      return {
-        success: false,
-        error: error.message,
-        action: 'query-phi3-routing'
-      };
-    }
-  },
 
   async queryPhi3(params, context) {
     try {

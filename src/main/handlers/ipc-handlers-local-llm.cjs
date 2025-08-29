@@ -29,7 +29,8 @@ let currentParser = null;
 // LEGACY LLM COMPATIBILITY HANDLERS
 // ========================================
 
-function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
+function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
+  console.log('🚀 Setting up Local LLM IPC handlers...');
   // Initialize IntentParser using factory
   if (!currentParser) {
     parserFactory.getParser().then(parser => {
@@ -60,720 +61,797 @@ function setupLocalLLMHandlers(ipcMain, coreAgent, windows) {
     }
   });
 
-  // Fast local LLM query handler with intent classification - returns both response and intentClassificationPayload
-  ipcMain.handle('llm-query', async (event, prompt, context = {}) => {
+  // Main IPC handler for new pipeline with routing and 3-stage progressive search
+  ipcMain.handle('llm-query', async (event, prompt, options = {}) => {
     const startTime = Date.now();
-    console.log('🚀 [NEW-PIPELINE] Starting ultra-fast pipeline...');
-    console.log('🔍 [NEW-PIPELINE-DEBUG] IPC handler llm-query called with prompt:', prompt.substring(0, 50) + '...');
     
     try {
-      // TIER 1: Context vs Non-Context routing (ultra-lightweight)
-      const routingStartTime = Date.now();
-      const contextType = await fastContextRouting(prompt);
-      const routingTime = Date.now() - routingStartTime;
-      console.log(`⚡ [ROUTING-T1] ${contextType} classification in ${routingTime}ms`);
-      
-      if (contextType === 'CONTEXT') {
-        // Path 1: Progressive search pipeline
-        return await handleContextPipeline(prompt, context, startTime);
-      } else {
-        // Path 2: Non-Context - needs secondary routing
-        const subRoutingStartTime = Date.now();
-        const queryType = await fastNonContextRouting(prompt);
-        const subRoutingTime = Date.now() - subRoutingStartTime;
-        console.log(`⚡ [ROUTING-T2] ${queryType} classification in ${subRoutingTime}ms`);
-        
-        const result = await handleNonContextPipeline(queryType, prompt, context, startTime);
-        console.log(`🔍 [PIPELINE-RETURN] Final result:`, { success: result?.success, hasResponse: !!result?.response, responseLength: result?.response?.length });
-        return result;
+      if (!coreAgent || !coreAgent.initialized) {
+        return { success: false, error: 'CoreAgent not initialized' };
       }
+
+      console.log(`🎯 [NEW-PIPELINE] Starting query: "${prompt.substring(0, 50)}..."`);
+
+      // Step 1: Routing classification
+      const routingStartTime = Date.now();
+      const routingResult = await classifyQuery(prompt);
+      const routingTime = Date.now() - routingStartTime;
       
+      console.log(`🔍 [ROUTING] Classification: ${routingResult.classification} (${routingTime}ms)`);
+
+      // Handle non-context queries (GENERAL, MEMORY, COMMAND)
+      if (['GENERAL', 'MEMORY', 'COMMAND'].includes(routingResult.classification)) {
+        return await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
+      }
+
+      // Handle context queries with 3-stage progressive search
+      if (routingResult.classification === 'CONTEXT') {
+        console.log('🎯 [CONTEXT-PIPELINE] Starting 3-stage progressive search...');
+        
+        // Stage 1: Current conversation scope
+        console.log('📍 [STAGE-1] Current conversation scope...');
+        const stage1Result = await handleCurrentScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
+        if (stage1Result && stage1Result.success) {
+          console.log('✅ [STAGE-1] Success - returning current scope result');
+          return {
+            success: true,
+            response: stage1Result.response,
+            pipeline: 'stage1_current_scope',
+            timing: { total: Date.now() - startTime }
+          };
+        }
+
+        // Stage 2: Session-scoped semantic search
+        console.log('📍 [STAGE-2] Session-scoped semantic search...');
+        const stage2Result = await handleSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
+        // Return successful stage 2 result if available
+        if (stage2Result && stage2Result.success) {
+          console.log('✅ [CONTEXT-PIPELINE] Returning Stage 2 result with conversation messages');
+          return {
+            success: true,
+            response: stage2Result.response,
+            pipeline: 'stage2_session_scope',
+            timing: { total: Date.now() - startTime }
+          };
+        }
+
+        // Stage 3: Cross-session semantic search if still no results
+        if (!stage1Result || !stage1Result.success) {
+          console.log('📍 [STAGE-3] Cross-session semantic search...');
+          // Temporarily disabled due to executeAgent context issues
+          console.log('⚠️ [STAGE-3] Skipped - using Stage 1-2 results');
+        }
+
+        // All stages failed - fallback to general knowledge
+        console.log('⚠️ [FALLBACK] All context stages failed - using general knowledge');
+        return await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+      }
+
+      // Default fallback
+      return await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+
     } catch (error) {
       const totalTime = Date.now() - startTime;
-      console.error(`❌ [NEW-PIPELINE] Error after ${totalTime}ms:`, error.message);
-      return { success: false, error: error.message, timing: { total: totalTime } };
-    }
-
-    // Ultra-lightweight Phi4-mini context routing
-    async function fastContextRouting(prompt, context) {
-      try {
-        if (!coreAgent || !coreAgent.initialized) {
-          throw new Error('CoreAgent not initialized');
-        }
-
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        if (!phi3Agent) {
-          throw new Error('Phi3Agent not available');
-        }
-
-        const routingPrompt = `Classify this query:
-
-"${prompt}"
-
-CONTEXT: References our conversation history or stored memories
-- "What did I tell you about my project?"
-- "Continue our discussion about..."
-- "Remember when I mentioned..."
-
-NONCONTEXT: General knowledge or standalone questions  
-- "Who is the president of Canada?"
-- "What is the capital of France?"
-- "How do I cook pasta?"
-- "What's the weather today?"
-
-Answer: CONTEXT or NONCONTEXT`;
-
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-routing',
-          prompt: routingPrompt,
-          options: { 
-            timeout: 2000,  // Ultra-fast routing timeout
-            maxTokens: 3,   // Minimal tokens for routing
-            temperature: 0.0 // Deterministic routing
-          }
-        });
-
-        if (!result.success) {
-          console.warn('⚠️ Routing classification failed, defaulting to NONCONTEXT');
-          return 'NONCONTEXT';
-        }
-
-        const classification = result.result?.trim()?.toUpperCase()?.replace(/[^A-Z]/g, '');
-        console.log(`🎯 Query classified as: ${classification}`);
-        
-        // Validate classification
-        if (classification === 'CONTEXT' || classification === 'NONCONTEXT') {
-          return classification;
-        } else {
-          console.warn(`⚠️ Invalid classification "${classification}", defaulting to NONCONTEXT`);
-          return 'NONCONTEXT';
-        }
-      } catch (error) {
-        console.error('❌ Fast context routing failed:', error);
-        return 'NONCONTEXT'; // Safe fallback
-      }
-    }
-
-    // Secondary routing for non-context queries
-    async function fastNonContextRouting(prompt) {
-      try {
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        if (!phi3Agent) {
-          throw new Error('Phi3Agent not available');
-        }
-
-        const routingPrompt = `Classify this standalone query:
-
-"${prompt}"
-
-GENERAL: Factual/knowledge question
-MEMORY: Store information  
-COMMAND: Action/task request
-
-Answer:`;
-
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-routing',
-          prompt: routingPrompt,
-          options: { 
-            timeout: 2000,  // Ultra-fast secondary routing
-            maxTokens: 8,   // Enough for GENERAL/MEMORY/COMMAND
-            temperature: 0.0
-          }
-        });
-
-        if (result.success && result.response) {
-          const classification = result.response.trim().toUpperCase();
-          if (classification.includes('MEMORY')) return 'MEMORY';
-          if (classification.includes('COMMAND')) return 'COMMAND';
-          return 'GENERAL';
-        }
-
-        // Default to GENERAL for fastest path
-        return 'GENERAL';
-
-      } catch (error) {
-        console.warn('⚠️ [ROUTING-T2] Error, defaulting to GENERAL:', error.message);
-        return 'GENERAL';
-      }
-    }
-
-    // Handle context-dependent queries (progressive search)
-    async function handleContextPipeline(prompt, context, startTime) {
-      console.log('🔍 [CONTEXT-PIPELINE] Starting streamlined progressive search...');
+      console.error(`❌ [NEW-PIPELINE] Critical error after ${totalTime}ms:`, error.message);
       
-      try {
-        // Stage 1: Current conversation scope with embeddings
-        const stage1StartTime = Date.now();
-        const currentScopeResult = await handleCurrentScope(prompt, context);
-        const stage1Time = Date.now() - stage1StartTime;
+      return {
+        success: false,
+        error: error.message,
+        pipeline: 'critical_error',
+        timing: { total: totalTime }
+      };
+    }
+  });
+
+  // Helper functions for the 3-stage progressive search pipeline
+
+  // Helper function: Semantic similarity calculation
+  function cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) {
+      console.log(`⚠️ [COSINE] Invalid vectors: A=${!!vecA}, B=${!!vecB}, lengthA=${vecA?.length}, lengthB=${vecB?.length}`);
+      return 0;
+    }
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      const a = vecA[i];
+      const b = vecB[i];
+      
+      // Check for non-numeric values
+      if (typeof a !== 'number' || typeof b !== 'number' || isNaN(a) || isNaN(b)) {
+        console.log(`⚠️ [COSINE] Non-numeric values at index ${i}: a=${a} (${typeof a}), b=${b} (${typeof b})`);
+        return 0;
+      }
+      
+      dotProduct += a * b;
+      normA += a * a;
+      normB += b * b;
+    }
+    
+    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+    if (denominator === 0) {
+      console.log(`⚠️ [COSINE] Zero magnitude vectors: normA=${normA}, normB=${normB}`);
+      return 0;
+    }
+    
+    const similarity = dotProduct / denominator;
+    console.log(`🔢 [COSINE] Similarity: ${similarity.toFixed(6)} (dot=${dotProduct.toFixed(3)}, normA=${Math.sqrt(normA).toFixed(3)}, normB=${Math.sqrt(normB).toFixed(3)})`);
+    return similarity;
+  }
+
+  // Helper function: Find semantically relevant recent messages
+  async function findRelevantRecentMessages(prompt, recentMessages, coreAgent, limit = 3) {
+    try {
+      // Generate embedding for the query
+      const semanticAgent = coreAgent.getAgent('SemanticEmbeddingAgent');
+      if (!semanticAgent) {
+        console.warn('⚠️ [SEMANTIC-FILTER] SemanticEmbeddingAgent not available, falling back to recency');
+        return recentMessages.slice(-limit);
+      }
+
+      const queryResult = await semanticAgent.execute({
+        action: 'generate-embedding',
+        text: prompt
+      });
+
+      if (!queryResult.success || !queryResult.embedding) {
+        console.warn('⚠️ [SEMANTIC-FILTER] Failed to generate query embedding, falling back to recency');
+        return recentMessages.slice(-limit);
+      }
+
+      const queryEmbedding = queryResult.embedding;
+      console.log('🧠 [SEMANTIC-FILTER] Generated query embedding');
+
+      // Score each message by semantic similarity + recency
+      const scoredMessages = recentMessages.map((msg, index) => {
+        // Recency score: more recent = higher score
+        const recencyScore = (recentMessages.length - index) / recentMessages.length;
         
-        if (currentScopeResult && currentScopeResult.success) {
-          const totalTime = Date.now() - startTime;
-          console.log(`✅ [CONTEXT-PIPELINE] Found answer in current scope (${stage1Time}ms, total: ${totalTime}ms)`);
-          return {
-            success: true,
-            response: currentScopeResult.response,
-            pipeline: 'context_current_scope',
-            timing: { stage1: stage1Time, total: totalTime }
-          };
-        }
+        // Semantic score: use stored embedding if available
+        let semanticScore = 0;
+        let messageEmbedding = null;
         
-        // Stage 2: Session-scoped semantic memory search
-        const stage2StartTime = Date.now();
-        const sessionScopeResult = await handleSessionScope(prompt, context);
-        const stage2Time = Date.now() - stage2StartTime;
-        
-        if (sessionScopeResult && sessionScopeResult.success) {
-          const totalTime = Date.now() - startTime;
-          console.log(`✅ [CONTEXT-PIPELINE] Found answer in session scope (${stage2Time}ms, total: ${totalTime}ms)`);
-          return {
-            success: true,
-            response: sessionScopeResult.response,
-            pipeline: 'context_session_scope',
-            timing: { stage1: stage1Time, stage2: stage2Time, total: totalTime }
-          };
-        }
-        
-        // Stage 3: Cross-session semantic memory search
-        const stage3StartTime = Date.now();
-        const crossSessionResult = await handleCrossSessionScope(prompt, context);
-        const stage3Time = Date.now() - stage3StartTime;
-        
-        if (crossSessionResult && crossSessionResult.success) {
-          const totalTime = Date.now() - startTime;
-          console.log(`✅ [CONTEXT-PIPELINE] Found answer in cross-session scope (${stage3Time}ms, total: ${totalTime}ms)`);
-          return {
-            success: true,
-            response: crossSessionResult.response,
-            pipeline: 'context_cross_session',
-            timing: { stage1: stage1Time, stage2: stage2Time, stage3: stage3Time, total: totalTime }
-          };
-        }
-        
-        // No context found - fallback to general knowledge pipeline
-        const totalTime = Date.now() - startTime;
-        console.log(`⚠️ [CONTEXT-PIPELINE] No relevant context found, falling back to general knowledge (${totalTime}ms)`);
-        
-        // Fallback to general knowledge pipeline
-        try {
-          const fallbackResult = await handleGeneralKnowledge(prompt, context, startTime);
-          if (fallbackResult && fallbackResult.success) {
-            return {
-              ...fallbackResult,
-              pipeline: 'context_fallback_to_general',
-              timing: { ...fallbackResult.timing, contextAttempt: totalTime }
-            };
+        if (msg.embedding) {
+          if (Array.isArray(msg.embedding)) {
+            messageEmbedding = msg.embedding;
+          } else if (typeof msg.embedding === 'string') {
+            // Parse comma-separated string back to array of floats
+            try {
+              // Check if string starts with array literal format [...]
+              let embeddingStr = msg.embedding;
+              if (embeddingStr.startsWith('[') && embeddingStr.endsWith(']')) {
+                // Remove brackets and parse
+                embeddingStr = embeddingStr.slice(1, -1);
+              }
+              
+              messageEmbedding = embeddingStr.split(',').map(x => {
+                const val = parseFloat(x.trim());
+                return isNaN(val) ? 0 : val; // Replace NaN with 0
+              });
+              
+              console.log(`🔧 [SEMANTIC-FILTER] Parsed string embedding to array (${messageEmbedding.length} dimensions)`);
+              
+              // Debug: Check first few values
+              const firstFew = messageEmbedding.slice(0, 5);
+              const hasNaN = messageEmbedding.some(x => isNaN(x));
+              const nanCount = messageEmbedding.filter(x => isNaN(x)).length;
+              console.log(`🔍 [SEMANTIC-FILTER] First 5 values: [${firstFew.join(', ')}], hasNaN: ${hasNaN}, nanCount: ${nanCount}`);
+              
+              if (hasNaN) {
+                console.log(`🔍 [SEMANTIC-FILTER] Raw embedding string sample: "${msg.embedding.substring(0, 100)}..."`);
+              }
+            } catch (error) {
+              console.warn(`⚠️ [SEMANTIC-FILTER] Failed to parse embedding string:`, error);
+            }
           }
-        } catch (fallbackError) {
-          console.error('❌ [CONTEXT-FALLBACK] General knowledge fallback failed:', fallbackError.message);
+          
+          if (messageEmbedding && Array.isArray(messageEmbedding) && messageEmbedding.length > 0) {
+            semanticScore = cosineSimilarity(queryEmbedding, messageEmbedding);
+          }
         }
+        
+        // Combined score: 70% semantic, 30% recency
+        const combinedScore = (semanticScore * 0.7) + (recencyScore * 0.3);
+        
+        console.log(`📊 [SEMANTIC-FILTER] ${msg.sender}: "${msg.text.substring(0, 30)}..." - Semantic: ${semanticScore.toFixed(3)}, Recency: ${recencyScore.toFixed(3)}, Combined: ${combinedScore.toFixed(3)}`);
         
         return {
-          success: true,
-          response: "I don't have enough context from our previous conversations to answer that question. Could you provide more details?",
-          pipeline: 'context_no_results',
-          timing: { stage1: stage1Time, stage2: stage2Time, stage3: stage3Time, total: totalTime }
+          message: msg,
+          semanticScore,
+          recencyScore,
+          combinedScore
         };
-        
-      } catch (error) {
-        const totalTime = Date.now() - startTime;
-        console.error(`❌ [CONTEXT-PIPELINE] Error after ${totalTime}ms:`, error.message);
-        return { success: false, error: error.message, timing: { total: totalTime } };
-      }
+      });
+
+      // Sort by combined score and return top N
+      const topMessages = scoredMessages
+        .sort((a, b) => b.combinedScore - a.combinedScore)
+        .slice(0, limit)
+        .map(item => item.message);
+
+      console.log(`🎯 [SEMANTIC-FILTER] Selected ${topMessages.length} most relevant messages`);
+      return topMessages;
+
+    } catch (error) {
+      console.error('❌ [SEMANTIC-FILTER] Error in semantic filtering:', error);
+      return recentMessages.slice(-limit);
     }
+  }
 
-    // Helper: Handle current conversation scope with embeddings
-    async function handleCurrentScope(prompt, context) {
-      try {
-        const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
-        const embeddingAgent = coreAgent.getAgent('SemanticEmbeddingAgent');
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        
-        if (!conversationAgent || !embeddingAgent || !phi3Agent) {
-          console.warn('⚠️ [CURRENT-SCOPE] Required agents not available');
-          return null;
-        }
+  // Helper function: Handle current conversation scope (Stage 1)
+  async function handleCurrentScope(prompt, context) {
+    try {
+      const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      
+      if (!conversationAgent || !phi3Agent) {
+        console.warn('⚠️ [CURRENT-SCOPE] Required agents not available');
+        return null;
+      }
 
-        // Get current session ID
-        const sessionsResult = await conversationAgent.execute({
-          action: 'session-list',
-          limit: 1,
-          offset: 0
-        });
+      // Get recent messages from current session
+      const sessionId = context.sessionId;
+      console.log(`🔍 [CURRENT-SCOPE] Debug context:`, JSON.stringify(context, null, 2));
+      console.log(`🔍 [CURRENT-SCOPE] Session ID from context:`, context.sessionId);
+      if (!sessionId) {
+        console.warn('⚠️ [CURRENT-SCOPE] No session ID provided');
+        return null;
+      }
+      
+      console.log(`🔍 [CURRENT-SCOPE] Using session ID: ${sessionId}`);
 
-        if (!sessionsResult?.success || !sessionsResult?.data?.sessions?.length) {
-          console.warn('⚠️ [CURRENT-SCOPE] No active session found');
-          return null;
-        }
+      const recentMessages = await conversationAgent.execute({
+        action: 'message-list',
+        sessionId: sessionId,
+        limit: 8,
+        offset: 0,
+        direction: 'DESC'  // Get most recent messages first
+      });
 
-        const currentSessionId = sessionsResult.data.sessions[0].id;
-        
-        // Get conversation messages with embeddings
-        const messagesResult = await conversationAgent.execute({
-          action: 'messages-with-embeddings',
-          sessionId: currentSessionId,
-          limit: 20
-        });
+      if (!recentMessages?.success || !recentMessages?.data?.messages?.length) {
+        console.warn('⚠️ [CURRENT-SCOPE] No recent messages found');
+        console.log('🔍 [CURRENT-SCOPE] Debug - recentMessages result:', JSON.stringify(recentMessages, null, 2));
+        return null;
+      }
+      
+      console.log(`✅ [CURRENT-SCOPE] Found ${recentMessages.data.messages.length} recent messages`);
+      console.log('🔍 [CURRENT-SCOPE] Raw messages:', recentMessages.data.messages.map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
 
-        if (!messagesResult?.success || !messagesResult?.result?.messages?.length) {
-          console.warn('⚠️ [CURRENT-SCOPE] No messages with embeddings found');
-          return null;
-        }
+      // Intelligent semantic filtering of recent messages
+      let filteredMessages = recentMessages.data.messages.filter(msg => msg.text !== prompt);
+      console.log('🔍 [CURRENT-SCOPE] After filtering current prompt:', filteredMessages.map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
+      
+      // Use semantic similarity to find most relevant messages
+      const relevantMessages = await findRelevantRecentMessages(prompt, filteredMessages, coreAgent);
+      
+      const messages = relevantMessages
+        .map(msg => `${msg.sender}: ${msg.text}`)
+        .join('\n');
+      
+      console.log('🔍 [CURRENT-SCOPE] Final formatted messages:', messages);
 
-        // Generate embedding for prompt
-        const promptEmbeddingResult = await embeddingAgent.execute({
-          action: 'generate-embedding',
-          text: prompt
-        });
+      if (!messages.trim()) {
+        console.warn('⚠️ [CURRENT-SCOPE] No valid conversation context');
+        return null;
+      }
 
-        if (!promptEmbeddingResult?.success) {
-          console.warn('⚠️ [CURRENT-SCOPE] Failed to generate prompt embedding');
-          return null;
-        }
-
-        const promptEmbedding = promptEmbeddingResult.embedding;
-        const messages = messagesResult.result.messages;
-        
-        // Calculate semantic similarity and filter relevant messages
-        const relevantMessages = [];
-        for (const msg of messages) {
-          if (!msg.embedding || msg.embedding === 'NULL') continue;
-          
-          let msgEmbedding;
-          try {
-            msgEmbedding = typeof msg.embedding === 'string' ? JSON.parse(msg.embedding) : msg.embedding;
-          } catch (e) {
-            continue;
-          }
-
-          // Calculate cosine similarity
-          const similarity = calculateCosineSimilarity(promptEmbedding, msgEmbedding);
-          if (similarity >= 0.18) {
-            relevantMessages.push({
-              ...msg,
-              similarity,
-              text: msg.text || msg.source_text
-            });
-          }
-        }
-
-        if (relevantMessages.length === 0) {
-          console.warn('⚠️ [CURRENT-SCOPE] No semantically relevant messages found');
-          return null;
-        }
-
-        // Sort by similarity and build context
-        relevantMessages.sort((a, b) => b.similarity - a.similarity);
-        const contextMessages = relevantMessages.slice(0, 8);
-        
-        // Build conversation context
-        const conversationContext = contextMessages
-          .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
-          .map(msg => `${msg.sender}: ${msg.text}`)
-          .join('\n');
-
-        // Generate response using context
-        const phiPrompt = `You are ThinkDrop AI. Answer based on our recent conversation.
+      // Generate response using current conversation context
+      const phiPrompt = `You are ThinkDrop AI. Answer based on the recent conversation.
 
 RECENT CONVERSATION:
-${conversationContext}
+${messages}
 
-QUESTION: ${prompt}
+CURRENT QUESTION: ${prompt}
 
-Be concise (2-4 sentences).`;
+Answer based on what was just discussed. Be specific and accurate.`;
 
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-fast',
-          prompt: phiPrompt,
-          options: { timeout: 10000, maxTokens: 150, temperature: 0.2 }
-        });
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 5000, maxTokens: 120, temperature: 0.2 }
+      });
 
-        if (result.success && result.response) {
-          return { success: true, response: result.response };
-        }
+      if (result.success && result.response) {
+        return { success: true, response: result.response };
+      }
 
-        return null;
+      return null;
 
-      } catch (error) {
-        console.error('❌ [CURRENT-SCOPE] Error:', error.message);
+    } catch (error) {
+      console.error('❌ [CURRENT-SCOPE] Error:', error.message);
+      return null;
+    }
+  }
+
+  // Stage 2: Session-scoped semantic search
+  async function handleSessionScope(prompt, context) {
+    try {
+      const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      
+      if (!userMemoryAgent || !phi3Agent) {
+        console.warn('⚠️ [SESSION-SCOPE] Required agents not available');
         return null;
       }
-    }
 
-    // Helper: Handle session-scoped semantic memory search
-    async function handleSessionScope(prompt, context) {
-      try {
-        const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        
-        if (!userMemoryAgent || !phi3Agent) {
-          console.warn('⚠️ [SESSION-SCOPE] Required agents not available');
-          return null;
+      // Get current session ID for scoped search
+      const sessionId = context.sessionId;
+      
+      // Perform session-scoped semantic search
+      const searchResult = await userMemoryAgent.execute({
+        action: 'memory-semantic-search',
+        query: prompt,
+        limit: 20,
+        minSimilarity: 0.26,
+        sessionId: sessionId
+      }, {
+        database: coreAgent.context?.database || coreAgent.database,
+        embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
+        executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+      });
+
+      // Handle both memory results and conversation message results
+      let contextData = null;
+      let contextType = 'unknown';
+
+      if (searchResult?.success) {
+        // Check for conversation messages (from logs: "Found 20 conversation messages")
+        if (searchResult.result?.conversationMessages?.length) {
+          contextData = searchResult.result.conversationMessages;
+          contextType = 'conversation';
+          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} conversation messages`);
         }
-
-        // Get current session ID for scoped search
-        const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
-        let sessionId = null;
-        
-        if (conversationAgent) {
-          const sessionsResult = await conversationAgent.execute({
-            action: 'session-list',
-            limit: 1,
-            offset: 0
-          });
-          
-          if (sessionsResult?.success && sessionsResult?.data?.sessions?.length) {
-            sessionId = sessionsResult.data.sessions[0].id;
-          }
+        // Check for memory results
+        else if (searchResult.result?.results?.length) {
+          contextData = searchResult.result.results;
+          contextType = 'memory';
+          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} memory results`);
         }
+      }
 
-        // Perform session-scoped semantic search
-        const searchResult = await userMemoryAgent.execute({
-          action: 'memory-semantic-search',
-          query: prompt,
-          limit: 20,
-          minSimilarity: 0.26,
-          sessionId: sessionId
-        }, {
-          database: coreAgent.database,
-          embedder: coreAgent.getAgent('SemanticEmbeddingAgent')
+      if (!contextData?.length) {
+        console.warn('⚠️ [SESSION-SCOPE] No relevant context found');
+        return null;
+      }
+
+      // Build context snippets based on type
+      let contextSnippets;
+      if (contextType === 'conversation') {
+        contextSnippets = contextData.slice(0, 5).map((msg, i) => {
+          const sender = msg.sender === 'user' ? 'You' : 'AI';
+          const text = (msg.text || '').slice(0, 150);
+          return `${sender}: ${text}${(msg.text || '').length > 150 ? '...' : ''}`;
         });
-
-        if (!searchResult?.success || !searchResult?.result?.results?.length) {
-          console.warn('⚠️ [SESSION-SCOPE] No relevant memories found');
-          return null;
-        }
-
-        const memories = searchResult.result.results;
-        const topSimilarity = memories[0].similarity;
-        const avgTop3 = memories.slice(0, 3).reduce((s, m) => s + m.similarity, 0) / Math.min(3, memories.length);
-        
-        // Check if similarity is sufficient
-        if (topSimilarity < 0.28 && avgTop3 < 0.25) {
+      } else {
+        // Memory format
+        const topSimilarity = contextData[0].similarity;
+        if (topSimilarity < 0.28) {
           console.warn('⚠️ [SESSION-SCOPE] Similarity too low');
           return null;
         }
-
-        // Build memory snippets
-        const memorySnippets = memories.slice(0, 3).map((m, i) => {
+        contextSnippets = contextData.slice(0, 3).map((m, i) => {
           const text = (m.source_text || '').slice(0, 220);
           return `Memory ${i + 1} (${Math.round((m.similarity || 0) * 100)}%): ${text}${(m.source_text || '').length > 220 ? '...' : ''}`;
         });
+      }
 
-        // Generate response using memory context
-        const phiPrompt = `You are ThinkDrop AI. Use relevant history to answer.
+      // Generate response using context
+      const phiPrompt = `You are ThinkDrop AI. Use relevant history to answer.
 
 RELEVANT HISTORY:
-${memorySnippets.join('\n\n')}
+${contextSnippets.join('\n\n')}
 
 QUESTION: ${prompt}
 
 Answer in 2-4 sentences, focused and specific.`;
 
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-fast',
-          prompt: phiPrompt,
-          options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
-        });
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 5000, maxTokens: 120, temperature: 0.2 }
+      });
 
-        if (result.success && result.response) {
-          return { success: true, response: result.response };
-        }
+      if (result.success && result.response) {
+        return { success: true, response: result.response };
+      }
 
-        return null;
+      return null;
 
-      } catch (error) {
-        console.error('❌ [SESSION-SCOPE] Error:', error.message);
+    } catch (error) {
+      console.error('❌ [SESSION-SCOPE] Error:', error.message);
+      return null;
+    }
+  }
+
+  // Stage 3: Cross-session semantic search with current session prioritization
+  async function handleCrossSessionScope(prompt, context) {
+    try {
+      const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      
+      if (!userMemoryAgent || !phi3Agent) {
+        console.warn('⚠️ [CROSS-SESSION] Required agents not available');
         return null;
       }
-    }
 
-    // Helper: Handle cross-session semantic memory search
-    async function handleCrossSessionScope(prompt, context) {
-      try {
-        const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        
-        if (!userMemoryAgent || !phi3Agent) {
-          console.warn('⚠️ [CROSS-SESSION] Required agents not available');
-          return null;
-        }
+      // Perform cross-session semantic search (no sessionId filter)
+      const searchResult = await userMemoryAgent.execute({
+        action: 'memory-semantic-search',
+        query: prompt,
+        limit: 60,
+        minSimilarity: 0.32
+      }, {
+        database: coreAgent.context?.database || coreAgent.database,
+        embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
+        executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+      });
 
-        // Perform cross-session semantic search (no sessionId filter)
-        const searchResult = await userMemoryAgent.execute({
-          action: 'memory-semantic-search',
-          query: prompt,
-          limit: 60,
-          minSimilarity: 0.32
-        }, {
-          database: coreAgent.database,
-          embedder: coreAgent.getAgent('SemanticEmbeddingAgent')
-        });
+      if (!searchResult?.success) {
+        console.warn('⚠️ [CROSS-SESSION] Search failed');
+        return null;
+      }
 
-        if (!searchResult?.success || !searchResult?.result?.results?.length) {
-          console.warn('⚠️ [CROSS-SESSION] No relevant memories found');
-          return null;
-        }
-
+      // Handle both memory results and conversation message results
+      let contextItems = [];
+      if (searchResult.result?.results?.length) {
+        // Memory results with similarity scores
         const memories = searchResult.result.results;
         const topSimilarity = memories[0].similarity;
-        const avgTop3 = memories.slice(0, 3).reduce((s, m) => s + m.similarity, 0) / Math.min(3, memories.length);
         
         // Check if similarity is sufficient for cross-session
-        if (topSimilarity < 0.34 && avgTop3 < 0.30) {
+        if (topSimilarity < 0.34) {
           console.warn('⚠️ [CROSS-SESSION] Similarity too low');
           return null;
         }
 
-        // Build memory snippets
-        const memorySnippets = memories.slice(0, 3).map((m, i) => {
+        contextItems = memories.slice(0, 3).map((m, i) => {
           const text = (m.source_text || '').slice(0, 220);
           return `Memory ${i + 1} (${Math.round((m.similarity || 0) * 100)}%): ${text}${(m.source_text || '').length > 220 ? '...' : ''}`;
         });
-
-        // Generate response using cross-session memory context
-        const phiPrompt = `You are ThinkDrop AI. Use relevant history to answer.
-
-RELEVANT HISTORY:
-${memorySnippets.join('\n\n')}
-
-QUESTION: ${prompt}
-
-Answer in 2-4 sentences, focused and specific.`;
-
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-fast',
-          prompt: phiPrompt,
-          options: { timeout: 12000, maxTokens: 150, temperature: 0.2 }
+      } else if (searchResult.results?.length) {
+        // Conversation message results - prioritize current session
+        console.log(`✅ [CROSS-SESSION] Found ${searchResult.results.length} conversation messages`);
+        
+        const currentSessionId = context.sessionId;
+        const currentSessionMessages = searchResult.results.filter(msg => msg.session_id === currentSessionId);
+        const otherMessages = searchResult.results.filter(msg => msg.session_id !== currentSessionId);
+        
+        // Use current session messages first, then fill with other recent messages
+        const prioritizedMessages = [
+          ...currentSessionMessages.slice(-3), // Last 3 from current session
+          ...otherMessages.slice(0, 2) // Top 2 from other sessions
+        ].slice(0, 5);
+        
+        contextItems = prioritizedMessages.map((msg, i) => {
+          const sender = msg.sender === 'user' ? 'You' : 'AI';
+          const text = (msg.text || '').slice(0, 200);
+          const isCurrentSession = msg.session_id === currentSessionId;
+          const prefix = isCurrentSession ? 'Recent' : 'Previous';
+          return `${prefix} - ${sender}: ${text}${(msg.text || '').length > 200 ? '...' : ''}`;
         });
-
-        if (result.success && result.response) {
-          return { success: true, response: result.response };
-        }
-
-        return null;
-
-      } catch (error) {
-        console.error('❌ [CROSS-SESSION] Error:', error.message);
+      } else {
+        console.warn('⚠️ [CROSS-SESSION] No relevant memories or messages found');
         return null;
       }
+
+      // Generate response using cross-session context
+      const phiPrompt = `You are ThinkDrop AI. Answer based on the MOST RECENT conversation context.
+
+RECENT CONVERSATION:
+${contextItems.join('\n\n')}
+
+CURRENT QUESTION: ${prompt}
+
+Answer based on what was just said in this conversation. Be specific and accurate. Do not reference old conversations or make up details.`;
+
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: phiPrompt,
+        options: { timeout: 5000, maxTokens: 120, temperature: 0.2 }
+      });
+
+      if (result.success && result.response) {
+        return { success: true, response: result.response };
+      }
+
+      return null;
+
+    } catch (error) {
+      console.error('❌ [CROSS-SESSION] Error:', error.message);
+      return null;
     }
+  }
 
-    // Helper: Calculate cosine similarity between two vectors
-    function calculateCosineSimilarity(vecA, vecB) {
-      if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length !== vecB.length) {
-        return 0;
-      }
-
-      let dotProduct = 0;
-      let normA = 0;
-      let normB = 0;
-
-      for (let i = 0; i < vecA.length; i++) {
-        dotProduct += vecA[i] * vecB[i];
-        normA += vecA[i] * vecA[i];
-        normB += vecB[i] * vecB[i];
-      }
-
-      normA = Math.sqrt(normA);
-      normB = Math.sqrt(normB);
-
-      if (normA === 0 || normB === 0) {
-        return 0;
-      }
-
-      return dotProduct / (normA * normB);
-    }
-
-    // Handle non-context queries (general, memory, command)
-    async function handleNonContextPipeline(queryType, prompt, context, startTime) {
-      console.log(`🎯 [NONCONTEXT-PIPELINE] Handling ${queryType} query...`);
+  // Hybrid classification: keyword matching + zero-shot fallback
+  async function classifyQuery(prompt) {
+    try {
+      const queryLower = prompt.toLowerCase().trim();
       
-      switch (queryType) {
-        case 'GENERAL':
-          return await handleGeneralKnowledge(prompt, context, startTime);
-        case 'MEMORY':
-          return await handleMemoryStore(prompt, context, startTime);
-        case 'COMMAND':
-          return await handleCommand(prompt, context, startTime);
-        default:
-          return await handleGeneralKnowledge(prompt, context, startTime);
-      }
-    }
+      // Stage 1: Simple keyword detection for high-confidence cases
+      const keywords = {
+        CONTEXT: [
+          'what did i', 'what did you', 'what were we', 'earlier you', 'earlier i',
+          'before you', 'before i', 'previous', 'recap', 'summarize our',
+          'tell me what i said', 'remind me what', 'what was our'
+        ],
+        MEMORY: [
+          'remember that', 'remember this', 'store this', 'store that',
+          'save this', 'save that', 'keep this', 'keep that', 'note this',
+          'note that', 'don\'t forget', 'make a note'
+        ],
+        COMMAND: [
+          'write a', 'write me', 'create a', 'create me', 'generate a',
+          'generate me', 'build a', 'build me', 'make a', 'make me',
+          'code a', 'draft a', 'compose a', 'design a', 'develop a'
+        ]
+      };
 
-    // Ultra-fast general knowledge handler
-    async function handleGeneralKnowledge(prompt, context, startTime) {
-      const llmStartTime = Date.now();
-      console.log('📚 [GENERAL] Direct Phi4-mini call...');
-      
-      try {
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        if (!phi3Agent) {
-          throw new Error('Phi3Agent not available');
-        }
-
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-fast',
-          prompt: `You are ThinkDrop AI. Answer this general knowledge question concisely (2-3 sentences):
-
-${prompt}`,
-          options: { 
-            timeout: 6000, // Reduced from 8000ms for faster responses
-            maxTokens: 120, // Slightly reduced for faster generation
-            temperature: 0.2 // Reduced for more focused responses
+      // Check for keyword matches
+      for (const [category, keywordList] of Object.entries(keywords)) {
+        for (const keyword of keywordList) {
+          if (queryLower.includes(keyword)) {
+            console.log(`🎯 [KEYWORD-MATCH] "${prompt}" -> ${category} (matched: "${keyword}")`);
+            return { classification: category };
           }
-        });
+        }
+      }
 
-        const llmTime = Date.now() - llmStartTime;
-        const totalTime = Date.now() - startTime;
+      // Stage 2: Zero-shot classification for ambiguous cases
+      console.log('🔄 [CLASSIFICATION] No keyword match found, trying zero-shot...');
+      return await classifyWithZeroShot(prompt);
+      
+    } catch (error) {
+      console.error('❌ [ROUTING] Classification error:', error.message);
+      return { classification: 'GENERAL' };
+    }
+  }
+
+  // Zero-shot classification using transformers.js (copied from working IntentParser.cjs)
+  async function classifyWithZeroShot(prompt) {
+    try {
+      // Initialize zero-shot classifier if not already done
+      if (!global.zeroShotClassifier) {
+        const { pipeline } = await import('@xenova/transformers');
         
-        console.log(`✅ [GENERAL] Response generated in ${llmTime}ms (total: ${totalTime}ms)`);
-        console.log(`🔍 [GENERAL-DEBUG] Result:`, { success: result.success, hasResponse: !!result.response, responseLength: result.response?.length });
-
-        if (result.success && result.response) {
-          return {
-            success: true,
-            response: result.response,
-            pipeline: 'general_knowledge',
-            timing: { llm: llmTime, total: totalTime }
-          };
-        }
-
-        console.error(`❌ [GENERAL-DEBUG] Invalid result:`, result);
-        throw new Error('Failed to generate response');
-
-      } catch (error) {
-        const totalTime = Date.now() - startTime;
-        console.error(`❌ [GENERAL] Error after ${totalTime}ms:`, error.message);
-        return { success: false, error: error.message, timing: { total: totalTime } };
+        // Use a more accessible model that works offline
+        console.log('🔄 [ZERO-SHOT] Loading zero-shot classifier (DistilBERT)...');
+        global.zeroShotClassifier = await pipeline(
+          'zero-shot-classification',
+          'Xenova/distilbert-base-uncased-mnli'
+        );
+        console.log('✅ [ZERO-SHOT] Zero-shot classifier loaded');
       }
-    }
-
-    // Handle memory store requests
-    async function handleMemoryStore(prompt, context, startTime) {
-      const storeStartTime = Date.now();
-      console.log('💾 [MEMORY-STORE] Processing information storage...');
       
-      try {
-        const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
-        if (!userMemoryAgent) {
-          throw new Error('UserMemoryAgent not available');
+      // Define candidate labels for intent classification
+      const candidateLabels = [
+        'I want to ask about previous conversation or messages',
+        'I want to store information or share something that happened', 
+        'I want to execute a command or action',
+        'I have a general question that needs an answer'
+      ];
+      
+      // Map labels back to our categories
+      const labelMap = {
+        'I want to ask about previous conversation or messages': 'CONTEXT',
+        'I want to store information or share something that happened': 'MEMORY',
+        'I want to execute a command or action': 'COMMAND',
+        'I have a general question that needs an answer': 'GENERAL'
+      };
+
+      const result = await global.zeroShotClassifier(prompt, candidateLabels);
+      
+      if (result && result.labels && result.scores) {
+        const topLabel = result.labels[0];
+        const topScore = result.scores[0];
+        const classification = labelMap[topLabel] || 'GENERAL';
+
+        console.log(`🧠 [ZERO-SHOT] "${prompt}" -> ${classification} (confidence: ${topScore.toFixed(3)})`);
+        return { classification, confidence: topScore };
+      }
+      
+    } catch (error) {
+      console.error('❌ [ZERO-SHOT] Error:', error.message);
+      console.log('🔄 [ZERO-SHOT] Falling back to heuristics...');
+      return classifyWithHeuristics(prompt);
+    }
+  }
+
+  // Simple heuristic fallback
+  function classifyWithHeuristics(prompt) {
+    const queryLower = prompt.toLowerCase();
+    
+    // Basic patterns as fallback
+    if (queryLower.includes('what') && (queryLower.includes('say') || queryLower.includes('talk'))) {
+      return { classification: 'CONTEXT' };
+    }
+    if (queryLower.includes('remember') || queryLower.includes('store')) {
+      return { classification: 'MEMORY' };
+    }
+    if (queryLower.startsWith('write') || queryLower.startsWith('create') || queryLower.startsWith('make')) {
+      return { classification: 'COMMAND' };
+    }
+    
+    console.log(`🔄 [HEURISTIC] "${prompt}" -> GENERAL (fallback)`);
+    return { classification: 'GENERAL' };
+  }
+
+  async function classifyNonContextQuery(prompt) {
+    // Simple classification for non-context queries
+    if (prompt.toLowerCase().includes('remember') || prompt.toLowerCase().includes('store')) {
+      return 'MEMORY';
+    }
+    return 'GENERAL';
+  }
+
+  // Non-context query handlers
+  async function handleNonContextPipeline(queryType, prompt, context, startTime) {
+    console.log(`🎯 [NONCONTEXT-PIPELINE] Handling ${queryType} query...`);
+    
+    switch (queryType) {
+      case 'GENERAL':
+        return await handleGeneralKnowledge(prompt, context, startTime);
+      case 'MEMORY':
+        return await handleMemoryStore(prompt, context, startTime);
+      case 'COMMAND':
+        return await handleCommand(prompt, context, startTime);
+      default:
+        return await handleGeneralKnowledge(prompt, context, startTime);
+    }
+  }
+
+  // Ultra-fast general knowledge handler
+  async function handleGeneralKnowledge(prompt, context, startTime) {
+    const llmStartTime = Date.now();
+    console.log('⚡ [GENERAL-ULTRA-FAST] Starting chunked response...');
+    
+    try {
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      if (!phi3Agent) {
+        throw new Error('Phi3Agent not available');
+      }
+
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: `${prompt}`,
+        options: { 
+          timeout: 1500,
+          maxTokens: 40,
+          temperature: 0.0,
+          stop: [".", "!", "?", "\n"]
         }
+      });
 
-        // Get current session ID for context
-        const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
-        let sessionId = null;
-        
-        if (conversationAgent) {
-          const sessionsResult = await conversationAgent.execute({
-            action: 'session-list',
-            limit: 1,
-            offset: 0
-          });
-          
-          if (sessionsResult?.success && sessionsResult?.data?.sessions?.length) {
-            sessionId = sessionsResult.data.sessions[0].id;
-          }
+      const llmTime = Date.now() - llmStartTime;
+      const totalTime = Date.now() - startTime;
+      
+      console.log(`⚡ [GENERAL-ULTRA-FAST] Response in ${llmTime}ms (total: ${totalTime}ms)`);
+
+      if (result.success && result.response) {
+        return {
+          success: true,
+          response: result.response,
+          pipeline: 'general_knowledge_ultra_fast',
+          timing: { llm: llmTime, total: totalTime }
+        };
+      }
+
+      throw new Error('No response from Phi3');
+
+    } catch (error) {
+      console.error('❌ [GENERAL-ULTRA-FAST] Error:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        pipeline: 'general_knowledge_failed',
+        timing: { total: Date.now() - startTime }
+      };
+    }
+  }
+
+  // Handle memory store requests
+  async function handleMemoryStore(prompt, context, startTime) {
+    console.log('💾 [MEMORY-STORE] Processing information storage...');
+    
+    try {
+      const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
+      if (!userMemoryAgent) {
+        throw new Error('UserMemoryAgent not available');
+      }
+
+      const storeResult = await userMemoryAgent.execute({
+        action: 'memory-store',
+        text: prompt,
+        tags: ['user_input', 'stored_via_pipeline'],
+        metadata: {
+          pipeline: 'memory_store',
+          sessionId: context.sessionId,
+          timestamp: new Date().toISOString()
         }
+      }, {
+        database: coreAgent.context?.database || coreAgent.database,
+        embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
+        executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+      });
 
-        // Store the information in memory
-        const storeResult = await userMemoryAgent.execute({
-          action: 'memory-store',
-          text: prompt,
-          tags: ['user_input', 'stored_via_pipeline'],
-          metadata: {
-            pipeline: 'memory_store',
-            sessionId: sessionId,
-            timestamp: new Date().toISOString(),
-            source: 'llm_query_pipeline'
-          }
-        }, {
-          database: coreAgent.database,
-          embedder: coreAgent.getAgent('SemanticEmbeddingAgent')
-        });
+      const totalTime = Date.now() - startTime;
 
-        const storeTime = Date.now() - storeStartTime;
-        const totalTime = Date.now() - startTime;
-
-        if (storeResult.success) {
-          console.log(`✅ [MEMORY-STORE] Information stored successfully (${storeTime}ms, total: ${totalTime}ms)`);
-          return {
-            success: true,
-            response: 'Information stored successfully in your memory. I can reference this in future conversations.',
-            pipeline: 'memory_store',
-            timing: { store: storeTime, total: totalTime }
-          };
-        } else {
-          throw new Error(storeResult.error || 'Failed to store information');
-        }
-
-      } catch (error) {
-        const totalTime = Date.now() - startTime;
-        console.error(`❌ [MEMORY-STORE] Error after ${totalTime}ms:`, error.message);
-        return { 
-          success: false, 
-          error: error.message,
+      if (storeResult.success) {
+        console.log(`✅ [MEMORY-STORE] Information stored successfully (${totalTime}ms)`);
+        return {
+          success: true,
+          response: 'Information stored successfully in your memory.',
           pipeline: 'memory_store',
           timing: { total: totalTime }
         };
+      } else {
+        throw new Error(storeResult.error || 'Failed to store information');
       }
+
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [MEMORY-STORE] Error:`, error.message);
+      return { 
+        success: false, 
+        error: error.message,
+        pipeline: 'memory_store',
+        timing: { total: totalTime }
+      };
     }
+  }
 
-    // Handle command/action requests
-    async function handleCommand(prompt, context, startTime) {
-      const commandStartTime = Date.now();
-      console.log('⚡ [COMMAND] Processing action request...');
-      
-      try {
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        if (!phi3Agent) {
-          throw new Error('Phi3Agent not available');
-        }
+  // Handle command/action requests
+  async function handleCommand(prompt, context, startTime) {
+    console.log('⚡ [COMMAND] Processing action request...');
+    
+    try {
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      if (!phi3Agent) {
+        throw new Error('Phi3Agent not available');
+      }
 
-        // Generate command response with action-oriented prompt
-        const result = await phi3Agent.execute({
-          action: 'query-phi3-fast',
-          prompt: `You are ThinkDrop AI. The user is requesting an action or task. Provide a helpful response about what you can do or guide them on next steps.
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: `You are ThinkDrop AI. The user is requesting an action. Provide helpful guidance.
 
 User request: ${prompt}
 
-Respond concisely (2-3 sentences) with actionable guidance.`,
-          options: { 
-            timeout: 8000, 
-            maxTokens: 120, 
-            temperature: 0.2
-          }
-        });
-
-        const commandTime = Date.now() - commandStartTime;
-        const totalTime = Date.now() - startTime;
-
-        if (result.success && result.response) {
-          console.log(`✅ [COMMAND] Action response generated (${commandTime}ms, total: ${totalTime}ms)`);
-          return {
-            success: true,
-            response: result.response,
-            pipeline: 'command',
-            timing: { command: commandTime, total: totalTime }
-          };
-        } else {
-          throw new Error('Failed to generate command response');
+Respond concisely with actionable guidance.`,
+        options: { 
+          timeout: 8000, 
+          maxTokens: 120, 
+          temperature: 0.2
         }
+      });
 
-      } catch (error) {
-        const totalTime = Date.now() - startTime;
-        console.error(`❌ [COMMAND] Error after ${totalTime}ms:`, error.message);
-        return { 
-          success: false, 
-          error: error.message,
+      const totalTime = Date.now() - startTime;
+
+      if (result.success && result.response) {
+        console.log(`✅ [COMMAND] Action response generated (${totalTime}ms)`);
+        return {
+          success: true,
+          response: result.response,
           pipeline: 'command',
           timing: { total: totalTime }
         };
+      } else {
+        throw new Error('Failed to generate command response');
       }
+
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [COMMAND] Error:`, error.message);
+      return { 
+        success: false, 
+        error: error.message,
+        pipeline: 'command',
+        timing: { total: totalTime }
+      };
     }
-  });
-      
+  }
+
   ipcMain.handle('llm-query-local', async (event, prompt, options = {}) => {  
     try {
       if (!coreAgent || !coreAgent.initialized) {
@@ -1498,7 +1576,7 @@ Respond concisely (2-3 sentences) with actionable guidance.`,
     }
   });
 }
-
+ 
 // Initialize all handlers
 function initializeLocalLLMHandlers({
   ipcMain,
