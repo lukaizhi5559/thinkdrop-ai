@@ -1133,19 +1133,19 @@ const AGENT_FORMAT = {
       let entities = [];
       
       try {
-        // Use intent classification to extract rich intent information
-        const intentResult = await context.executeAgent('UserMemoryAgent', {
+        // Use Phi3Agent for intelligent intent classification instead of hardcoded patterns
+        const intentResult = await context.executeAgent('Phi3Agent', {
           action: 'classify-intent',
-          text: text
+          message: text
         }, context);
         
-        if (intentResult.success && intentResult.result?.intent) {
-          extractedIntent = intentResult.result.intent;
-          entities = intentResult.result.entities || [];
-          console.log('✅ [BACKGROUND] Extracted intent:', extractedIntent, 'entities:', entities.length);
+        if (intentResult.success && intentResult.intentData?.primaryIntent) {
+          extractedIntent = intentResult.intentData.primaryIntent;
+          entities = intentResult.intentData.entities || [];
+          console.log('✅ [BACKGROUND] Extracted intent via Phi3:', extractedIntent, 'entities:', entities.length);
         }
       } catch (intentError) {
-        console.warn('⚠️ [BACKGROUND] Intent extraction failed, using basic intent:', intentError.message);
+        console.warn('⚠️ [BACKGROUND] Phi3 intent extraction failed, using basic intent:', intentError.message);
       }
       
       // Create memory entry using UserMemoryAgent with extracted intent

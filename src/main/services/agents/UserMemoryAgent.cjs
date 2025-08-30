@@ -2133,7 +2133,7 @@ const AGENT_FORMAT = {
                         AND embedding IS NOT NULL
                         AND length(CAST(embedding AS DOUBLE[])) = ${queryEmbedding.length}
                     )
-                    SELECT source, id, source_text, sender, session_id, created_at, metadata, similarity
+                    SELECT source, id, source_text, source_text as text, sender, session_id, created_at, metadata, similarity
                     FROM message_similarities
                     WHERE similarity >= ?
                     ORDER BY similarity DESC

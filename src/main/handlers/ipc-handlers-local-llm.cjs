@@ -340,7 +340,13 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       console.log('🔍 [CURRENT-SCOPE] Raw messages:', recentMessages.data.messages.map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
 
       // Intelligent semantic filtering of recent messages
-      let filteredMessages = recentMessages.data.messages.filter(msg => msg.text !== prompt);
+      let filteredMessages = recentMessages.data.messages.filter(msg => {
+        // Ensure message object exists and has required properties
+        if (!msg || typeof msg !== 'object') return false;
+        if (!msg.text || typeof msg.text !== 'string') return false;
+        if (!msg.sender || typeof msg.sender !== 'string') return false;
+        return msg.text !== prompt;
+      });
       console.log('🔍 [CURRENT-SCOPE] After filtering current prompt:', filteredMessages.map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
       
       // Use semantic similarity to find most relevant messages
@@ -434,7 +440,12 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       // Filter and format context messages, excluding noise messages
       const contextMessages = recentMessages.data.messages
         .filter(msg => {
-          if (!msg.text || msg.text.trim() === prompt.trim()) return false;
+          // Ensure message object exists and has required properties
+          if (!msg || typeof msg !== 'object') return false;
+          if (!msg.text || typeof msg.text !== 'string' || msg.text.trim() === '') return false;
+          if (!msg.sender || typeof msg.sender !== 'string') return false;
+          if (msg.text.trim() === prompt.trim()) return false;
+          
           // Filter out generic system messages that add noise to classification
           const isNoiseMessage = /Information stored successfully|I don't have|I cannot|Sorry, I/i.test(msg.text.trim());
           return !isNoiseMessage;
@@ -953,7 +964,12 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
       // Filter and format context messages, excluding noise messages
       const contextMessages = recentMessages.data.messages
         .filter(msg => {
-          if (!msg.text || msg.text.trim() === prompt.trim()) return false;
+          // Ensure message object exists and has required properties
+          if (!msg || typeof msg !== 'object') return false;
+          if (!msg.text || typeof msg.text !== 'string' || msg.text.trim() === '') return false;
+          if (!msg.sender || typeof msg.sender !== 'string') return false;
+          if (msg.text.trim() === prompt.trim()) return false;
+          
           // Filter out generic system messages that add noise to classification
           const isNoiseMessage = /Information stored successfully|I don't have|I cannot|Sorry, I/i.test(msg.text.trim());
           return !isNoiseMessage;
@@ -1528,7 +1544,13 @@ Respond concisely with actionable guidance.`,
           
           if (recentMessages && recentMessages.data && recentMessages.data.messages && recentMessages.data.messages.length > 0) {
             // Format context messages (exclude current prompt)
-            const allMessages = recentMessages.data.messages.filter(msg => msg.text !== prompt);
+            const allMessages = recentMessages.data.messages.filter(msg => {
+              // Ensure message object exists and has required properties
+              if (!msg || typeof msg !== 'object') return false;
+              if (!msg.text || typeof msg.text !== 'string') return false;
+              if (!msg.sender || typeof msg.sender !== 'string') return false;
+              return msg.text !== prompt;
+            });
             console.log(`🔍 [CONTEXT-DEBUG] Filtered ${allMessages.length} messages (excluded current prompt)`);
             console.log(`🔍 [CONTEXT-DEBUG] Raw messages preview:`, allMessages.slice(-4).map(m => `${m.sender}: ${m.text.substring(0, 50)}...`));
             
