@@ -74,7 +74,7 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
 
       // Step 1: Routing classification
       const routingStartTime = Date.now();
-      const routingResult = await classifyQuery(prompt);
+      const routingResult = await classifyQuery(prompt, { sessionId: options.currentSessionId || options.sessionId });
       const routingTime = Date.now() - routingStartTime;
       
       console.log(`🔍 [ROUTING] Classification: ${routingResult.classification} (${routingTime}ms)`);
@@ -84,29 +84,27 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
         return await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
       }
 
-      // Handle context queries with 3-stage progressive search
-      if (routingResult.classification === 'CONTEXT') {
-        console.log('🎯 [CONTEXT-PIPELINE] Starting 3-stage progressive search...');
-        
-        // Stage 1: Current conversation scope
-        console.log('📍 [STAGE-1] Current conversation scope...');
-        const stage1Result = await handleCurrentScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
-        if (stage1Result && stage1Result.success) {
-          console.log('✅ [STAGE-1] Success - returning current scope result');
-          return {
-            success: true,
-            response: stage1Result.response,
-            pipeline: 'stage1_current_scope',
-            timing: { total: Date.now() - startTime }
-          };
-        }
+      console.log(`🔍 [ROUTING] Classification: ${routingResult.classification} (${Date.now() - startTime}ms)`);
 
-        // Stage 2: Session-scoped semantic search
+      // Route based on classification
+      if (routingResult.classification === 'CONTEXT') {
+        console.log('🎯 [CONTEXT-PIPELINE] Starting progressive context search...');
+        
+        // Stage 1: Current conversation context awareness
+        console.log('📍 [STAGE-1] Current conversation context awareness...');
+        const contextAwareResult = await handleContextAwareScope(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
+        if (contextAwareResult?.success) {
+          console.log('✅ [CONTEXT-PIPELINE] Stage 1 successful - returning conversation context result');
+          return contextAwareResult;
+        }
+        
+        console.log('🔄 [CONTEXT-PIPELINE] Stage 1 failed, trying session scope search...');
+        
+        // Stage 2: Session-scoped semantic search (cross-session)
         console.log('📍 [STAGE-2] Session-scoped semantic search...');
         const stage2Result = await handleSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
-        // Return successful stage 2 result if available
         if (stage2Result && stage2Result.success) {
-          console.log('✅ [CONTEXT-PIPELINE] Returning Stage 2 result with conversation messages');
+          console.log('✅ [CONTEXT-PIPELINE] Stage 2 successful - returning session scope result');
           return {
             success: true,
             response: stage2Result.response,
@@ -115,11 +113,17 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
           };
         }
 
-        // Stage 3: Cross-session semantic search if still no results
-        if (!stage1Result || !stage1Result.success) {
-          console.log('📍 [STAGE-3] Cross-session semantic search...');
-          // Temporarily disabled due to executeAgent context issues
-          console.log('⚠️ [STAGE-3] Skipped - using Stage 1-2 results');
+        // Stage 3: Cross-session semantic search (broader scope)
+        console.log('📍 [STAGE-3] Cross-session semantic search...');
+        const stage3Result = await handleCrossSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
+        if (stage3Result && stage3Result.success) {
+          console.log('✅ [CONTEXT-PIPELINE] Stage 3 successful - returning cross-session result');
+          return {
+            success: true,
+            response: stage3Result.response,
+            pipeline: 'stage3_cross_session',
+            timing: { total: Date.now() - startTime }
+          };
         }
 
         // All stages failed - fallback to general knowledge
@@ -352,31 +356,156 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       const requiredSimilarity = needsCrossSessionSearch ? 0.65 : 0.35;
       console.log(`🔍 [CURRENT-SCOPE] Query needs cross-session search: ${needsCrossSessionSearch}, required similarity: ${requiredSimilarity}`);
       
-      if (bestSimilarity < requiredSimilarity) {
-        console.log(`⚠️ [CURRENT-SCOPE] Semantic similarity ${bestSimilarity.toFixed(3)} below threshold ${requiredSimilarity}, will try session scope`);
-        return null;
+      // Lower threshold for context-aware queries since we already know they need context
+      const contextAwareThreshold = 0.4; // Much lower threshold for context-aware queries
+      
+      if (bestSimilarity >= contextAwareThreshold) {
+        console.log(`✅ [CURRENT-SCOPE] Found relevant context (similarity: ${bestSimilarity.toFixed(3)} >= ${contextAwareThreshold})`);
+        
+        // Build context from selected messages
+        const selectedMessages = relevantScoredMessages.slice(0, 3);
+        const contextText = selectedMessages
+          .map(msg => `${msg.message.sender}: ${msg.message.text}`)
+          .join('\n');
+        
+        console.log(`🎯 [CURRENT-SCOPE] Using context:\\n${contextText}`);
+        
+        return {
+          success: true,
+          context: contextText,
+          messages: selectedMessages,
+          source: 'current-conversation',
+          similarity: bestSimilarity
+        };
       }
       
-      const messages = relevantScoredMessages
-        .map(item => `${item.message.sender}: ${item.message.text}`)
+      console.log(`⚠️ [CURRENT-SCOPE] Semantic similarity ${bestSimilarity.toFixed(3)} below context-aware threshold ${contextAwareThreshold}, will try session scope`);
+      return null;
+      
+    } catch (error) {
+      console.error('❌ [CURRENT-SCOPE] Error:', error.message);
+      return null;
+    }
+  }
+
+  // Helper function to clean LLM responses from system prompt contamination
+  function cleanLLMResponse(response) {
+    if (!response) return response;
+    
+    // Remove system prompt patterns that leak into responses
+    let cleaned = response
+      // Remove "You are ThinkDrop AI" system prompts
+      .replace(/You are ThinkDrop AI[^.]*\./g, '')
+      // Remove "--- End ---" markers
+      .replace(/---\s*End\s*---/gi, '')
+      // Remove system prompt blocks between markers
+      .replace(/<\|system\|>[\s\S]*?<\|end\|>/g, '')
+      // Remove any remaining system role indicators
+      .replace(/\[SYSTEM\][\s\S]*?\[\/SYSTEM\]/gi, '')
+      // Clean up extra whitespace and newlines
+      .replace(/\n\s*\n\s*\n/g, '\n\n')
+      .trim();
+    
+    return cleaned;
+  }
+
+  // Handle context-aware queries with lower threshold and better context utilization
+  async function handleContextAwareScope(prompt, context, coreAgent) {
+    try {
+      console.log('🔍 [CONTEXT-AWARE-SCOPE] Processing context-aware query...');
+      
+      const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+      if (!conversationAgent) {
+        return null;
+      }
+
+      const recentMessages = await conversationAgent.execute({
+        action: 'message-list',
+        sessionId: context.sessionId,
+        limit: 8,
+        offset: 0,
+        direction: 'DESC'
+      });
+
+      if (!recentMessages?.success || !recentMessages?.data?.messages?.length) {
+        return null;
+      }
+
+      // Filter and format context messages, excluding noise messages
+      const contextMessages = recentMessages.data.messages
+        .filter(msg => {
+          if (!msg.text || msg.text.trim() === prompt.trim()) return false;
+          // Filter out generic system messages that add noise to classification
+          const isNoiseMessage = /Information stored successfully|I don't have|I cannot|Sorry, I/i.test(msg.text.trim());
+          return !isNoiseMessage;
+        })
+        .slice(0, 4)
+        .reverse()
+        .map(msg => `${msg.sender}: ${msg.text}`)
         .join('\n');
-      
-      console.log('🔍 [CURRENT-SCOPE] Final formatted messages:', messages);
 
-      if (!messages.trim()) {
-        console.warn('⚠️ [CURRENT-SCOPE] No valid conversation context');
+      if (!contextMessages.trim()) {
         return null;
       }
 
-      // Generate response using current conversation context
-      const phiPrompt = `You are ThinkDrop AI. Answer based on the recent conversation.
+      console.log(`🎯 [CONTEXT-AWARE-SCOPE] Using conversation context:\n${contextMessages}`);
+
+      // Use LLM to detect if this is a cross-session query and if current context can answer it
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      if (phi3Agent) {
+        const detectionPrompt = `Analyze this question and the recent conversation context:
 
 RECENT CONVERSATION:
-${messages}
+${contextMessages}
+
+QUESTION: ${prompt}
+
+Is this question asking about information from past conversations or broader history that is NOT in the recent conversation above?
+
+Examples of cross-session queries:
+- "have I ever mentioned X"
+- "did we talk about Y before" 
+- "what did I say about Z"
+- "when did we discuss A"
+
+Respond with only: "CROSS_SESSION" if it needs broader search, or "CURRENT" if the recent conversation can answer it.`;
+
+        try {
+          const detectionResult = await phi3Agent.execute({
+            action: 'query-phi3-fast',
+            prompt: detectionPrompt,
+            options: { timeout: 3000, maxTokens: 15, temperature: 0.1 }
+          });
+
+          if (detectionResult.success && detectionResult.response) {
+            const needsBroaderSearch = detectionResult.response.trim().toUpperCase().includes('CROSS_SESSION');
+            console.log(`🔍 [CONTEXT-AWARE-SCOPE] Detection result: "${detectionResult.response.trim()}" - needsBroaderSearch: ${needsBroaderSearch}`);
+            
+            if (needsBroaderSearch) {
+              console.log('🔍 [CONTEXT-AWARE-SCOPE] Cross-session query needs broader search - failing to Stage 2');
+              return null; // Fail to allow Stage 2 to search across sessions
+            } else {
+              console.log('✅ [CONTEXT-AWARE-SCOPE] Current context can answer query');
+            }
+          }
+        } catch (error) {
+          console.warn('⚠️ [CONTEXT-AWARE-SCOPE] Detection failed, proceeding with context');
+        }
+      }
+
+      // Generate response using conversation context
+      if (!phi3Agent) {
+        return null;
+      }
+
+      const phiPrompt = `You are ThinkDrop AI. Answer based on the recent conversation context.
+
+RECENT CONVERSATION:
+${contextMessages}
 
 CURRENT QUESTION: ${prompt}
 
-Answer based on what was just discussed. Be specific and accurate.`;
+Answer based on what was just discussed. Be specific and reference the conversation context. If the question refers to "they", "it", or similar pronouns, understand what they refer to from the conversation.`;
 
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
@@ -385,13 +514,18 @@ Answer based on what was just discussed. Be specific and accurate.`;
       });
 
       if (result.success && result.response) {
-        return { success: true, response: result.response };
+        console.log('✅ [CONTEXT-AWARE-SCOPE] Generated context-aware response');
+        return { 
+          success: true, 
+          response: result.response,
+          source: 'context-aware-conversation'
+        };
       }
 
       return null;
 
     } catch (error) {
-      console.error('❌ [CURRENT-SCOPE] Error:', error.message);
+      console.error('❌ [CONTEXT-AWARE-SCOPE] Error:', error.message);
       return null;
     }
   }
@@ -413,7 +547,7 @@ Answer based on what was just discussed. Be specific and accurate.`;
         action: 'memory-semantic-search',
         query: prompt,
         limit: 30,
-        minSimilarity: 0.26
+        minSimilarity: 0.12
         // No sessionId - search across all sessions
       }, {
         database: coreAgent.context?.database || coreAgent.database,
@@ -426,6 +560,15 @@ Answer based on what was just discussed. Be specific and accurate.`;
       let contextType = 'unknown';
 
       if (searchResult?.success) {
+        // Safe logging without BigInt serialization issues
+        console.log(`🔍 [SESSION-SCOPE] Search result keys:`, Object.keys(searchResult));
+        if (searchResult.results) {
+          console.log(`🔍 [SESSION-SCOPE] Direct results count:`, searchResult.results.length);
+        }
+        if (searchResult.result) {
+          console.log(`🔍 [SESSION-SCOPE] Result object keys:`, Object.keys(searchResult.result));
+        }
+        
         // Check for conversation messages (from logs: "Found 20 conversation messages")
         if (searchResult.result?.conversationMessages?.length) {
           contextData = searchResult.result.conversationMessages;
@@ -437,6 +580,19 @@ Answer based on what was just discussed. Be specific and accurate.`;
           contextData = searchResult.result.results;
           contextType = 'memory';
           console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} memory results across sessions`);
+        }
+        // Check for direct results array (alternative structure)
+        else if (searchResult.results?.length) {
+          contextData = searchResult.results;
+          contextType = 'conversation';
+          console.log(`✅ [SESSION-SCOPE] Found ${contextData.length} messages in direct results`);
+        }
+        // Check for any other data structures
+        else {
+          console.log(`⚠️ [SESSION-SCOPE] Unknown result structure, keys:`, Object.keys(searchResult));
+          if (searchResult.result) {
+            console.log(`⚠️ [SESSION-SCOPE] Result object keys:`, Object.keys(searchResult.result));
+          }
         }
       }
 
@@ -450,57 +606,121 @@ Answer based on what was just discussed. Be specific and accurate.`;
       if (contextType === 'conversation') {
         // Prioritize current session messages, then other sessions
         const currentSessionId = context.sessionId;
-        const currentSessionMessages = contextData.filter(msg => msg.session_id === currentSessionId);
-        const otherSessionMessages = contextData.filter(msg => msg.session_id !== currentSessionId);
+        // Sort all messages by similarity score and take the most relevant ones
+        const sortedByRelevance = contextData.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
         
-        // Mix current session (up to 2) + other sessions (up to 3) = max 5 total
-        const prioritizedMessages = [
-          ...currentSessionMessages.slice(0, 2),
-          ...otherSessionMessages.slice(0, 3)
-        ].slice(0, 5);
+        // Take top 8 most relevant messages regardless of session
+        const prioritizedMessages = sortedByRelevance.slice(0, 8);
         
-        contextSnippets = prioritizedMessages.map((msg, i) => {
-          const sender = msg.sender === 'user' ? 'You' : 'AI';
-          const text = (msg.text || '').slice(0, 150);
-          const isCurrentSession = msg.session_id === currentSessionId;
-          const prefix = isCurrentSession ? 'Recent' : 'Previous';
-          return `${prefix} - ${sender}: ${text}${(msg.text || '').length > 150 ? '...' : ''}`;
+        // Validate messages have required fields
+        const validMessages = prioritizedMessages.filter(msg => {
+          const hasText = msg.text && msg.text.trim().length > 0;
+          const hasSender = msg.sender && (msg.sender === 'user' || msg.sender === 'ai' || msg.sender === 'assistant');
+          if (!hasText || !hasSender) {
+            console.warn(`⚠️ [SESSION-SCOPE] Skipping invalid message: text="${msg.text}", sender="${msg.sender}"`);
+            return false;
+          }
+          return true;
         });
         
-        console.log(`🔍 [SESSION-SCOPE] Using ${currentSessionMessages.length} current + ${Math.min(3, otherSessionMessages.length)} other session messages`);
+        if (validMessages.length === 0) {
+          console.warn('⚠️ [SESSION-SCOPE] No valid messages after filtering');
+          return null;
+        }
+        
+        contextSnippets = validMessages.map((msg, i) => {
+          const sender = msg.sender === 'user' ? 'You' : 'AI';
+          const text = (msg.text || '').trim().slice(0, 150);
+          const isCurrentSession = msg.session_id === currentSessionId;
+          const prefix = isCurrentSession ? 'Recent' : 'Previous';
+          const sessionInfo = msg.session_title ? ` [${msg.session_title}]` : '';
+          return `${prefix}${sessionInfo} - ${sender}: ${text}${(msg.text || '').length > 150 ? '...' : ''}`;
+        });
+        
+        console.log(`🔍 [SESSION-SCOPE] Using ${validMessages.length} valid messages (filtered from ${prioritizedMessages.length})`);
+        console.log(`[DEBUG] [SESSION-SCOPE] Context snippets being sent to LLM:`);
+        contextSnippets.forEach((snippet, i) => {
+          console.log(`  ${i + 1}: ${snippet.substring(0, 100)}...`);
+        });
       } else {
         // Memory format
         const topSimilarity = contextData[0].similarity;
-        if (topSimilarity < 0.28) {
+        console.log(`[DEBUG] [SESSION-SCOPE] Top similarity: ${topSimilarity.toFixed(4)}, threshold: 0.12`);
+        if (topSimilarity < 0.12) {
           console.warn('⚠️ [SESSION-SCOPE] Similarity too low');
           return null;
         }
-        contextSnippets = contextData.slice(0, 3).map((m, i) => {
-          const text = (m.source_text || '').slice(0, 220);
-          return `Memory ${i + 1} (${Math.round((m.similarity || 0) * 100)}%): ${text}${(m.source_text || '').length > 220 ? '...' : ''}`;
+        contextSnippets = contextData.slice(0, 5).map((m, i) => {
+          const text = (m.source_text || '').slice(0, 300);
+          const sessionInfo = m.sessionTitle ? ` [${m.sessionTitle}]` : '';
+          return `Memory ${i + 1} (${Math.round((m.similarity || 0) * 100)}%)${sessionInfo}: ${text}${(m.source_text || '').length > 300 ? '...' : ''}`;
+        });
+        
+        console.log(`[DEBUG] [SESSION-SCOPE] Context snippets being sent to LLM:`);
+        contextSnippets.forEach((snippet, i) => {
+          console.log(`  ${i + 1}: ${snippet.substring(0, 100)}...`);
         });
       }
 
-      // Generate response using context
-      const phiPrompt = `You are ThinkDrop AI. Use relevant history to answer.
+      // Validate context snippets before sending to LLM
+      if (!contextSnippets || contextSnippets.length === 0) {
+        console.warn('⚠️ [SESSION-SCOPE] No context snippets to send to LLM');
+        return null;
+      }
 
-RELEVANT HISTORY:
-${contextSnippets.join('\n\n')}
+      // Filter out empty or invalid snippets
+      const validSnippets = contextSnippets.filter(snippet => 
+        snippet && typeof snippet === 'string' && snippet.trim().length > 0
+      );
+
+      if (validSnippets.length === 0) {
+        console.warn('⚠️ [SESSION-SCOPE] No valid context snippets after filtering');
+        return null;
+      }
+
+      const contextHistory = validSnippets.join('\n\n');
+      console.log(`[DEBUG] [SESSION-SCOPE] Final context history length: ${contextHistory.length} chars`);
+
+      // Generate response using context
+      const phiPrompt = `Based ONLY on the conversation history provided below, answer the question. Reference which conversation/session the topic was discussed in if found.
+
+CONVERSATION HISTORY:
+${contextHistory}
 
 QUESTION: ${prompt}
 
-Answer in 2-4 sentences, focused and specific.`;
+Answer in 1-2 sentences using ONLY the information from the conversation history above. If you find the topic in the history, mention when/where it was discussed. Do not make up or invent any conversations that are not shown.`;
 
+      console.log(`[DEBUG] [SESSION-SCOPE] Sending prompt to LLM (${phiPrompt.length} chars)`);
+      
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
         prompt: phiPrompt,
         options: { timeout: 5000, maxTokens: 120, temperature: 0.2 }
       });
 
+      console.log(`[DEBUG] [SESSION-SCOPE] LLM result:`, {
+        success: result.success,
+        responseLength: result.response ? result.response.length : 0,
+        response: result.response ? result.response.substring(0, 200) + '...' : 'null'
+      });
+
       if (result.success && result.response) {
-        return { success: true, response: result.response };
+        const cleanedResponse = cleanLLMResponse(result.response);
+        console.log(`[DEBUG] [SESSION-SCOPE] Cleaned response: "${cleanedResponse}"`);
+        
+        // Check if LLM is saying it has no context
+        if (cleanedResponse.toLowerCase().includes('no sufficient context') || 
+            cleanedResponse.toLowerCase().includes('no information') ||
+            cleanedResponse.toLowerCase().includes('not discussed')) {
+          console.warn(`⚠️ [SESSION-SCOPE] LLM claims no context despite ${validSnippets.length} snippets provided`);
+          console.warn(`⚠️ [SESSION-SCOPE] Context preview: ${contextHistory.substring(0, 300)}...`);
+        }
+        
+        return { success: true, response: cleanedResponse };
       }
 
+      console.warn('⚠️ [SESSION-SCOPE] LLM execution failed or returned empty response');
       return null;
 
     } catch (error) {
@@ -525,10 +745,9 @@ Answer in 2-4 sentences, focused and specific.`;
         action: 'memory-semantic-search',
         query: prompt,
         limit: 60,
-        minSimilarity: 0.32
+        minSimilarity: 0.12
       }, {
         database: coreAgent.context?.database || coreAgent.database,
-        embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
         executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
       });
 
@@ -581,14 +800,14 @@ Answer in 2-4 sentences, focused and specific.`;
       }
 
       // Generate response using cross-session context
-      const phiPrompt = `You are ThinkDrop AI. Answer based on the MOST RECENT conversation context.
+      const phiPrompt = `Based ONLY on the conversation history provided below, answer the question. Reference which conversation/session the topic was discussed in if found.
 
-RECENT CONVERSATION:
+CONVERSATION HISTORY:
 ${contextItems.join('\n\n')}
 
-CURRENT QUESTION: ${prompt}
+QUESTION: ${prompt}
 
-Answer based on what was just said in this conversation. Be specific and accurate. Do not reference old conversations or make up details.`;
+Answer in 1-2 sentences using ONLY the information from the conversation history above. If you find the topic in the history, mention when/where it was discussed. Do not make up or invent any conversations that are not shown.`;
 
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
@@ -597,7 +816,8 @@ Answer based on what was just said in this conversation. Be specific and accurat
       });
 
       if (result.success && result.response) {
-        return { success: true, response: result.response };
+        const cleanedResponse = cleanLLMResponse(result.response);
+        return { success: true, response: cleanedResponse };
       }
 
       return null;
@@ -608,8 +828,8 @@ Answer based on what was just said in this conversation. Be specific and accurat
     }
   }
 
-  // Hybrid classification: zero-shot primary + keyword confidence boosting
-  async function classifyQuery(prompt) {
+  // Hybrid classification: zero-shot primary + keyword confidence boosting + context awareness
+  async function classifyQuery(prompt, context) {
     try {
       const queryLower = prompt.toLowerCase().trim();
       
@@ -621,6 +841,15 @@ Answer based on what was just said in this conversation. Be specific and accurat
         // High confidence zero-shot result, use it directly
         console.log(`✅ [CLASSIFICATION] High confidence zero-shot: ${zeroShotResult.classification} (${zeroShotResult.confidence.toFixed(3)})`);
         return zeroShotResult;
+      }
+      
+      // Stage 1.5: For low confidence classifications, check if we need conversation context
+      if (zeroShotResult && zeroShotResult.confidence < 0.5 && context?.sessionId) {
+        console.log(`🔍 [CLASSIFICATION] Medium-low confidence (${zeroShotResult.confidence.toFixed(3)}), checking conversation context...`);
+        const contextAwareResult = await classifyWithConversationContext(prompt, context, zeroShotResult);
+        if (contextAwareResult) {
+          return contextAwareResult;
+        }
       }
       
       // Stage 2: For lower confidence, check if keywords can boost confidence
@@ -664,6 +893,20 @@ Answer based on what was just said in this conversation. Be specific and accurat
         console.log(`🎯 [CLASSIFICATION] Low confidence zero-shot (${zeroShotResult.confidence.toFixed(3)}), using keyword: ${keywordMatch}`);
         return { classification: keywordMatch, confidence: 0.8 };
       } else if (zeroShotResult) {
+        // Check if this looks like a knowledge question that was misclassified
+        const knowledgePatterns = [
+          /^(is|are|what|how|why|when|where|which|can|does|do|will|would)\s+/i,
+          /\b(only|best|better|different|alternative|option|language|technology|framework)\b/i,
+          /\?\s*$/
+        ];
+        
+        const looksLikeKnowledge = knowledgePatterns.some(pattern => pattern.test(prompt));
+        
+        if (looksLikeKnowledge && zeroShotResult.classification === 'COMMAND' && zeroShotResult.confidence < 0.4) {
+          console.log(`🔄 [CLASSIFICATION] Knowledge question misclassified as COMMAND, correcting to GENERAL`);
+          return { classification: 'GENERAL', confidence: 0.7 };
+        }
+        
         // Use zero-shot result even with moderate confidence
         console.log(`🧠 [CLASSIFICATION] Using zero-shot: ${zeroShotResult.classification} (${zeroShotResult.confidence.toFixed(3)})`);
         return zeroShotResult;
@@ -676,6 +919,149 @@ Answer based on what was just said in this conversation. Be specific and accurat
     } catch (error) {
       console.error('❌ [ROUTING] Classification error:', error.message);
       return { classification: 'GENERAL' };
+    }
+  }
+
+  // Context-aware classification for ambiguous queries
+  async function classifyWithConversationContext(prompt, context, fallbackResult) {
+    try {
+      console.log(`🔍 [CONTEXT-AWARE] Starting context-aware classification for: "${prompt}"`);
+      console.log(`🔍 [CONTEXT-AWARE] Fallback result: ${fallbackResult.classification} (${fallbackResult.confidence.toFixed(3)})`);
+      
+      const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+      if (!conversationAgent) {
+        console.log('❌ [CONTEXT-AWARE] No ConversationSessionAgent available');
+        return null;
+      }
+
+      // Get recent messages from current session for context
+      console.log(`📋 [CONTEXT-AWARE] Fetching messages for session: ${context.sessionId}`);
+      const recentMessages = await conversationAgent.execute({
+        action: 'message-list',
+        sessionId: context.sessionId,
+        limit: 8,
+        offset: 0,
+        direction: 'DESC'
+      });
+
+      console.log(`📨 [CONTEXT-AWARE] Retrieved ${recentMessages?.data?.messages?.length || 0} messages`);
+      if (!recentMessages?.success || !recentMessages?.data?.messages?.length) {
+        console.log('❌ [CONTEXT-AWARE] No messages retrieved');
+        return null;
+      }
+
+      // Filter and format context messages, excluding noise messages
+      const contextMessages = recentMessages.data.messages
+        .filter(msg => {
+          if (!msg.text || msg.text.trim() === prompt.trim()) return false;
+          // Filter out generic system messages that add noise to classification
+          const isNoiseMessage = /Information stored successfully|I don't have|I cannot|Sorry, I/i.test(msg.text.trim());
+          return !isNoiseMessage;
+        })
+        .slice(0, 4)
+        .reverse()
+        .map(msg => `${msg.sender}: ${msg.text}`)
+        .join('\n');
+
+      console.log(`💬 [CONTEXT-AWARE] Context messages built (${contextMessages.split('\n').length} lines):`);
+      console.log(contextMessages);
+
+      if (!contextMessages.trim()) {
+        console.log('❌ [CONTEXT-AWARE] No context messages after filtering');
+        return null;
+      }
+
+      // Use zero-shot classification with conversation context
+      if (!global.zeroShotClassifier) {
+        const { pipeline } = await import('@xenova/transformers');
+        global.zeroShotClassifier = await pipeline(
+          'zero-shot-classification',
+          'Xenova/distilbert-base-uncased-mnli'
+        );
+      }
+
+      const contextualPrompt = `Recent conversation:
+${contextMessages}
+
+Current question: ${prompt}`;
+
+      const candidateLabels = [
+        'asking about previous conversations, messages, or what was discussed before',
+        'wanting to remember, store, or save information for later',
+        'requesting to write, create, generate, or build something',
+        'asking a general question that needs a direct answer'
+      ];
+
+      const result = await global.zeroShotClassifier(contextualPrompt, candidateLabels);
+      
+      if (result && result.labels && result.scores) {
+        const topLabel = result.labels[0];
+        const topScore = result.scores[0];
+        
+        const labelMap = {
+          'asking about previous conversations, messages, or what was discussed before': 'CONTEXT',
+          'wanting to remember, store, or save information for later': 'MEMORY',
+          'requesting to write, create, generate, or build something': 'COMMAND',
+          'asking a general question that needs a direct answer': 'GENERAL'
+        };
+        
+        const classification = labelMap[topLabel] || 'GENERAL';
+        
+        console.log(`📊 [CONTEXT-AWARE] Classification: ${classification}, confidence: ${topScore.toFixed(3)}`);
+        const confidenceImprovement = result.scores[0] - fallbackResult.confidence;
+        console.log(`📈 [CONTEXT-AWARE] Improvement needed varies by type, achieved: +${confidenceImprovement.toFixed(3)}`);
+        
+        // Enhanced acceptance criteria with pronoun detection and context hints
+        const hasPronounReference = /\b(they|them|their|it|its|this|that|these|those)\b/i.test(prompt);
+        const hasContextualWords = /\b(also|too|additionally|furthermore|moreover|what about|how about)\b/i.test(prompt);
+        const isFollowUpQuestion = hasPronounReference || hasContextualWords;
+        
+        console.log(`🔍 [CONTEXT-AWARE] Pronoun reference: ${hasPronounReference}`);
+        console.log(`🔍 [CONTEXT-AWARE] Contextual words: ${hasContextualWords}`);
+        console.log(`🔍 [CONTEXT-AWARE] Follow-up question: ${isFollowUpQuestion}`);
+        
+        // Check for cross-session query patterns
+        const isCrossSessionQuery = /\b(when did we|have we|did we|we discussed|we talked|we chatted|before|previously|earlier|past|any.*we|what.*we.*discuss|tell me about.*our)\b/i.test(prompt);
+        
+        // Determine acceptance criteria:
+        // 1. Query is a follow-up question (pronouns/contextual words) - force CONTEXT classification
+        // 2. Cross-session query patterns - force CONTEXT classification
+        // 3. Context-aware result is CONTEXT with reasonable confidence (>0.25 for cross-session, >0.30 for others)
+        // 4. Non-CONTEXT with significant improvement (+0.15) to avoid noise
+        const contextThreshold = isCrossSessionQuery ? 0.25 : 0.30;
+        const shouldAccept = (isFollowUpQuestion) ||
+                            (isCrossSessionQuery) ||
+                            (classification === 'CONTEXT' && result.scores[0] > contextThreshold) ||
+                            (classification !== 'CONTEXT' && confidenceImprovement >= 0.15);
+        
+        // Override classification for follow-up questions
+        let finalClassification = classification;
+        let finalConfidence = topScore;
+        
+        if ((isFollowUpQuestion || isCrossSessionQuery) && classification !== 'CONTEXT') {
+          console.log(`🔄 [CONTEXT-AWARE] Overriding ${classification} -> CONTEXT for ${isCrossSessionQuery ? 'cross-session query' : 'follow-up question'}`);
+          finalClassification = 'CONTEXT';
+          finalConfidence = Math.max(0.75, topScore); // Boost confidence for context queries
+        }
+        
+        console.log(`🎯 [CONTEXT-AWARE] Acceptance criteria:`);
+        console.log(`  - Follow-up question: ${isFollowUpQuestion ? '✅' : '❌'}`);
+        console.log(`  - Cross-session query: ${isCrossSessionQuery ? '✅' : '❌'}`);
+        console.log(`  - CONTEXT >${contextThreshold}: ${classification === 'CONTEXT' && result.scores[0] > contextThreshold ? '✅' : '❌'}`);
+        console.log(`  - Non-CONTEXT +0.15: ${classification !== 'CONTEXT' && confidenceImprovement >= 0.15 ? '✅' : '❌'}`);
+        
+        if (shouldAccept) {
+          console.log(`🧠 [CONTEXT-AWARE] "${prompt}" -> ${finalClassification} (confidence: ${finalConfidence.toFixed(3)}, improved from ${fallbackResult.confidence.toFixed(3)})`);
+          return { classification: finalClassification, confidence: finalConfidence };
+        } else {
+          console.log(`⚠️ [CONTEXT-AWARE] Rejected: ${classification} classification doesn't meet criteria`);
+        }
+      }
+      
+      return null;
+    } catch (error) {
+      console.error('❌ [CONTEXT-AWARE] Error:', error.message);
+      return null;
     }
   }
 
@@ -800,7 +1186,7 @@ Answer based on what was just said in this conversation. Be specific and accurat
       case 'GENERAL':
         return await handleGeneralKnowledge(prompt, context, startTime);
       case 'MEMORY':
-        return await handleMemoryStore(prompt, context, startTime);
+        return await handleMemoryQuery(prompt, context, startTime);
       case 'COMMAND':
         return await handleCommand(prompt, context, startTime);
       default:
@@ -857,7 +1243,71 @@ Answer based on what was just said in this conversation. Be specific and accurat
     }
   }
 
-  // Handle memory store requests
+  // Handle memory queries (both storage and retrieval)
+  async function handleMemoryQuery(prompt, context, startTime) {
+    console.log('🧠 [MEMORY-QUERY] Analyzing memory intent...');
+    
+    try {
+      // Quick pattern-based classification for memory intent
+      const isStorageIntent = await classifyMemoryIntent(prompt);
+      
+      if (isStorageIntent) {
+        return await handleMemoryStore(prompt, context, startTime);
+      } else {
+        return await handleMemoryRetrieve(prompt, context, startTime);
+      }
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [MEMORY-QUERY] Error:`, error.message);
+      return { 
+        success: false, 
+        error: error.message,
+        pipeline: 'memory_query',
+        timing: { total: totalTime }
+      };
+    }
+  }
+
+  // Classify whether query is for storage or retrieval
+  async function classifyMemoryIntent(prompt) {
+    // Storage patterns - user wants to store information
+    const storagePatterns = [
+      /^(remember|note|save|store|keep in mind|don't forget)/i,
+      /^(i have|i'm|i am|my|i like|i prefer|i need|i want)/i,
+      /(appointment|meeting|schedule|deadline|reminder).*\d/i, // with numbers/dates
+      /^(add|create|record|log)/i
+    ];
+    
+    // Retrieval patterns - user wants to find information
+    const retrievalPatterns = [
+      /^(do i have|did i|have i|when is|what is|where is|who is)/i,
+      /^(find|search|look for|show me|tell me about)/i,
+      /^(what.*appointment|when.*meeting|any.*schedule)/i,
+      /\?$/i // questions typically indicate retrieval
+    ];
+    
+    // Check storage patterns first
+    for (const pattern of storagePatterns) {
+      if (pattern.test(prompt)) {
+        console.log('🔍 [MEMORY-INTENT] Detected storage intent');
+        return true;
+      }
+    }
+    
+    // Check retrieval patterns
+    for (const pattern of retrievalPatterns) {
+      if (pattern.test(prompt)) {
+        console.log('🔍 [MEMORY-INTENT] Detected retrieval intent');
+        return false;
+      }
+    }
+    
+    // Default to retrieval for ambiguous cases (safer)
+    console.log('🔍 [MEMORY-INTENT] Ambiguous - defaulting to retrieval');
+    return false;
+  }
+
+  // Handle memory storage requests
   async function handleMemoryStore(prompt, context, startTime) {
     console.log('💾 [MEMORY-STORE] Processing information storage...');
     
@@ -869,16 +1319,17 @@ Answer based on what was just said in this conversation. Be specific and accurat
 
       const storeResult = await userMemoryAgent.execute({
         action: 'memory-store',
-        text: prompt,
-        tags: ['user_input', 'stored_via_pipeline'],
+        sourceText: prompt,
+        suggestedResponse: null,
+        primaryIntent: 'user_storage',
         metadata: {
           pipeline: 'memory_store',
           sessionId: context.sessionId,
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          source: 'direct_query'
         }
       }, {
         database: coreAgent.context?.database || coreAgent.database,
-        embedder: coreAgent.getAgent('SemanticEmbeddingAgent'),
         executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
       });
 
@@ -903,6 +1354,71 @@ Answer based on what was just said in this conversation. Be specific and accurat
         success: false, 
         error: error.message,
         pipeline: 'memory_store',
+        timing: { total: totalTime }
+      };
+    }
+  }
+
+  // Handle memory retrieval requests
+  async function handleMemoryRetrieve(prompt, context, startTime) {
+    console.log('🔍 [MEMORY-RETRIEVE] Searching memories...');
+    
+    try {
+      const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
+      if (!userMemoryAgent) {
+        throw new Error('UserMemoryAgent not available');
+      }
+
+      // Perform semantic search of memories
+      const searchResult = await userMemoryAgent.execute({
+        action: 'memory-semantic-search',
+        query: prompt,
+        limit: 10,
+        minSimilarity: 0.3,
+        sessionId: context.sessionId
+      }, {
+        database: coreAgent.context?.database || coreAgent.database,
+        executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+      });
+
+      const totalTime = Date.now() - startTime;
+
+      if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
+        console.log(`✅ [MEMORY-RETRIEVE] Found ${searchResult.results.length} relevant memories (${totalTime}ms)`);
+        
+        // Format the response based on found memories
+        const memories = searchResult.results.slice(0, 3); // Top 3 most relevant
+        const memoryTexts = memories.map(m => m.source_text || m.text).filter(Boolean);
+        
+        if (memoryTexts.length > 0) {
+          const response = `Based on your memories:\n\n${memoryTexts.map((text, i) => `${i + 1}. ${text}`).join('\n')}`;
+          
+          return {
+            success: true,
+            response: response,
+            pipeline: 'memory_retrieve',
+            timing: { total: totalTime },
+            memories: memories
+          };
+        }
+      }
+
+      // No relevant memories found
+      console.log(`⚠️ [MEMORY-RETRIEVE] No relevant memories found (${totalTime}ms)`);
+      return {
+        success: true,
+        response: "I couldn't find any relevant information in your memories for that query.",
+        pipeline: 'memory_retrieve_empty',
+        timing: { total: totalTime }
+      };
+
+    } catch (error) {
+      const totalTime = Date.now() - startTime;
+      console.error(`❌ [MEMORY-RETRIEVE] Error:`, error.message);
+      return { 
+        success: false, 
+        error: error.message,
+        pipeline: 'memory_retrieve',
         timing: { total: totalTime }
       };
     }
@@ -935,12 +1451,14 @@ Respond concisely with actionable guidance.`,
       const totalTime = Date.now() - startTime;
 
       if (result.success && result.response) {
-        console.log(`✅ [COMMAND] Action response generated (${totalTime}ms)`);
+        // Clean the response to remove any system prompt contamination
+        const cleanedResponse = cleanLLMResponse(result.response);
+        console.log(`✅ [COMMAND] Generated response for command request`);
         return {
           success: true,
-          response: result.response,
-          pipeline: 'command',
-          timing: { total: totalTime }
+          response: cleanedResponse,
+          source: 'command',
+          contextUsed: 0
         };
       } else {
         throw new Error('Failed to generate command response');

@@ -1633,11 +1633,20 @@ const AGENT_FORMAT = {
                   console.log(`[INFO] Session-scoped search for session: ${effectiveSessionId}`);
                 } else {
                   // Cross-session search: search across all sessions
+                  // Include ALL sessions, not just those with session context embeddings
                   sessionSql = `
-                    SELECT sc.session_id, sc.content, sc.embedding, sc.metadata, cs.title, cs.type, cs.trigger_reason, cs.created_at
-                    FROM session_context sc
-                    JOIN conversation_sessions cs ON sc.session_id = cs.id
-                    WHERE sc.context_type = 'session_summary' AND sc.embedding IS NOT NULL
+                    SELECT 
+                      cs.id as session_id,
+                      COALESCE(sc.content, 'Session: ' || cs.title || '\nType: ' || cs.type || '\nTrigger: ' || cs.trigger_reason) as content,
+                      sc.embedding,
+                      sc.metadata,
+                      cs.title,
+                      cs.type,
+                      cs.trigger_reason,
+                      cs.created_at
+                    FROM conversation_sessions cs
+                    LEFT JOIN session_context sc ON cs.id = sc.session_id AND sc.context_type = 'session_summary'
+                    WHERE cs.created_at IS NOT NULL
                     ORDER BY cs.created_at DESC
                   `;
                   sessionParams = [];
@@ -1646,6 +1655,11 @@ const AGENT_FORMAT = {
                 
                 const sessions = await database.query(sessionSql, sessionParams);
                 console.log(`[INFO] Found ${sessions.length} sessions with embeddings`);
+                
+                // Debug: Show session order and titles
+                console.log(`[DEBUG] Session order from database:`, sessions.map((s, idx) => 
+                  `${idx}: ${s.title} (${s.session_id}) - ${new Date(s.created_at).toISOString()}`
+                ).join(', '));
                 
                 if (sessions.length === 0) {
                   console.log('[WARN] No session embeddings found, falling back to message-only search');
@@ -1659,9 +1673,22 @@ const AGENT_FORMAT = {
                 
                 for (const session of sessions) {
                   try {
-                    const sessionEmbedding = Array.isArray(session.embedding) 
-                      ? session.embedding 
-                      : JSON.parse(session.embedding);
+                    let sessionEmbedding;
+                    
+                    if (session.embedding) {
+                      // Use existing session context embedding
+                      sessionEmbedding = Array.isArray(session.embedding) 
+                        ? session.embedding 
+                        : JSON.parse(session.embedding);
+                    } else {
+                      // Generate embedding for session content on the fly
+                      console.log(`[DEBUG] Generating embedding for session ${session.title} (${session.session_id})`);
+                      const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+                        action: 'generate-embedding',
+                        text: session.content
+                      });
+                      sessionEmbedding = embeddingResult.embedding;
+                    }
                     
                     const similarity = MathUtils.calculateCosineSimilarity(queryEmbedding, sessionEmbedding);
                     
@@ -1689,6 +1716,11 @@ const AGENT_FORMAT = {
                   `${s.title}: ${s.similarity.toFixed(4)}`
                 ).join(', '));
                 console.log(`[DEBUG] Similarity threshold: ${minSimilarity}, Sessions above threshold: ${sessionResults.length}`);
+                
+                // Debug: Show which sessions qualify above threshold
+                console.log(`[DEBUG] Sessions above threshold:`, sessionResults.map(s => 
+                  `${s.title} (${s.session_id}): ${s.similarity.toFixed(4)}`
+                ).join(', '));
                 
                 // If no sessions meet threshold but we have sessions, use improved conversational query detection
                 if (sessionResults.length === 0 && sessions.length > 0) {
@@ -1724,18 +1756,22 @@ const AGENT_FORMAT = {
                       }
                     }
                     
-                    // Prefer the top few; avoid flooding
+                    // Include all sessions above threshold, don't artificially limit
                     sessionResults.sort((a, b) => b.similarity - a.similarity);
-                    sessionResults = sessionResults.slice(0, 3);
+                    // Remove arbitrary limit - use all qualifying sessions
                     console.log(`[DEBUG] With lower threshold: ${sessionResults.length} sessions found`);
                   }
                 }
                 
                 // Sort sessions by similarity
                 sessionResults.sort((a, b) => b.similarity - a.similarity);
-                const topSessions = sessionResults.slice(0, Math.max(2, Math.ceil(semanticLimit / 2))); // Get top sessions
+                // Include ALL sessions above threshold, not just top N
+                const topSessions = sessionResults; // Use all qualifying sessions above threshold
                 
                 console.log(`[SUCCESS] TIER 2: Found ${topSessions.length} relevant sessions`);
+                console.log(`[DEBUG] Final topSessions:`, topSessions.map(s => 
+                  `${s.title} (${s.session_id}): ${s.similarity.toFixed(4)}`
+                ).join(', '));
                 
                 // STEP 2: Smart Query Classification
                 const queryClassification = await AGENT_FORMAT.classifyConversationalQuery(semanticQuery, context);
@@ -1760,6 +1796,12 @@ const AGENT_FORMAT = {
                     const sessionIds = topSessions.map(s => s.session_id);
                     const placeholders = sessionIds.map(() => '?').join(',');
                     
+                    // Debug: Show exact session ID mapping
+                    console.log(`[DEBUG] Target sessions for search:`, sessionIds);
+                    console.log(`[DEBUG] Session ID to title mapping:`, topSessions.map(s => 
+                      `${s.session_id} -> ${s.title} (${s.similarity.toFixed(4)})`
+                    ));
+                    
                     // Get actual conversation messages from relevant sessions
                     // Smart retrieval: get all messages from short sessions, balanced from longer ones
                     const messagesPerSession = Math.ceil(semanticLimit / sessionIds.length);
@@ -1773,7 +1815,7 @@ const AGENT_FORMAT = {
                         GROUP BY session_id
                       ),
                       session_messages AS (
-                        SELECT 'conversation' as source, cm.id, cm.text as source_text, cm.sender, cm.session_id, 
+                        SELECT 'conversation' as source, cm.id, cm.text, cm.text as source_text, cm.sender, cm.session_id, 
                                cm.created_at, cm.metadata, cm.embedding,
                                si.total_messages,
                                ROW_NUMBER() OVER (PARTITION BY cm.session_id ORDER BY cm.created_at DESC) as rn
@@ -1781,7 +1823,7 @@ const AGENT_FORMAT = {
                         JOIN session_info si ON cm.session_id = si.session_id
                         WHERE cm.session_id IN (${placeholders})
                       )
-                      SELECT source, id, source_text, sender, session_id, created_at, metadata, embedding, total_messages
+                      SELECT source, id, text, source_text, sender, session_id, created_at, metadata, embedding, total_messages
                       FROM session_messages
                       WHERE rn <= CASE 
                         WHEN total_messages <= ${messagesPerSession} THEN total_messages  -- Get all messages from short sessions
@@ -1896,7 +1938,7 @@ const AGENT_FORMAT = {
                     
                     // Get actual conversation messages from recent sessions
                     const messagesSql = `
-                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                      SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                              created_at, metadata, embedding
                       FROM conversation_messages
                       WHERE session_id IN (${placeholders})
@@ -2001,7 +2043,7 @@ const AGENT_FORMAT = {
                   try {
                     // For chronological queries, get messages in chronological order
                     const chronoSql = `
-                      SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                      SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                              created_at, metadata, embedding
                       FROM conversation_messages
                       WHERE session_id IN (${placeholders})
@@ -2054,7 +2096,7 @@ const AGENT_FORMAT = {
                 } else {
                   // Regular semantic search for non-chronological queries
                   const messageSql = `
-                    SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+                    SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                            created_at, metadata, embedding
                     FROM conversation_messages
                     WHERE session_id IN (${placeholders}) AND embedding IS NOT NULL
@@ -2072,6 +2114,7 @@ const AGENT_FORMAT = {
                       SELECT 
                         'conversation' as source, 
                         id, 
+                        text,
                         text as source_text, 
                         sender, 
                         session_id, 
@@ -2418,16 +2461,20 @@ const AGENT_FORMAT = {
               
               // Delete any other foreign key references if they exist
               // Check for other tables that might reference this memory
+              // Note: conversation_messages table doesn't have memory_id column
+              // This is expected - conversation messages are not directly linked to memories
+              // They are linked through session context and semantic search
+              console.log(`[DEBUG] Skipping conversation_messages cleanup - no direct memory_id relationship`);
+              
+              // Clean up any session context references if needed
               try {
-                // Try to delete from conversation_memories if it exists
-                const deleteConvMemSQL = 'DELETE FROM conversation_memories WHERE memory_id = ?';
-                const convMemResult = await database.run(deleteConvMemSQL, [deleteId]);
-                const convMemDeleted = convMemResult?.changes || 0;
-                totalReferencesDeleted += convMemDeleted;
-                console.log(`[DEBUG] Deleted ${convMemDeleted} conversation memory references`);
-              } catch (convError) {
-                // Table might not exist, that's okay
-                console.log(`[DEBUG] conversation_memories table not found or no references: ${convError.message}`);
+                const deleteSessionContextSQL = 'DELETE FROM session_context WHERE context LIKE ?';
+                const contextResult = await database.run(deleteSessionContextSQL, [`%${deleteId}%`]);
+                const contextDeleted = contextResult?.changes || 0;
+                totalReferencesDeleted += contextDeleted;
+                console.log(`[DEBUG] Deleted ${contextDeleted} session context references`);
+              } catch (contextError) {
+                console.log(`[DEBUG] session_context cleanup failed: ${contextError.message}`);
               }
               
               console.log(`[DEBUG] Total foreign key references deleted: ${totalReferencesDeleted}`);
@@ -3835,18 +3882,9 @@ const AGENT_FORMAT = {
       }
       
       try {
-        // Use existing embedding generation method (will be optimized by AgentOrchestrator when called through agent system)
-        const embedding = await this.generateEmbedding(text);
-        
-        if (embedding) {
-          // Cache the result
-          queryCache.cacheEmbedding(text, embedding);
-          
-          const totalTime = Date.now() - startTime;
-          console.log(`[FAST-EMBED] Generated and cached in ${totalTime}ms`);
-          return embedding;
-        }
-        
+        // This method should not be called directly - it's a fallback that always returns null
+        // The actual embedding generation should go through context.executeAgent
+        console.warn('[FAST-EMBED] Direct embedding generation not available, use context.executeAgent instead');
         return null;
         
       } catch (error) {
@@ -4147,7 +4185,7 @@ Answer:`;
         
         if (queryClassification.details.position === 'first') {
           sql = `
-            SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+            SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                    created_at, metadata
             FROM conversation_messages
             WHERE session_id = ?
@@ -4161,7 +4199,7 @@ Answer:`;
           // prioritize the immediate previous USER message in this session.
           if (queryClassification.details.justPattern === true) {
             sql = `
-              SELECT 'conversation' as source, id, text as source_text, sender, session_id,
+              SELECT 'conversation' as source, id, text, text as source_text, sender, session_id,
                      created_at, metadata
               FROM conversation_messages
               WHERE session_id = ? AND sender = 'user'
@@ -4172,7 +4210,7 @@ Answer:`;
           } else {
             // Generic "last" (most recent messages in session regardless of sender)
             sql = `
-              SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+              SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                      created_at, metadata
               FROM conversation_messages
               WHERE session_id = ?
@@ -4186,7 +4224,7 @@ Answer:`;
           // Get message N positions ago
           const messageNum = queryClassification.details.messageNumber;
           sql = `
-            SELECT 'conversation' as source, id, text as source_text, sender, session_id, 
+            SELECT 'conversation' as source, id, text, text as source_text, sender, session_id, 
                    created_at, metadata
             FROM conversation_messages
             WHERE session_id = ?
@@ -4199,7 +4237,7 @@ Answer:`;
           // Handle patterns like "N messages ago" or fuzzy counts mapped to a number
           const count = Math.max(1, parseInt(queryClassification.details.count, 10) || 1);
           sql = `
-            SELECT 'conversation' as source, id, text as source_text, sender, session_id,
+            SELECT 'conversation' as source, id, text, text as source_text, sender, session_id,
                    created_at, metadata
             FROM conversation_messages
             WHERE session_id = ? AND sender = 'user'

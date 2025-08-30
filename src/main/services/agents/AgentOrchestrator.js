@@ -2010,7 +2010,7 @@ Respond with only "true" if this query likely needs cross-session search, or "fa
       action: 'memory-semantic-search',
       query: prompt,
       limit: sessionId ? 20 : 60, // Higher limit for cross-session searches to capture more history
-      minSimilarity: sessionId ? 0.26 : 0.32
+      minSimilarity: sessionId ? 0.12 : 0.12
     };
     if (sessionId) params.sessionId = sessionId;
 

@@ -1013,6 +1013,11 @@ const AGENT_FORMAT = {
             // TIER 3: Update session message chunks for scalable context
             await AGENT_FORMAT.updateSessionChunks(sessionId, context);
             
+            // TIER 4: Create memory entry for meaningful user messages
+            if (sender === 'user' && text.length > 20 && !text.match(/^(ok|thanks?|yes|no|hi|hello)$/i)) {
+              await AGENT_FORMAT.createMemoryFromMessage(messageId, sessionId, text, sender, timestamp, context);
+            }
+            
           } else {
             console.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
           }
@@ -1038,6 +1043,137 @@ const AGENT_FORMAT = {
         success: false,
         error: error.message
       };
+    }
+  },
+
+  // TIER 4: Create memory entry from meaningful user messages (Smart Storage)
+  async createMemoryFromMessage(messageId, sessionId, text, sender, timestamp, context) {
+    try {
+      console.log('🧠 [BACKGROUND] Smart memory analysis for message:', messageId);
+      
+      // Only create memories for user messages with meaningful content
+      if (sender !== 'user' || text.length < 15) {
+        return;
+      }
+      
+      // FAST CHECK 1: Skip obvious conversational queries (preserve existing conversation scope stages)
+      const conversationalQueryPatterns = [
+        /^(have i|did i|do i|what did i|when did i|where did i|how did i|why did i)/i,
+        /^(what about|tell me about|explain|describe|show me)/i,
+        /^(can you|could you|would you|will you|please|help me)/i,
+        /^(what|how|when|where|why|who)(\s+\w+){0,3}\?/i
+      ];
+      
+      for (const pattern of conversationalQueryPatterns) {
+        if (pattern.test(text.trim())) {
+          console.log('⚠️ [BACKGROUND] Skipping conversational query - preserving for context stages');
+          return;
+        }
+      }
+      
+      // FAST CHECK 2: Skip basic conversational responses
+      const basicResponsePatterns = [
+        /^(ok|okay|thanks?|thank you|yes|no|hi|hello|bye|goodbye)$/i,
+        /^(i don't know|i'm not sure|maybe|perhaps|probably)$/i,
+        /^(sure|fine|alright|sounds good)$/i
+      ];
+      
+      for (const pattern of basicResponsePatterns) {
+        if (pattern.test(text.trim())) {
+          console.log('⚠️ [BACKGROUND] Skipping basic conversational response');
+          return;
+        }
+      }
+      
+      // FAST CHECK 3: Detect obvious learning goals (high-value storage patterns)
+      const learningGoalPatterns = [
+        /^(remember|note|save|store|keep in mind|don't forget)/i,
+        /^(i have|i'm|i am|my|i like|i prefer|i need|i want)/i,
+        /(appointment|meeting|schedule|deadline|reminder)/i,
+        /(favorite|preference|important|address|phone|email)/i,
+        /(birthday|anniversary|event|trip|vacation)/i
+      ];
+      
+      let hasLearningGoal = false;
+      for (const pattern of learningGoalPatterns) {
+        if (pattern.test(text)) {
+          hasLearningGoal = true;
+          console.log('✅ [BACKGROUND] Detected learning goal pattern');
+          break;
+        }
+      }
+      
+      // SMART CHECK 4: For ambiguous cases, use lightweight conversational classification
+      if (!hasLearningGoal) {
+        try {
+          // Quick conversational query classification to prevent false positives
+          const classificationResult = await context.executeAgent('UserMemoryAgent', {
+            action: 'classify-conversational-query',
+            query: text
+          }, context);
+          
+          if (classificationResult.success && classificationResult.result?.result?.isConversational) {
+            console.log('⚠️ [BACKGROUND] LLM classified as conversational query - preserving for context stages');
+            return;
+          }
+          
+          console.log('✅ [BACKGROUND] LLM approved for memory storage');
+        } catch (error) {
+          console.warn('⚠️ [BACKGROUND] LLM classification failed, using pattern-based decision:', error.message);
+          // Fall back to pattern-based decision
+          if (text.length < 30 && !hasLearningGoal) {
+            console.log('⚠️ [BACKGROUND] Short text without learning goal - skipping');
+            return;
+          }
+        }
+      }
+      
+      // Extract intent and entities before storing memory
+      let extractedIntent = hasLearningGoal ? 'learning_goal' : 'conversation_memory';
+      let entities = [];
+      
+      try {
+        // Use intent classification to extract rich intent information
+        const intentResult = await context.executeAgent('UserMemoryAgent', {
+          action: 'classify-intent',
+          text: text
+        }, context);
+        
+        if (intentResult.success && intentResult.result?.intent) {
+          extractedIntent = intentResult.result.intent;
+          entities = intentResult.result.entities || [];
+          console.log('✅ [BACKGROUND] Extracted intent:', extractedIntent, 'entities:', entities.length);
+        }
+      } catch (intentError) {
+        console.warn('⚠️ [BACKGROUND] Intent extraction failed, using basic intent:', intentError.message);
+      }
+      
+      // Create memory entry using UserMemoryAgent with extracted intent
+      const memoryResult = await context.executeAgent('UserMemoryAgent', {
+        action: 'memory-store',
+        sourceText: text,
+        suggestedResponse: null,
+        primaryIntent: extractedIntent,
+        entities: entities,
+        metadata: {
+          messageId: messageId,
+          sessionId: sessionId,
+          sender: sender,
+          timestamp: timestamp,
+          source: 'conversation',
+          hasLearningGoal: hasLearningGoal,
+          intentExtracted: true
+        }
+      }, context);
+      
+      if (memoryResult.success) {
+        console.log('✅ [BACKGROUND] Smart memory created from message:', messageId);
+      } else {
+        console.warn('⚠️ [BACKGROUND] Failed to create memory from message:', memoryResult.error);
+      }
+      
+    } catch (error) {
+      console.error('❌ [BACKGROUND] Smart memory creation failed:', error);
     }
   },
 
