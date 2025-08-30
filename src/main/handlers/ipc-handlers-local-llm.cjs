@@ -43,6 +43,28 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
     });
   }
 
+  // Helper function to broadcast thinking indicator updates
+  function broadcastThinkingUpdate(message, sessionId = null) {
+    const updateData = {
+      message,
+      sessionId,
+      timestamp: Date.now()
+    };
+    
+    // Send to all windows (unified architecture uses only overlayWindow)
+    const windowList = [
+      windows.overlayWindow
+    ].filter(Boolean);
+    
+    windowList.forEach(window => {
+      if (window && !window.isDestroyed()) {
+        window.webContents.send('thinking-indicator-update', updateData);
+      }
+    });
+    
+    console.log(`💭 Thinking update broadcasted: "${message}"`);
+  }
+
   // Legacy LLM health check - routes to unified agent system
   ipcMain.handle('llm-get-health', async () => {
     try {
@@ -551,6 +573,9 @@ Answer based on what was just discussed. Be specific and reference the conversat
         console.warn('⚠️ [SESSION-SCOPE] Required agents not available');
         return null;
       }
+
+      // Send thinking indicator update
+      broadcastThinkingUpdate("Checking other conversations...", context.sessionId);
 
       // Perform cross-session semantic search (no sessionId filter for broader scope)
       console.log('🔍 [SESSION-SCOPE] Searching across all sessions...');

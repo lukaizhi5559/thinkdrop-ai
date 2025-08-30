@@ -1189,6 +1189,30 @@ export default function ChatMessages() {
     };
   }, []); // Remove dependencies to prevent re-mounting
 
+  // Listen for thinking indicator updates from backend
+  useEffect(() => {
+    const handleThinkingUpdate = (_: any, data: { message: string; sessionId?: string; timestamp: number }) => {
+      console.log('💭 Received thinking update:', data.message);
+      
+      // Only update if it's for the current session or no specific session
+      if (!data.sessionId || data.sessionId === activeSessionId) {
+        setInitialThinkingMessage(data.message);
+        
+        // Clear the thinking message after a delay if no new updates
+        setTimeout(() => {
+          setInitialThinkingMessage(null);
+        }, 5000);
+      }
+    };
+
+    // Set up IPC listener using the same pattern as other listeners
+    if (window.electronAPI && (window.electronAPI as any).onThinkingIndicatorUpdate) {
+      (window.electronAPI as any).onThinkingIndicatorUpdate(handleThinkingUpdate);
+    } else {
+      console.warn('⚠️ onThinkingIndicatorUpdate not available in electronAPI');
+    }
+  }, [activeSessionId]);
+
   // Auto-scroll to bottom when new messages arrive (only if user is not manually scrolling)
   useEffect(() => {
     const hasMessages = displayMessages.length > 0;

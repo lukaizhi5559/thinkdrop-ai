@@ -299,6 +299,13 @@ async function initializeServices() {
           action: 'bootstrap'
         });
         
+        // Bootstrap WebSearchAgent for hybrid query support
+        console.log('🔍 Bootstrapping WebSearchAgent...');
+        await coreAgent.ask({
+          agent: 'WebSearchAgent',
+          action: 'bootstrap'
+        });
+        
         // Start the embedding daemon with default 10-minute intervals
         const daemonResult = await coreAgent.ask({
           agent: 'EmbeddingDaemonAgent',

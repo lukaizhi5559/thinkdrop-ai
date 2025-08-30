@@ -26,6 +26,7 @@ const AGENT_FORMAT = {
           'query-phi3',
           'query-phi3-fast',
           'query-phi3-routing',
+          'classify-intent',
           'check-availability',
           'get-model-info'
         ]
@@ -470,6 +471,21 @@ ${message}<|end|>
           fallbackIntent = 'greeting';
         }
 
+        // External knowledge heuristics (news/facts/web-needed)
+        const externalPatterns = [
+          /\b(latest|today|current|recent)\b/i,
+          /\bnews|headline|trending\b/i,
+          /\bwho is\b|\bwhat is\b|\bdefine\b|\bmeaning of\b/i,
+          /\brelease date|price|stock|ticker|market|weather|time in\b/i,
+          /\bsource|citation|according to\b/i,
+          /\bsearch|google|web|internet|searx\b/i,
+          /\bapi docs?|documentation|reference\b/i,
+          /\barxiv|paper|study|research\b/i,
+        ];
+        if (externalPatterns.some((re) => re.test(message))) {
+          fallbackExternal = true;
+        }
+
         intentData = {
           chainOfThought: {
             step1_analysis: `Natural language parsing failed, analyzing message: "${message}"`,
@@ -491,6 +507,40 @@ ${message}<|end|>
             (fallbackIntent === 'memory_retrieve' ? null : 'I\'ll help you with that using my local capabilities.'),
           sourceText: message
         };  
+      }
+      
+      // Normalize and enrich flags post-parsing for hybrid routing support
+      try {
+        const text = message.toLowerCase();
+        const mentionScreen = /\b(screenshot|screen|capture|image|ocr|picture)\b/i.test(message);
+        const mentionMemory = /(what did i say|what did we talk|last time|earlier|previous|past conversation|remember|recall|notes?)/i.test(message);
+        const mentionExternal = (
+          /\b(latest|today|current|recent)\b/i.test(message) ||
+          /\b(news|headline|trending)\b/i.test(message) ||
+          /(who is|what is|define|meaning of)/i.test(message) ||
+          /(release date|price|stock|ticker|market|weather|time in)/i.test(message) ||
+          /(source|citation|according to)/i.test(message) ||
+          /(search|google|web|internet|searx)/i.test(message) ||
+          /(api docs?|documentation|reference)/i.test(message) ||
+          /(arxiv|paper|study|research)/i.test(message)
+        );
+
+        // Ensure booleans exist
+        if (typeof intentData.captureScreen !== 'boolean') intentData.captureScreen = false;
+        if (typeof intentData.requiresMemoryAccess !== 'boolean') intentData.requiresMemoryAccess = false;
+        if (typeof intentData.requiresExternalData !== 'boolean') intentData.requiresExternalData = false;
+
+        // Merge heuristics (OR) with parsed values
+        intentData.captureScreen = intentData.captureScreen || mentionScreen;
+        intentData.requiresMemoryAccess = intentData.requiresMemoryAccess || mentionMemory;
+        intentData.requiresExternalData = intentData.requiresExternalData || mentionExternal;
+
+        // Optional routing hint for downstream orchestrator
+        intentData.routingHint = intentData.requiresExternalData && intentData.requiresMemoryAccess
+          ? 'hybrid'
+          : (intentData.requiresExternalData ? 'external_only' : (intentData.requiresMemoryAccess ? 'memory_only' : 'conversation'));
+      } catch (enrichErr) {
+        console.warn('⚠️ Intent flag enrichment failed:', enrichErr.message);
       }
       
       // Extract entities from the original message regardless of parsing success/failure

@@ -2953,6 +2953,12 @@ Answer:`,
       if (hasPreClassifiedIntent) {
         console.log('✅ Using pre-classified intent data (avoiding redundant classification)');
         console.log('🎯 Pre-classified intent:', intentDataOrContext.primaryIntent);
+        console.log('🔀 Routing hint:', intentDataOrContext.routingHint);
+        console.log('🏷️ Intent flags:', {
+          requiresMemoryAccess: intentDataOrContext.requiresMemoryAccess,
+          requiresExternalData: intentDataOrContext.requiresExternalData,
+          captureScreen: intentDataOrContext.captureScreen
+        });
         
         // Handle suggestedResponse for memory_retrieve with async import
         let suggestedResponse = intentDataOrContext.suggestedResponse || null;
@@ -2984,6 +2990,8 @@ Answer:`,
             method: 'pre_classified',
             captureScreen: intentDataOrContext.captureScreen === true,
             requiresMemoryAccess: intentDataOrContext.requiresMemoryAccess === true,
+            requiresExternalData: intentDataOrContext.requiresExternalData === true,
+            routingHint: intentDataOrContext.routingHint || 'conversation',
             suggestedResponse: suggestedResponse,
             sourceText: intentDataOrContext.sourceText || userMessage
           }
@@ -3075,12 +3083,32 @@ Answer:`,
    */
   async processLocalIntentResult(intentResult, userMessage, context = {}) {
     try {
-      const { intent, confidence, entities, category, method } = intentResult?.result;
+      const { intent, confidence, entities, category, method, routingHint, requiresMemoryAccess, requiresExternalData, captureScreen } = intentResult?.result;
       
       console.log('🔍 DEBUG: intentResult in processLocalIntentResult:', JSON.stringify(intentResult, null, 2));
       console.log(`🎯 Processing intent: ${intent} (confidence: ${confidence}, method: ${method})`);
+      console.log(`🔀 Routing hint: ${routingHint}`);
+      console.log(`🏷️ Intent flags: memory=${requiresMemoryAccess}, external=${requiresExternalData}, screen=${captureScreen}`);
       
-      // Handle different intent types with local processing
+      // Check for hybrid routing first based on the new routingHint
+      if (routingHint === 'hybrid') {
+        console.log('🔄 HYBRID ROUTING: Query needs both memory and external data');
+        return await this.handleHybridQuery(userMessage, intentResult.result, context);
+      }
+      
+      // Check for external-only routing
+      if (routingHint === 'external_only' || (requiresExternalData && !requiresMemoryAccess)) {
+        console.log('🌐 EXTERNAL ROUTING: Query needs web search only');
+        return await this.handleExternalQuery(userMessage, intentResult.result, context);
+      }
+      
+      // Check for memory-only routing
+      if (routingHint === 'memory_only' || (requiresMemoryAccess && !requiresExternalData)) {
+        console.log('🧠 MEMORY ROUTING: Query needs conversation context only');
+        return await this.handleMemoryQuery(userMessage, intentResult.result, context);
+      }
+      
+      // Handle different intent types with local processing (fallback to original logic)
       switch (intent) {
         case 'command':
           // Route command intents through unified orchestration for proper agent selection
@@ -4597,26 +4625,250 @@ Your evaluation:`;
       }
       
     } catch (error) {
-      console.warn('⚠️ [COMPLETENESS-EVAL] AI validation error:', error.message);
+      console.error('❌ [COMPLETENESS-EVAL] Error during completeness evaluation:', error);
       return !isIncomplete; // Use heuristic decision as fallback
     }
   }
 
   /**
-   * Fallback heuristic evaluation when AI evaluation fails
+   * Handle hybrid queries that need both memory context and external data
    */
-  fallbackCompletenessEvaluation(trimmedResponse) {
-    // Simple fallback: longer responses with proper punctuation are more likely complete
-    const hasProperEnding = /[.!?]$/.test(trimmedResponse);
-    const isReasonableLength = trimmedResponse.length >= 60;
-    const hasCompleteIndicators = /\b(specifically|according to|based on|the answer|in summary)\b/i.test(trimmedResponse);
-    
-    const isComprehensive = (hasProperEnding && isReasonableLength) || hasCompleteIndicators;
-    console.log(`🔍 [COMPLETENESS-EVAL] Fallback heuristic: Length=${trimmedResponse.length}, Comprehensive=${isComprehensive}`);
-    
-    return isComprehensive;
+  async handleHybridQuery(userMessage, intentData, context = {}) {
+    try {
+      console.log('🔄 HYBRID QUERY: Starting parallel memory and web search...');
+      
+      // Start both memory and web search in parallel
+      const memoryPromise = this.executeAgent('UserMemoryAgent', {
+        action: 'search',
+        query: userMessage,
+        limit: 5
+      }, context);
+      
+      const webPromise = this.executeAgent('WebSearchAgent', {
+        action: 'search',
+        query: userMessage,
+        maxResults: 3
+      }, context);
+      
+      // Wait for both to complete
+      const [memoryResult, webResult] = await Promise.allSettled([memoryPromise, webPromise]);
+      
+      let memoryContext = '';
+      let webContext = '';
+      
+      // Process memory results
+      if (memoryResult.status === 'fulfilled' && memoryResult.value?.success) {
+        const memories = memoryResult.value.result?.results || [];
+        if (memories.length > 0) {
+          memoryContext = memories.map((m, i) => 
+            `Memory ${i + 1}: ${m.source_text || m.text || ''}`
+          ).join('\n');
+          console.log(`✅ HYBRID: Found ${memories.length} memory results`);
+        }
+      } else {
+        console.warn('⚠️ HYBRID: Memory search failed:', memoryResult.reason?.message);
+      }
+      
+      // Process web results
+      if (webResult.status === 'fulfilled' && webResult.value?.success) {
+        const webData = webResult.value.result?.results || [];
+        if (webData.length > 0) {
+          webContext = webData.map((w, i) => 
+            `Web Result ${i + 1}: ${w.title || ''} - ${w.snippet || w.content || ''}`
+          ).join('\n');
+          console.log(`✅ HYBRID: Found ${webData.length} web results`);
+        }
+      } else {
+        console.warn('⚠️ HYBRID: Web search failed:', webResult.reason?.message);
+      }
+      
+      // Combine contexts and generate response
+      const combinedContext = [memoryContext, webContext].filter(c => c.trim()).join('\n\n');
+      
+      if (!combinedContext.trim()) {
+        console.warn('⚠️ HYBRID: No context found from either source');
+        return {
+          success: true,
+          response: "I couldn't find relevant information from either my memory or web search. Could you provide more details?",
+          handledBy: 'HybridQuery',
+          method: 'no_context_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      // Generate response using Phi3Agent with combined context
+      const responseResult = await this.executeAgent('Phi3Agent', {
+        action: 'generate-response',
+        message: userMessage,
+        context: combinedContext,
+        options: {
+          temperature: 0.3,
+          maxTokens: 500
+        }
+      }, context);
+      
+      const response = responseResult?.success ? 
+        responseResult.result?.response || responseResult.result || 'Response generated successfully.' :
+        'I found some relevant information but had trouble generating a response.';
+      
+      return {
+        success: true,
+        response,
+        handledBy: 'HybridQuery',
+        method: 'memory_and_web_search',
+        timestamp: new Date().toISOString(),
+        sources: {
+          memory: memoryResult.status === 'fulfilled',
+          web: webResult.status === 'fulfilled'
+        }
+      };
+      
+    } catch (error) {
+      console.error('❌ HYBRID QUERY failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I had trouble processing your hybrid query. Please try again.',
+        handledBy: 'HybridQuery',
+        method: 'error_fallback',
+        timestamp: new Date().toISOString()
+      };
+    }
   }
 
+  /**
+   * Handle queries that need only external web data
+   */
+  async handleExternalQuery(userMessage, intentData, context = {}) {
+    try {
+      console.log('🌐 EXTERNAL QUERY: Starting web search...');
+      
+      const webResult = await this.executeAgent('WebSearchAgent', {
+        action: 'search',
+        query: userMessage,
+        maxResults: 5
+      }, context);
+      
+      if (!webResult?.success || !webResult.result?.results?.length) {
+        console.warn('⚠️ EXTERNAL: Web search failed or no results');
+        return {
+          success: true,
+          response: "I couldn't find current information about that topic. Could you try rephrasing your question?",
+          handledBy: 'ExternalQuery',
+          method: 'no_results_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      const webData = webResult.result.results;
+      const webContext = webData.map((w, i) => 
+        `Source ${i + 1}: ${w.title || ''} - ${w.snippet || w.content || ''}`
+      ).join('\n');
+      
+      console.log(`✅ EXTERNAL: Found ${webData.length} web results`);
+      
+      // Generate response using Phi3Agent with web context
+      const responseResult = await this.executeAgent('Phi3Agent', {
+        action: 'generate-response',
+        message: userMessage,
+        context: webContext,
+        options: {
+          temperature: 0.3,
+          maxTokens: 500
+        }
+      }, context);
+      
+      const response = responseResult?.success ? 
+        responseResult.result?.response || responseResult.result || 'Response generated successfully.' :
+        'I found some relevant information but had trouble generating a response.';
+      
+      return {
+        success: true,
+        response,
+        handledBy: 'ExternalQuery',
+        method: 'web_search_only',
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ EXTERNAL QUERY failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I had trouble searching for current information. Please try again.',
+        handledBy: 'ExternalQuery',
+        method: 'error_fallback',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
+
+  /**
+   * Handle queries that need only memory/conversation context
+   */
+  async handleMemoryQuery(userMessage, intentData, context = {}) {
+    try {
+      console.log('🧠 MEMORY QUERY: Starting memory search...');
+      
+      const memoryResult = await this.executeAgent('UserMemoryAgent', {
+        action: 'search',
+        query: userMessage,
+        limit: 8
+      }, context);
+      
+      if (!memoryResult?.success || !memoryResult.result?.results?.length) {
+        console.warn('⚠️ MEMORY: Memory search failed or no results');
+        return {
+          success: true,
+          response: "I don't have any relevant information from our previous conversations about that topic.",
+          handledBy: 'MemoryQuery',
+          method: 'no_memory_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      const memories = memoryResult.result.results;
+      const memoryContext = memories.map((m, i) => 
+        `Memory ${i + 1}: ${m.source_text || m.text || ''}`
+      ).join('\n');
+      
+      console.log(`✅ MEMORY: Found ${memories.length} memory results`);
+      
+      // Generate response using Phi3Agent with memory context
+      const responseResult = await this.executeAgent('Phi3Agent', {
+        action: 'generate-response',
+        message: userMessage,
+        context: memoryContext,
+        options: {
+          temperature: 0.3,
+          maxTokens: 500
+        }
+      }, context);
+      
+      const response = responseResult?.success ? 
+        responseResult.result?.response || responseResult.result || 'Response generated successfully.' :
+        'I found some relevant information from our conversations but had trouble generating a response.';
+      
+      return {
+        success: true,
+        response,
+        handledBy: 'MemoryQuery',
+        method: 'memory_search_only',
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      console.error('❌ MEMORY QUERY failed:', error);
+      return {
+        success: false,
+        error: error.message,
+        response: 'I had trouble searching through our conversation history. Please try again.',
+        handledBy: 'MemoryQuery',
+        method: 'error_fallback',
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
 }
 
 export default AgentOrchestrator;
