@@ -83,7 +83,7 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
     }
   });
 
-  // Main IPC handler for new pipeline with routing and 3-stage progressive search
+  // Main IPC handler for new pipeline with Phi3Agent classification and hybrid routing
   ipcMain.handle('llm-query', async (event, prompt, options = {}) => {
     const startTime = Date.now();
     
@@ -92,21 +92,170 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
 
-      console.log(`🎯 [NEW-PIPELINE] Starting query: "${prompt.substring(0, 50)}..."`);
+      console.log(`🎯 [MAIN-PIPELINE] Starting query: "${prompt.substring(0, 50)}..."`);
 
-      // Step 1: Routing classification
+      ////////////////////////////////////////////////////////////////////////
+      // STEP 1: PHI3AGENT INTENT CLASSIFICATION
+      ////////////////////////////////////////////////////////////////////////
+      
+      console.log('🧠 Step 1: Phi3Agent intent classification...');
+      let intentClassificationPayload = null;
+      
+      try {
+        const phi3Agent = coreAgent.getLoadedAgent('Phi3Agent');
+        if (!phi3Agent) {
+          throw new Error('Phi3Agent not available');
+        }
+        
+        // Check if Phi3Agent is ready (wait up to 5 seconds)
+        let isReady = false;
+        for (let i = 0; i < 10; i++) {
+          try {
+            const availabilityCheck = await phi3Agent.execute({ action: 'check-availability' });
+            console.log(`🔍 DEBUG: Phi3Agent availability check ${i+1}/10:`, availabilityCheck);
+            if (availabilityCheck && availabilityCheck.success && availabilityCheck.available === true) {
+              isReady = true;
+              console.log('✅ DEBUG: Phi3Agent is ready for classification');
+              break;
+            }
+          } catch (e) {
+            console.log(`⚠️ DEBUG: Phi3Agent availability check ${i+1}/10 failed:`, e.message);
+          }
+          await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms
+        }
+        
+        if (!isReady) {
+          throw new Error('Phi3Agent not ready after 5 seconds');
+        }
+        
+        const classificationResult = await phi3Agent.execute({ 
+          action: 'classify-intent',
+          message: prompt 
+        }, { 
+          sessionId: options.currentSessionId || options.sessionId 
+        });
+        
+        if (classificationResult && classificationResult.success && classificationResult.intentData) {
+          intentClassificationPayload = classificationResult.intentData;
+          console.log(`✅ [PHI3-CLASSIFICATION] Intent: ${intentClassificationPayload.primaryIntent}, External: ${intentClassificationPayload.requiresExternalData}, Routing: ${intentClassificationPayload.routingHint}`);
+        } else {
+          throw new Error('Invalid classification result');
+        }
+      } catch (error) {
+        console.warn('⚠️ [PHI3-CLASSIFICATION] Failed, using fallback:', error.message);
+        
+        // Fallback to simple classification
+        intentClassificationPayload = {
+          primaryIntent: 'question',
+          requiresExternalData: false,
+          requiresMemoryAccess: false,
+          captureScreen: false,
+          routingHint: 'conversation'
+        };
+      }
+
+      ////////////////////////////////////////////////////////////////////////
+      // STEP 2: SMART ROUTING - Use hybrid routing for external data queries
+      ////////////////////////////////////////////////////////////////////////
+      
+      // Check if Phi3Agent classification indicates external data is needed
+      const needsExternalData = intentClassificationPayload.requiresExternalData;
+      const routingHint = intentClassificationPayload.routingHint;
+      
+      console.log(`🎯 [ROUTING-DECISION] requiresExternalData: ${needsExternalData}, routingHint: ${routingHint}`);
+      
+      if (needsExternalData && (routingHint === 'external_only' || routingHint === 'hybrid')) {
+        console.log('🚀 [DIRECT-SEARCH] Query needs external data - using direct WebSearchAgent + LLM summarization...');
+        
+        // Direct approach: WebSearchAgent -> get articles -> LLM summarize
+        try {
+          // Step 1: Get news articles using WebSearchAgent
+          console.log('📰 [DIRECT-SEARCH] Fetching articles from WebSearchAgent...');
+          const WebSearchAgent = require('../services/agents/WebSearchAgent.cjs');
+          const Phi3Agent = require('../services/agents/Phi3Agent.cjs');
+          
+          const searchResult = await WebSearchAgent.search(prompt, { 
+            maxResults: 5 
+          });
+          
+          if (searchResult.success && searchResult.articles.length > 0) {
+            // Format articles for summarization
+            const articlesText = searchResult.articles.map((article, index) => 
+              `${index + 1}. **${article.title}**\n   Source: ${article.source?.name || 'Unknown'}\n   URL: ${article.url}\n   Published: ${article.publishedAt ? new Date(article.publishedAt).toLocaleDateString() : 'Unknown'}\n   ${article.description || article.content?.substring(0, 200) + '...' || 'No description available'}`
+            ).join('\n\n');
+            
+            const summaryPrompt = `Based on the following news articles about "${prompt}", provide a comprehensive summary that includes the key points, recent developments, and important details. Include article titles and sources in your response.
+
+${articlesText}
+
+Please provide a well-structured summary that helps the user understand the current situation regarding their query.`;
+
+            console.log(`📝 Sending ${searchResult.articles.length} articles to Phi3Agent for summarization`);
+            
+            const summaryResult = await Phi3Agent.execute({
+              action: 'query-phi3-fast',
+              prompt: summaryPrompt,
+              options: {
+                temperature: 0.3,
+                max_tokens: 800,
+                timeout: 15000
+              }
+            });
+            
+            if (summaryResult.success) {
+              console.log(`✅ Phi3Agent summarization successful`);
+              return {
+                success: true,
+                data: summaryResult.response,
+                articles: searchResult.articles,
+                source: 'websearch_llm_summary',
+                timestamp: new Date().toISOString()
+              };
+            } else {
+              console.log(`⚠️ Phi3Agent summarization failed, returning formatted articles`);
+              // Fallback to formatted article list
+              const fallbackResponse = `Here are the latest articles I found about "${prompt}":\n\n${articlesText}`;
+              return {
+                success: true,
+                data: fallbackResponse,
+                articles: searchResult.articles,
+                source: 'websearch_formatted',
+                timestamp: new Date().toISOString()
+              };
+            }
+          } else {
+            console.log(`❌ WebSearchAgent returned no articles, providing informative response`);
+            // Instead of falling back to old pipeline, provide a helpful response
+            return {
+              success: true,
+              data: `I wasn't able to find recent news articles about "${prompt}" at the moment. This could be due to query optimization or temporary API limitations. You might try rephrasing your question or asking about a more specific topic.`,
+              source: 'no_results_fallback',
+              timestamp: new Date().toISOString()
+            };
+          }
+        } catch (error) {
+          console.error('❌ [DIRECT-SEARCH] Direct search failed:', error.message);
+          console.log('🔄 [DIRECT-SEARCH] Falling back to old pipeline...');
+        }
+      }
+
+      ////////////////////////////////////////////////////////////////////////
+      // STEP 3: FALLBACK TO OLD PIPELINE FOR NON-EXTERNAL QUERIES
+      ////////////////////////////////////////////////////////////////////////
+      
+      console.log('🔄 [FALLBACK] Using old pipeline for conversational/memory queries...');
+      
+      // Use old routing classification for fallback
       const routingStartTime = Date.now();
       const routingResult = await classifyQuery(prompt, { sessionId: options.currentSessionId || options.sessionId });
       const routingTime = Date.now() - routingStartTime;
       
-      console.log(`🔍 [ROUTING] Classification: ${routingResult.classification} (${routingTime}ms)`);
+      console.log(`🔍 [OLD-ROUTING] Classification: ${routingResult.classification} (${routingTime}ms)`);
 
       // Handle non-context queries (GENERAL, MEMORY, COMMAND)
       if (['GENERAL', 'MEMORY', 'COMMAND'].includes(routingResult.classification)) {
         return await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
       }
-
-      console.log(`🔍 [ROUTING] Classification: ${routingResult.classification} (${Date.now() - startTime}ms)`);
 
       // Route based on classification
       if (routingResult.classification === 'CONTEXT') {
@@ -1661,6 +1810,12 @@ Respond concisely with actionable guidance.`,
           console.log('🔧 [STAGED-SEARCH] Removed surrounding quotes:', responseText);
         }
         
+        // Ensure responseText is never undefined or null
+        if (responseText === undefined || responseText === null || responseText === '') {
+          responseText = 'I found some information for you.';
+          console.log('⚠️ [STAGED-SEARCH] ResponseText was undefined/null, using fallback');
+        }
+        
         // Ensure we return a plain string
         const finalResponse = typeof responseText === 'string' ? responseText : String(responseText);
         
@@ -1833,9 +1988,9 @@ Respond concisely with actionable guidance.`,
         };
       }
 
-      ////////////////////////////////////////////////////////////////////////
-      // STEP 3: CONDITIONAL ORCHESTRATION - Only when NER suggests it's needed
-      ////////////////////////////////////////////////////////////////////////
+      // Note: Hybrid routing logic is now implemented in the main llm-query handler
+      
+      // Fallback to background orchestration for other cases
       if (!routingDecision || routingDecision.needsOrchestration) {
         console.log('🔄 Step 3: Triggering background orchestration (NER suggests needed)...');
         // Don't await this - let it run in background
@@ -1880,6 +2035,12 @@ Respond concisely with actionable guidance.`,
           if (typeof responseText === 'string' && responseText.startsWith('"') && responseText.endsWith('"')) {
             responseText = responseText.slice(1, -1);
             console.log('🔧 [BROADCAST] Removed surrounding quotes:', responseText);
+          }
+          
+          // Ensure responseText is never undefined or null
+          if (responseText === undefined || responseText === null || responseText === '') {
+            responseText = 'I found some information for you.';
+            console.log('⚠️ [BROADCAST] ResponseText was undefined/null, using fallback');
           }
           
           // Ensure we have a plain string

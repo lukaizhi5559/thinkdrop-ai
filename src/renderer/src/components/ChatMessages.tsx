@@ -648,12 +648,12 @@ export default function ChatMessages() {
           });
           
           if (result.success) {
-            console.log('✅ [NEW-PIPELINE] Direct query successful:', result.response);
+            console.log('✅ [NEW-PIPELINE] Direct query successful:', result.data);
             
             // Add AI response to conversation
             if (signalsAddMessage && signals.activeSessionId.value) {
               await signalsAddMessage(signals.activeSessionId.value, {
-                text: result.response,
+                text: result.data,
                 sender: 'ai',
                 sessionId: signals.activeSessionId.value,
                 metadata: { isFinal: true }

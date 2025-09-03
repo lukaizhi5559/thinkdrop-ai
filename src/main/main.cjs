@@ -4,13 +4,18 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// Load environment variables FIRST before any other setup
+require('dotenv').config(); // Load .env variables
+
 // Force WASM-only execution for all transformers to prevent ONNX runtime issues
 process.env.ONNXJS_LOG_LEVEL = 'error';
 process.env.TRANSFORMERS_CACHE = path.join(__dirname, '../../models');
 process.env.HF_HUB_DISABLE_TELEMETRY = '1';
 // Disable ONNX runtime entirely
 process.env.ONNXRUNTIME_DISABLE = '1';
-require('dotenv').config(); // Load .env variables
+
+// Debug: Log NewsAPI key status
+console.log('🔑 NewsAPI Key Status:', process.env.NEWSAPI_KEY ? 'LOADED' + process.env.NEWSAPI_KEY : 'NOT FOUND');
 
 // Handle EPIPE errors gracefully to prevent process crashes
 process.stdout.on('error', (err) => {

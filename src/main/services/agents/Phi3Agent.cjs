@@ -16,6 +16,7 @@ try {
 const AGENT_FORMAT = {
   name: 'Phi3Agent',
   description: 'Local LLM interface using Ollama for fallback capabilities when backend is disconnected',
+  isAvailable: false, // Initialize to false by default
   schema: {
     type: 'object',
     properties: {
@@ -471,16 +472,56 @@ ${message}<|end|>
           fallbackIntent = 'greeting';
         }
 
-        // External knowledge heuristics (news/facts/web-needed)
+        // Enhanced external knowledge heuristics (news/facts/web-needed)
         const externalPatterns = [
-          /\b(latest|today|current|recent)\b/i,
-          /\bnews|headline|trending\b/i,
-          /\bwho is\b|\bwhat is\b|\bdefine\b|\bmeaning of\b/i,
-          /\brelease date|price|stock|ticker|market|weather|time in\b/i,
-          /\bsource|citation|according to\b/i,
-          /\bsearch|google|web|internet|searx\b/i,
-          /\bapi docs?|documentation|reference\b/i,
-          /\barxiv|paper|study|research\b/i,
+          // Time-sensitive queries
+          /\b(latest|today|current|recent|now|this (year|month|week)|2024|2025)\b/i,
+          /\b(yesterday|tomorrow|last (week|month|year))\b/i,
+          
+          // News and current events
+          /\b(news|headline|trending|breaking|update|announcement)\b/i,
+          /\b(election|politics|government|president|congress)\b/i,
+          
+          // Factual queries requiring external data
+          /\b(who is|what is|define|meaning of|explain|tell me about)\b/i,
+          /\b(how (much|many|old|tall|big|small))\b/i,
+          /\b(when (did|was|will)|where (is|was|will))\b/i,
+          
+          // Financial and market data
+          /\b(price|cost|stock|ticker|market|nasdaq|dow|s&p|crypto|bitcoin)\b/i,
+          /\b(earnings|revenue|profit|loss|ipo|merger|acquisition)\b/i,
+          
+          // Weather and location
+          /\b(weather|temperature|forecast|rain|snow|storm)\b/i,
+          /\b(time in|timezone|what time)\b/i,
+          
+          // Technology and products
+          /\b(release date|launch|version|update|specs|features)\b/i,
+          /\b(iphone|android|windows|mac|tesla|apple|google|microsoft)\b/i,
+          
+          // Research and academic
+          /\b(study|research|paper|journal|arxiv|pubmed)\b/i,
+          /\b(statistics|data|report|survey|analysis)\b/i,
+          
+          // Web search indicators
+          /\b(search|google|web|internet|searx|find|lookup)\b/i,
+          /\b(source|citation|according to|reference|link)\b/i,
+          
+          // Documentation and technical
+          /\b(api docs?|documentation|manual|guide|tutorial)\b/i,
+          /\b(github|stackoverflow|npm|pip|install)\b/i,
+          
+          // Sports and entertainment
+          /\b(score|game|match|season|playoffs|championship)\b/i,
+          /\b(movie|film|tv show|netflix|streaming|review)\b/i,
+          
+          // Health and science
+          /\b(covid|vaccine|virus|disease|treatment|medicine)\b/i,
+          /\b(climate|environment|space|nasa|asteroid)\b/i,
+          
+          // Company and business info
+          /\b(company|corporation|business|startup|ceo|founder)\b/i,
+          /\b(headquarters|office|location|address|phone)\b/i
         ];
         if (externalPatterns.some((re) => re.test(message))) {
           fallbackExternal = true;
@@ -514,16 +555,59 @@ ${message}<|end|>
         const text = message.toLowerCase();
         const mentionScreen = /\b(screenshot|screen|capture|image|ocr|picture)\b/i.test(message);
         const mentionMemory = /(what did i say|what did we talk|last time|earlier|previous|past conversation|remember|recall|notes?)/i.test(message);
-        const mentionExternal = (
-          /\b(latest|today|current|recent)\b/i.test(message) ||
-          /\b(news|headline|trending)\b/i.test(message) ||
-          /(who is|what is|define|meaning of)/i.test(message) ||
-          /(release date|price|stock|ticker|market|weather|time in)/i.test(message) ||
-          /(source|citation|according to)/i.test(message) ||
-          /(search|google|web|internet|searx)/i.test(message) ||
-          /(api docs?|documentation|reference)/i.test(message) ||
-          /(arxiv|paper|study|research)/i.test(message)
-        );
+        // Enhanced external detection patterns (matching fallback logic)
+        const externalDetectionPatterns = [
+          // Time-sensitive queries
+          /\b(latest|today|current|recent|now|this (year|month|week)|2024|2025)\b/i,
+          /\b(yesterday|tomorrow|last (week|month|year))\b/i,
+          
+          // News and current events
+          /\b(news|headline|trending|breaking|update|announcement)\b/i,
+          /\b(election|politics|government|president|congress)\b/i,
+          
+          // Factual queries requiring external data
+          /\b(who is|what is|define|meaning of|explain|tell me about)\b/i,
+          /\b(how (much|many|old|tall|big|small))\b/i,
+          /\b(when (did|was|will)|where (is|was|will))\b/i,
+          
+          // Financial and market data
+          /\b(price|cost|stock|ticker|market|nasdaq|dow|s&p|crypto|bitcoin)\b/i,
+          /\b(earnings|revenue|profit|loss|ipo|merger|acquisition)\b/i,
+          
+          // Weather and location
+          /\b(weather|temperature|forecast|rain|snow|storm)\b/i,
+          /\b(time in|timezone|what time)\b/i,
+          
+          // Technology and products
+          /\b(release date|launch|version|update|specs|features)\b/i,
+          /\b(iphone|android|windows|mac|tesla|apple|google|microsoft)\b/i,
+          
+          // Research and academic
+          /\b(study|research|paper|journal|arxiv|pubmed)\b/i,
+          /\b(statistics|data|report|survey|analysis)\b/i,
+          
+          // Web search indicators
+          /\b(search|google|web|internet|searx|find|lookup)\b/i,
+          /\b(source|citation|according to|reference|link)\b/i,
+          
+          // Documentation and technical
+          /\b(api docs?|documentation|manual|guide|tutorial)\b/i,
+          /\b(github|stackoverflow|npm|pip|install)\b/i,
+          
+          // Sports and entertainment
+          /\b(score|game|match|season|playoffs|championship)\b/i,
+          /\b(movie|film|tv show|netflix|streaming|review)\b/i,
+          
+          // Health and science
+          /\b(covid|vaccine|virus|disease|treatment|medicine)\b/i,
+          /\b(climate|environment|space|nasa|asteroid)\b/i,
+          
+          // Company and business info
+          /\b(company|corporation|business|startup|ceo|founder)\b/i,
+          /\b(headquarters|office|location|address|phone)\b/i
+        ];
+        
+        const mentionExternal = externalDetectionPatterns.some(pattern => pattern.test(message));
 
         // Ensure booleans exist
         if (typeof intentData.captureScreen !== 'boolean') intentData.captureScreen = false;
@@ -1204,8 +1288,10 @@ Everything I do is processed locally on your device for complete privacy, reflec
   // Check if Ollama and the model are available (using cached status)
   async checkAvailability() {
     try {
-      console.log('🔍 DEBUG: Using cached Phi3 availability status:', AGENT_FORMAT.isAvailable);
-      return AGENT_FORMAT.isAvailable;
+      // Ensure isAvailable is always a boolean, defaulting to false if undefined
+      const available = typeof AGENT_FORMAT.isAvailable === 'boolean' ? AGENT_FORMAT.isAvailable : false;
+      console.log('🔍 DEBUG: Using cached Phi3 availability status:', available);
+      return available;
     } catch (error) {
       console.warn('🚫 Phi3 availability check failed:', error.message);
       return false;

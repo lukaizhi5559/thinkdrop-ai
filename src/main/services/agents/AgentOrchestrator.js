@@ -314,6 +314,23 @@ export class AgentOrchestrator {
         config: { max_active_sessions: 10, hibernation_timeout_minutes: 30, context_similarity_threshold: 0.7 },
         orchestrator_metadata: { category: 'conversation', priority: 'high' }
       },
+      {
+        name: 'WebSearchAgent',
+        description: 'Performs web searches using SearXNG public instances for real-time information retrieval',
+        dependencies: ['https', 'url'],
+        execution_target: 'frontend',
+        requires_database: false,
+        config: { 
+          searxng_instances: [
+            'https://searx.be',
+            'https://search.sapti.me',
+            'https://searx.tiekoetter.com'
+          ],
+          timeout: 10000,
+          max_results: 10
+        },
+        orchestrator_metadata: { category: 'search', priority: 'high' }
+      },
       // {
       //   name: 'IntentParserAgent',
       //   description: 'Parses user intents and determines appropriate actions',
@@ -4761,6 +4778,19 @@ Your evaluation:`;
       }
       
       const webData = webResult.result.results;
+      
+      // Check if this is a fallback message that should be returned directly
+      if (webData.length === 1 && webData[0].source === 'duckduckgo_fallback') {
+        console.log(`🦆 EXTERNAL: Returning DuckDuckGo fallback message directly`);
+        return {
+          success: true,
+          response: webData[0].content,
+          handledBy: 'ExternalQuery',
+          method: 'duckduckgo_fallback',
+          timestamp: new Date().toISOString()
+        };
+      }
+      
       const webContext = webData.map((w, i) => 
         `Source ${i + 1}: ${w.title || ''} - ${w.snippet || w.content || ''}`
       ).join('\n');
@@ -4793,9 +4823,8 @@ Your evaluation:`;
     } catch (error) {
       console.error('❌ EXTERNAL QUERY failed:', error);
       return {
-        success: false,
-        error: error.message,
-        response: 'I had trouble searching for current information. Please try again.',
+        success: true,
+        response: 'I had trouble searching for current information. Please try again later.',
         handledBy: 'ExternalQuery',
         method: 'error_fallback',
         timestamp: new Date().toISOString()
