@@ -267,95 +267,185 @@ const greetingResponses = [
     "Hey! Just say the word."
 ];
 
+// -----------------------------
+// CONTEXT ANALYSIS
+// -----------------------------
 const contextAnalysisResponses = [
-    "Analyzing conversation context",
-    "Reading between the lines",
-    "Understanding your intent",
-    "Parsing your request",
-    "Getting the full picture",
-    "Connecting the dots",
-    "Piecing things together",
-    "Making sense of this",
-    "Interpreting your message",
-    "Grasping the context"
+  "Analyzing conversation context",
+  "Reading between the lines",
+  "Understanding your intent",
+  "Parsing your request",
+  "Getting the full picture",
+  "Connecting the dots",
+  "Piecing things together",
+  "Making sense of this",
+  "Interpreting your message",
+  "Grasping the context",
+  "Checking what led up to this",
+  "Weaving prior points together",
+  "Mapping your objectives",
+  "Clarifying what you need",
+  "Resolving ambiguities",
+  "Aligning on your goal",
+  "Reviewing cues and signals",
+  "Deriving the core ask",
+  "Distilling the request",
+  "Locking onto the intent"
 ];
 
+// -----------------------------
+// CONVERSATION (CURRENT THREAD) SEARCH
+// -----------------------------
 const conversationSearchResponses = [
-    "Checking current conversation",
-    "Reviewing our chat",
-    "Looking at recent messages",
-    "Scanning this discussion",
-    "Checking what we've covered",
-    "Reviewing our exchange",
-    "Looking back at our chat",
-    "Checking conversation history",
-    "Scanning recent context",
-    "Reviewing this session"
+  "Checking current conversation",
+  "Reviewing our chat",
+  "Looking at recent messages",
+  "Scanning this discussion",
+  "Checking what we've covered",
+  "Reviewing our exchange",
+  "Looking back at our chat",
+  "Checking conversation history",
+  "Scanning recent context",
+  "Reviewing this session",
+  "Finding relevant points in this thread",
+  "Surfacing recent mentions",
+  "Pulling the latest highlights",
+  "Catching up on this discussion",
+  "Re-reading the last few messages",
+  "Gathering near-context",
+  "Spotting references we just made",
+  "Collecting recent details",
+  "Rewinding the thread briefly",
+  "Syncing with the current topic"
 ];
 
+// -----------------------------
+// SESSION SEARCH (PAST SESSIONS)
 const sessionSearchResponses = [
-    "Searching session history",
-    "Looking through past chats",
-    "Checking previous sessions",
-    "Scanning your chat history",
-    "Reviewing earlier conversations",
-    "Digging through session logs",
-    "Searching conversation archives",
-    "Looking at your chat timeline",
-    "Checking session records",
-    "Browsing conversation history"
+  "Searching session history",
+  "Looking through past chats",
+  "Checking previous sessions",
+  "Scanning your chat history",
+  "Reviewing earlier conversations",
+  "Digging through session logs",
+  "Searching conversation archives",
+  "Looking at your chat timeline",
+  "Checking session records",
+  "Browsing conversation history",
+  "Pulling prior session highlights",
+  "Gathering context from older threads",
+  "Surfacing earlier decisions",
+  "Finding earlier references",
+  "Cross-checking past discussions",
+  "Reviewing prior outcomes",
+  "Looking up older notes",
+  "Checking what we did before",
+  "Revisiting previous work",
+  "Skimming historical context"
 ];
 
+// -----------------------------
+// CROSS-SESSION (GLOBAL) SEARCH
+// -----------------------------
 const crossSessionSearchResponses = [
-    "Searching all conversations",
-    "Looking across all sessions",
-    "Checking your full history",
-    "Scanning everything we've discussed",
-    "Searching your complete timeline",
-    "Looking through all our chats",
-    "Checking your entire archive",
-    "Scanning all conversation data",
-    "Searching comprehensive history",
-    "Looking at everything stored"
+  "Searching all conversations",
+  "Looking across all sessions",
+  "Checking your full history",
+  "Scanning everything we've discussed",
+  "Searching your complete timeline",
+  "Looking through all our chats",
+  "Checking your entire archive",
+  "Scanning all conversation data",
+  "Searching comprehensive history",
+  "Looking at everything stored",
+  "Querying global memory",
+  "Aggregating results across sessions",
+  "Surfacing cross-session links",
+  "Building the big-picture view",
+  "Merging signals from everywhere",
+  "Hunting for long-range context",
+  "Reconciling past and present",
+  "Connecting distant references",
+  "Mining the long tail",
+  "Pulling a full-history match"
 ];
 
+// -----------------------------
+// INTENT CLASSIFICATION
+// -----------------------------
 const intentClassificationResponses = [
-    "Understanding your intent",
-    "Figuring out what you need",
-    "Analyzing your request",
-    "Determining the best approach",
-    "Classifying your query",
-    "Understanding your goal",
-    "Parsing your intention",
-    "Getting to the heart of it",
-    "Identifying your needs",
-    "Decoding your request"
+  "Understanding your intent",
+  "Figuring out what you need",
+  "Analyzing your request",
+  "Determining the best approach",
+  "Classifying your query",
+  "Understanding your goal",
+  "Parsing your intention",
+  "Getting to the heart of it",
+  "Identifying your needs",
+  "Decoding your request",
+  "Assigning the right intent",
+  "Matching to a workflow",
+  "Choosing the correct track",
+  "Recognizing the task type",
+  "Labeling this correctly",
+  "Locking onto the right intent",
+  "Selecting the best handler",
+  "Clarifying the category",
+  "Resolving intent signals",
+  "Pinpointing what to do"
 ];
 
+// -----------------------------
+// ROUTING (PIPELINE DECISION)
+// -----------------------------
 const routingResponses = [
-    "Finding the best path forward",
-    "Determining next steps",
-    "Choosing the right approach",
-    "Routing your request",
-    "Selecting optimal strategy",
-    "Planning the response",
-    "Mapping out the solution",
-    "Deciding how to help",
-    "Charting the course",
-    "Setting the direction"
+  "Finding the best path forward",
+  "Determining next steps",
+  "Choosing the right approach",
+  "Routing your request",
+  "Selecting optimal strategy",
+  "Planning the response",
+  "Mapping out the solution",
+  "Deciding how to help",
+  "Charting the course",
+  "Setting the direction",
+  "Choosing the right tools",
+  "Queuing the proper modules",
+  "Picking the proper stage",
+  "Orchestrating the pipeline",
+  "Allocating the lanes",
+  "Balancing speed and depth",
+  "Prioritizing useful context",
+  "Sequencing the steps",
+  "Aligning to your goal",
+  "Locking the route"
 ];
 
+// -----------------------------
+// RESPONSE GENERATION
+// -----------------------------
 const responseGenerationResponses = [
-    "Crafting your response",
-    "Generating an answer",
-    "Putting together a reply",
-    "Formulating the response",
-    "Creating your answer",
-    "Building the reply",
-    "Composing a response",
-    "Preparing your answer",
-    "Constructing the reply",
-    "Assembling the response"
+  "Crafting your response",
+  "Generating an answer",
+  "Putting together a reply",
+  "Formulating the response",
+  "Creating your answer",
+  "Building the reply",
+  "Composing a response",
+  "Preparing your answer",
+  "Constructing the reply",
+  "Assembling the response",
+  "Shaping a clear reply",
+  "Refining the wording",
+  "Making this concise and useful",
+  "Tailoring the output to you",
+  "Expressing this simply",
+  "Packaging the details",
+  "Arranging the key points",
+  "Making it actionable",
+  "Ensuring clarity and flow",
+  "Delivering a helpful answer"
 ];
 
 class IntentResponses {
