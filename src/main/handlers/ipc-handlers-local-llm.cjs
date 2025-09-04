@@ -6,6 +6,7 @@
 
 // Import IntentParser factory for centralized parser management
 const parserFactory = require('../services/utils/IntentParserFactory.cjs');
+const IntentResponses = require('../services/utils/IntentResponses.cjs');
 
 // ========================================
 // LIGHTWEIGHT IPC HANDLERS - BUSINESS LOGIC IN ORCHESTRATOR
@@ -174,6 +175,7 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       ////////////////////////////////////////////////////////////////////////
       // STEP 2: SMART ROUTING - Use hybrid routing for external data queries
       ////////////////////////////////////////////////////////////////////////
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('routing'), options.sessionId);
       
       // Check if Phi3Agent classification indicates external data is needed
       const needsExternalData = intentClassificationPayload.requiresExternalData;
@@ -262,6 +264,7 @@ Please provide a well-structured summary that helps the user understand the curr
       ////////////////////////////////////////////////////////////////////////
       
       console.log('🔄 [FALLBACK] Using old pipeline for conversational/memory queries...');
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('routing'), options.sessionId);
       
       // Use old routing classification for fallback
       const routingStartTime = Date.now();
@@ -290,9 +293,11 @@ Please provide a well-structured summary that helps the user understand the curr
       // Route based on classification
       if (routingResult.classification === 'CONTEXT') {
         console.log('🎯 [CONTEXT-PIPELINE] Starting progressive context search...');
+        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('context_analysis'), options.sessionId);
         
         // Stage 1: Current conversation context awareness
         console.log('📍 [STAGE-1] Current conversation context awareness...');
+        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('conversation_search'), options.sessionId);
         const contextAwareResult = await handleContextAwareScope(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
         if (contextAwareResult?.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 1 successful - returning conversation context result');
@@ -306,6 +311,7 @@ Please provide a well-structured summary that helps the user understand the curr
         }
         
         console.log('🔄 [CONTEXT-PIPELINE] Stage 1 failed, trying session scope search...');
+        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('session_search'), options.sessionId);
         
         // Stage 2: Session-scoped semantic search (cross-session)
         console.log('📍 [STAGE-2] Session-scoped semantic search...');
@@ -322,6 +328,7 @@ Please provide a well-structured summary that helps the user understand the curr
 
         // Stage 3: Cross-session semantic search (broader scope)
         console.log('📍 [STAGE-3] Cross-session semantic search...');
+        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('cross_session_search'), options.sessionId);
         const stage3Result = await handleCrossSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
         if (stage3Result && stage3Result.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 3 successful - returning cross-session result');
@@ -335,6 +342,7 @@ Please provide a well-structured summary that helps the user understand the curr
 
         // All stages failed - fallback to general knowledge
         console.log('⚠️ [FALLBACK] All context stages failed - using general knowledge');
+        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('response_generation'), options.sessionId);
         const fallbackResult = await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
         // Transform fallback response format for NEW pipeline compatibility
         if (fallbackResult && fallbackResult.success && fallbackResult.response) {
@@ -646,6 +654,7 @@ Please provide a well-structured summary that helps the user understand the curr
   async function handleContextAwareScope(prompt, context, coreAgent) {
     try {
       console.log('🔍 [CONTEXT-AWARE-SCOPE] Processing context-aware query...');
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('context_analysis'), context.sessionId);
       
       const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
       if (!conversationAgent) {
@@ -780,7 +789,7 @@ Answer based on what was just discussed. Be specific and reference the conversat
       }
 
       // Send thinking indicator update
-      broadcastThinkingUpdate("Checking other conversations...", context.sessionId);
+      broadcastThinkingUpdate("Checking other conversations", context.sessionId);
 
       // Perform cross-session semantic search (no sessionId filter for broader scope)
       console.log('🔍 [SESSION-SCOPE] Searching across all sessions...');
@@ -973,6 +982,9 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
   // Stage 3: Cross-session semantic search with current session prioritization
   async function handleCrossSessionScope(prompt, context) {
     try {
+      console.log('🔍 [CROSS-SESSION-SCOPE] Processing cross-session query...');
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('cross_session_search'), context.sessionId);
+      
       const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
       const phi3Agent = coreAgent.getAgent('Phi3Agent');
       
@@ -1419,6 +1431,8 @@ Current question: ${prompt}`;
   // Robust zero-shot classification with ensemble logic
   async function classifyWithZeroShot(prompt) {
     try {
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('intent_classification'), null);
+      
       // Initialize zero-shot classifier if not already done
       if (!global.zeroShotClassifier) {
         const { pipeline } = await import('@xenova/transformers');
@@ -1535,6 +1549,7 @@ Current question: ${prompt}`;
   async function handleGeneralKnowledge(prompt, context, startTime) {
     const llmStartTime = Date.now();
     console.log('⚡ [GENERAL-ULTRA-FAST] Starting chunked response...');
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('response_generation'), context.sessionId);
     
     try {
       const phi3Agent = coreAgent.getAgent('Phi3Agent');
@@ -1589,6 +1604,7 @@ Current question: ${prompt}`;
   // Handle memory queries (both storage and retrieval)
   async function handleMemoryQuery(prompt, context, startTime) {
     console.log('🧠 [MEMORY-QUERY] Analyzing memory intent...');
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('memory_retrieve'), context.sessionId);
     
     try {
       // Quick pattern-based classification for memory intent
@@ -1620,6 +1636,8 @@ Current question: ${prompt}`;
 
   // Classify whether query is for storage or retrieval
   async function classifyMemoryIntent(prompt) {
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('intent_classification'), null);
+    
     // Factual/general knowledge patterns - should NOT be treated as memory queries
     const factualPatterns = [
       /^(can you list|list the|what are the|tell me about|explain|describe)/i,
@@ -1678,6 +1696,7 @@ Current question: ${prompt}`;
   // Handle memory storage requests
   async function handleMemoryStore(prompt, context, startTime) {
     console.log('💾 [MEMORY-STORE] Processing information storage...');
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('memory_store'), context.sessionId);
     
     try {
       const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
@@ -1730,6 +1749,7 @@ Current question: ${prompt}`;
   // Handle memory retrieval requests
   async function handleMemoryRetrieve(prompt, context, startTime) {
     console.log('🔍 [MEMORY-RETRIEVE] Searching memories...');
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('memory_retrieve'), context.sessionId);
     
     try {
       const userMemoryAgent = coreAgent.getAgent('UserMemoryAgent');
@@ -1795,6 +1815,7 @@ Current question: ${prompt}`;
   // Handle command/action requests
   async function handleCommand(prompt, context, startTime) {
     console.log('⚡ [COMMAND] Processing action request...');
+    broadcastThinkingUpdate(IntentResponses.getThinkingMessage('command'), context.sessionId);
     
     try {
       const phi3Agent = coreAgent.getAgent('Phi3Agent');
@@ -2067,6 +2088,7 @@ Respond concisely with actionable guidance.`,
       ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 1.5: EARLY QUESTION HANDLER - Direct LLM for general knowledge
       ////////////////////////////////////////////////////////////////////////
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('question'), options.sessionId);
       const directQuestionResponse = await coreAgent.tryDirectQuestionFirst(prompt, routingDecision, {
         ...options,
         conversationContext: conversationContext
@@ -2078,6 +2100,7 @@ Respond concisely with actionable guidance.`,
       ////////////////////////////////////////////////////////////////////////
       // 🎯 STEP 2: SIMPLIFIED INTENT ASSIGNMENT - Use NER routing result
       ////////////////////////////////////////////////////////////////////////
+      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('intent_classification'), options.sessionId);
       let intentResult;
 
       // NER-FIRST SIMPLIFIED PATH: Use routing decision if available

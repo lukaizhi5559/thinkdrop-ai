@@ -220,28 +220,28 @@ const greetingResponses = [
     "Hello! How can I help you today?",
     "Hi there! What can I do for you?",
     "Good to see you! How can I assist?",
-    "Hey! What’s on your mind?",
+    "Hey! What's on your mind?",
     "Welcome back! Ready when you are.",
     "Hello again! What can I do for you?",
     "Hi! Need anything?",
     "Hey there! How may I be of service?",
     "Greetings! How can I help you today?",
     "Hey! Let me know how I can assist.",
-    "Hi! What’s up?",
+    "Hi! What's up?",
     "Hey friend! What can I do today?",
     "Hi there! I'm here to assist.",
     "Hello! Let's get started.",
     "Greetings! I'm at your service.",
-    "Hi! Let’s make today productive.",
+    "Hi! Let's make today productive.",
     "Howdy! How can I assist today?",
-    "Hey! Hope your day’s going well.",
+    "Hey! Hope your day's going well.",
     "Hi! What brings you here today?",
     "Nice to see you! How can I help?",
     "Hello! Just say the word.",
     "Hi! What would you like to do?",
     "Hello! I'm ready when you are.",
     "Hi there! Need a hand?",
-    "Hello! Let’s take care of that.",
+    "Hello! Let's take care of that.",
     "Hey! Ready to assist as always.",
     "Welcome! How can I be useful?",
     "Hi! Got a task for me?",
@@ -250,21 +250,112 @@ const greetingResponses = [
     "Hello again! Let's get things done.",
     "Hey there! What's first?",
     "Hi! Let me know what you need.",
-    "Good day! I’m standing by.",
+    "Good day! I'm standing by.",
     "Hey! How can I serve you today?",
     "Hi there! Ready to dive in?",
     "Hello! What's the plan today?",
     "Hi! I'm here to help.",
     "Hey! Let's make progress.",
-    "Welcome back! What’s on the agenda?",
+    "Welcome back! What's on the agenda?",
     "Hi! How may I assist you right now?",
     "Hey! Happy to help, as always.",
-    "Greetings, friend! What’s next?",
+    "Greetings, friend! What's next?",
     "Hi! You can count on me.",
-    "Hey! I’m listening.",
-    "Hello! Let’s get to work.",
+    "Hey! I'm listening.",
+    "Hello! Let's get to work.",
     "Hi! Always good to see you.",
     "Hey! Just say the word."
+];
+
+const contextAnalysisResponses = [
+    "Analyzing conversation context",
+    "Reading between the lines",
+    "Understanding your intent",
+    "Parsing your request",
+    "Getting the full picture",
+    "Connecting the dots",
+    "Piecing things together",
+    "Making sense of this",
+    "Interpreting your message",
+    "Grasping the context"
+];
+
+const conversationSearchResponses = [
+    "Checking current conversation",
+    "Reviewing our chat",
+    "Looking at recent messages",
+    "Scanning this discussion",
+    "Checking what we've covered",
+    "Reviewing our exchange",
+    "Looking back at our chat",
+    "Checking conversation history",
+    "Scanning recent context",
+    "Reviewing this session"
+];
+
+const sessionSearchResponses = [
+    "Searching session history",
+    "Looking through past chats",
+    "Checking previous sessions",
+    "Scanning your chat history",
+    "Reviewing earlier conversations",
+    "Digging through session logs",
+    "Searching conversation archives",
+    "Looking at your chat timeline",
+    "Checking session records",
+    "Browsing conversation history"
+];
+
+const crossSessionSearchResponses = [
+    "Searching all conversations",
+    "Looking across all sessions",
+    "Checking your full history",
+    "Scanning everything we've discussed",
+    "Searching your complete timeline",
+    "Looking through all our chats",
+    "Checking your entire archive",
+    "Scanning all conversation data",
+    "Searching comprehensive history",
+    "Looking at everything stored"
+];
+
+const intentClassificationResponses = [
+    "Understanding your intent",
+    "Figuring out what you need",
+    "Analyzing your request",
+    "Determining the best approach",
+    "Classifying your query",
+    "Understanding your goal",
+    "Parsing your intention",
+    "Getting to the heart of it",
+    "Identifying your needs",
+    "Decoding your request"
+];
+
+const routingResponses = [
+    "Finding the best path forward",
+    "Determining next steps",
+    "Choosing the right approach",
+    "Routing your request",
+    "Selecting optimal strategy",
+    "Planning the response",
+    "Mapping out the solution",
+    "Deciding how to help",
+    "Charting the course",
+    "Setting the direction"
+];
+
+const responseGenerationResponses = [
+    "Crafting your response",
+    "Generating an answer",
+    "Putting together a reply",
+    "Formulating the response",
+    "Creating your answer",
+    "Building the reply",
+    "Composing a response",
+    "Preparing your answer",
+    "Constructing the reply",
+    "Assembling the response"
 ];
 
 class IntentResponses {
@@ -280,7 +371,14 @@ class IntentResponses {
       memory_retrieve: memoryRetrieveResponses,
       command: commandResponses,
       question: questionResponses,
-      greeting: greetingResponses
+      greeting: greetingResponses,
+      context_analysis: contextAnalysisResponses,
+      conversation_search: conversationSearchResponses,
+      session_search: sessionSearchResponses,
+      cross_session_search: crossSessionSearchResponses,
+      intent_classification: intentClassificationResponses,
+      routing: routingResponses,
+      response_generation: responseGenerationResponses
     };
     
     const intentResponses = responses[intent] || responses.question;
@@ -299,7 +397,14 @@ class IntentResponses {
         memory_retrieve: memoryRetrieveResponses,
         command: commandResponses,
         question: questionResponses,
-        greeting: greetingResponses
+        greeting: greetingResponses,
+        context_analysis: contextAnalysisResponses,
+        conversation_search: conversationSearchResponses,
+        session_search: sessionSearchResponses,
+        cross_session_search: crossSessionSearchResponses,
+        intent_classification: intentClassificationResponses,
+        routing: routingResponses,
+        response_generation: responseGenerationResponses
     };
     
     return responses[intent] || responses.question;
@@ -321,7 +426,18 @@ class IntentResponses {
    * @returns {string[]} - Array of supported intent names
    */
   static getSupportedIntents() {
-    return ['memory_store', 'memory_retrieve', 'command', 'question', 'greeting'];
+    return ['memory_store', 'memory_retrieve', 'command', 'question', 'greeting', 
+            'context_analysis', 'conversation_search', 'session_search', 'cross_session_search',
+            'intent_classification', 'routing', 'response_generation'];
+  }
+
+  /**
+   * Get a random thinking update message for pipeline stages
+   * @param {string} stage - The pipeline stage
+   * @returns {string} - Random thinking message
+   */
+  static getThinkingMessage(stage) {
+    return this.getRandomResponse(stage);
   }
 }
 
