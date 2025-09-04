@@ -12,6 +12,10 @@ import { initializeConversationSignals } from './signals/init';
 import './types/electronAPI'; // Import Electron API types
 import { ViewType } from '@/types/view';
 
+// Initialize signals immediately when module loads (before React mounts)
+console.log('🚀 [APP MODULE] Initializing conversation signals at module level...');
+
+
 function App() {
   // Check if this is a specific mode (for legacy compatibility)
   const urlParams = new URLSearchParams(window.location.search);
@@ -42,11 +46,11 @@ function App() {
     setCurrentView(view);
   }
 
-  // Initialize signals when app starts
+  // Initialize signals when app starts - moved to module level for earlier execution
   useEffect(() => {
-    console.log('🚀 [APP] Initializing conversation signals...');
+    console.log('🚀 [APP] Signals should already be initialized at module level');
     initializeConversationSignals().catch(error => {
-      console.error('❌ [APP] Failed to initialize signals:', error);
+      console.error('❌ [APP MODULE] Failed to initialize signals at module level:', error);
     });
   }, []);
 

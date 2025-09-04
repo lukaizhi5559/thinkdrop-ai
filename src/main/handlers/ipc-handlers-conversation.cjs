@@ -6,10 +6,12 @@
 function setupConversationHandlers(ipcMain, coreAgent) {
   console.log('🔧 Setting up conversation persistence IPC handlers...');
   
-  // Check if coreAgent is available
+  // Check if coreAgent is available at setup time
   if (!coreAgent) {
     console.warn('⚠️ CoreAgent not available - conversation handlers will return errors');
   }
+  
+  
 
   // Session Management Handlers
   ipcMain.handle('conversation-session-create', async (event, options) => {
@@ -55,18 +57,51 @@ function setupConversationHandlers(ipcMain, coreAgent) {
     try {
       console.log('📋 [IPC] Listing conversation sessions');
       
+      // if (!coreAgent) {
+      //   console.log('⏳ [IPC] CoreAgent not ready, waiting...');
+      //   // Wait for CoreAgent to be available (up to 10 seconds)
+      //   let attempts = 0;
+      //   while (!coreAgent && attempts < 100) {
+      //     await new Promise(resolve => setTimeout(resolve, 100));
+      //     coreAgent = getCoreAgent();
+      //     attempts++;
+      //   }
+        
+      //   if (!coreAgent) {
+      //     console.error('❌ [IPC] CoreAgent still not available after waiting');
+      //     return {
+      //       success: false,
+      //       error: 'CoreAgent not initialized after waiting',
+      //       sessions: []
+      //     };
+      //   }
+        
+      //   console.log('✅ [IPC] CoreAgent is now available');
+      // }
       if (!coreAgent) {
+        console.error('❌ [IPC] CoreAgent still not available after waiting');
         return {
           success: false,
-          error: 'CoreAgent not initialized',
+          error: 'CoreAgent not initialized after waiting',
           sessions: []
         };
       }
+      
+      console.log('🔍 [IPC] Calling ConversationSessionAgent with options:', options);
       
       const result = await coreAgent.executeAgent('ConversationSessionAgent', {
         action: 'session-list',
         ...options
       });
+
+      // Convert BigInt values to regular numbers for JSON serialization
+      const sanitizeForJSON = (obj) => {
+        return JSON.parse(JSON.stringify(obj, (key, value) =>
+          typeof value === 'bigint' ? Number(value) : value
+        ));
+      };
+      
+      console.log('🔍 [IPC] Full agent result:', JSON.stringify(sanitizeForJSON(result), null, 2));
 
       if (result.success) {
         console.log('🔍 [IPC] Raw result from agent:', {
@@ -78,11 +113,18 @@ function setupConversationHandlers(ipcMain, coreAgent) {
           dataKeys: result.result?.data ? Object.keys(result.result.data) : 'no data'
         });
         
-        console.log(`✅ [IPC] Found ${result.result?.data?.sessions?.length || 0} sessions`);
-        return {
+        const responseData = {
           success: true,
           data: result.result?.data || { sessions: [], pagination: { total: 0, limit: 50, offset: 0, hasMore: false } }
         };
+        
+        // Sanitize BigInt values in the response data
+        const sanitizedResponseData = sanitizeForJSON(responseData);
+        
+        console.log(`✅ [IPC] Found ${result.result?.data?.sessions?.length || 0} sessions`);
+        console.log('🔍 [IPC] Returning response:', JSON.stringify(sanitizedResponseData, null, 2));
+        
+        return sanitizedResponseData;
       } else {
         console.error('❌ [IPC] Failed to list sessions:', result.error);
         return {

@@ -14,9 +14,6 @@ process.env.HF_HUB_DISABLE_TELEMETRY = '1';
 // Disable ONNX runtime entirely
 process.env.ONNXRUNTIME_DISABLE = '1';
 
-// Debug: Log NewsAPI key status
-console.log('🔑 NewsAPI Key Status:', process.env.NEWSAPI_KEY ? 'LOADED' + process.env.NEWSAPI_KEY : 'NOT FOUND');
-
 // Handle EPIPE errors gracefully to prevent process crashes
 process.stdout.on('error', (err) => {
   if (err.code === 'EPIPE') {
@@ -173,9 +170,23 @@ function toggleOverlay() {
   }
 }
 
-app.whenReady().then(() => {
-  createOverlayWindow();
+app.whenReady().then(async () => {
+  // console.log('🚀 App ready - starting initialization sequence...');
   
+  // // Setup IPC handlers FIRST to prevent "No handler registered" errors
+  // console.log('🔧 Step 1: Setting up IPC handlers...');
+  // await setupIPCHandlers();
+  // console.log('✅ Step 1: IPC handlers registered');
+  
+  // // Initialize core services after handlers are ready
+  // console.log('🔧 Step 2: Initializing core services...');
+  // await initializeServices();
+  // console.log('✅ Step 2: Core services initialized');
+  
+  // Create overlay window LAST to prevent premature frontend requests
+  // console.log('🔧 Step 3: Creating overlay window...');
+  createOverlayWindow();
+  // console.log('✅ Step 3: Overlay window created');
   // Initialize core services including LocalLLMAgent
   initializeServices().then(() => {
     // Verify CoreAgent is properly initialized before setting up IPC handlers
@@ -195,6 +206,8 @@ app.whenReady().then(() => {
     // Setup IPC handlers anyway to allow basic functionality
     await setupIPCHandlers();
   });
+  
+  console.log('🎉 Initialization sequence complete!');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
@@ -279,11 +292,14 @@ async function initializeServices() {
           apiKey: process.env.BIBSCRIP_API_KEY
         }
       });
+      
+      // Make CoreAgent available globally for IPC handlers AFTER initialization
+      global.coreAgent = coreAgent;
       console.log('✅ Step 5: CoreAgent initialized successfully:', initResult);
 
       // Initialize performance optimizations
       console.log('🔄 Step 6: Initializing performance optimizations...');
-      const { optimizationManager } = require('./services/OptimizationManager.cjs');
+      const { optimizationManager } = require('./services/cache/OptimizationManager.cjs');
       await optimizationManager.initialize();
       console.log('✅ Step 6: Performance optimizations ready');
 
@@ -350,6 +366,8 @@ async function initializeServices() {
 
 // Setup IPC handlers using modularized files
 async function setupIPCHandlers() {
+  console.log('🔧 Setting up IPC handlers...');
+  
   // Unified window state - UI state now managed by React components
   const windowState = {
     isGloballyVisible,
@@ -370,48 +388,71 @@ async function setupIPCHandlers() {
     // Removed separate window references
   };
   
-  // Initialize all IPC handlers from modularized files
-  const { broadcastOrchestrationUpdate: broadcastUpdate, sendClarificationRequest: sendClarification } = 
-    initializeIPCHandlers({
-      overlayWindow,
+  try {
+    // Initialize all IPC handlers from modularized files
+    const { broadcastOrchestrationUpdate: broadcastUpdate, sendClarificationRequest: sendClarification } = 
+      initializeIPCHandlers({
+        overlayWindow,
+        coreAgent,
+        localLLMAgent,
+        windowState,
+        windowCreators
+      });
+    console.log('✅ Main IPC handlers setup complete');
+    
+    // Setup memory handlers
+    console.log('🔧 Setting up memory handlers...');
+    setupMemoryHandlers(ipcMain, coreAgent);
+    console.log('✅ Memory handlers setup complete');
+    
+    // Initialize screenshot, system health, and legacy LLM handlers
+    console.log('🔧 Setting up screenshot and system handlers...');
+    initializeHandlersPart3({
+      ipcMain,
       coreAgent,
-      localLLMAgent,
       windowState,
-      windowCreators
+      windows
     });
-  
-  // Setup memory handlers
-  setupMemoryHandlers(ipcMain, coreAgent);
-  
-  // Initialize screenshot, system health, and legacy LLM handlers
-  initializeHandlersPart3({
-    ipcMain,
-    coreAgent,
-    windowState,
-    windows
-  });
 
-  // Setup conversation persistence handlers FIRST (required by frontend)
-  setupConversationHandlers(ipcMain, coreAgent);
-  
-  // Initialize local LLM handlers
-  initializeLocalLLMHandlers({
-    ipcMain,
-    coreAgent,
-    windowState,
-    windows
-  });
-  
-  // Setup orchestration workflow handlers
-  const { sendClarificationRequest: sendWorkflowClarification } = 
-    setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
-  
-  // Setup database notification handlers
-  await setupDatabaseNotificationHandlers();
-  
-  // Store the broadcast and clarification functions for use elsewhere
-  global.broadcastOrchestrationUpdate = broadcastUpdate;
-  global.sendClarificationRequest = sendWorkflowClarification || sendClarification;
+    console.log('🔧 Setting up conversation persistence handlers...');
+    setupConversationHandlers(ipcMain, coreAgent);
+    console.log('✅ Conversation persistence handlers setup complete');
+    
+    console.log('🔧 Setting up Local LLM IPC handlers...');
+    initializeLocalLLMHandlers({
+      ipcMain,
+      coreAgent,
+      windowState,
+      windows
+    });
+    
+    // Setup orchestration workflow handlers
+    console.log('🔧 Setting up orchestration workflow handlers...');
+    const { sendClarificationRequest: sendWorkflowClarification } = 
+      setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
+    console.log('✅ Orchestration workflow handlers setup complete');
+
+    console.log('✅ Local LLM IPC handlers setup complete');
+    
+    console.log('🔧 Setting up database notification handlers...');
+    await setupDatabaseNotificationHandlers();
+    console.log('✅ Database notification IPC handlers setup complete');
+    
+    // Initialize main IPC handlers
+    console.log('🔧 Setting up main IPC handlers...');
+    console.log('✅ Screenshot and system handlers setup complete');
+    
+    
+    // Store the broadcast and clarification functions for use elsewhere
+    global.broadcastOrchestrationUpdate = broadcastUpdate;
+    global.sendClarificationRequest = sendWorkflowClarification || sendClarification;
+    
+    console.log('✅ All IPC handlers registered successfully');
+    
+  } catch (error) {
+    console.error('❌ Error setting up IPC handlers:', error);
+    throw error;
+  }
 }
 
 // Window control handlers are now initialized in setupIPCHandlers() using initializeIPCHandlers

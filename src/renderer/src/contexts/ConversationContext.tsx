@@ -252,10 +252,10 @@ export const ConversationProvider: React.FC<ConversationProviderProps> = ({ chil
     }
   }, []);
 
-  // Load sessions on mount
+  // Load sessions on mount - DISABLED to avoid conflict with signals system
   useEffect(() => {
-    console.log('🚀 [ConversationContext] Component mounted, loading sessions...');
-    loadSessions();
+    console.log('🚀 [ConversationContext] Component mounted, using signals for session loading...');
+    // loadSessions(); // Disabled - using signals system instead
   }, []); // Empty dependency array - only run once on mount
 
   // Monitor session activity and auto-open sidebar when no active sessions

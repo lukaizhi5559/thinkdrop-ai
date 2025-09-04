@@ -163,23 +163,68 @@ export const loadSessions = async () => {
         }
       });
       
-      if (result.success && result.result?.data?.sessions) {
-        console.log('✅ [SIGNALS] Loaded sessions:', result.result.data.sessions.length);
-        sessions.value = result.result.data.sessions;
+      console.log('🔍 [SIGNALS] Raw backend result:', JSON.stringify(result, (key, value) => 
+        typeof value === 'bigint' ? value.toString() : value, 2));
+      console.log('🔍 [SIGNALS] Result structure check:', {
+        hasData: !!result.data,
+        hasResult: !!result.result,
+        dataKeys: result.data ? Object.keys(result.data) : 'no data',
+        resultKeys: result.result ? Object.keys(result.result) : 'no result',
+        directSessions: result.data?.sessions ? result.data.sessions.length : 'no direct sessions',
+        nestedSessions: result.result?.data?.sessions ? result.result.data.sessions.length : 'no nested sessions'
+      });
+      
+      // Handle all possible response formats
+      let sessionsData = null;
+      
+      // Try direct access first: result.data.sessions
+      if (result.data?.sessions) {
+        sessionsData = result.data.sessions;
+        console.log('🎯 [SIGNALS] Found sessions via result.data.sessions');
+      }
+      // Try nested access: result.result.data.sessions  
+      else if (result.result?.data?.sessions) {
+        sessionsData = result.result.data.sessions;
+        console.log('🎯 [SIGNALS] Found sessions via result.result.data.sessions');
+      }
+      // Try direct result access: result.sessions
+      else if (result.sessions) {
+        sessionsData = result.sessions;
+        console.log('🎯 [SIGNALS] Found sessions via result.sessions');
+      }
+      else {
+        console.log('❌ [SIGNALS] No sessions found in any expected location');
+      }
+      
+      console.log('🔍 [SIGNALS] Extracted sessions data:', sessionsData ? sessionsData.length : 'no sessions data');
+      
+      if (result.success && sessionsData) {
+        console.log('✅ [SIGNALS] Loaded sessions:', sessionsData.length);
+        console.log('🔍 [SIGNALS] Sessions data:', sessionsData);
+        sessions.value = sessionsData;
         
         // Set active session if one exists
-        const activeSession = result.result.data.sessions.find((s: ConversationSession) => s.isActive);
+        const activeSession = sessionsData.find((s: ConversationSession) => s.isActive);
         if (activeSession) {
           activeSessionId.value = activeSession.id;
           console.log('🎯 [SIGNALS] Found active session:', activeSession.id);
-        } else if (result.result.data.sessions.length > 0) {
+        } else if (sessionsData.length > 0) {
           // Auto-activate the first session if none is active
-          const firstSession = result.result.data.sessions[0];
+          const firstSession = sessionsData[0];
           console.log('🎯 [SIGNALS] Auto-activating first session:', firstSession.id);
           await switchToSession(firstSession.id);
         }
       } else {
         console.warn('⚠️ [SIGNALS] No sessions data in response:', result);
+        console.warn('⚠️ [SIGNALS] Expected sessions data, got:', {
+          hasDirectData: !!result.data,
+          hasNestedData: !!result.result?.data,
+          directSessions: !!result.data?.sessions,
+          nestedSessions: !!result.result?.data?.sessions,
+          resultKeys: result ? Object.keys(result) : 'no result',
+          dataKeys: result.data ? Object.keys(result.data) : 'no direct data',
+          nestedDataKeys: result.result?.data ? Object.keys(result.result.data) : 'no nested data'
+        });
       }
     }
   } catch (err) {

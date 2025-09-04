@@ -159,7 +159,7 @@ class ModelCache {
     try {
       // Try to initialize DistilBERT directly
       console.log('[CACHE] Initializing DistilBERT parser...');
-      const DistilBertIntentParser = require('./utils/DistilBertIntentParser.cjs');
+      const DistilBertIntentParser = require('../utils/DistilBertIntentParser.cjs');
       const parser = new DistilBertIntentParser();
       await parser.initialize();
       console.log('[CACHE] DistilBERT initialized successfully');

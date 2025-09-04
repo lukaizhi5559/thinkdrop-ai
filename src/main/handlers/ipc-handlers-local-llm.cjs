@@ -7,6 +7,7 @@
 // Import IntentParser factory for centralized parser management
 const parserFactory = require('../services/utils/IntentParserFactory.cjs');
 const IntentResponses = require('../services/utils/IntentResponses.cjs');
+const { storeTurn } = require('../services/background/AsyncMemoryStorage.cjs');
 
 // ========================================
 // LIGHTWEIGHT IPC HANDLERS - BUSINESS LOGIC IN ORCHESTRATOR
@@ -279,6 +280,18 @@ Please provide a well-structured summary that helps the user understand the curr
         
         // Transform response format for NEW pipeline compatibility
         if (result && result.success && result.response) {
+          // Store conversation turn asynchronously
+          try {
+            await storeTurn(
+              { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
+              prompt,
+              result.response,
+              result.pipeline || 'main_pipeline'
+            );
+          } catch (error) {
+            console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
+          }
+        
           return {
             success: true,
             data: result.response, // NEW pipeline expects response in 'data' field
@@ -301,6 +314,19 @@ Please provide a well-structured summary that helps the user understand the curr
         const contextAwareResult = await handleContextAwareScope(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
         if (contextAwareResult?.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 1 successful - returning conversation context result');
+          
+          // Store conversation turn asynchronously
+          try {
+            await storeTurn(
+              { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
+              prompt,
+              contextAwareResult.response,
+              contextAwareResult.pipeline || 'context_aware'
+            );
+          } catch (error) {
+            console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
+          }
+          
           // Transform response format for NEW pipeline compatibility
           return {
             success: true,
@@ -318,6 +344,19 @@ Please provide a well-structured summary that helps the user understand the curr
         const stage2Result = await handleSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
         if (stage2Result && stage2Result.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 2 successful - returning session scope result');
+          
+          // Store conversation turn asynchronously
+          try {
+            await storeTurn(
+              { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
+              prompt,
+              stage2Result.response,
+              'stage2_session_scope'
+            );
+          } catch (error) {
+            console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
+          }
+          
           return {
             success: true,
             data: stage2Result.response, // NEW pipeline expects response in 'data' field
@@ -332,6 +371,19 @@ Please provide a well-structured summary that helps the user understand the curr
         const stage3Result = await handleCrossSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
         if (stage3Result && stage3Result.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 3 successful - returning cross-session result');
+          
+          // Store conversation turn asynchronously
+          try {
+            await storeTurn(
+              { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
+              prompt,
+              stage3Result.response,
+              'stage3_cross_session'
+            );
+          } catch (error) {
+            console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
+          }
+          
           return {
             success: true,
             data: stage3Result.response, // NEW pipeline expects response in 'data' field
@@ -697,25 +749,40 @@ Please provide a well-structured summary that helps the user understand the curr
 
       console.log(`🎯 [CONTEXT-AWARE-SCOPE] Using conversation context:\n${contextMessages}`);
 
-      // Use LLM to detect if this is a cross-session query and if current context can answer it
-      const phi3Agent = coreAgent.getAgent('Phi3Agent');
-      if (phi3Agent) {
-        const detectionPrompt = `Analyze this question and the recent conversation context:
+      // First check heuristic rules for clear current-session indicators
+      const hasCurrentSessionIndicators = /\b(here|this (chat|conversation)|in this (chat|conversation)|current (chat|conversation))\b/i.test(prompt);
+      const hasFirstMessageIndicators = /\b(first (couple|few|messages?)|start|beginning) (of|in)? (this|here|our)\b/i.test(prompt);
+      
+      let needsBroaderSearch = false;
+      
+      if (hasCurrentSessionIndicators || hasFirstMessageIndicators) {
+        console.log('✅ [CONTEXT-AWARE-SCOPE] Clear current session indicators - staying in current context');
+        needsBroaderSearch = false;
+      } else {
+        // Use LLM to detect if this is a cross-session query and if current context can answer it
+        const phi3Agent = coreAgent.getAgent('Phi3Agent');
+        if (phi3Agent) {
+          const detectionPrompt = `Analyze this question and the recent conversation context:
 
 RECENT CONVERSATION:
 ${contextMessages}
 
 QUESTION: ${prompt}
 
-Is this question asking about information from past conversations or broader history that is NOT in the recent conversation above?
+Can this question be answered using ONLY the recent conversation above?
 
-Examples of cross-session queries:
-- "have I ever mentioned X"
-- "did we talk about Y before" 
-- "what did I say about Z"
-- "when did we discuss A"
+CURRENT session indicators (answer from recent conversation):
+- "here", "this chat", "current conversation"
+- "first messages here", "what we just discussed"
+- Questions about content visible in recent conversation
 
-Respond with only: "CROSS_SESSION" if it needs broader search, or "CURRENT" if the recent conversation can answer it.`;
+CROSS_SESSION indicators (needs broader search):
+- "have I ever mentioned X" (lifetime history)
+- "did we discuss Y yesterday" (specific past time)
+- "when did I first say Z" (historical timeline)
+- Questions about content NOT in recent conversation
+
+Respond with only: "CURRENT" if recent conversation can answer it, or "CROSS_SESSION" if it needs broader search.`;
 
         try {
           const detectionResult = await phi3Agent.execute({
@@ -725,22 +792,25 @@ Respond with only: "CROSS_SESSION" if it needs broader search, or "CURRENT" if t
           });
 
           if (detectionResult.success && detectionResult.response) {
-            const needsBroaderSearch = detectionResult.response.trim().toUpperCase().includes('CROSS_SESSION');
+            needsBroaderSearch = detectionResult.response.trim().toUpperCase().includes('CROSS_SESSION');
             console.log(`🔍 [CONTEXT-AWARE-SCOPE] Detection result: "${detectionResult.response.trim()}" - needsBroaderSearch: ${needsBroaderSearch}`);
-            
-            if (needsBroaderSearch) {
-              console.log('🔍 [CONTEXT-AWARE-SCOPE] Cross-session query needs broader search - failing to Stage 2');
-              return null; // Fail to allow Stage 2 to search across sessions
-            } else {
-              console.log('✅ [CONTEXT-AWARE-SCOPE] Current context can answer query');
-            }
           }
         } catch (error) {
           console.warn('⚠️ [CONTEXT-AWARE-SCOPE] Detection failed, proceeding with context');
+          needsBroaderSearch = false;
+        }
         }
       }
 
+      if (needsBroaderSearch) {
+        console.log('🔍 [CONTEXT-AWARE-SCOPE] Cross-session query needs broader search - failing to Stage 2');
+        return null; // Fail to allow Stage 2 to search across sessions
+      }
+
+      console.log('✅ [CONTEXT-AWARE-SCOPE] Current context can answer query');
+
       // Generate response using conversation context
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
       if (!phi3Agent) {
         return null;
       }
@@ -1375,9 +1445,21 @@ Current question: ${prompt}`;
     // CONTEXT: requires question about prior conversations or chat history
     const hasPriorReference = /\b(what did (i|we|you) (say|do|discuss|talk about|mention)|what were (we|you) (talking|discussing) about|what was (said|discussed|mentioned) earlier|earlier|previous(ly)?|before|recap|summari[sz]e (our|the) conversation)\b/i.test(p);
     const hasChatHistoryReference = /\b(first (couple|few|messages?)|messages? (in|we) (this|our) chat|what('s| is) the (first|earliest|initial)|conversation history|chat history)\b/i.test(p);
+    
+    // More precise conversation history patterns with past tense validation
+    const hasConversationQuery = (
+      /\b(what.*did we (chat|talk|discuss) about|what.*we (chatted|talked|discussed))\b/i.test(p) ||
+      (/\bwhat\b.*\b(topics?|subjects?|things?)\b.*\b(did we|we) (chat|talk|discuss)\b/i.test(p)) ||
+      (/\bwhat\b.*\b(presidents?|people|names?)\b.*\b(did we|we) (chat|talk|discuss)\b/i.test(p) && /\b(about|regarding|concerning)\b/i.test(p))
+    );
+    
+    // Exclude hypothetical/future queries to reduce false positives
+    const isHypothetical = /\b(should|could|would|might|if|suppose|imagine|what if)\b/i.test(p);
+    const isFutureOriented = /\b(will|shall|going to|next|future|plan to|want to)\b/i.test(p);
+    
     const isQuestion = /[?]/.test(p) || /\b(what|when|where|who|how|why)\b/.test(p);
     
-    if ((hasPriorReference || hasChatHistoryReference) && isQuestion) {
+    if ((hasPriorReference || hasChatHistoryReference || hasConversationQuery) && isQuestion && !isHypothetical && !isFutureOriented) {
       return { label: 'CONTEXT', score: 0.8, reason: 'prior-convo-question' };
     }
     
@@ -1447,14 +1529,14 @@ Current question: ${prompt}`;
       
       // Tight, explicit labels to reduce false positives
       const candidateLabels = [
-        'asking about conversation history, earlier messages, or what was previously discussed in this chat',
+        'asking about what we discussed, chatted about, or talked about in this conversation or chat history',
         'explicitly asking to remember or save this for later recall',
         'requesting to create, write, generate, build, or do something',
         'asking for factual information or to learn about something'
       ];
       
       const labelMap = {
-        'asking about conversation history, earlier messages, or what was previously discussed in this chat': 'CONTEXT',
+        'asking about what we discussed, chatted about, or talked about in this conversation or chat history': 'CONTEXT',
         'explicitly asking to remember or save this for later recall': 'MEMORY',
         'requesting to create, write, generate, build, or do something': 'COMMAND',
         'asking for factual information or to learn about something': 'GENERAL'
@@ -1462,6 +1544,7 @@ Current question: ${prompt}`;
 
       // Get heuristic vote first
       const rule = heuristicVote(prompt);
+      console.log(`🔍 [HEURISTIC] Rule result: ${JSON.stringify(rule)}`);
       
       // Run zero-shot with multi-label and hypothesis template
       const result = await global.zeroShotClassifier(prompt, candidateLabels, {

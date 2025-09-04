@@ -10,8 +10,8 @@
  */
 
 // Import performance optimization modules
-const { modelCache } = require('../ModelCache.cjs');
-const { queryCache } = require('../QueryCache.cjs');
+const { modelCache } = require('../cache/ModelCache.cjs');
+const { queryCache } = require('../cache/QueryCache.cjs');
 const { MathUtils } = require('../utils/MathUtils.cjs');
 
 const AGENT_FORMAT = {
@@ -1556,7 +1556,7 @@ const AGENT_FORMAT = {
             const semanticLimit = params.limit || params.options?.limit || 3;
             const timeWindow = params.timeWindow || params.options?.timeWindow || null;
             // Use higher threshold for cross-session to prevent contamination, lower for same-session
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || 0.25;
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || (needsCrossSessionSearch ? 0.65 : 0.45);
             const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
             const sessionId = params.sessionId; // Session scoping to prevent cross-session contamination
             
@@ -1725,8 +1725,8 @@ const AGENT_FORMAT = {
                 // If no sessions meet threshold but we have sessions, use improved conversational query detection
                 if (sessionResults.length === 0 && sessions.length > 0) {
                   if (AGENT_FORMAT.isConversationalQueryRobust(semanticQuery)) {
-                    // For conversational queries, be much more lenient with thresholds
-                    const lowerThreshold = Math.max(0.05, (minSimilarity || 0.6) * 0.3);
+                    // For conversational queries, be more lenient but still prevent hallucination
+                    const lowerThreshold = Math.max(0.35, (minSimilarity || 0.6) * 0.6);
                     console.log(`[DEBUG] Conversational query detected, lowering threshold to ${lowerThreshold}`);
                     
                     for (const session of sessions) {
@@ -1744,7 +1744,10 @@ const AGENT_FORMAT = {
                         
                         console.log(`[DEBUG] Session ${session.session_id}: rawSim=${similarity.toFixed(4)}, recency=${recency.toFixed(4)}, finalScore=${finalScore.toFixed(4)}`);
                         
-                        if (finalScore >= lowerThreshold) {
+                        // Additional check: ensure the query actually relates to session content
+                        const hasRelevantKeywords = this.checkQueryRelevance(semanticQuery, session.content || session.title);
+                        
+                        if (finalScore >= lowerThreshold && hasRelevantKeywords) {
                           sessionResults.push({
                             ...session,
                             similarity: finalScore,
@@ -4490,6 +4493,22 @@ Answer:`;
       });
       
       return isConversational;
+    },
+
+    /**
+     * Check if query has relevant keywords matching session content to prevent hallucination
+     */
+    checkQueryRelevance(query, sessionContent) {
+      if (!query || !sessionContent) return false;
+      
+      const queryWords = query.toLowerCase().split(/\s+/).filter(word => word.length > 2);
+      const contentWords = sessionContent.toLowerCase().split(/\s+/);
+      
+      // Check for at least 1 meaningful word overlap
+      const overlap = queryWords.filter(word => contentWords.includes(word));
+      
+      // Require at least 1 overlapping word for relevance
+      return overlap.length > 0;
     },
   };
   

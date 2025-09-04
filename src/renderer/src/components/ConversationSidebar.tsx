@@ -10,7 +10,6 @@ import {
   Play,
   Clock,
   Bot,
-  User,
   ChevronLeft,
   Search
 } from 'lucide-react';
@@ -23,7 +22,6 @@ interface ConversationSidebarProps {
 
 export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ className = '' }) => {
   const {
-    signals,
     sessions,
     activeSessionId,
     isSidebarOpen,
@@ -65,10 +63,13 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   const [openMenuSessionId, setOpenMenuSessionId] = useState<string | null>(null);
 
   // Filter sessions based on search query
-  const filteredSessions = sessions.filter(session =>
-    session.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    session.lastMessage?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredSessions = sessions.filter(session => {
+    const title = session.title || session.id || 'Untitled';
+    const lastMessage = session.lastMessage || '';
+    
+    return title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+           lastMessage.toLowerCase().includes(searchQuery.toLowerCase());
+  });
 
   // Handle new chat creation
   const handleNewChat = useCallback(async () => {
@@ -170,7 +171,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
     }
   }, []);
 
-  console.log('[filteredSessions]', filteredSessions)
+  console.log('[filteredSessions]', filteredSessions.length, filteredSessions.map(s => ({ id: s.id, title: s.title })));
 
   return (
     <>

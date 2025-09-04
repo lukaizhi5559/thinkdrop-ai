@@ -16,8 +16,8 @@ const require = createRequire(import.meta.url);
 const IntentResponses = require('../utils/IntentResponses.cjs');
 
 // Import performance optimization modules
-const { modelCache } = require('../ModelCache.cjs');
-const { queryCache } = require('../QueryCache.cjs');
+const { modelCache } = require('../cache/ModelCache.cjs');
+const { queryCache } = require('../cache/QueryCache.cjs');
 const { MathUtils } = require('../utils/MathUtils.cjs');
 
 const __filename = fileURLToPath(import.meta.url);
@@ -698,8 +698,19 @@ export class AgentOrchestrator {
         // Create a sandbox environment for evaluating the agent code
         const vm = await import('vm');
         
-        // Create a custom require function that handles ES modules
+        // Create a custom require function that handles ES modules and path mappings
         const customRequire = (modulePath) => {
+          // Handle old path mappings for reorganized files
+          if (modulePath === '../ModelCache.cjs') {
+            modulePath = '../cache/ModelCache.cjs';
+          }
+          if (modulePath === '../QueryCache.cjs') {
+            modulePath = '../cache/QueryCache.cjs';
+          }
+          if (modulePath === '../AsyncMemoryStorage.cjs') {
+            modulePath = '../background/AsyncMemoryStorage.cjs';
+          }
+          
           // Check if it's the problematic ES module
           if (modulePath.includes('NaturalLanguageIntentParser')) {
             // Return a mock object since this isn't actually used in the agent code
