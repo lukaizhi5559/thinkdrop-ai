@@ -390,7 +390,8 @@ class DistilBertIntentParser {
       location: [],
       event: [],
       contact: [],
-      items: []
+      items: [],
+      technology: [] // Add technology category for frameworks, languages, etc.
     };
     
     // 🏷️ LAYER 1: Try NER Transformer (most accurate for complex entities)
@@ -434,7 +435,8 @@ class DistilBertIntentParser {
       location: this.extractLocations(message),
       event: this.extractEvents(message),
       contact: [],
-      items: this.extractItems(message)
+      items: this.extractItems(message),
+      technology: this.extractTechnologies(message)
     };
     
     // Merge rule-based results (avoiding duplicates)
@@ -647,6 +649,43 @@ class DistilBertIntentParser {
     });
     
     return [...new Set(items)]; // Remove duplicates
+  }
+
+   /**
+   * Extract technology entities (frameworks, languages, tools, etc.)
+   */
+   extractTechnologies(message) {
+    const technologies = [];
+    
+    // Programming languages and frameworks
+    const techPatterns = [
+      // JavaScript ecosystem
+      /\b(React|ReactJS|Vue|VueJS|Angular|AngularJS|Node\.?js|NodeJS|Express|Next\.?js|Nuxt\.?js|Svelte|SvelteKit)\b/gi,
+      // Other languages
+      /\b(Python|Java|JavaScript|TypeScript|C\+\+|C#|PHP|Ruby|Go|Rust|Swift|Kotlin|Scala|Clojure)\b/gi,
+      // Databases
+      /\b(MySQL|PostgreSQL|MongoDB|Redis|SQLite|DuckDB|Firebase|Supabase)\b/gi,
+      // Cloud & DevOps
+      /\b(AWS|Azure|GCP|Docker|Kubernetes|Jenkins|GitHub|GitLab|Vercel|Netlify)\b/gi,
+      // Tools & Libraries
+      /\b(Webpack|Vite|Babel|ESLint|Prettier|Jest|Cypress|Tailwind|Bootstrap|Material-UI|Ant Design)\b/gi,
+      // AI/ML
+      /\b(TensorFlow|PyTorch|Scikit-learn|Pandas|NumPy|OpenAI|GPT|BERT|Transformers)\b/gi
+    ];
+    
+    techPatterns.forEach(pattern => {
+      const matches = message.match(pattern);
+      if (matches) {
+        matches.forEach(match => {
+          const normalized = match.trim();
+          if (normalized && !technologies.includes(normalized)) {
+            technologies.push(normalized);
+          }
+        });
+      }
+    });
+    
+    return technologies;
   }
   
   /**
@@ -1394,6 +1433,7 @@ class DistilBertIntentParser {
     
     return questionWords.test(message) || endsWithQuestion;
   }
+
 }
 
 module.exports = DistilBertIntentParser;
