@@ -1347,15 +1347,83 @@ Current question: ${prompt}`;
     }
   }
 
-  // Zero-shot classification using transformers.js (copied from working IntentParser.cjs)
+  // Robust heuristic gates with high precision patterns
+  function heuristicVote(prompt) {
+    const p = prompt.trim().toLowerCase();
+    
+    // MEMORY: requires explicit storage verb + object cue (high precision)
+    const hasStorageVerb = /\b(remember|save|store|note|bookmark|log|keep)\b/i.test(p);
+    const hasMemoryObject = /\b(this|that|it|for later|to memory|in mind)\b/i.test(p);
+    const isContextQuestion = /\b(do you remember|remember what (you|we|i) said)\b/i.test(p);
+    
+    if (hasStorageVerb && hasMemoryObject && !isContextQuestion) {
+      return { label: 'MEMORY', score: 0.85, reason: 'explicit-store-verb+object' };
+    }
+    
+    // CONTEXT: requires question about prior conversations or chat history
+    const hasPriorReference = /\b(what did (i|we|you) (say|do|discuss|talk about|mention)|what were (we|you) (talking|discussing) about|what was (said|discussed|mentioned) earlier|earlier|previous(ly)?|before|recap|summari[sz]e (our|the) conversation)\b/i.test(p);
+    const hasChatHistoryReference = /\b(first (couple|few|messages?)|messages? (in|we) (this|our) chat|what('s| is) the (first|earliest|initial)|conversation history|chat history)\b/i.test(p);
+    const isQuestion = /[?]/.test(p) || /\b(what|when|where|who|how|why)\b/.test(p);
+    
+    if ((hasPriorReference || hasChatHistoryReference) && isQuestion) {
+      return { label: 'CONTEXT', score: 0.8, reason: 'prior-convo-question' };
+    }
+    
+    // COMMAND: requires action verb (not questions about actions)
+    const hasActionVerb = /\b(write|generate|create|build|make|compose|produce|draft|code|implement|design)\b/i.test(p);
+    const isActionQuestion = /\b(can you|could you|please|would you)\s+(write|generate|create|build|make)/i.test(p);
+    
+    if (hasActionVerb && (isActionQuestion || !isQuestion)) {
+      return { label: 'COMMAND', score: 0.7, reason: 'action-verb' };
+    }
+    
+    // GENERAL: factual questions and learning requests
+    const hasQuestionMarkers = /(\?|\b(who|what|when|where|why|how|which)\b|\blist\b|\btell me about\b|\bexplain\b|\btypes of\b|\bkinds of\b)/i.test(p);
+    const hasLearningIntent = /\b(can you (list|tell|explain)|i (love|like).*(and can you|tell me))\b/i.test(p);
+    
+    if (hasQuestionMarkers || hasLearningIntent) {
+      return { label: 'GENERAL', score: 0.65, reason: 'qa-signals' };
+    }
+    
+    return { label: null, score: 0.0, reason: 'none' };
+  }
+  
+  // Ensemble decision logic combining heuristics and zero-shot
+  function decideEnsemble({ rule, zsc }) {
+    const RULE_STRONG = rule.score >= 0.8;
+    const MODEL_STRONG = zsc.top >= 0.65 && zsc.margin >= 0.15;
+    
+    // Model is confident and has good margin → trust model
+    if (MODEL_STRONG) {
+      console.log(`🎯 [ENSEMBLE] Model confident: ${zsc.label} (${zsc.top.toFixed(3)}, margin: ${zsc.margin.toFixed(3)})`);
+      return zsc.label;
+    }
+    
+    // Rule is strong and model is uncertain → trust rule
+    if (RULE_STRONG && zsc.top < 0.55) {
+      console.log(`🎯 [ENSEMBLE] Rule strong, model weak: ${rule.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
+      return rule.label;
+    }
+    
+    // Both agree → take it even if not individually strong
+    if (rule.label && rule.label === zsc.label) {
+      console.log(`🎯 [ENSEMBLE] Rule+Model agree: ${zsc.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
+      return zsc.label;
+    }
+    
+    // Default to safe fallback
+    console.log(`🎯 [ENSEMBLE] Uncertain, defaulting to GENERAL (rule: ${rule.label || 'none'}, model: ${zsc.label})`);
+    return 'GENERAL';
+  }
+
+  // Robust zero-shot classification with ensemble logic
   async function classifyWithZeroShot(prompt) {
     try {
       // Initialize zero-shot classifier if not already done
       if (!global.zeroShotClassifier) {
         const { pipeline } = await import('@xenova/transformers');
         
-        // Use a more accessible model that works offline
-        console.log('🔄 [ZERO-SHOT] Loading zero-shot classifier (DistilBERT)...');
+        console.log('🔄 [ZERO-SHOT] Loading zero-shot classifier (DistilBERT MNLI)...');
         global.zeroShotClassifier = await pipeline(
           'zero-shot-classification',
           'Xenova/distilbert-base-uncased-mnli'
@@ -1363,37 +1431,60 @@ Current question: ${prompt}`;
         console.log('✅ [ZERO-SHOT] Zero-shot classifier loaded');
       }
       
-      // Define candidate labels for intent classification
+      // Tight, explicit labels to reduce false positives
       const candidateLabels = [
-        'asking about previous conversations, messages, or what was discussed before',
-        'explicitly requesting to remember, store, save, or note something for later recall',
-        'requesting to write, create, generate, or build something',
-        'asking a factual question, requesting information, or wanting to learn about something'
+        'asking about conversation history, earlier messages, or what was previously discussed in this chat',
+        'explicitly asking to remember or save this for later recall',
+        'requesting to create, write, generate, build, or do something',
+        'asking for factual information or to learn about something'
       ];
       
-      // Map labels back to our categories
       const labelMap = {
-        'asking about previous conversations, messages, or what was discussed before': 'CONTEXT',
-        'explicitly requesting to remember, store, save, or note something for later recall': 'MEMORY',
-        'requesting to write, create, generate, or build something': 'COMMAND',
-        'asking a factual question, requesting information, or wanting to learn about something': 'GENERAL'
+        'asking about conversation history, earlier messages, or what was previously discussed in this chat': 'CONTEXT',
+        'explicitly asking to remember or save this for later recall': 'MEMORY',
+        'requesting to create, write, generate, build, or do something': 'COMMAND',
+        'asking for factual information or to learn about something': 'GENERAL'
       };
 
-      const result = await global.zeroShotClassifier(prompt, candidateLabels);
+      // Get heuristic vote first
+      const rule = heuristicVote(prompt);
+      
+      // Run zero-shot with multi-label and hypothesis template
+      const result = await global.zeroShotClassifier(prompt, candidateLabels, {
+        multi_label: true,
+        hypothesis_template: 'The user is {}.'
+      });
       
       if (result && result.labels && result.scores) {
-        const topLabel = result.labels[0];
-        const topScore = result.scores[0];
-        const classification = labelMap[topLabel] || 'GENERAL';
-
-        console.log(`🧠 [ZERO-SHOT] "${prompt}" -> ${classification} (confidence: ${topScore.toFixed(3)})`);
-        return { classification, confidence: topScore };
+        // Calculate top score and margin
+        const pairs = result.labels.map((lbl, i) => ({ 
+          lbl, 
+          score: result.scores[i],
+          classification: labelMap[lbl] || 'GENERAL'
+        })).sort((a, b) => b.score - a.score);
+        
+        const zscTop = pairs[0]?.score ?? 0;
+        const zscMargin = (pairs[0]?.score ?? 0) - (pairs[1]?.score ?? 0);
+        const zscLabel = pairs[0]?.classification ?? 'GENERAL';
+        
+        // Use ensemble decision
+        const finalClassification = decideEnsemble({ 
+          rule, 
+          zsc: { label: zscLabel, top: zscTop, margin: zscMargin }
+        });
+        
+        console.log(`🧠 [ZERO-SHOT] "${prompt}" -> ${finalClassification} (top: ${zscTop.toFixed(3)}, margin: ${zscMargin.toFixed(3)})`);
+        return { classification: finalClassification, confidence: zscTop, source: 'ensemble' };
       }
       
     } catch (error) {
       console.error('❌ [ZERO-SHOT] Error:', error.message);
       console.log('🔄 [ZERO-SHOT] Falling back to heuristics...');
-      return classifyWithHeuristics(prompt);
+      
+      // Fallback to heuristic vote or safe default
+      const rule = heuristicVote(prompt);
+      const fallbackClassification = rule.label || 'GENERAL';
+      return { classification: fallbackClassification, confidence: 0.4, source: 'fallback' };
     }
   }
 
