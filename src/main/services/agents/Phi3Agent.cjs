@@ -174,10 +174,16 @@ const AGENT_FORMAT = {
       // Single attempt - no retries for speed
       const result = await AGENT_FORMAT.executeOllamaQuery(prompt, routingOptions);
       
+      // Handle empty or undefined responses
+      const responseText = result && typeof result === 'string' ? result.trim() : '';
+      if (!responseText) {
+        throw new Error('Empty response from Phi3 routing');
+      }
+      
       return {
         success: true,
         action: 'query-phi3-routing',
-        response: result.trim(),
+        response: responseText,
         timestamp: new Date().toISOString()
       };
       
@@ -240,10 +246,16 @@ const AGENT_FORMAT = {
       const finalOptions = { ...queryOptions, ...options };
       const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, finalOptions);
       
+      // Handle empty or undefined responses
+      const responseText = result && typeof result === 'string' ? result.trim() : '';
+      if (!responseText) {
+        throw new Error('Empty response from Phi3 model');
+      }
+      
       return {
         success: true,
         action: 'query-phi3-fast',
-        response: result.trim(),
+        response: responseText,
         timestamp: new Date().toISOString()
       };
       
@@ -328,12 +340,18 @@ ${prompt}<|end|>
         try {
           const result = await AGENT_FORMAT.executeOllamaQuery(thinkdropPrompt, { ...options, ...queryOptions });
           
+          // Handle empty or undefined responses
+          const responseText = result && typeof result === 'string' ? result.trim() : '';
+          if (!responseText) {
+            throw new Error('Empty response from Phi3 model');
+          }
+          
           console.log('✅ Phi3 query successful');
           
           return {
             success: true,
             action: 'query-phi3',
-            response: result.trim(),
+            response: responseText,
             attempt,
             timestamp: new Date().toISOString()
           };
@@ -422,7 +440,10 @@ ${message}<|end|>
       // Parse natural language response
       let intentData;
       try {
-        const responseText = result.trim();
+        const responseText = result && typeof result === 'string' ? result.trim() : '';
+        if (!responseText) {
+          throw new Error('Empty response from Phi3 intent classification');
+        }
         // Parsing natural language response
 
         // Use new natural language parser
@@ -708,12 +729,14 @@ ${message}<|end|>
       
       const result = await AGENT_FORMAT.executeOllamaQuery('What model are you?', { timeout: 10000 });
       
+      const responseText = result && typeof result === 'string' ? result.trim() : 'Model info unavailable';
+      
       return {
         success: true,
         action: 'get-model-info',
         model: AGENT_FORMAT.config.model,
         available: true,
-        response: result.trim(),
+        response: responseText,
         timestamp: new Date().toISOString()
       };
     } catch (error) {

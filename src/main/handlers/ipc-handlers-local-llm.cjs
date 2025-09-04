@@ -95,6 +95,23 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       console.log(`🎯 [MAIN-PIPELINE] Starting query: "${prompt.substring(0, 50)}..."`);
 
       ////////////////////////////////////////////////////////////////////////
+      // OFFLINE MODE: Skip external data search, use local LLM knowledge only
+      ////////////////////////////////////////////////////////////////////////
+      
+      console.log('🔒 [OFFLINE-MODE] Using local LLM knowledge base only...');
+      
+      // Simple classification for offline mode
+      let intentClassificationPayload = {
+        primaryIntent: 'question',
+        requiresExternalData: false,
+        requiresMemoryAccess: false,
+        captureScreen: false,
+        routingHint: 'conversation'
+      };
+
+      // TODO: Uncomment below for online mode with external search
+      /*
+      ////////////////////////////////////////////////////////////////////////
       // STEP 1: PHI3AGENT INTENT CLASSIFICATION
       ////////////////////////////////////////////////////////////////////////
       
@@ -238,6 +255,7 @@ Please provide a well-structured summary that helps the user understand the curr
           console.log('🔄 [DIRECT-SEARCH] Falling back to old pipeline...');
         }
       }
+      */
 
       ////////////////////////////////////////////////////////////////////////
       // STEP 3: FALLBACK TO OLD PIPELINE FOR NON-EXTERNAL QUERIES
@@ -254,7 +272,19 @@ Please provide a well-structured summary that helps the user understand the curr
 
       // Handle non-context queries (GENERAL, MEMORY, COMMAND)
       if (['GENERAL', 'MEMORY', 'COMMAND'].includes(routingResult.classification)) {
-        return await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
+        const result = await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
+        
+        // Transform response format for NEW pipeline compatibility
+        if (result && result.success && result.response) {
+          return {
+            success: true,
+            data: result.response, // NEW pipeline expects response in 'data' field
+            pipeline: result.pipeline,
+            timing: result.timing
+          };
+        }
+        
+        return result;
       }
 
       // Route based on classification
@@ -266,7 +296,13 @@ Please provide a well-structured summary that helps the user understand the curr
         const contextAwareResult = await handleContextAwareScope(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
         if (contextAwareResult?.success) {
           console.log('✅ [CONTEXT-PIPELINE] Stage 1 successful - returning conversation context result');
-          return contextAwareResult;
+          // Transform response format for NEW pipeline compatibility
+          return {
+            success: true,
+            data: contextAwareResult.response, // NEW pipeline expects response in 'data' field
+            pipeline: contextAwareResult.pipeline,
+            timing: contextAwareResult.timing
+          };
         }
         
         console.log('🔄 [CONTEXT-PIPELINE] Stage 1 failed, trying session scope search...');
@@ -278,7 +314,7 @@ Please provide a well-structured summary that helps the user understand the curr
           console.log('✅ [CONTEXT-PIPELINE] Stage 2 successful - returning session scope result');
           return {
             success: true,
-            response: stage2Result.response,
+            data: stage2Result.response, // NEW pipeline expects response in 'data' field
             pipeline: 'stage2_session_scope',
             timing: { total: Date.now() - startTime }
           };
@@ -291,7 +327,7 @@ Please provide a well-structured summary that helps the user understand the curr
           console.log('✅ [CONTEXT-PIPELINE] Stage 3 successful - returning cross-session result');
           return {
             success: true,
-            response: stage3Result.response,
+            data: stage3Result.response, // NEW pipeline expects response in 'data' field
             pipeline: 'stage3_cross_session',
             timing: { total: Date.now() - startTime }
           };
@@ -299,11 +335,31 @@ Please provide a well-structured summary that helps the user understand the curr
 
         // All stages failed - fallback to general knowledge
         console.log('⚠️ [FALLBACK] All context stages failed - using general knowledge');
-        return await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+        const fallbackResult = await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+        // Transform fallback response format for NEW pipeline compatibility
+        if (fallbackResult && fallbackResult.success && fallbackResult.response) {
+          return {
+            success: true,
+            data: fallbackResult.response, // NEW pipeline expects response in 'data' field
+            pipeline: fallbackResult.pipeline,
+            timing: fallbackResult.timing
+          };
+        }
+        return fallbackResult;
       }
 
       // Default fallback
-      return await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+      const fallbackResult = await handleGeneralKnowledge(prompt, { sessionId: options.sessionId }, startTime);
+      // Transform fallback response format for NEW pipeline compatibility
+      if (fallbackResult && fallbackResult.success && fallbackResult.response) {
+        return {
+          success: true,
+          data: fallbackResult.response, // NEW pipeline expects response in 'data' field
+          pipeline: fallbackResult.pipeline,
+          timing: fallbackResult.timing
+        };
+      }
+      return fallbackResult;
 
     } catch (error) {
       const totalTime = Date.now() - startTime;
@@ -1310,17 +1366,17 @@ Current question: ${prompt}`;
       // Define candidate labels for intent classification
       const candidateLabels = [
         'asking about previous conversations, messages, or what was discussed before',
-        'wanting to remember, store, or save information for later',
+        'explicitly requesting to remember, store, save, or note something for later recall',
         'requesting to write, create, generate, or build something',
-        'asking a general question that needs a direct answer'
+        'asking a factual question, requesting information, or wanting to learn about something'
       ];
       
       // Map labels back to our categories
       const labelMap = {
         'asking about previous conversations, messages, or what was discussed before': 'CONTEXT',
-        'wanting to remember, store, or save information for later': 'MEMORY',
+        'explicitly requesting to remember, store, save, or note something for later recall': 'MEMORY',
         'requesting to write, create, generate, or build something': 'COMMAND',
-        'asking a general question that needs a direct answer': 'GENERAL'
+        'asking a factual question, requesting information, or wanting to learn about something': 'GENERAL'
       };
 
       const result = await global.zeroShotClassifier(prompt, candidateLabels);
@@ -1410,8 +1466,14 @@ Current question: ${prompt}`;
       const totalTime = Date.now() - startTime;
       
       console.log(`⚡ [GENERAL-ULTRA-FAST] Response in ${llmTime}ms (total: ${totalTime}ms)`);
+      console.log('🔍 [DEBUG] Phi3Agent result:', {
+        success: result.success,
+        responseType: typeof result.response,
+        responseValue: result.response,
+        responseLength: result.response ? result.response.length : 0
+      });
 
-      if (result.success && result.response) {
+      if (result.success && result.response && result.response.trim().length > 0) {
         return {
           success: true,
           response: result.response,
@@ -1420,7 +1482,7 @@ Current question: ${prompt}`;
         };
       }
 
-      throw new Error('No response from Phi3');
+      throw new Error(`No valid response from Phi3: ${JSON.stringify(result)}`);
 
     } catch (error) {
       console.error('❌ [GENERAL-ULTRA-FAST] Error:', error.message);
@@ -1448,6 +1510,13 @@ Current question: ${prompt}`;
       }
     } catch (error) {
       const totalTime = Date.now() - startTime;
+      
+      // Handle reclassification requests
+      if (error.message === 'RECLASSIFY_AS_GENERAL') {
+        console.log('🔄 [MEMORY-QUERY] Reclassifying as GENERAL knowledge query...');
+        return await handleGeneralKnowledge(prompt, context, startTime);
+      }
+      
       console.error(`❌ [MEMORY-QUERY] Error:`, error.message);
       return { 
         success: false, 
@@ -1460,20 +1529,38 @@ Current question: ${prompt}`;
 
   // Classify whether query is for storage or retrieval
   async function classifyMemoryIntent(prompt) {
+    // Factual/general knowledge patterns - should NOT be treated as memory queries
+    const factualPatterns = [
+      /^(can you list|list the|what are the|tell me about|explain|describe)/i,
+      /^(how many|how do|what is|what are|who is|who are|where is|where are)/i,
+      /^(i love .* and can you|i like .* and can you)/i, // "I love X and can you..." = factual question
+      /(types of|kinds of|species of|varieties of)/i,
+      /(in the world|on earth|that exist)/i
+    ];
+    
+    // Check if this is a factual question first
+    for (const pattern of factualPatterns) {
+      if (pattern.test(prompt)) {
+        console.log('🔍 [MEMORY-INTENT] Detected factual question - should be GENERAL, not MEMORY');
+        // Return null to indicate this shouldn't be handled by MEMORY pipeline at all
+        throw new Error('RECLASSIFY_AS_GENERAL');
+      }
+    }
+    
     // Storage patterns - user wants to store information
     const storagePatterns = [
       /^(remember|note|save|store|keep in mind|don't forget)/i,
-      /^(i have|i'm|i am|my|i like|i prefer|i need|i want)/i,
+      /^(i have|i'm|i am|my|i like|i prefer|i need|i want)(?!.*(and can you|and tell me))/i, // exclude factual questions
       /(appointment|meeting|schedule|deadline|reminder).*\d/i, // with numbers/dates
       /^(add|create|record|log)/i
     ];
     
-    // Retrieval patterns - user wants to find information
+    // Retrieval patterns - user wants to find personal information
     const retrievalPatterns = [
-      /^(do i have|did i|have i|when is|what is|where is|who is)/i,
-      /^(find|search|look for|show me|tell me about)/i,
+      /^(do i have|did i|have i|when is my|what is my|where is my)/i,
+      /^(find my|search my|show me my)/i,
       /^(what.*appointment|when.*meeting|any.*schedule)/i,
-      /\?$/i // questions typically indicate retrieval
+      /^(what did i|when did i|where did i|how did i)/i // personal history
     ];
     
     // Check storage patterns first

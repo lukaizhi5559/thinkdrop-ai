@@ -57,6 +57,7 @@
     "@mistralai/mistralai": "^0.1.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@pinecone-database/pinecone": "^1.1.0",
+    "@playwright/mcp": "^0.0.36",
     "@preact/signals-react": "^3.2.1",
     "@radix-ui/react-avatar": "^1.1.10",
     "@radix-ui/react-dialog": "^1.1.14",
