@@ -377,12 +377,26 @@ class MemoryProcessor {
         typeof entity === 'object' && entity.text ? entity.text : String(entity)
       ).filter(text => text && text.trim());
       
+      // Convert entities to the format expected by UserMemoryAgent
+      const entitiesForStorage = {};
+      allEntities.forEach(entity => {
+        const type = entity.type ? entity.type.toLowerCase() : 'general';
+        const text = typeof entity === 'object' && entity.text ? entity.text : String(entity);
+        if (!entitiesForStorage[type]) {
+          entitiesForStorage[type] = [];
+        }
+        if (text && text.trim() && !entitiesForStorage[type].includes(text)) {
+          entitiesForStorage[type].push(text);
+        }
+      });
+
       const processedMemories = [
         {
           key: `conversation_${data.turnId}`,
           value: entityTexts.length > 0 ? `Discussed: ${entityTexts.join(', ')}` : 'General conversation',
           sourceText: data.userMessage,
           suggestedResponse: data.aiResponse,
+          entities: entitiesForStorage, // Pass entities at top level for UserMemoryAgent
           metadata: {
             sessionId: data.sessionId,
             turnId: data.turnId,

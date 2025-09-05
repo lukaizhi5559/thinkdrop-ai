@@ -8,7 +8,7 @@ const trainingData = require('./training-data/thinkdrop-training-data.cjs');
 const enhancedTrainingData = require('./training-data/enhanced-training-data.cjs');
 const edgeCaseTrainingData = require('./training-data/edge-case-training-data.cjs');
 const { MathUtils } = require('./MathUtils.cjs');
-
+const { _clean, _pushAll, _uniqCase, _matchAll } = require('./utils.cjs');
 class DistilBertIntentParser {
   constructor() {
     console.log('🤖 Initializing DistilBERT Intent Parser...');
@@ -379,7 +379,7 @@ class DistilBertIntentParser {
   cosineSimilarity(vecA, vecB) {
     return MathUtils.calculateCosineSimilarity(vecA, vecB);
   }
-  
+
   /**
    * Extract entities from message using NER + enhanced rule-based approach
    */
@@ -402,7 +402,7 @@ class DistilBertIntentParser {
         
         if (nerResults && nerResults.length > 0) {
           console.log('✅ NER transformer found entities:', nerResults.length);
-          console.log('🔍 [NER-DEBUG] Raw NER results:', nerResults.slice(0, 5).map(r => ({
+          console.log('🔍 [NER-DEBUG] Raw NER results:', nerResults.slice(0, 10).map(r => ({
             word: r.word,
             entity: r.entity,
             score: r.score.toFixed(3),
@@ -410,17 +410,24 @@ class DistilBertIntentParser {
             end: r.end
           })));
           const transformerEntities = this.processNerResults(nerResults, message);
+          console.log('🔍 [NER-DEBUG] Processed transformer entities:', transformerEntities);
           
           // Merge transformer results into our format
           transformerEntities.forEach(entity => {
             const type = entity.type;
+            console.log(`🔍 [NER-DEBUG] Merging entity: ${entity.value} (type: ${type})`);
             if (entities[type]) {
               entities[type].push(entity.value);
             } else if (type === 'organization') {
               // Map organization to location for our schema
               entities.location.push(entity.value);
+              console.log(`🔍 [NER-DEBUG] Mapped organization '${entity.value}' to location`);
+            } else {
+              console.log(`⚠️ [NER-DEBUG] Unknown entity type '${type}' for '${entity.value}'`);
             }
           });
+        } else {
+          console.log('⚠️ [NER-DEBUG] No entities found by NER transformer');
         }
       } catch (error) {
         console.warn('⚠️ NER transformer failed:', error.message);
@@ -434,7 +441,7 @@ class DistilBertIntentParser {
       person: this.extractPeople(message),
       location: this.extractLocations(message),
       event: this.extractEvents(message),
-      contact: [],
+      contact: this.extractContacts(message),
       items: this.extractItems(message),
       technology: this.extractTechnologies(message)
     };
@@ -449,244 +456,256 @@ class DistilBertIntentParser {
     });
     
     console.log('✅ Combined entity extraction results:', entities);
+    console.log('🔍 [ENTITY-DEBUG] Total entities found:', {
+      datetime: entities.datetime.length,
+      person: entities.person.length, 
+      location: entities.location.length,
+      event: entities.event.length,
+      contact: entities.contact.length,
+      items: entities.items.length,
+      technology: entities.technology.length
+    });
     return entities;
   }
   
   extractDatetimes(message) {
-    // const timePatterns = /\b(today|tomorrow|yesterday|next week|last week|this week|next month|last month|coming up|in a week|in a month|\d{1,2}:\d{2}|\d{1,2}(am|pm))\b/gi;
-    const timePatterns = new RegExp(
-      [
-        '\\b(today|tonight|tomorrow|yesterday)',
-        '(this|next|last)\\s+(week|month|year|weekend|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',
-        'in\\s+(a|one|two|three|\\d+)\\s+(minute|hour|day|week|month|year)s?',
-        '(\\d{1,2})(:\\d{2})?\\s*(am|pm)?',
-        '\\bsoon\\b', 
-        '\\bcoming up\\b',
-        '\\bin\\s+a\\s+bit\\b',
-        '\\bearly\\s+morning|late\\s+afternoon|midday|evening',
-      ].join('|'),
-      'gi'
-    );
-    return message.match(timePatterns) || [];
+    const text = message;
+    const lower = message.toLowerCase();
+    const hits = [];
+  
+    // ISO & numeric dates: 2025-09-04, 09/04/2025, 4/9/25, 04-09-2025
+    _pushAll(hits, (text.match(/\b(20\d{2}|19\d{2})-(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])\b/g) || []));
+    _pushAll(hits, (text.match(/\b(0?[1-9]|1[0-2])[\/.-](0?[1-9]|[12]\d|3[01])[\/.-](\d{2,4})\b/g) || []));
+  
+    // Month name patterns: Sep 4, 2025 / 4 Sep 2025 / September 4th
+    _pushAll(hits, (text.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t\.?|tember)|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?\b/gi) || []));
+    _pushAll(hits, (text.match(/\b\d{1,2}(?:st|nd|rd|th)?\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t\.?|tember)|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)(?:,\s*\d{4})?\b/gi) || []));
+    
+    // Weekdays with modifiers: next Friday 3pm, this Tuesday, last Monday at 09:30
+    _pushAll(hits, (text.match(/\b(this|next|last)\s+(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)(?:\s+at\s+)?\s*(\d{1,2}(:\d{2})?\s*(am|pm)?)?\b/gi) || []));
+    _pushAll(hits, (text.match(/\b(Mon(?:day)?|Tue(?:sday)?|Wed(?:nesday)?|Thu(?:rsday)?|Fri(?:day)?|Sat(?:urday)?|Sun(?:day)?)(?:\s+at\s+)?\s*(\d{1,2}(:\d{2})?\s*(am|pm)?)?\b/gi) || []));
+  
+    // Relative: today/tomorrow/yesterday/in 2 weeks/after 3 days
+    _pushAll(hits, (text.match(/\b(today|tonight|tomorrow|tmr|yesterday|this\s+(morning|afternoon|evening|week|month|year|weekend)|next\s+(week|month|year|quarter)|last\s+(week|month|year)|in\s+(?:a|an|\d+)\s+(minute|hour|day|week|month|year)s?|after\s+\d+\s+(minute|hour|day|week|month|year)s?)\b/gi) || []));
+  
+    // Times: 3pm, 15:30, 09:00:15, 7p
+    _pushAll(hits, (text.match(/\b([01]?\d|2[0-3])(:\d{2})(:\d{2})?\s*(am|pm)?\b/gi) || []));
+    _pushAll(hits, (text.match(/\b(\d{1,2})\s*(am|pm)\b/gi) || []));
+  
+    // Ranges: 2–4pm, 9:00-11:00, Sep 4–6
+    _pushAll(hits, (text.match(/\b(\d{1,2}(:\d{2})?\s*(am|pm)?)\s*[-–]\s*(\d{1,2}(:\d{2})?\s*(am|pm)?)\b/gi) || []));
+    _pushAll(hits, (text.match(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\w*\s+\d{1,2})(?:\s*[-–]\s*(\d{1,2}))?\b/gi) || []));
+  
+    // Time zones: 5pm ET, 14:00 UTC, 9am PST
+    _pushAll(hits, (text.match(/\b(\d{1,2}(:\d{2})?\s*(am|pm)?)\s*(UTC|GMT|[EP]DT|[EP]ST|CET|CEST|IST|AEST)\b/gi) || []));
+  
+    // Qualifiers: “soon”, “coming up”, “in a bit”
+    _pushAll(hits, (text.match(/\b(soon|coming up|in a bit|later today|end of day|eod|cob)\b/gi) || []));
+  
+    return _uniqCase(hits.map(_clean));
   }
+  
   
   extractPeople(message) {
-    const lowerMessage = message.toLowerCase();
-    const people = [];
-    
-    // Proper names (existing pattern)
-    const namePatterns = /\b[A-Z][a-z]+\s+[A-Z][a-z]+\b/g;
-    const properNames = message.match(namePatterns) || [];
-    people.push(...properNames);
-    
-    // Common person references including political/leadership roles
-    const personWords = [
-      'kid', 'kids', 'child', 'children', 'teen', 'teenager',
-      'family', 'relative', 'siblings', 'brother', 'sister',
-      'parents', 'mom', 'dad', 'mother', 'father',
-      'spouse', 'wife', 'husband', 'partner',
-      'friend', 'friends', 'colleague', 'coworker',
-      'boss', 'manager', 'team',
-      'client', 'customer', 'patient',
-      'doctor', 'dentist', 'therapist', 'nurse', 'teacher', 'professor', 'coach',
-      // Political/leadership roles
-      'president', 'vice president', 'senator', 'governor', 'mayor',
-      'prime minister', 'king', 'queen', 'emperor', 'leader',
-      'ceo', 'founder', 'director', 'chairman'
+    const text = message;
+  
+    const hits = [];
+  
+    // Titled/professional names: Dr. Jane Doe, Prof. A. Smith, Mr. Chen
+    _pushAll(hits, (text.match(/\b(Dr\.|Doctor|Prof\.|Professor|Mr\.|Mrs\.|Ms\.|Mx\.|Sir|Madam)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b/g) || []));
+  
+    // Full names: “Jane Doe”, “Mary Anne Johnson” (2–4 tokens)
+    _pushAll(hits, (text.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || []));
+  
+    // User handles: @john_doe, @JaneDoe42
+    _pushAll(hits, (text.match(/@[A-Za-z0-9_\.]+/g) || []));
+  
+    // Roles/titles as person-refs (kept literal): president, governor, CEO, etc.
+    const roleWords = [
+      'president','vice president','senator','governor','mayor','prime minister','king','queen','emperor','leader',
+      'ceo','cto','cfo','founder','director','chairman','manager','boss','teacher','professor','coach','doctor','dentist','therapist','nurse',
+      'client','customer','colleague','coworker','parent','spouse','wife','husband','partner','friend','child','kid','teen','student'
     ];
-    const foundPersons = personWords.filter(word => {
-      const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-      return regex.test(message);
-    });
-    people.push(...foundPersons);
+    for (const w of roleWords) {
+      const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')}\\b`, 'i');
+      if (re.test(text)) hits.push(w);
+    }
+  
+    return _uniqCase(hits.map(_clean));
+  }
     
-    return [...new Set(people)]; // Remove duplicates
+  extractLocations(message) {
+    const text = message;
+    const hits = [];
+
+    // Common venue/place nouns
+    const placeWords = [
+      'office','work','workspace','home','house','apartment','residence','campus',
+      'hospital','clinic','school','university','college','library','bank','church','museum',
+      'restaurant','cafe','coffee shop','bar','diner',
+      'park','zoo','beach','gym','pool','track','field','stadium',
+      'mall','store','supermarket','grocery','market',
+      'airport','hotel','station','terminal','harbor','port','downtown','uptown','midtown','suburb','neighborhood'
+    ];
+    for (const w of placeWords) {
+      const re = new RegExp(`\\b${w.replace(/[.*+?^${}()|[\\]\\\\]/g,'\\$&')}\\b`, 'i');
+      if (re.test(text)) hits.push(w);
+    }
+
+    // Street-ish addresses: 123 Main St, 55-10 31st Ave, 500 5th Avenue
+    _pushAll(hits, (text.match(/\b\d{1,6}\s+[A-Za-z0-9\.]+(?:\s+[A-Za-z0-9\.]+){0,5}\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Boulevard|Ln|Lane|Dr|Drive|Ct|Court|Pl|Place|Pkwy|Parkway)\b/gi) || []));
+
+    // City, State (US): “Austin, TX”, “San Francisco, California”
+    _pushAll(hits, (text.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*(AL|AK|AZ|AR|CA|CO|CT|DC|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV)\b/g) || []));
+    _pushAll(hits, (text.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*),\s*(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New\s+Hampshire|New\s+Jersey|New\s+Mexico|New\s+York|North\s+Carolina|North\s+Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode\s+Island|South\s+Carolina|South\s+Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West\s+Virginia|Wisconsin|Wyoming)\b/g) || []));
+
+    // Countries (common set)
+    _pushAll(hits, (text.match(/\b(United\s+States|USA|US|America|Canada|Mexico|United\s+Kingdom|UK|England|France|Germany|Italy|Spain|China|Japan|India|Russia|Brazil|Australia)\b/gi) || []));
+
+    // Postal codes (US/CA simple)
+    _pushAll(hits, (text.match(/\b\d{5}(?:-\d{4})?\b/g) || []));                    // US ZIP
+    _pushAll(hits, (text.match(/\b[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\s?\d[ABCEGHJ-NPRSTV-Z]\d\b/gi) || [])); // CA
+
+    // Airport codes: “fly to LAX”, “arrive at JFK”
+    _pushAll(hits, (text.match(/\b([A-Z]{3})\b(?=\s+(airport|intl|terminal|flight|arrive|depart))/g) || []));
+
+    return _uniqCase(hits.map(_clean));
   }
 
-// ... (rest of the code remains the same)
-  
-  extractLocations(message) {
-    const lowerMessage = message.toLowerCase();
-    const locationWords = [
-      'office', 'work', 'workspace', 'home', 'house', 'apartment', 'residence',
-      'hospital', 'clinic', 'school', 'university', 'college',
-      'restaurant', 'cafe', 'coffee shop', 'diner', 'bar',
-      'park', 'zoo', 'beach', 'gym', 'pool', 'track', 'field',
-      'mall', 'store', 'supermarket', 'grocery', 'market',
-      'downtown', 'uptown', 'midtown', 'suburb', 'neighborhood',
-      'library', 'bank', 'airport', 'hotel', 'station', 'terminal', 'church', 'museum',
-      // Countries and regions
-      'usa', 'united states', 'america', 'us', 'canada', 'mexico',
-      'uk', 'united kingdom', 'england', 'france', 'germany', 'italy', 'spain',
-      'china', 'japan', 'india', 'russia', 'brazil', 'australia',
-      // States/provinces
-      'california', 'texas', 'florida', 'new york', 'illinois', 'pennsylvania',
-      // Cities
-      'washington', 'new york city', 'los angeles', 'chicago', 'houston', 'phoenix'
-    ];
-    // Use word boundaries to avoid partial matches (e.g., "framework" shouldn't match "work")
-  return locationWords.filter(word => {
-    const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-    return regex.test(message);
-  });
-  }
-  
   extractEvents(message) {
-    const lowerMessage = message.toLowerCase();
-    const events = [];
-    
-    // Direct event words
-    // const eventWords = ['appointment', 'appt', 'meeting', 'event', 'call', 'conference', 'lunch', 'dinner', 'interview', 'presentation', 'class', 'lesson', 'session', 'checkup', 'visit'];
-    const eventWords = [
-      'appointment', 'appt', 'meeting', 'event', 'call', 'video call', 'zoom',
-      'conference', 'lunch', 'brunch', 'dinner', 'breakfast',
-      'interview', 'presentation', 'webinar', 'training',
-      'class', 'lesson', 'workshop', 'seminar',
-      'checkup', 'visit', 'gathering', 'party', 'ceremony',
-      'trip', 'travel', 'vacation', 'holiday', 'outing', 'date'
+    const text = message.toLowerCase();
+    const hits = [];
+  
+    // Generic event nouns
+    const base = [
+      'appointment','appt','meeting','event','call','video call','zoom','hangout',
+      'conference','summit','webinar','training','workshop','seminar','presentation','demo','standup','retro',
+      'lunch','brunch','dinner','breakfast','coffee',
+      'interview','checkup','visit','gathering','party','ceremony','wedding','birthday','deadline','release',
+      'trip','travel','vacation','holiday','outing','date','game','match'
     ];
-    const foundEvents = eventWords.filter(word => lowerMessage.includes(word));
-    events.push(...foundEvents);
-    
-    // Specific appointment types
-    // const appointmentTypes = [
-    //   { pattern: /hair\s*(appointment|appt)/gi, type: 'hair appointment' },
-    //   { pattern: /dentist\s*(appointment|appt)/gi, type: 'dentist appointment' },
-    //   { pattern: /doctor\s*(appointment|appt)/gi, type: 'doctor appointment' },
-    //   { pattern: /medical\s*(appointment|appt)/gi, type: 'medical appointment' },
-    //   { pattern: /vet\s*(appointment|appt)/gi, type: 'vet appointment' }
-    // ];
-    const appointmentTypes = [
-      { pattern: /hair\s*(appointment|appt|cut|trim|styling)?/gi, type: 'hair appointment' },
-      { pattern: /dentist\s*(appointment|appt|checkup|visit)?/gi, type: 'dentist appointment' },
-      { pattern: /doctor\s*(appointment|appt|checkup|visit)?/gi, type: 'doctor appointment' },
-      { pattern: /medical\s*(appointment|appt|checkup|exam|visit)?/gi, type: 'medical appointment' },
-      { pattern: /vet\s*(appointment|appt|checkup|visit)?/gi, type: 'veterinary appointment' },
-      { pattern: /therapy\s*(session|appointment|visit)?/gi, type: 'therapy session' },
-      { pattern: /interview\s*(appointment)?/gi, type: 'interview' },
-      { pattern: /parent[-\s]*teacher\s*(meeting|conference)/gi, type: 'parent-teacher meeting' },
-      { pattern: /school\s*(event|meeting|appointment|orientation)?/gi, type: 'school-related appointment' },
+    for (const w of base) if (text.includes(w)) hits.push(w);
+  
+    // Specific appointment types via regex
+    const specific = [
+      { re: /hair\s*(appointment|appt|cut|trim|styling)?/gi, type: 'hair appointment' },
+      { re: /dentist\s*(appointment|appt|checkup|visit)?/gi, type: 'dentist appointment' },
+      { re: /doctor\s*(appointment|appt|checkup|visit|exam)?/gi, type: 'doctor appointment' },
+      { re: /medical\s*(appointment|appt|checkup|exam|visit)?/gi, type: 'medical appointment' },
+      { re: /vet\s*(appointment|appt|checkup|visit)?/gi, type: 'veterinary appointment' },
+      { re: /therapy\s*(session|appointment|visit)?/gi, type: 'therapy session' },
+      { re: /parent[-\s]*teacher\s*(meeting|conference)/gi, type: 'parent-teacher meeting' },
+      { re: /school\s*(event|meeting|orientation|conference)/gi, type: 'school event' }
     ];
-    
-    appointmentTypes.forEach(({ pattern, type }) => {
-      if (pattern.test(message)) {
-        events.push(type);
-      }
-    });
-    
-    // School-related events
-    if (/\b(school|classes?)\b/i.test(message) && /(start|begin|go back|return)/i.test(message)) {
-      events.push('school start');
+    for (const { re, type } of specific) if (re.test(message)) hits.push(type);
+  
+    // School-year “start/return”
+    if (/\b(school|classes?)\b/i.test(message) && /(start|begin|go back|return|back)\b/i.test(message)) {
+      hits.push('school start');
     }
-    
-    return [...new Set(events)]; // Remove duplicates
+  
+    // Shipping/delivery windows as “events”
+    if (/\b(deliver(y|ies)?|arrival|arriving|ship(ping|s|ped)?)\b/i.test(message)) hits.push('shipment');
+  
+    return _uniqCase(hits.map(_clean));
   }
   
+  extractContacts(message) {
+    const hits = [];
+  
+    // Emails
+    _pushAll(hits, (message.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g) || []));
+    // Phones (loose)
+    _pushAll(hits, (message.match(/\b(?:\+?\d{1,3}[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)?\d{3}[\s.-]?\d{4}\b/g) || []));
+    // URLs
+    _pushAll(hits, (message.match(/\bhttps?:\/\/[^\s)]+/gi) || []));
+    // Social handles (also returned by people extractor but useful here)
+    _pushAll(hits, (message.match(/@[A-Za-z0-9_\.]+/g) || []));
+  
+    return _uniqCase(hits);
+  }
+    
   /**
    * Extract items/objects from message (shoes, clothes, food, etc.)
    */
   extractItems(message) {
-    const items = [];
-    const text = message.toLowerCase();
-    
-    // Common item patterns
-    const itemPatterns = [
-      // Clothing & Accessories
-      /\b(shoes?|boots?|sneakers?|sandals?|heels?|flats?)\b/g,
-      /\b(shirt?s?|pants?|jeans?|dress(es)?|skirt?s?|jacket?s?|coat?s?)\b/g,
-      /\b(hat?s?|cap?s?|gloves?|socks?|underwear|bra?s?)\b/g,
-      /\b(watch(es)?|jewelry|necklace?s?|ring?s?|earrings?)\b/g,
-      
-      // Electronics & Tech
-      /\b(phone?s?|laptop?s?|computer?s?|tablet?s?|headphones?)\b/g,
-      /\b(tv?s?|television?s?|camera?s?|speaker?s?|keyboard?s?)\b/g,
-      
-      // Food & Beverages
-      /\b(food|meal?s?|lunch|dinner|breakfast|snack?s?)\b/g,
-      /\b(coffee|tea|water|juice|soda|beer|wine)\b/g,
-      /\b(bread|milk|eggs?|cheese|meat|chicken|fish)\b/g,
-      
-      // Home & Furniture
-      /\b(furniture|chair?s?|table?s?|bed?s?|sofa?s?|couch(es)?)\b/g,
-      /\b(lamp?s?|mirror?s?|curtains?|pillow?s?|blanket?s?)\b/g,
-      
-      // Books & Media
-      /\b(book?s?|magazine?s?|movie?s?|music|album?s?|cd?s?)\b/g,
-      
-      // Sports & Recreation
-      /\b(bike?s?|bicycle?s?|ball?s?|equipment|gear)\b/g,
-      
-      // Technology & Programming
-      /\b(React|ReactJS|Vue|VueJS|Angular|AngularJS|Svelte|SvelteJS|SvelteKit)\b/g,
-      /\b(JavaScript|TypeScript|Python|Java|C\+\+|C#|PHP|Ruby|Go|Rust)\b/g,
-      /\b(Node\.?js|Express|Django|Flask|Spring|Laravel|Rails)\b/g,
-      /\b(HTML|CSS|SCSS|SASS|Bootstrap|Tailwind|Material-UI|Chakra)\b/g,
-      /\b(MongoDB|MySQL|PostgreSQL|SQLite|Redis|Firebase|Supabase)\b/g,
-      /\b(Docker|Kubernetes|AWS|Azure|GCP|Vercel|Netlify|Heroku)\b/g,
-      /\b(Git|GitHub|GitLab|VS Code|Visual Studio|IntelliJ|WebStorm)\b/g,
-      /\b(Next\.?js|Nuxt\.?js|Gatsby|Remix|Astro|Vite|Webpack|Rollup)\b/g,
-      /\b(GraphQL|REST API|API|SDK|CLI|npm|yarn|pip|composer)\b/g,
-      /\b(machine learning|ML|AI|artificial intelligence|deep learning)\b/g,
-      
-      // General patterns (capture nouns after action verbs)
-      /\bneed (?:to )?(?:learn |start |use |work with |study )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\bwant (?:to )?(?:learn |start |use |work with |study )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\blearning (?:about )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\bstart (?:learning |using |with )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\bworking (?:on |with )?([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\busing ([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g,
-      /\bstudying ([A-Z][a-zA-Z]*(?:JS|\.js)?)\b/g
+    const text = message;
+    const lower = message.toLowerCase();
+    const hits = [];
+  
+    // Clothing, electronics, home, food, media, sports, animals, colors
+    const nounLists = [
+      /\b(shoes?|boots?|sneakers?|sandals?|heels?|flats?|shirt?s?|pants?|jeans?|dress(es)?|skirt?s?|jacket?s?|coat?s?|hat?s?|cap?s?|gloves?|socks?|underwear|bra?s?)\b/gi,
+      /\b(phone?s?|laptop?s?|computer?s?|tablet?s?|headphones?|earbuds?|camera?s?|speaker?s?|keyboard?s?|monitor?s?|router?s?)\b/gi,
+      /\b(chair?s?|table?s?|desk?s?|bed?s?|sofa?s?|couch(?:es)?|lamp?s?|mirror?s?|curtains?|pillow?s?|blanket?s?)\b/gi,
+      /\b(food|meal?s?|lunch|dinner|breakfast|snack?s?|coffee|tea|water|juice|soda|bread|milk|eggs?|cheese|chicken|fish)\b/gi,
+      /\b(book?s?|magazine?s?|movie?s?|album?s?|record?s?)\b/gi,
+      /\b(bike?s?|bicycle?s?|ball?s?|helmet?s?|glove?s?|skateboard?s?|treadmill?s?)\b/gi,
+      // Animals - comprehensive list of common pets and animals
+      /\b(cat?s?|dog?s?|puppy|puppies|kitten?s?|bird?s?|fish|goldfish|hamster?s?|rabbit?s?|bunny|bunnies|guinea pig?s?|turtle?s?|snake?s?|lizard?s?|horse?s?|pony|ponies|cow?s?|pig?s?|sheep|goat?s?|chicken?s?|duck?s?|parrot?s?|canary|canaries|mouse|mice|rat?s?)\b/gi,
+      // Colors - comprehensive list of common colors
+      /\b(red|blue|green|yellow|orange|purple|pink|black|white|gray|grey|brown|beige|tan|navy|maroon|crimson|scarlet|azure|turquoise|teal|lime|olive|gold|silver|bronze|violet|indigo|magenta|cyan|coral|salmon|peach|lavender|mint|cream|ivory|charcoal)\b/gi
     ];
-    
-    itemPatterns.forEach(pattern => {
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
-        const item = match[1] || match[0];
-        if (item && item.length > 2 && !items.includes(item)) {
-          items.push(item.trim());
-        }
-      }
-    });
-    
-    return [...new Set(items)]; // Remove duplicates
+    for (const re of nounLists) _pushAll(hits, (text.match(re) || []));
+  
+    // Tech nouns mentioned as "things"
+    const techNouns = [
+      'server','cluster','container','image','pipeline','dashboard','widget','module',
+      'sensor','camera','printer','filter','adapter','charger','cable','battery'
+    ];
+    for (const w of techNouns) {
+      const re = new RegExp(`\\b${w}\\b`, 'i');
+      if (re.test(text)) hits.push(w);
+    }
+  
+    // "Modelish/SKU" tokens: ABC-123, XPS 13, iPhone 15 Pro, RTX 4090
+    _pushAll(hits, (text.match(/\b([A-Z]{2,}\d{1,3}|[A-Z]{2,}-\d{2,}|[A-Z]+\s?\d{2,4}\s?(Pro|Max|Ultra)?)\b/g) || []));
+  
+    // Verbal cues: "need/want/using/learning <Thing>"
+    const verbal = _matchAll(/\b(?:need|want|buy|get|use|using|learn|learning|start|upgrade)\s+(?:a|the|some|to)?\s*([A-Za-z0-9\-\s]{2,40})/gi, text)
+      .map(m => m[1])
+      .filter(s => /\b[a-z]/i.test(s));
+    _pushAll(hits, verbal);
+  
+    return _uniqCase(hits.map(_clean));
   }
+  
 
    /**
    * Extract technology entities (frameworks, languages, tools, etc.)
    */
-   extractTechnologies(message) {
-    const technologies = [];
-    
-    // Programming languages and frameworks
-    const techPatterns = [
-      // JavaScript ecosystem
-      /\b(React|ReactJS|Vue|VueJS|Angular|AngularJS|Node\.?js|NodeJS|Express|Next\.?js|Nuxt\.?js|Svelte|SvelteKit)\b/gi,
-      // Other languages
-      /\b(Python|Java|JavaScript|TypeScript|C\+\+|C#|PHP|Ruby|Go|Rust|Swift|Kotlin|Scala|Clojure)\b/gi,
+  extractTechnologies(message) {
+    const text = message;
+  
+    const buckets = [
+      // JS/Web frameworks
+      /\b(React(?:JS)?|Next\.?js|Remix|Gatsby|Vue(?:JS)?|Nuxt\.?js|Angular(?:JS)?|Svelte(?:Kit)?)\b/gi,
+      // Langs
+      /\b(TypeScript|JavaScript|Python|Java|C\+\+|C#|Go|Rust|Swift|Kotlin|Scala|Ruby|PHP|Clojure|Elixir)\b/gi,
+      // Runtime/BE
+      /\b(Node\.?js|Deno|Express|Fastify|NestJS|Spring|Django|Flask|Laravel|Rails)\b/gi,
+      // Tooling
+      /\b(Vite|Webpack|Rollup|Babel|ESLint|Prettier|Jest|Vitest|Mocha|Cypress|Playwright|Puppeteer)\b/gi,
+      // UI libs
+      /\b(Tailwind|Bootstrap|Material-UI|MUI|Chakra UI|Ant Design|Radix)\b/gi,
       // Databases
-      /\b(MySQL|PostgreSQL|MongoDB|Redis|SQLite|DuckDB|Firebase|Supabase)\b/gi,
-      // Cloud & DevOps
-      /\b(AWS|Azure|GCP|Docker|Kubernetes|Jenkins|GitHub|GitLab|Vercel|Netlify)\b/gi,
-      // Tools & Libraries
-      /\b(Webpack|Vite|Babel|ESLint|Prettier|Jest|Cypress|Tailwind|Bootstrap|Material-UI|Ant Design)\b/gi,
-      // AI/ML
-      /\b(TensorFlow|PyTorch|Scikit-learn|Pandas|NumPy|OpenAI|GPT|BERT|Transformers)\b/gi
+      /\b(PostgreSQL|MySQL|MariaDB|SQLite|DuckDB|MongoDB|Redis|Cassandra|DynamoDB|Neo4j|Elastic(?:search)?)\b/gi,
+      // Vector/RAG
+      /\b(PGVector|Milvus|Weaviate|FAISS|Qdrant|Pinecone|LanceDB)\b/gi,
+      // Cloud/DevOps
+      /\b(AWS|Azure|GCP|Vercel|Netlify|Heroku|Docker|Kubernetes|Helm|Terraform|Pulumi|Ansible|GitHub Actions|CircleCI|Jenkins)\b/gi,
+      // AI/LLM
+      /\b(Transformers|Hugging\s*Face|@xenova\/transformers|OpenAI|GPT[- ]?\d+|Claude|Llama(?:\s?\d+)?|Mistral|Phi[- ]?\d+|BERT|DeBERTa|T5|Whisper|RAG|LoRA|QLoRA)\b/gi,
+      // Data/py
+      /\b(NumPy|Pandas|Polars|PyTorch|TensorFlow|Keras|scikit-learn|XGBoost|LightGBM)\b/gi,
+      // APIs/protocols
+      /\b(GraphQL|REST|WebSocket|gRPC|OAuth2|OIDC|SAML)\b/gi
     ];
-    
-    techPatterns.forEach(pattern => {
-      const matches = message.match(pattern);
-      if (matches) {
-        matches.forEach(match => {
-          const normalized = match.trim();
-          if (normalized && !technologies.includes(normalized)) {
-            technologies.push(normalized);
-          }
-        });
-      }
-    });
-    
-    return technologies;
-  }
+  
+    const out = [];
+    for (const re of buckets) _pushAll(out, (text.match(re) || []));
+    return _uniqCase(out.map(_clean));
+  }  
   
   /**
    * Get suggested response for intent

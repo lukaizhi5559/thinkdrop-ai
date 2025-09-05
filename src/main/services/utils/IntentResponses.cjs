@@ -448,6 +448,32 @@ const responseGenerationResponses = [
   "Delivering a helpful answer"
 ];
 
+// -----------------------------
+// CONTEXT EVALUATION
+// -----------------------------
+const contextEvaluationResponses = [
+  "Evaluating response quality",
+  "Checking if context is sufficient",
+  "Analyzing response completeness",
+  "Verifying answer adequacy",
+  "Assessing context coverage",
+  "Reviewing response quality",
+  "Validating information completeness",
+  "Examining answer thoroughness",
+  "Checking for missing details",
+  "Evaluating context depth",
+  "Analyzing response accuracy",
+  "Assessing information gaps",
+  "Reviewing answer quality",
+  "Checking response relevance",
+  "Validating context sufficiency",
+  "Examining information quality",
+  "Evaluating answer completeness",
+  "Analyzing context adequacy",
+  "Checking for knowledge gaps",
+  "Assessing response depth"
+];
+
 class IntentResponses {
   /**
    * Get suggested response for a given intent and message
@@ -468,7 +494,8 @@ class IntentResponses {
       cross_session_search: crossSessionSearchResponses,
       intent_classification: intentClassificationResponses,
       routing: routingResponses,
-      response_generation: responseGenerationResponses
+      response_generation: responseGenerationResponses,
+      context_evaluation: contextEvaluationResponses
     };
     
     const intentResponses = responses[intent] || responses.question;
@@ -494,7 +521,8 @@ class IntentResponses {
         cross_session_search: crossSessionSearchResponses,
         intent_classification: intentClassificationResponses,
         routing: routingResponses,
-        response_generation: responseGenerationResponses
+        response_generation: responseGenerationResponses,
+        context_evaluation: contextEvaluationResponses
     };
     
     return responses[intent] || responses.question;
@@ -518,7 +546,7 @@ class IntentResponses {
   static getSupportedIntents() {
     return ['memory_store', 'memory_retrieve', 'command', 'question', 'greeting', 
             'context_analysis', 'conversation_search', 'session_search', 'cross_session_search',
-            'intent_classification', 'routing', 'response_generation'];
+            'intent_classification', 'routing', 'response_generation', 'context_evaluation'];
   }
 
   /**

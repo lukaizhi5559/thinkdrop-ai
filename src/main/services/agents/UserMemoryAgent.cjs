@@ -1031,26 +1031,69 @@ const AGENT_FORMAT = {
             
             // Convert entities object to array format for storage
             let entitiesArray = [];
-            if (storeData.entities) {
-              if (Array.isArray(storeData.entities)) {
-                entitiesArray = storeData.entities;
-              } else if (typeof storeData.entities === 'object') {
+            console.log(`[DEBUG] storeData.entities:`, storeData.entities);
+            console.log(`[DEBUG] storeData.metadata?.entities:`, storeData.metadata?.entities);
+            console.log(`[DEBUG] storeData keys:`, Object.keys(storeData));
+            
+            // Try to get entities from top level first, then fallback to metadata
+            let entitiesSource = storeData.entities || storeData.metadata?.entities;
+            
+            if (entitiesSource) {
+              // Use a Set to track unique entities and avoid duplicates
+              const uniqueEntities = new Set();
+              
+              if (Array.isArray(entitiesSource)) {
+                // Handle array format - could be strings or objects with {value, type}
+                entitiesSource.forEach(entity => {
+                  let entityText, entityType;
+                  
+                  if (typeof entity === 'string') {
+                    // Handle string format
+                    entityText = entity;
+                    entityType = 'general';
+                  } else if (entity && typeof entity === 'object' && entity.value) {
+                    // Handle object format {value: "text", type: "person"}
+                    entityText = entity.value;
+                    entityType = entity.type || 'general';
+                  } else {
+                    return; // Skip invalid entities
+                  }
+                  
+                  if (entityText && typeof entityText === 'string' && entityText.trim()) {
+                    const entityKey = entityText.toLowerCase().trim();
+                    if (!uniqueEntities.has(entityKey)) {
+                      uniqueEntities.add(entityKey);
+                      entitiesArray.push({
+                        entity: entityText,
+                        type: entityType,
+                        entity_type: entityType
+                      });
+                    }
+                  }
+                });
+              } else if (typeof entitiesSource === 'object') {
                 // Convert object format {"datetime": ["next week"], "location": ["ohio"]} to array
-                for (const [entityType, entityValues] of Object.entries(storeData.entities)) {
+                for (const [entityType, entityValues] of Object.entries(entitiesSource)) {
                   if (Array.isArray(entityValues)) {
                     for (const value of entityValues) {
                       if (value && value.trim()) { // Only add non-empty values
-                        entitiesArray.push({
-                          entity: value,
-                          type: entityType,
-                          entity_type: entityType
-                        });
+                        const entityKey = `${value.toLowerCase().trim()}_${entityType}`;
+                        if (!uniqueEntities.has(entityKey)) {
+                          uniqueEntities.add(entityKey);
+                          entitiesArray.push({
+                            entity: value,
+                            type: entityType,
+                            entity_type: entityType
+                          });
+                        }
                       }
                     }
                   }
                 }
               }
             }
+            
+            console.log(`[DEBUG] Final entitiesArray for storage:`, entitiesArray);
             
             // Add additional metadata
             metadata.requiresMemoryAccess = storeData.requiresMemoryAccess || false;
@@ -1279,6 +1322,7 @@ const AGENT_FORMAT = {
               const insertResult = await database.run(insertSQL, values);
               
               // Store entities in memory_entities table if they exist
+              console.log(`[DEBUG] About to store entities. entitiesArray:`, entitiesArray);
               if (entitiesArray && entitiesArray.length > 0) {
                 console.log(`[INFO] Storing ${entitiesArray.length} entities for memory ${memoryId}`);
                 

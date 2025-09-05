@@ -1,5 +1,5 @@
 // ---------- helpers ----------
-export function _uniqCase(items) {
+function _uniqCase(items) {
     const seen = new Set();
     const out = [];
     for (const s of items) {
@@ -9,17 +9,24 @@ export function _uniqCase(items) {
     return out;
 }
 
-export function _clean(s) {
+function _clean(s) {
     return s.replace(/^[\s,;:.-]+|[\s,;:.-]+$/g, '').trim();
 }
 
-export function _pushAll(arr, vals) {
+function _pushAll(arr, vals) {
     for (const v of vals) if (v && v.trim()) arr.push(_clean(v));
 }
 
-export function _matchAll(regex, text) {
+function _matchAll(regex, text) {
     const res = [];
     let m; while ((m = regex.exec(text)) !== null) res.push(m);
     return res;
 }
+
+module.exports = {
+  _uniqCase,
+  _clean,
+  _pushAll,
+  _matchAll
+};
   

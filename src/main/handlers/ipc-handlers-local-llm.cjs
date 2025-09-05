@@ -45,26 +45,35 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
     });
   }
 
-  // Helper function to broadcast thinking indicator updates
-  function broadcastThinkingUpdate(message, sessionId = null) {
-    const updateData = {
-      message,
-      sessionId,
-      timestamp: Date.now()
-    };
+  // Helper function to broadcast thinking updates
+  function broadcastThinkingUpdate(message, sessionId) {
+    if (global.mainWindow && global.mainWindow.webContents) {
+      global.mainWindow.webContents.send('thinking-update', {
+        message,
+        sessionId,
+        timestamp: new Date().toISOString()
+      });
+    }
+  }
+
+  // Helper function to compute cosine similarity between two embeddings
+  function computeCosineSimilarity(embedding1, embedding2) {
+    if (!embedding1 || !embedding2 || embedding1.length !== embedding2.length) {
+      return 0;
+    }
     
-    // Send to all windows (unified architecture uses only overlayWindow)
-    const windowList = [
-      windows.overlayWindow
-    ].filter(Boolean);
+    let dotProduct = 0;
+    let norm1 = 0;
+    let norm2 = 0;
     
-    windowList.forEach(window => {
-      if (window && !window.isDestroyed()) {
-        window.webContents.send('thinking-indicator-update', updateData);
-      }
-    });
+    for (let i = 0; i < embedding1.length; i++) {
+      dotProduct += embedding1[i] * embedding2[i];
+      norm1 += embedding1[i] * embedding1[i];
+      norm2 += embedding2[i] * embedding2[i];
+    }
     
-    console.log(`💭 Thinking update broadcasted: "${message}"`);
+    const magnitude = Math.sqrt(norm1) * Math.sqrt(norm2);
+    return magnitude === 0 ? 0 : dotProduct / magnitude;
   }
 
   // Legacy LLM health check - routes to unified agent system
@@ -305,53 +314,20 @@ Please provide a well-structured summary that helps the user understand the curr
 
       // Route based on classification
       if (routingResult.classification === 'CONTEXT') {
-        console.log('🎯 [CONTEXT-PIPELINE] Starting progressive context search...');
-        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('context_analysis'), options.sessionId);
-        
-        // Stage 1: Current conversation context awareness
-        console.log('📍 [STAGE-1] Current conversation context awareness...');
+        console.log('🎯 [SIMPLE-CONTEXT] Using recent conversation context...');
         broadcastThinkingUpdate(IntentResponses.getThinkingMessage('conversation_search'), options.sessionId);
-        const contextAwareResult = await handleContextAwareScope(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
-        if (contextAwareResult?.success) {
-          console.log('✅ [CONTEXT-PIPELINE] Stage 1 successful - returning conversation context result');
+        
+        const simpleContextResult = await handleSimpleContext(prompt, { sessionId: options.currentSessionId || options.sessionId }, coreAgent);
+        if (simpleContextResult?.success) {
+          console.log('✅ [SIMPLE-CONTEXT] Successfully answered using recent messages');
           
           // Store conversation turn asynchronously
           try {
             await storeTurn(
               { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
               prompt,
-              contextAwareResult.response,
-              contextAwareResult.pipeline || 'context_aware'
-            );
-          } catch (error) {
-            console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
-          }
-          
-          // Transform response format for NEW pipeline compatibility
-          return {
-            success: true,
-            data: contextAwareResult.response, // NEW pipeline expects response in 'data' field
-            pipeline: contextAwareResult.pipeline,
-            timing: contextAwareResult.timing
-          };
-        }
-        
-        console.log('🔄 [CONTEXT-PIPELINE] Stage 1 failed, trying session scope search...');
-        broadcastThinkingUpdate(IntentResponses.getThinkingMessage('session_search'), options.sessionId);
-        
-        // Stage 2: Session-scoped semantic search (cross-session)
-        console.log('📍 [STAGE-2] Session-scoped semantic search...');
-        const stage2Result = await handleSessionScope(prompt, { sessionId: options.currentSessionId || options.sessionId });
-        if (stage2Result && stage2Result.success) {
-          console.log('✅ [CONTEXT-PIPELINE] Stage 2 successful - returning session scope result');
-          
-          // Store conversation turn asynchronously
-          try {
-            await storeTurn(
-              { sessionId: options.sessionId, userId: 'user', conversationId: options.conversationId },
-              prompt,
-              stage2Result.response,
-              'stage2_session_scope'
+              simpleContextResult.response,
+              'simple_context'
             );
           } catch (error) {
             console.warn('⚠️ [ASYNC-MEMORY] Failed to store turn:', error.message);
@@ -359,8 +335,8 @@ Please provide a well-structured summary that helps the user understand the curr
           
           return {
             success: true,
-            data: stage2Result.response, // NEW pipeline expects response in 'data' field
-            pipeline: 'stage2_session_scope',
+            data: simpleContextResult.response,
+            pipeline: 'simple_context',
             timing: { total: Date.now() - startTime }
           };
         }
@@ -701,148 +677,226 @@ Please provide a well-structured summary that helps the user understand the curr
     
     return cleaned;
   }
-
-  // Handle context-aware queries with lower threshold and better context utilization
-  async function handleContextAwareScope(prompt, context, coreAgent) {
+  // Simple Context: Just use recent messages from current session
+  async function handleSimpleContext(prompt, context, coreAgent) {
     try {
-      console.log('🔍 [CONTEXT-AWARE-SCOPE] Processing context-aware query...');
-      broadcastThinkingUpdate(IntentResponses.getThinkingMessage('context_analysis'), context.sessionId);
-      
       const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
-      if (!conversationAgent) {
+      const phi3Agent = coreAgent.getAgent('Phi3Agent');
+      
+      if (!conversationAgent || !phi3Agent) {
+        console.warn('⚠️ [SIMPLE-CONTEXT] Required agents not available');
         return null;
       }
 
+      console.log('🔍 [SIMPLE-CONTEXT] Getting recent messages...');
+
+      // Get recent messages from current session
       const recentMessages = await conversationAgent.execute({
         action: 'message-list',
         sessionId: context.sessionId,
-        limit: 8,
-        offset: 0,
-        direction: 'DESC'
-      });
+        limit: 8, // Get more messages for better context
+        direction: 'DESC' // Get newest messages first
+      }, coreAgent.context);
 
       if (!recentMessages?.success || !recentMessages?.data?.messages?.length) {
+        console.warn('⚠️ [SIMPLE-CONTEXT] No recent messages found');
         return null;
       }
 
-      // Filter and format context messages, excluding noise messages
+      // Format context messages (keep it simple)
       const contextMessages = recentMessages.data.messages
-        .filter(msg => {
-          // Ensure message object exists and has required properties
-          if (!msg || typeof msg !== 'object') return false;
-          if (!msg.text || typeof msg.text !== 'string' || msg.text.trim() === '') return false;
-          if (!msg.sender || typeof msg.sender !== 'string') return false;
-          if (msg.text.trim() === prompt.trim()) return false;
-          
-          // Filter out generic system messages that add noise to classification
-          const isNoiseMessage = /Information stored successfully|I don't have|I cannot|Sorry, I/i.test(msg.text.trim());
-          return !isNoiseMessage;
-        })
-        .slice(0, 4)
+        .filter(msg => msg && msg.text && msg.sender && msg.text.trim() !== prompt.trim())
+        .slice(0, 6) // Use last 6 messages
         .reverse()
         .map(msg => `${msg.sender}: ${msg.text}`)
         .join('\n');
 
       if (!contextMessages.trim()) {
+        console.warn('⚠️ [SIMPLE-CONTEXT] No valid context messages');
         return null;
       }
 
-      console.log(`🎯 [CONTEXT-AWARE-SCOPE] Using conversation context:\n${contextMessages}`);
-
-      // First check heuristic rules for clear current-session indicators
-      const hasCurrentSessionIndicators = /\b(here|this (chat|conversation)|in this (chat|conversation)|current (chat|conversation))\b/i.test(prompt);
-      const hasFirstMessageIndicators = /\b(first (couple|few|messages?)|start|beginning) (of|in)? (this|here|our)\b/i.test(prompt);
-      
-      let needsBroaderSearch = false;
-      
-      if (hasCurrentSessionIndicators || hasFirstMessageIndicators) {
-        console.log('✅ [CONTEXT-AWARE-SCOPE] Clear current session indicators - staying in current context');
-        needsBroaderSearch = false;
-      } else {
-        // Use LLM to detect if this is a cross-session query and if current context can answer it
-        const phi3Agent = coreAgent.getAgent('Phi3Agent');
-        if (phi3Agent) {
-          const detectionPrompt = `Analyze this question and the recent conversation context:
-
-RECENT CONVERSATION:
-${contextMessages}
-
-QUESTION: ${prompt}
-
-Can this question be answered using ONLY the recent conversation above?
-
-CURRENT session indicators (answer from recent conversation):
-- "here", "this chat", "current conversation"
-- "first messages here", "what we just discussed"
-- Questions about content visible in recent conversation
-
-CROSS_SESSION indicators (needs broader search):
-- "have I ever mentioned X" (lifetime history)
-- "did we discuss Y yesterday" (specific past time)
-- "when did I first say Z" (historical timeline)
-- Questions about content NOT in recent conversation
-
-Respond with only: "CURRENT" if recent conversation can answer it, or "CROSS_SESSION" if it needs broader search.`;
-
-        try {
-          const detectionResult = await phi3Agent.execute({
-            action: 'query-phi3-fast',
-            prompt: detectionPrompt,
-            options: { timeout: 3000, maxTokens: 15, temperature: 0.1 }
-          });
-
-          if (detectionResult.success && detectionResult.response) {
-            needsBroaderSearch = detectionResult.response.trim().toUpperCase().includes('CROSS_SESSION');
-            console.log(`🔍 [CONTEXT-AWARE-SCOPE] Detection result: "${detectionResult.response.trim()}" - needsBroaderSearch: ${needsBroaderSearch}`);
-          }
-        } catch (error) {
-          console.warn('⚠️ [CONTEXT-AWARE-SCOPE] Detection failed, proceeding with context');
-          needsBroaderSearch = false;
-        }
-        }
-      }
-
-      if (needsBroaderSearch) {
-        console.log('🔍 [CONTEXT-AWARE-SCOPE] Cross-session query needs broader search - failing to Stage 2');
-        return null; // Fail to allow Stage 2 to search across sessions
-      }
-
-      console.log('✅ [CONTEXT-AWARE-SCOPE] Current context can answer query');
+      console.log(`🎯 [SIMPLE-CONTEXT] Using conversation context (${recentMessages.data.messages.length} messages)`);
 
       // Generate response using conversation context
-      const phi3Agent = coreAgent.getAgent('Phi3Agent');
-      if (!phi3Agent) {
-        return null;
-      }
-
-      const phiPrompt = `You are ThinkDrop AI. Answer based on the recent conversation context.
+      const phiPrompt = `You are ThinkDrop AI. Answer the user's question using the recent conversation context.
 
 RECENT CONVERSATION:
 ${contextMessages}
 
 CURRENT QUESTION: ${prompt}
 
-Answer based on what was just discussed. Be specific and reference the conversation context. If the question refers to "they", "it", or similar pronouns, understand what they refer to from the conversation.`;
+INSTRUCTIONS:
+1. First, check if the conversation context contains enough information to answer the question
+2. If the question refers to numbered items (first, second, third, etc.) and the context discusses a topic but doesn't contain the full sequence, use your general knowledge to provide the specific answer
+3. For example, if discussing "miracles in John's Gospel" and asked "what was the second miracle," provide the actual second miracle from John's Gospel even if only the first was mentioned in the conversation
+4. Be specific and informative, connecting the answer to the conversation topic
+
+Answer the question directly and helpfully:`;
 
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
         prompt: phiPrompt,
-        options: { timeout: 5000, maxTokens: 120, temperature: 0.2 }
+        options: { timeout: 6000, maxTokens: 150, temperature: 0.2 }
       });
 
       if (result.success && result.response) {
-        console.log('✅ [CONTEXT-AWARE-SCOPE] Generated context-aware response');
+        const cleanedResponse = cleanLLMResponse(result.response);
+        console.log('✅ [SIMPLE-CONTEXT] Generated response using recent messages');
         return { 
           success: true, 
-          response: result.response,
-          source: 'context-aware-conversation'
+          response: cleanedResponse,
+          source: 'simple-context'
         };
       }
 
       return null;
 
     } catch (error) {
-      console.error('❌ [CONTEXT-AWARE-SCOPE] Error:', error.message);
+      console.error('❌ [SIMPLE-CONTEXT] Error:', error.message);
+      return null;
+    }
+  }
+  async function evaluateContextSufficiency(prompt, contextMessages, response, phi3Agent, sessionId = null) {
+    try {
+      // Notify user that we're evaluating context sufficiency
+      if (sessionId) {
+        const thinkingMessage = IntentResponses.getThinkingMessage('context_evaluation');
+        broadcastThinkingUpdate(thinkingMessage, sessionId);
+      }
+      
+      const evaluationPrompt = `You are evaluating if a response adequately answers a user's question. Be STRICT in your evaluation.
+
+CONVERSATION CONTEXT:
+${contextMessages}
+
+USER QUESTION: ${prompt}
+
+AI RESPONSE: ${response}
+
+EVALUATION TASK:
+Determine if the AI response directly and relevantly answers the user's specific question.
+
+KEY CHECKS:
+1. TOPIC MATCH: Does the response address the same topic as the question?
+2. DIRECT ANSWER: Does the response provide the specific information requested?
+3. RELEVANCE: Is the response about what the user actually asked?
+
+MARK AS INSUFFICIENT IF:
+- Response talks about a completely different topic than the question
+- Response references unrelated previous conversations instead of answering
+- Response is vague, deflects, or says "I don't know"
+- Follow-up questions where only partial info exists (e.g., asking "second" when only "first" discussed)
+- Response doesn't match the question's intent or subject matter
+
+MARK AS SUFFICIENT IF:
+- Response directly answers the specific question asked
+- Response provides relevant information on the correct topic
+- Response addresses what the user is actually seeking
+
+EXAMPLE:
+Question: "what was the second miracle?"
+Bad Response: "The second message I mentioned was about presidents" → INSUFFICIENT (wrong topic)
+Good Response: "The second miracle was healing the official's son" → SUFFICIENT (correct topic)
+
+Respond with ONLY: "INSUFFICIENT" or "SUFFICIENT"`;
+
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: evaluationPrompt,
+        options: { timeout: 4000, maxTokens: 15, temperature: 0.1 }
+      });
+
+      if (result.success && result.response) {
+        const evaluation = result.response.trim().toUpperCase();
+        const isInsufficient = evaluation.includes('INSUFFICIENT');
+        
+        console.log(`🔍 [CONTEXT-EVALUATION] Question: "${prompt.substring(0, 50)}..."`);
+        console.log(`🔍 [CONTEXT-EVALUATION] Response: "${response.substring(0, 80)}..."`);
+        console.log(`🔍 [CONTEXT-EVALUATION] Evaluation: ${evaluation} -> ${isInsufficient ? 'NEEDS FALLBACK' : 'CONTEXT OK'}`);
+        
+        return isInsufficient;
+      }
+
+      // Fallback to basic heuristics if LLM evaluation fails
+      console.warn('⚠️ [CONTEXT-EVALUATION] LLM evaluation failed, using basic heuristics');
+      return (
+        response.toLowerCase().includes('no information') ||
+        response.toLowerCase().includes('cannot determine') ||
+        response.toLowerCase().includes('not discussed')
+      );
+
+    } catch (error) {
+      console.error('❌ [CONTEXT-EVALUATION] Error:', error.message);
+      // Conservative fallback - assume context is sufficient to avoid unnecessary fallbacks
+      return false;
+    }
+  }
+
+  // Knowledge fallback for contextual questions that need external knowledge
+  async function attemptKnowledgeFallback(prompt, contextHistory, phi3Agent) {
+    try {
+      console.log('🔄 [KNOWLEDGE-FALLBACK] Attempting hybrid context+knowledge response...');
+      
+      // Extract context from conversation to understand what topic we're discussing
+      const contextAnalysisPrompt = `Based on this conversation context, what topic or subject is being discussed?
+
+CONVERSATION CONTEXT:
+${contextHistory}
+
+CURRENT QUESTION: ${prompt}
+
+Identify the main topic/subject being discussed (e.g., "Gospel of John miracles", "React programming", "cooking recipes", etc.). Respond with just the topic in 2-4 words.`;
+
+      const topicResult = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: contextAnalysisPrompt,
+        options: { timeout: 3000, maxTokens: 20, temperature: 0.1 }
+      });
+
+      let topic = 'the topic';
+      if (topicResult.success && topicResult.response) {
+        topic = topicResult.response.trim().toLowerCase();
+        console.log(`🔍 [KNOWLEDGE-FALLBACK] Identified topic: "${topic}"`);
+      }
+
+      // Generate response using both context and general knowledge
+      const hybridPrompt = `You are ThinkDrop AI. Answer this question using both the conversation context and your general knowledge.
+
+CONVERSATION CONTEXT:
+${contextHistory}
+
+CURRENT QUESTION: ${prompt}
+
+ANALYSIS:
+The conversation shows we've been discussing ${topic}. The user is asking "${prompt}" which appears to be a follow-up question referencing a numbered item from our discussion.
+
+INSTRUCTIONS:
+1. Look at the conversation context to understand what topic we were discussing
+2. If the question contains numbered references (first, second, third, fourth, etc.), connect it to the topic
+3. Use your knowledge about ${topic} to provide the specific information requested
+4. For example: if discussing "miracles in John's Gospel" and asked "what was the fourth one", provide the fourth miracle from John's Gospel
+
+Answer directly and specifically, using your knowledge to provide the requested information while acknowledging the conversation context.`;
+
+      const result = await phi3Agent.execute({
+        action: 'query-phi3-fast',
+        prompt: hybridPrompt,
+        options: { timeout: 8000, maxTokens: 200, temperature: 0.3 }
+      });
+
+      if (result.success && result.response) {
+        console.log('✅ [KNOWLEDGE-FALLBACK] Generated hybrid response');
+        return { 
+          success: true, 
+          response: cleanLLMResponse(result.response),
+          source: 'hybrid-context-knowledge'
+        };
+      }
+
+      return null;
+    } catch (error) {
+      console.error('❌ [KNOWLEDGE-FALLBACK] Error:', error.message);
       return null;
     }
   }
@@ -1029,12 +1083,25 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
         const cleanedResponse = cleanLLMResponse(result.response);
         console.log(`[DEBUG] [SESSION-SCOPE] Cleaned response: "${cleanedResponse}"`);
         
-        // Check if LLM is saying it has no context
-        if (cleanedResponse.toLowerCase().includes('no sufficient context') || 
-            cleanedResponse.toLowerCase().includes('no information') ||
-            cleanedResponse.toLowerCase().includes('not discussed')) {
-          console.warn(`⚠️ [SESSION-SCOPE] LLM claims no context despite ${validSnippets.length} snippets provided`);
+        // Use semantic analysis to determine if context is insufficient
+        const hasInsufficientContext = await evaluateContextSufficiency(
+          prompt, 
+          contextHistory, 
+          cleanedResponse, 
+          phi3Agent,
+          context.sessionId
+        );
+        
+        if (hasInsufficientContext) {
+          console.warn(`⚠️ [SESSION-SCOPE] Insufficient context detected - attempting knowledge fallback`);
           console.warn(`⚠️ [SESSION-SCOPE] Context preview: ${contextHistory.substring(0, 300)}...`);
+          
+          // Try knowledge fallback for contextual questions that need external knowledge
+          const knowledgeFallback = await attemptKnowledgeFallback(prompt, contextHistory, phi3Agent);
+          if (knowledgeFallback?.success) {
+            console.log('✅ [SESSION-SCOPE] Knowledge fallback successful');
+            return knowledgeFallback;
+          }
         }
         
         return { success: true, response: cleanedResponse };
@@ -1183,9 +1250,12 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
           'tell me what i said', 'remind me what', 'what was our'
         ],
         MEMORY: [
-          'remember that', 'remember this', 'store this', 'store that',
-          'save this', 'save that', 'keep this', 'keep that', 'note this',
-          'note that', 'don\'t forget', 'make a note'
+          // Memory retrieval patterns
+          'do i have', 'am i', 'did i', 'have i', 'was i', 'will i',
+          'my meeting', 'my appointment', 'my schedule', 'my calendar',
+          'tell me about', 'what about', 'remind me', 'check if',
+          'meeting tomorrow', 'meeting today', 'appointment tomorrow',
+          'scheduled for', 'planned for', 'working on', 'project with'
         ],
         COMMAND: [
           'write a', 'write me', 'create a', 'create me', 'generate a',
@@ -1439,41 +1509,140 @@ Current question: ${prompt}`;
     const isContextQuestion = /\b(do you remember|remember what (you|we|i) said)\b/i.test(p);
     
     if (hasStorageVerb && hasMemoryObject && !isContextQuestion) {
-      return { label: 'MEMORY', score: 0.85, reason: 'explicit-store-verb+object' };
+      return { label: 'MEMORY', score: 0.9, reason: 'explicit-storage' };
     }
-    
-    // CONTEXT: requires question about prior conversations or chat history
-    const hasPriorReference = /\b(what did (i|we|you) (say|do|discuss|talk about|mention)|what were (we|you) (talking|discussing) about|what was (said|discussed|mentioned) earlier|earlier|previous(ly)?|before|recap|summari[sz]e (our|the) conversation)\b/i.test(p);
-    const hasChatHistoryReference = /\b(first (couple|few|messages?)|messages? (in|we) (this|our) chat|what('s| is) the (first|earliest|initial)|conversation history|chat history)\b/i.test(p);
-    
-    // More precise conversation history patterns with past tense validation
-    const hasConversationQuery = (
-      /\b(what.*did we (chat|talk|discuss) about|what.*we (chatted|talked|discussed))\b/i.test(p) ||
-      (/\bwhat\b.*\b(topics?|subjects?|things?)\b.*\b(did we|we) (chat|talk|discuss)\b/i.test(p)) ||
-      (/\bwhat\b.*\b(presidents?|people|names?)\b.*\b(did we|we) (chat|talk|discuss)\b/i.test(p) && /\b(about|regarding|concerning)\b/i.test(p))
+
+    const isQuestion = /[?]/.test(p) || /\b(what|when|where|who|how|why)\b/.test(p);
+
+    // CONTEXT: references to prior conversation (check before MEMORY patterns)
+    const hasPriorConvoRef = (
+      /\b(what|when|where|who|how)\s+(did|was|were|have)\s+(we|you|i)\b/i.test(p) ||
+      /\b(earlier|before|previously|yesterday|last time|ago)\b/i.test(p) ||
+      /\b(previous|prior|recent)\s+(conversation|discussion|chat|message|question|topic)\b/i.test(p) ||
+      /\b(repeat|again)\b/i.test(p) ||
+      /\bmy\s+(previous|prior|last)\s+(question|message)\b/i.test(p) ||
+      // Implicit conversation references
+      /\bwe\s+(talked|discussed|decided|concluded|picked|chose)\b/i.test(p) ||
+      /\b(do\s+you\s+remember|remember\s+(what|when|where|who|how))\b/i.test(p) ||
+      /\b(which\s+(option|choice|steps?)\s+(did\s+we|you\s+gave?))\b/i.test(p) ||
+      /\b(what\s+did\s+i\s+say|tell\s+me\s+what\s+i\s+asked)\b/i.test(p) ||
+      /\b(remind\s+me\s+what\s+we|recap\s+what\s+we|paste\s+the\s+steps)\b/i.test(p) ||
+      /\bin\s+this\s+(thread|chat|conversation)\b/i.test(p) ||
+      /\b(last\s+time\s+here|at\s+the\s+start\s+of\s+this)\b/i.test(p) ||
+      /\bi\s+wish\s+we\s+(had|chose|picked|decided|chosen)\b/i.test(p) ||
+      // Common conversational follow-ups
+      /\b(was\s+there\s+any\s+other|were\s+there\s+any\s+other|any\s+other|what\s+about\s+other)\b/i.test(p) ||
+      /\b(regarding|about|concerning)\s+\w+/i.test(p) ||
+      /\b(what\s+was\s+the\s+(first|second|third|fourth|fifth|next|last))\b/i.test(p) ||
+      /\b(the\s+(first|second|third|fourth|fifth|next|last)\s+one)\b/i.test(p)
     );
+    const hasConversationQuery = /\b(what (did|was)|repeat|again)\b/i.test(p);
     
     // Exclude hypothetical/future queries to reduce false positives
     const isHypothetical = /\b(should|could|would|might|if|suppose|imagine|what if)\b/i.test(p);
     const isFutureOriented = /\b(will|shall|going to|next|future|plan to|want to)\b/i.test(p);
     
-    const isQuestion = /[?]/.test(p) || /\b(what|when|where|who|how|why)\b/.test(p);
-    
-    if ((hasPriorReference || hasChatHistoryReference || hasConversationQuery) && isQuestion && !isHypothetical && !isFutureOriented) {
+    if ((hasPriorConvoRef || hasConversationQuery) && (isQuestion || /\bi\s+wish\s+we\b/i.test(p)) && !isHypothetical && !isFutureOriented) {
       return { label: 'CONTEXT', score: 0.8, reason: 'prior-convo-question' };
     }
+
+    // Strong MEMORY patterns for personal data retrieval (check after CONTEXT)
+    const hasPersonalInfoQuery = (
+      /\b(what|when|where|who|how)\s+(is|are|was|were)\s+my\b/i.test(p) ||
+      /\bmy\s+(favorite|best|preferred|phone|address|email|birthday|age|style|type|preference|meeting|appointment|class|network|contact|license|deadline)\b/i.test(p) ||
+      /\b(do\s+i\s+have|am\s+i|is\s+my)\b/i.test(p) ||
+      /\bwhat\s+(is|are)\s+my\s+(learning|communication|personality|work)\s+(style|type|preference)\b/i.test(p) ||
+      /\b(what('s|s)?\s+my\s+(favorite|preferred|best))\b/i.test(p) ||
+      // Personal settings and preferences
+      /\b(which|what)\s+\w+\s+do\s+i\s+(use|prefer|keep|have)\b/i.test(p) ||
+      // More specific "which X do I use" patterns
+      /\bwhich\s+(keyboard|layout|tool|app|software|browser|editor)\s+do\s+i\s+use\b/i.test(p) ||
+      /\bwhich\s+keyboard\s+layout\s+do\s+i\s+use\b/i.test(p) ||
+      // "Do I usually/normally/typically" patterns
+      /\bdo\s+i\s+(usually|normally|typically|often)\b/i.test(p) ||
+      // "Help me remember" + personal info
+      /\bhelp\s+me\s+remember.*\bmy\b/i.test(p) ||
+      // "Remind me" + personal schedule/info (not conversation)
+      /\bremind\s+me\s+(my|when\s+is\s+my|what\s+is\s+my)\b/i.test(p) ||
+      // Implicit personal reminders without "my"
+      /\bremind\s+me\s+\w+\s+(time|meeting|appointment|class|deadline)\b/i.test(p) ||
+      // Direct "remind me X" for personal info
+      /\bremind\s+me\s+(meeting|appointment|class|deadline|time)\b/i.test(p) ||
+      // Handle non-question MEMORY requests
+      /\bremind\s+me\s+my\s+\w+\s+(time|meeting|appointment|class|deadline)\b/i.test(p)
+    );
+
+    // Exclude conversation references from MEMORY patterns
+    if (hasPersonalInfoQuery && (isQuestion || /\bremind\s+me\b/i.test(p)) && !hasPriorConvoRef) {
+      return { label: 'MEMORY', score: 0.85, reason: 'personal-info-query' };
+    }
     
-    // COMMAND: requires action verb (not questions about actions)
+    // COMMAND: requires action verb (not questions about actions) OR preference statements
     const hasActionVerb = /\b(write|generate|create|build|make|compose|produce|draft|code|implement|design)\b/i.test(p);
     const isActionQuestion = /\b(can you|could you|please|would you)\s+(write|generate|create|build|make)/i.test(p);
+    // Hedged commands ("could you, uh, make it")
+    const hasHedgedCommand = /\b(could\s+you.*make|help\s+me.*\w+|can\s+you.*\w+)\b/i.test(p) && !/\?/.test(p);
+    
+    // Enhanced preference patterns for personal statements that should be stored
+    const hasPreferenceStatement = (
+      // "X is my favorite/best/preferred Y" patterns
+      /\b\w+\s+is\s+my\s+(favorite|best|preferred)\b/i.test(p) ||
+      // "I love/like/prefer X" patterns  
+      /\b(i|my)\s+(love|like|prefer|adore|enjoy|dislike|hate)\s+\w+/i.test(p) ||
+      // "X are my favorite" patterns (handles "Cat are me favorite")
+      /\b\w+\s+are?\s+(my|me)\s+(favorite|best|preferred)\b/i.test(p) ||
+      // Color/animal preference patterns
+      /\b(red|blue|green|yellow|orange|purple|pink|black|white|gray|grey|brown|cat|dog|bird|fish)\s+(is|are)\s+(my|me|the)?\s*(favorite|best|preferred)\b/i.test(p) ||
+      // Opinion statements
+      /\b(i\s+think|i\s+believe|in\s+my\s+opinion)\b/i.test(p) ||
+      // Comparative opinion statements (X are/is better/worse/faster/etc)
+      /\b\w+\s+(are?|is)\s+(better|worse|faster|slower|stronger|weaker|more|less)\b/i.test(p) ||
+      // Symbol comparisons (>, <, etc.)
+      /\b\w+\s*[><]\s*\w+/i.test(p) ||
+      // Learning and interest preferences
+      /\b(i\s+want\s+to\s+(learn|study|understand|start\s+learning)|i\s+am\s+interested\s+in)\b/i.test(p) ||
+      // General opinion patterns
+      /\b\w+\s+(are?|is)\s+(amazing|terrible|great|awful|beautiful|ugly|good|bad)\b/i.test(p) ||
+      // "My [adjective] X is Y" patterns (e.g., "My least favorite UI is cluttered ones")
+      /\bmy\s+(least\s+)?(favorite|preferred|best|worst)\s+\w+\s+(is|are)\b/i.test(p) ||
+      // "X calms/helps/makes me Y" patterns
+      /\b\w+\s+(calms?|helps?|makes?)\s+me\b/i.test(p)
+    );
     
     if (hasActionVerb && (isActionQuestion || !isQuestion)) {
       return { label: 'COMMAND', score: 0.7, reason: 'action-verb' };
     }
     
-    // GENERAL: factual questions and learning requests
+    if (hasHedgedCommand) {
+      return { label: 'COMMAND', score: 0.75, reason: 'hedged-command' };
+    }
+    
+    if (hasPreferenceStatement && !isQuestion) {
+      return { label: 'COMMAND', score: 0.8, reason: 'preference-statement' };
+    }
+    
+    // GENERAL: Enhanced factual knowledge patterns
+    const hasGeneralKnowledgeQuery = (
+      // Geography, science, history patterns
+      /\b(what('s|s)?\s+(the\s+)?(capital|largest|smallest|population|area|distance))\b/i.test(p) ||
+      /\b(how\s+many\s+(planets|countries|states|continents|oceans))\b/i.test(p) ||
+      /\b(who\s+(wrote|invented|discovered|created|founded))\b/i.test(p) ||
+      /\b(when\s+did\s+(world\s+war|the\s+civil\s+war|\w+\s+end|\w+\s+start))\b/i.test(p) ||
+      /\b(what\s+is\s+(photosynthesis|gravity|democracy|capitalism))\b/i.test(p) ||
+      // Biblical/religious knowledge
+      /\b(gospel|bible|jesus|christ|miracle|scripture|verse)\b/i.test(p) ||
+      // Recipe/cooking knowledge
+      /\b(how\s+(do\s+you\s+)?make|recipe\s+for|ingredients\s+for)\b/i.test(p) ||
+      // General "tell me about" patterns
+      /\b(tell\s+me\s+about|explain|describe)\s+(?!my|our|we|us)\w+/i.test(p)
+    );
+    
     const hasQuestionMarkers = /(\?|\b(who|what|when|where|why|how|which)\b|\blist\b|\btell me about\b|\bexplain\b|\btypes of\b|\bkinds of\b)/i.test(p);
     const hasLearningIntent = /\b(can you (list|tell|explain)|i (love|like).*(and can you|tell me))\b/i.test(p);
+    
+    if (hasGeneralKnowledgeQuery && isQuestion) {
+      return { label: 'GENERAL', score: 0.8, reason: 'factual-knowledge-query' };
+    }
     
     if (hasQuestionMarkers || hasLearningIntent) {
       return { label: 'GENERAL', score: 0.65, reason: 'qa-signals' };
@@ -1485,7 +1654,26 @@ Current question: ${prompt}`;
   // Ensemble decision logic combining heuristics and zero-shot
   function decideEnsemble({ rule, zsc }) {
     const RULE_STRONG = rule.score >= 0.8;
+    const RULE_MEDIUM = rule.score >= 0.65;
     const MODEL_STRONG = zsc.top >= 0.65 && zsc.margin >= 0.15;
+    
+    // Strong heuristic rule always wins (high precision patterns)
+    if (RULE_STRONG) {
+      console.log(`🎯 [ENSEMBLE] Strong heuristic: ${rule.label} (${rule.score.toFixed(3)}) - ${rule.reason}`);
+      return rule.label;
+    }
+    
+    // Both agree → take it even if not individually strong
+    if (rule.label && rule.label === zsc.label) {
+      console.log(`🎯 [ENSEMBLE] Rule+Model agree: ${zsc.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
+      return zsc.label;
+    }
+    
+    // Medium heuristic rule beats uncertain model
+    if (RULE_MEDIUM && zsc.top < 0.6) {
+      console.log(`🎯 [ENSEMBLE] Medium rule beats weak model: ${rule.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
+      return rule.label;
+    }
     
     // Model is confident and has good margin → trust model
     if (MODEL_STRONG) {
@@ -1493,15 +1681,9 @@ Current question: ${prompt}`;
       return zsc.label;
     }
     
-    // Rule is strong and model is uncertain → trust rule
-    if (RULE_STRONG && zsc.top < 0.55) {
-      console.log(`🎯 [ENSEMBLE] Rule strong, model weak: ${rule.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
-      return rule.label;
-    }
-    
-    // Both agree → take it even if not individually strong
-    if (rule.label && rule.label === zsc.label) {
-      console.log(`🎯 [ENSEMBLE] Rule+Model agree: ${zsc.label} (rule: ${rule.score.toFixed(3)}, model: ${zsc.top.toFixed(3)})`);
+    // Model has reasonable confidence → trust model
+    if (zsc.top >= 0.55) {
+      console.log(`🎯 [ENSEMBLE] Model reasonably confident: ${zsc.label} (${zsc.top.toFixed(3)})`);
       return zsc.label;
     }
     
@@ -1519,27 +1701,27 @@ Current question: ${prompt}`;
       if (!global.zeroShotClassifier) {
         const { pipeline } = await import('@xenova/transformers');
         
-        console.log('🔄 [ZERO-SHOT] Loading zero-shot classifier (DistilBERT MNLI)...');
+        console.log('🔄 [ZERO-SHOT] Loading zero-shot classifier (BART MNLI)...');
         global.zeroShotClassifier = await pipeline(
           'zero-shot-classification',
-          'Xenova/distilbert-base-uncased-mnli'
+          'Xenova/bart-large-mnli'
         );
         console.log('✅ [ZERO-SHOT] Zero-shot classifier loaded');
       }
       
-      // Tight, explicit labels to reduce false positives
+                                             // Optimized labels for best classification performance
       const candidateLabels = [
-        'asking about what we discussed, chatted about, or talked about in this conversation or chat history',
-        'explicitly asking to remember or save this for later recall',
-        'requesting to create, write, generate, build, or do something',
-        'asking for factual information or to learn about something'
+        'asking about previous conversation messages',
+        'asking about personal stored information',
+        'sharing a preference or opinion',
+        'asking factual questions about the world, history, science, or general topics'
       ];
       
       const labelMap = {
-        'asking about what we discussed, chatted about, or talked about in this conversation or chat history': 'CONTEXT',
-        'explicitly asking to remember or save this for later recall': 'MEMORY',
-        'requesting to create, write, generate, build, or do something': 'COMMAND',
-        'asking for factual information or to learn about something': 'GENERAL'
+        'asking about previous conversation messages': 'CONTEXT',
+        'asking about personal stored information': 'MEMORY',
+        'sharing a preference or opinion': 'COMMAND',
+        'asking factual questions about the world, history, science, or general topics': 'GENERAL'
       };
 
       // Get heuristic vote first
@@ -1604,13 +1786,6 @@ Current question: ${prompt}`;
     return { classification: 'GENERAL' };
   }
 
-  async function classifyNonContextQuery(prompt) {
-    // Simple classification for non-context queries
-    if (prompt.toLowerCase().includes('remember') || prompt.toLowerCase().includes('store')) {
-      return 'MEMORY';
-    }
-    return 'GENERAL';
-  }
 
   // Non-context query handlers
   async function handleNonContextPipeline(queryType, prompt, context, startTime) {
@@ -1626,6 +1801,61 @@ Current question: ${prompt}`;
       default:
         return await handleGeneralKnowledge(prompt, context, startTime);
     }
+  }
+
+  // WebSocket Backend Integration - Direct Pipeline Access
+  async function handleWebSocketBackendResponse(websocketResponse, originalPrompt, originalContext) {
+    console.log('🌐 [WEBSOCKET-BACKEND] Processing response from online backend...');
+    
+    const { data, queryType, memoryTurn, pipeline, timing } = websocketResponse;
+    const startTime = Date.now() - (timing?.total || 0);
+    
+    // Store conversation turn in local memory (async)
+    try {
+      await storeTurn(
+        {
+          sessionId: memoryTurn.sessionId,
+          userId: memoryTurn.context.userId,
+          conversationId: memoryTurn.context.conversationId,
+          messageId: memoryTurn.context.messageId
+        },
+        memoryTurn.userMessage,
+        memoryTurn.aiResponse,
+        `websocket_${pipeline}`
+      );
+      console.log('✅ [WEBSOCKET-BACKEND] Stored conversation turn from online backend');
+    } catch (error) {
+      console.warn('⚠️ [WEBSOCKET-BACKEND] Failed to store turn:', error.message);
+    }
+    
+    // Return response in local system format
+    return {
+      success: true,
+      data: data,
+      pipeline: `websocket_${pipeline}`,
+      timing: {
+        total: timing?.total || 0,
+        websocket: true
+      },
+      source: 'websocket_backend',
+      queryType: queryType
+    };
+  }
+
+  // Extract recent context for WebSocket backend
+  function extractRecentContextForBackend(sessionId, messageCount = 6) {
+    // This integrates with conversation signals to get recent messages
+    try {
+      const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
+      if (conversationAgent) {
+        // Get recent messages from the session
+        // This would need to be implemented based on your conversation storage
+        return [];
+      }
+    } catch (error) {
+      console.warn('⚠️ [WEBSOCKET-BACKEND] Failed to extract context:', error.message);
+    }
+    return [];
   }
 
   // Ultra-fast general knowledge handler
@@ -1684,34 +1914,27 @@ Current question: ${prompt}`;
     }
   }
 
-  // Handle memory queries (both storage and retrieval)
+  // Handle memory queries (retrieval only - all messages are auto-stored)
   async function handleMemoryQuery(prompt, context, startTime) {
-    console.log('🧠 [MEMORY-QUERY] Analyzing memory intent...');
+    console.log('🧠 [MEMORY-RETRIEVE] Searching across all conversations...');
     broadcastThinkingUpdate(IntentResponses.getThinkingMessage('memory_retrieve'), context.sessionId);
     
     try {
-      // Quick pattern-based classification for memory intent
-      const isStorageIntent = await classifyMemoryIntent(prompt);
-      
-      if (isStorageIntent) {
-        return await handleMemoryStore(prompt, context, startTime);
-      } else {
-        return await handleMemoryRetrieve(prompt, context, startTime);
-      }
+      return await handleMemoryRetrieve(prompt, context, startTime);
     } catch (error) {
       const totalTime = Date.now() - startTime;
       
       // Handle reclassification requests
       if (error.message === 'RECLASSIFY_AS_GENERAL') {
-        console.log('🔄 [MEMORY-QUERY] Reclassifying as GENERAL knowledge query...');
+        console.log('🔄 [MEMORY-RETRIEVE] Reclassifying as GENERAL knowledge query...');
         return await handleGeneralKnowledge(prompt, context, startTime);
       }
       
-      console.error(`❌ [MEMORY-QUERY] Error:`, error.message);
+      console.error(`❌ [MEMORY-RETRIEVE] Error:`, error.message);
       return { 
         success: false, 
         error: error.message,
-        pipeline: 'memory_query',
+        pipeline: 'memory_retrieve',
         timing: { total: totalTime }
       };
     }
@@ -1840,17 +2063,34 @@ Current question: ${prompt}`;
         throw new Error('UserMemoryAgent not available');
       }
 
-      // Perform semantic search of memories
-      const searchResult = await userMemoryAgent.execute({
+      // Use semantic search to find most relevant memories across all conversations
+      console.log('🎯 [MEMORY-RETRIEVE] Performing semantic search across all memories...');
+      let searchResult = await userMemoryAgent.execute({
         action: 'memory-semantic-search',
         query: prompt,
-        limit: 10,
-        minSimilarity: 0.3,
-        sessionId: context.sessionId
+        limit: 10, // Get top 10 most relevant memories
+        minSimilarity: 0.6, // Reasonable threshold for relevance
+        sessionId: null // Search across all sessions for memory queries
       }, {
         database: coreAgent.context?.database || coreAgent.database,
         executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
       });
+
+      // Semantic search already returns relevance-ranked results - use them directly
+      if (!searchResult.success || !searchResult.results || searchResult.results.length === 0) {
+        // If no results, try with lower similarity threshold
+        console.log('🔄 [MEMORY-RETRIEVE] No results with high threshold, trying lower threshold...');
+        searchResult = await userMemoryAgent.execute({
+          action: 'memory-semantic-search',
+          query: prompt,
+          limit: 10,
+          minSimilarity: 0.3, // Lower threshold
+          sessionId: context.sessionId // Try current session first
+        }, {
+          database: coreAgent.context?.database || coreAgent.database,
+          executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+        });
+      }
 
       const totalTime = Date.now() - startTime;
 
