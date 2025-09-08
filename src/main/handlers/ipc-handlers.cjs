@@ -224,6 +224,31 @@ function initializeIPCHandlers({
         return result; // Return result directly (already has success/error structure)
       }
       
+      // Handle WebSocket backend response storage
+      if (intentPayload.intent === 'websocket_backend_response') {
+        console.log('🌐 Processing WebSocket backend response for memory storage');
+        const { handleWebSocketBackendResponse } = require('./ipc-handlers-local-llm.cjs');
+        const result = await handleWebSocketBackendResponse(
+          intentPayload.payload,
+          intentPayload.payload.userMessage,
+          intentPayload.context || {}
+        );
+        console.log('✅ WebSocket backend response processed:', result);
+        return { success: true, data: result };
+      }
+
+      // Handle WebSocket context extraction
+      if (intentPayload.intent === 'extract_websocket_context') {
+        console.log('🔍 Extracting recent context for WebSocket backend');
+        const { extractRecentContextForBackend } = require('./ipc-handlers-local-llm.cjs');
+        const result = await extractRecentContextForBackend(
+          intentPayload.sessionId,
+          intentPayload.messageCount || 6
+        );
+        console.log(`✅ Extracted ${result.length} context messages for WebSocket`);
+        return { success: true, data: result };
+      }
+
       // Route all other requests through AgentOrchestrator.ask()
       // AgentOrchestrator will handle:
       // 1. Agent validation and security checks

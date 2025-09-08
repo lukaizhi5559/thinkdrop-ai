@@ -3742,6 +3742,12 @@ Answer based on the memories above. If no relevant information is found, say "I 
       // Parse intent payload
       let processedPayload = this.parseIntentPayload(intentPayload);
       
+      // Check if we should route to existing pipeline
+      if (processedPayload.routeToExistingPipeline) {
+        console.log(`🎯 Routing to existing handleNonContextPipeline for queryType: ${processedPayload.queryType}`);
+        return await this.routeToExistingPipeline(processedPayload, context);
+      }
+      
       // Extract intents and create workflow
       const workflow = this.createWorkflowFromIntents(processedPayload, context);
       console.log('🔄 Created workflow with', workflow.length, 'steps');
@@ -3795,7 +3801,59 @@ Answer based on the memories above. If no relevant information is found, say "I 
   }
 
   /**
-   * Parse intent payload from various input formats
+   * Route to existing handleNonContextPipeline in IPC handlers
+   */
+  async routeToExistingPipeline(processedPayload, context) {
+    const { queryType, sourceText, originalPayload } = processedPayload;
+    
+    try {
+      // Import the IPC handler function
+      const ipcHandlers = require('../handlers/ipc-handlers-local-llm.cjs');
+      
+      // Call the existing handleNonContextPipeline
+      const result = await ipcHandlers.handleNonContextPipeline(
+        queryType,
+        sourceText,
+        context,
+        Date.now()
+      );
+      
+      console.log(`✅ Successfully routed ${queryType} query to existing pipeline`);
+      return result;
+      
+    } catch (error) {
+      console.error(`❌ Failed to route to existing pipeline:`, error);
+      
+      // Fallback to local processing
+      console.log('🔄 Falling back to local agent processing');
+      const fallbackPayload = {
+        intents: [{ intent: this.mapQueryTypeToIntent(queryType), confidence: 0.8 }],
+        primaryIntent: this.mapQueryTypeToIntent(queryType),
+        entities: originalPayload.entities || [],
+        requiresMemoryAccess: queryType === 'MEMORY',
+        captureScreen: false,
+        sourceText: sourceText
+      };
+      
+      const workflow = this.createWorkflowFromIntents(fallbackPayload, context);
+      return await this.executeWorkflow(workflow, context);
+    }
+  }
+
+  /**
+   * Map queryType to local intent for fallback
+   */
+  mapQueryTypeToIntent(queryType) {
+    const mapping = {
+      'GENERAL': 'question',
+      'MEMORY': 'memory_retrieve',
+      'COMMAND': 'command'
+    };
+    return mapping[queryType] || 'question';
+  }
+
+  /**
+   * Parse intent payload from various formats
    */
   parseIntentPayload(intentPayload) {
     console.log('🔍 Parsing intent payload...');
@@ -3825,9 +3883,20 @@ Answer based on the memories above. If no relevant information is found, say "I 
   }
 
   /**
-   * Extract intent data from parsed payload
+   * Extract intent data from parsed payload - route to existing pipeline if queryType present
    */
   extractIntentData(payload) {
+    // If payload has queryType, route directly to existing handleNonContextPipeline
+    if (payload.queryType) {
+      console.log(`🎯 Found queryType: ${payload.queryType}, routing to existing pipeline`);
+      return {
+        routeToExistingPipeline: true,
+        queryType: payload.queryType,
+        sourceText: payload.sourceText || payload.message || payload.query || '',
+        originalPayload: payload
+      };
+    }
+
     // Handle nested payload structures
     if (payload.payload && payload.payload.intents) {
       console.log('📦 Found nested payload structure');

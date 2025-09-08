@@ -58,7 +58,6 @@ export default function ChatMessages() {
 
   // Use signals as primary source of truth
   const sessions = signals.sessions.value;
-  const contextIsLoading = signals.isLoading.value;
 
   // State for localStorage persistence fallback
   const [, setLastKnownSessions] = useState<any[]>(() => {
@@ -88,6 +87,10 @@ export default function ChatMessages() {
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [processedOrchestrationMessages, setProcessedOrchestrationMessages] = useState<Set<string>>(new Set());
   
+  // WebSocket conversation tracking
+  const [lastUserMessage, setLastUserMessage] = useState<string>('');
+  const [streamStartTime, setStreamStartTime] = useState<number>(0);
+  
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -96,6 +99,7 @@ export default function ChatMessages() {
   const currentMessageRef = useRef<string>('');
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
+  const streamTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const isProgrammaticScrolling = useRef(false);
@@ -334,11 +338,13 @@ export default function ChatMessages() {
     try {
       if (message.type === 'llm_stream_start') {
         console.log('🚀 Stream started for request:', message.requestId);
+        console.log('🔍 [STREAM-START] Initializing streaming state...');
         setCurrentStreamingMessage('');
-        setStreamingMessageId(`streaming_${message.requestId || Date.now()}`);
+        setStreamingMessageId(`streaming_${message.requestId || message.id || Date.now()}`);
         isStreamingEndedRef.current = false; // Reset streaming ended flag
         setIsLoading(false); // Clear loading when streaming starts
-        
+        console.log('✅ [STREAM-START] Streaming state initialized');
+        scrollToBottom({ smooth: true, force: false });
       } else if (message.type === 'llm_stream_chunk') {
         // Skip processing if streaming has already ended
         if (isStreamingEndedRef.current) {
@@ -356,9 +362,7 @@ export default function ChatMessages() {
               setCurrentStreamingMessage(prev => {
                 const newText = prev + chunkText;
                 console.log('📄 Updated streaming message length:', newText.length);
-                
-                // Auto-scroll is now handled by the unified useEffect system
-                // No need for manual scroll calls during streaming
+                console.log('🔍 [STREAM-CHUNK] Current streaming message:', newText.substring(0, 50) + '...');
                 
                 return newText;
               });
@@ -373,16 +377,27 @@ export default function ChatMessages() {
       } else if (message.type === 'llm_stream_end') {
         console.log('✅ Stream completed for request:', message.requestId);
         console.log('📄 Full response text:', message.payload?.fullText);
-        console.log('🔍 [DEBUG] Full llm_stream_end message:', JSON.stringify(message, null, 2));
-          
-        // Set streaming ended flag FIRST to prevent delayed chunks
+        console.log('🔍 [DEBUG]      case \'llm_stream_end\':');
+        console.log('🏁 Stream ended, finalizing message...');
+        // scrollToBottom({ smooth: true, force: false });
+
+        // Check if we've already processed a stream end for this message
+        if (isStreamingEndedRef.current) {
+          console.log('⚠️ Stream end already processed, ignoring duplicate');
+          return;
+        }
+        
+        // // Clear the timeout since we received the proper end signal
+        // if (streamTimeoutRef.current) {
+        //   clearTimeout(streamTimeoutRef.current);
+        //   streamTimeoutRef.current = null;
+        // }
+        
+        // Mark streaming as ended to prevent duplicate processing
         isStreamingEndedRef.current = true;
         
         // Clear streaming state to prevent duplicate display
         const finalText = message.payload?.fullText || currentStreamingMessage || 'No response received';
-        setCurrentStreamingMessage('');
-        setStreamingMessageId(null);
-        setIsLoading(false);
         
         // Create final AI message using the full text from the payload
         const finalMessage: ChatMessage = {
@@ -395,32 +410,71 @@ export default function ChatMessages() {
         
         // Add final message to conversation context
         console.log('🤖 Adding final AI message:', finalMessage);
-        if (activeSessionId && signalsAddMessage) {          
+        console.log('🔍 [DEBUG] activeSessionId:', activeSessionId);
+        console.log('🔍 [DEBUG] signalsAddMessage available:', !!signalsAddMessage);
+        console.log('🔍 [DEBUG] signals.activeSessionId.value:', signals.activeSessionId.value);
+        
+        // Use the current active session from signals as fallback
+        const currentSessionId = activeSessionId || signals.activeSessionId.value;
+        
+        if (currentSessionId && signalsAddMessage) {          
           try {
-            await signalsAddMessage(activeSessionId, {
+            await signalsAddMessage(currentSessionId, {
               text: finalText,
               sender: 'ai',
-              sessionId: activeSessionId,
+              sessionId: currentSessionId,
               metadata: { streamingComplete: true }
             });
             console.log('✅ Final AI message added to session successfully');
+
+            setCurrentStreamingMessage('');
+            setStreamingMessageId(null);
+            setIsLoading(false);
           } catch (error) {
             console.error('❌ Error adding final AI message to session:', error);
           }
         } else {
           console.log('⚠️ No active session or signalsAddMessage function available');
+          console.log('🔍 [DEBUG] currentSessionId:', currentSessionId);
+          console.log('🔍 [DEBUG] signalsAddMessage type:', typeof signalsAddMessage);
+        }
+
+        // Save WebSocket backend response to local memory
+        try {
+          console.log('💾 Saving WebSocket backend response to local memory...');
+          const websocketResponse = {
+            data: finalText,
+            queryType: message.payload.primaryIntent === "memory_retrieve" ? 'MEMORY' : message.payload?.queryType || 'GENERAL',
+            memoryTurn: {
+              sessionId: activeSessionId,
+              context: {
+                userId: 'default-user',
+                conversationId: activeSessionId,
+                messageId: message.id || `msg_${Date.now()}`
+              },
+              userMessage: lastUserMessage || 'Unknown user message',
+              aiResponse: finalText
+            },
+            pipeline: message.payload?.pipeline || 'websocket_stream',
+            timing: {
+              total: Date.now() - (streamStartTime || Date.now())
+            }
+          };
+
+          // Use the existing IPC method for agent orchestration
+          if (window.electronAPI?.agentOrchestrate) {
+            await window.electronAPI.agentOrchestrate({
+              intent: 'websocket_backend_response',
+              payload: websocketResponse,
+              context: { source: 'websocket_frontend' }
+            });
+            console.log('✅ WebSocket backend response saved to local memory');
+          }
+        } catch (error) {
+          console.error('❌ Failed to save WebSocket backend response:', error);
         }
         
-        // Final scroll-to-bottom when streaming completes (unless user is scrolling)
-        console.log('🏁 LLM streaming ended - triggering final scroll-to-bottom');
-        setTimeout(() => {
-          if (!isUserScrolling) {
-            console.log('✅ Final scroll-to-bottom (user not scrolling)');
-            scrollToBottom({ smooth: true, force: true });
-          } else {
-            console.log('⏸️ Skipping final scroll - user is scrolling');
-          }
-        }, 100); // Small delay to ensure message is rendered
+        
         
         // 🧠 CRITICAL: Trigger AgentOrchestrator for intent classification and memory storage
         console.log('🧠 [AGENT] Triggering AgentOrchestrator for intent classification...');
@@ -428,34 +482,80 @@ export default function ChatMessages() {
         
       } else if (message.type === 'intent_classification') {
         console.log('🎯🎯🎯 INTENT CLASSIFICATION MESSAGE FOUND! 🎯🎯🎯');
-        console.log('  Primary Intent:', message.primaryIntent);
-        console.log('  Requires Memory Access:', message.requiresMemoryAccess);
-        console.log('  📸 CAPTURE SCREEN FLAG:', message.captureScreen);
-        console.log('  Entities:', message.entities);
+        
+        // Extract the actual payload data
+        const payload = message.payload;
+        console.log('  Primary Intent:', payload.primaryIntent);
+        console.log('  Query Type:', payload.queryType);
+        console.log('  Suggested Response:', payload.suggestedResponse);
+        console.log('  Reasoning:', payload.intents?.[0]?.reasoning);
         console.log('  Full payload:', JSON.stringify(message, null, 2));
         
-        // 🧠 CRITICAL: Trigger AgentOrchestrator with intent classification payload
-        console.log('🧠 [AGENT] Triggering AgentOrchestrator with intent classification...');
-        try {
-          console.log('🎯 [AGENT] Processing direct intent classification payload...');
-          
-          if (window.electronAPI) {
-            const orchestrationResult = await window.electronAPI.agentOrchestrate({
-              message: JSON.stringify(message),
-              intent: message.primaryIntent,
-              context: { source: 'intent_classification_direct' }
-            });
-            console.log('✅ [AGENT] Direct AgentOrchestrator result:', orchestrationResult);
-            
-            if (orchestrationResult.success) {
-              console.log('🎉 [AGENT] Agent chain executed successfully from intent classification!');
-              // TODO: Show success indicator in UI
-            } else {
-              console.error('❌ [AGENT] Direct agent orchestration failed:', orchestrationResult.error);
+        // STEP 1: Immediately display suggestedResponse to user
+        if (payload.suggestedResponse && signalsAddMessage && activeSessionId) {
+          console.log('📤 [INTENT] Sending suggested response immediately to chat UI');
+          await signalsAddMessage(activeSessionId, {
+            text: payload.suggestedResponse,
+            sender: 'ai',
+            sessionId: activeSessionId,
+            metadata: {
+              source: 'intent_classification_suggested_response',
+              queryType: payload.queryType,
+              primaryIntent: payload.primaryIntent,
+              streamingComplete: true
             }
+          });
+        }
+        
+        // STEP 2 & 3: For MEMORY or COMMAND queryTypes, start thinking and trigger local pipeline
+        if (payload.primaryIntent === "memory_retrieve" || payload.queryType === 'MEMORY' || payload.queryType === 'COMMAND') {
+          setIsProcessingLocally(true);
+          setInitialThinkingMessage('Thinking');
+          console.log(`🔄 [INTENT] Processing ${payload.queryType} queryType - starting local pipeline`);
+          
+          try {
+            // STEP 2: Start thinking indicator with reasoning message
+            const reasoningMessage = payload.intents?.[0]?.reasoning || `Processing ${payload.queryType.toLowerCase()} request...`;
+            console.log('🤔 [INTENT] Starting thinking indicator with reasoning:', reasoningMessage);
+            setInitialThinkingMessage(reasoningMessage);
+            scrollToBottom({ smooth: true, force: true });
+            // STEP 3: Trigger local pipeline via handleNonContextPipeline
+            console.log('🚀 [INTENT] Triggering local pipeline for', payload.queryType, payload.primaryIntent);
+            
+            if (window.electronAPI?.llmQuery) {
+              const localResult = await window.electronAPI.llmQuery(payload.sourceText || payload.suggestedResponse, {
+                sessionId: activeSessionId,
+                forceQueryType: payload.primaryIntent === "memory_retrieve" ? 'MEMORY' : payload.queryType,
+                intentClassificationPayload: payload,
+                skipIntentClassification: true // We already have the classification
+              });
+              
+              if (localResult.success) {
+                console.log('✅ [INTENT] Local pipeline result:', localResult);
+                
+                // Add AI response to conversation
+                if (signalsAddMessage && signals.activeSessionId.value) {
+                  await signalsAddMessage(signals.activeSessionId.value, {
+                    text: localResult.response || localResult.data,
+                    sender: 'ai',
+                    sessionId: signals.activeSessionId.value,
+                    metadata: { isFinal: true }
+                  });
+
+                  setIsProcessingLocally(false);
+                  scrollToBottom({ smooth: true, force: true });
+                }
+                
+              } 
+            }
+            
+          } catch (error) {
+            console.error('❌ [INTENT] Error in local pipeline processing:', error);
           }
-        } catch (error) {
-          console.error('❌ [AGENT] Error in direct agent orchestration:', error);
+        } else if (payload.queryType === 'GENERAL') {
+          console.log('⏭️ [INTENT] Ignoring GENERAL queryType as requested');
+          setIsProcessingLocally(false);
+          scrollToBottom({ smooth: true, force: true });
         }
 
       } else if (message.type === 'connection_status') {
@@ -524,17 +624,28 @@ export default function ChatMessages() {
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
     const currentMsg = currentMessageRef.current;
+    const textareaValue = textareaRef.current?.value || '';
     
-    if (!currentMsg.trim() || isLoading || isProcessingLocally) {
-      // Message sending blocked - debug logging removed for performance
+    console.log('🚀 [SEND-DEBUG] handleSendMessage called');
+    console.log('🚀 [SEND-DEBUG] currentMessageRef.current:', JSON.stringify(currentMsg));
+    console.log('🚀 [SEND-DEBUG] textareaRef.current.value:', JSON.stringify(textareaValue));
+    console.log('🚀 [SEND-DEBUG] isLoading:', isLoading);
+    console.log('🚀 [SEND-DEBUG] isProcessingLocally:', isProcessingLocally);
+    
+    // Use textarea value as fallback if ref is empty
+    const messageToSend = currentMsg || textareaValue;
+    
+    if (!messageToSend.trim() || isLoading || isProcessingLocally) {
+      console.log('🚀 [SEND-DEBUG] Message sending blocked - no message or already processing');
       return;
     }
     
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
     logDebugState(); // Debug current signals state
     
-    // Check if context is still loading
-    if (contextIsLoading) {
+    // Check if context is still loading - read directly from signal for fresh value
+    console.log('🚀 [SEND-DEBUG] signals.isLoading.value:', signals.isLoading.value);
+    if (signals.isLoading.value) {
       console.log('⏳ [SIGNALS] Context is still loading, please wait...');
       return;
     }
@@ -547,7 +658,7 @@ export default function ChatMessages() {
       console.log('⚠️ [SIGNALS] No active session found, creating one...');
       try {
         // Use signals sendMessage which handles session creation automatically
-        const messageText = currentMsg.trim();
+        const messageText = messageToSend.trim();
         console.log('🚀 [SIGNALS] Using signalsSendMessage for automatic session handling');
         
         // Clear UI immediately
@@ -573,7 +684,7 @@ export default function ChatMessages() {
       console.log('✅ [SIGNALS] Using existing session:', currentSessionId);
     }
     
-    const messageText = currentMsg.trim();
+    const messageText = messageToSend.trim();
     setCurrentMessage('');
     setDisplayMessage('');
     currentMessageRef.current = ''; // Keep ref in sync
@@ -684,6 +795,30 @@ export default function ChatMessages() {
         return;
       }
       
+      // Track user message and stream start time for WebSocket backend response saving
+      setLastUserMessage(messageText);
+      setStreamStartTime(Date.now());
+      
+      // Extract recent conversation context for WebSocket backend
+      let recentContext = [];
+      try {
+        if (activeSessionId && window.electronAPI?.agentOrchestrate) {
+          const contextResult = await window.electronAPI.agentOrchestrate({
+            intent: 'extract_websocket_context',
+            sessionId: activeSessionId,
+            messageCount: 6,
+            context: { source: 'websocket_frontend' }
+          });
+          
+          if (contextResult.success && contextResult.data) {
+            recentContext = contextResult.data;
+            console.log(`🔍 Retrieved ${recentContext.length} context messages for WebSocket backend`);
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ Failed to extract recent context:', error);
+      }
+      
       // Send message via WebSocket for backend processing with enhanced orchestration
       await sendLLMRequest({
         prompt: messageText,
@@ -692,7 +827,8 @@ export default function ChatMessages() {
           taskType: 'ask',
           stream: true,
           temperature: 0.7,
-          useSemanticFirst: true // Flag to indicate semantic-first processing preference
+          useSemanticFirst: true, // Flag to indicate semantic-first processing preference
+          recentContext: recentContext // Include conversation context
         }
       });
       
@@ -1186,6 +1322,12 @@ export default function ChatMessages() {
       console.log('🔌 ChatMessages unmounting - disconnecting WebSocket...');
       disconnectWebSocket();
       clearTimeout(timeoutId);
+      
+      // Clear stream timeout to prevent memory leaks
+      if (streamTimeoutRef.current) {
+        clearTimeout(streamTimeoutRef.current);
+        streamTimeoutRef.current = null;
+      }
     };
   }, []); // Remove dependencies to prevent re-mounting
 
@@ -1362,7 +1504,7 @@ export default function ChatMessages() {
       if (!isUserScrolling && messagesContainerRef.current && messagesEndRef.current) {
         messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
       }
-    }, 100); // Adjust for smoother feeling: try 50–150ms
+    }, 150); // Adjust for smoother feeling: try 50–150ms
   
     return () => clearInterval(interval);
   }, [currentStreamingMessage, isUserScrolling]);

@@ -48,7 +48,7 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
   // Helper function to broadcast thinking updates
   function broadcastThinkingUpdate(message, sessionId) {
     if (global.mainWindow && global.mainWindow.webContents) {
-      global.mainWindow.webContents.send('thinking-update', {
+      global.mainWindow.webContents.send('thinking-indicator-update', {
         message,
         sessionId,
         timestamp: new Date().toISOString()
@@ -104,21 +104,52 @@ function setupLocalLLMHandlers(ipcMain,coreAgent, windows) {
       }
 
       console.log(`🎯 [MAIN-PIPELINE] Starting query: "${prompt.substring(0, 50)}..."`);
+      console.log('🔧 [OPTIONS]:', JSON.stringify(options, null, 2));
 
-      ////////////////////////////////////////////////////////////////////////
-      // OFFLINE MODE: Skip external data search, use local LLM knowledge only
-      ////////////////////////////////////////////////////////////////////////
-      
-      console.log('🔒 [OFFLINE-MODE] Using local LLM knowledge base only...');
-      
-      // Simple classification for offline mode
-      let intentClassificationPayload = {
-        primaryIntent: 'question',
-        requiresExternalData: false,
-        requiresMemoryAccess: false,
-        captureScreen: false,
-        routingHint: 'conversation'
-      };
+      // Check if we should use provided intent classification or skip classification
+      let intentClassificationPayload;
+      let queryType;
+
+      if (options.skipIntentClassification && options.intentClassificationPayload) {
+        console.log('⏭️ [INTENT] Using provided intent classification payload');
+        intentClassificationPayload = options.intentClassificationPayload;
+        queryType = options.forceQueryType || intentClassificationPayload.queryType;
+      } else if (options.forceQueryType) {
+        console.log('🎯 [INTENT] Using forced queryType:', options.forceQueryType);
+        queryType = options.forceQueryType;
+        intentClassificationPayload = {
+          primaryIntent: queryType.toLowerCase(),
+          queryType: queryType,
+          requiresExternalData: false,
+          requiresMemoryAccess: queryType === 'MEMORY',
+          captureScreen: false,
+          routingHint: 'local'
+        };
+      } else {
+        console.log('🔒 [OFFLINE-MODE] Using local LLM knowledge base only...');
+        
+        // Simple classification for offline mode
+        intentClassificationPayload = {
+          primaryIntent: 'question',
+          requiresExternalData: false,
+          requiresMemoryAccess: false,
+          captureScreen: false,
+          routingHint: 'conversation'
+        };
+      }
+
+      // If we have a specific queryType, route to handleNonContextPipeline
+      if (queryType === 'MEMORY' || queryType === 'COMMAND') {
+        console.log(`🚀 [PIPELINE] Routing ${queryType} to handleNonContextPipeline`);
+        const context = {
+          sessionId: options.sessionId,
+          userId: options.userId || 'default',
+          source: 'intent_classification_trigger',
+          intentClassificationPayload: intentClassificationPayload
+        };
+        
+        return await handleNonContextPipeline(queryType, prompt, context, startTime);
+      }
 
       // TODO: Uncomment below for online mode with external search
       /*
@@ -1255,7 +1286,12 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
           'my meeting', 'my appointment', 'my schedule', 'my calendar',
           'tell me about', 'what about', 'remind me', 'check if',
           'meeting tomorrow', 'meeting today', 'appointment tomorrow',
-          'scheduled for', 'planned for', 'working on', 'project with'
+          'scheduled for', 'planned for', 'working on', 'project with',
+          // Conversational memory patterns
+          'have we', 'did we', 'have you', 'did you', 'we talked', 'we discussed',
+          'we chatted', 'we mentioned', 'you mentioned', 'i mentioned',
+          'talked about', 'discussed about', 'chatted about', 'mentioned about',
+          'conversation about', 'discussion about', 'chat about'
         ],
         COMMAND: [
           'write a', 'write me', 'create a', 'create me', 'generate a',
@@ -1514,6 +1550,14 @@ Current question: ${prompt}`;
 
     const isQuestion = /[?]/.test(p) || /\b(what|when|where|who|how|why)\b/.test(p);
 
+    // Enhanced conversational memory patterns for better detection
+    const hasConversationalMemoryRef = (
+      /\b(have\s+we|did\s+we|have\s+you|did\s+you)\b.*\b(talk|discuss|chat|mention|cover)\b/i.test(p) ||
+      /\b(we\s+talked|we\s+discussed|we\s+chatted|we\s+mentioned)\b/i.test(p) ||
+      /\b(talked\s+about|discussed\s+about|chatted\s+about|mentioned\s+about)\b/i.test(p) ||
+      /\b(conversation\s+about|discussion\s+about|chat\s+about)\b/i.test(p)
+    );
+
     // CONTEXT: references to prior conversation (check before MEMORY patterns)
     const hasPriorConvoRef = (
       /\b(what|when|where|who|how)\s+(did|was|were|have)\s+(we|you|i)\b/i.test(p) ||
@@ -1538,6 +1582,11 @@ Current question: ${prompt}`;
     );
     const hasConversationQuery = /\b(what (did|was)|repeat|again)\b/i.test(p);
     
+    // Check for conversational memory patterns first (higher priority)
+    if (hasConversationalMemoryRef && isQuestion) {
+      return { label: 'MEMORY', score: 0.85, reason: 'conversational-memory-query' };
+    }
+
     // Exclude hypothetical/future queries to reduce false positives
     const isHypothetical = /\b(should|could|would|might|if|suppose|imagine|what if)\b/i.test(p);
     const isFutureOriented = /\b(will|shall|going to|next|future|plan to|want to)\b/i.test(p);
@@ -1771,6 +1820,21 @@ Current question: ${prompt}`;
   function classifyWithHeuristics(prompt) {
     const queryLower = prompt.toLowerCase();
     
+    // Enhanced patterns for better conversational memory detection
+    const conversationalMemoryPatterns = [
+      /\b(have we|did we|have you|did you)\b.*\b(talk|discuss|chat|mention|cover)\b/i,
+      /\b(we talked|we discussed|we chatted|we mentioned)\b/i,
+      /\b(talked about|discussed about|chatted about|mentioned about)\b/i,
+      /\b(conversation about|discussion about|chat about)\b/i,
+      /\b(before|previously|earlier)\b.*\b(talk|discuss|chat|mention)\b/i
+    ];
+    
+    // Check for conversational memory patterns first
+    if (conversationalMemoryPatterns.some(pattern => pattern.test(prompt))) {
+      console.log(`🔍 [HEURISTIC] Rule result: {"label":"MEMORY","score":0.8,"reason":"conversational-memory-pattern"}`);
+      return { classification: 'MEMORY', confidence: 0.8, reason: 'conversational-memory-pattern' };
+    }
+    
     // Basic patterns as fallback
     if (queryLower.includes('what') && (queryLower.includes('say') || queryLower.includes('talk'))) {
       return { classification: 'CONTEXT' };
@@ -1842,21 +1906,54 @@ Current question: ${prompt}`;
     };
   }
 
+  // Export the function for external access
+  handleWebSocketBackendResponseExport = handleWebSocketBackendResponse;
+
   // Extract recent context for WebSocket backend
-  function extractRecentContextForBackend(sessionId, messageCount = 6) {
+  async function extractRecentContextForBackend(sessionId, messageCount = 8) {
     // This integrates with conversation signals to get recent messages
     try {
+      console.log(`🔍 [WEBSOCKET-CONTEXT] Extracting ${messageCount} recent messages for session: ${sessionId}`);
+      
       const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
       if (conversationAgent) {
         // Get recent messages from the session
-        // This would need to be implemented based on your conversation storage
+        const recentMessages = await conversationAgent.execute({
+          action: 'message-list',
+          sessionId: sessionId, // Fixed: use sessionId parameter instead of context.sessionId
+          limit: messageCount, // Get more messages for better context
+          direction: 'DESC', // Get newest messages first
+          includeMetadata: true
+        }, coreAgent.context);
+        
+        if (recentMessages.success && recentMessages.messages) { // Fixed: use recentMessages instead of result
+          console.log(`✅ [WEBSOCKET-CONTEXT] Retrieved ${recentMessages.messages.length} recent messages`);
+          
+          // Format messages for WebSocket backend context
+          const contextMessages = recentMessages.messages.map(msg => ({
+            role: msg.sender === 'user' ? 'user' : 'assistant',
+            content: msg.text,
+            timestamp: msg.timestamp,
+            messageId: msg.id
+          }));
+          
+          return contextMessages;
+        } else {
+          console.log('⚠️ [WEBSOCKET-CONTEXT] No messages found or query failed');
+          return [];
+        }
+      } else {
+        console.log('⚠️ [WEBSOCKET-CONTEXT] ConversationSessionAgent not available');
         return [];
       }
     } catch (error) {
       console.warn('⚠️ [WEBSOCKET-BACKEND] Failed to extract context:', error.message);
+      return [];
     }
-    return [];
   }
+
+  // Export the function for external access
+  extractRecentContextForBackendExport = extractRecentContextForBackend;
 
   // Ultra-fast general knowledge handler
   async function handleGeneralKnowledge(prompt, context, startTime) {
@@ -1917,6 +2014,12 @@ Current question: ${prompt}`;
   // Handle memory queries (retrieval only - all messages are auto-stored)
   async function handleMemoryQuery(prompt, context, startTime) {
     console.log('🧠 [MEMORY-RETRIEVE] Searching across all conversations...');
+    
+    // Log intent classification payload if available
+    if (context.intentClassificationPayload) {
+      console.log('🎯 [MEMORY-RETRIEVE] Using intent classification payload:', JSON.stringify(context.intentClassificationPayload, null, 2));
+    }
+    
     broadcastThinkingUpdate(IntentResponses.getThinkingMessage('memory_retrieve'), context.sessionId);
     
     try {
@@ -2052,6 +2155,46 @@ Current question: ${prompt}`;
     }
   }
 
+  // Helper function to deduplicate and clean memory texts
+  function deduplicateAndCleanMemoryTexts(memoryTexts, query) {
+    const seen = new Set();
+    const cleaned = [];
+    const queryTerms = query.toLowerCase().split(/\s+/).filter(term => term.length > 2);
+    
+    for (const text of memoryTexts) {
+      // Skip AI responses that are just memory summaries themselves
+      if (text.startsWith('Based on your memories:') || text.startsWith('Based on our conversation history:')) {
+        // Extract the actual content from these responses
+        const lines = text.split('\n').filter(line => line.trim());
+        for (const line of lines) {
+          if (line.match(/^\d+\.\s+/) && !line.includes('Based on')) {
+            const content = line.replace(/^\d+\.\s+/, '').trim();
+            if (content && !seen.has(content.toLowerCase())) {
+              // Check if content is relevant to the query
+              const isRelevant = queryTerms.some(term => content.toLowerCase().includes(term));
+              if (isRelevant || queryTerms.length === 0) {
+                seen.add(content.toLowerCase());
+                cleaned.push(content);
+              }
+            }
+          }
+        }
+      } else {
+        // Regular text - check for duplicates and relevance
+        const normalized = text.toLowerCase().trim();
+        if (!seen.has(normalized)) {
+          const isRelevant = queryTerms.length === 0 || queryTerms.some(term => normalized.includes(term));
+          if (isRelevant) {
+            seen.add(normalized);
+            cleaned.push(text.trim());
+          }
+        }
+      }
+    }
+    
+    return cleaned.slice(0, 5); // Limit to top 5 most relevant
+  }
+
   // Handle memory retrieval requests
   async function handleMemoryRetrieve(prompt, context, startTime) {
     console.log('🔍 [MEMORY-RETRIEVE] Searching memories...');
@@ -2063,33 +2206,112 @@ Current question: ${prompt}`;
         throw new Error('UserMemoryAgent not available');
       }
 
-      // Use semantic search to find most relevant memories across all conversations
-      console.log('🎯 [MEMORY-RETRIEVE] Performing semantic search across all memories...');
-      let searchResult = await userMemoryAgent.execute({
-        action: 'memory-semantic-search',
-        query: prompt,
-        limit: 10, // Get top 10 most relevant memories
-        minSimilarity: 0.6, // Reasonable threshold for relevance
-        sessionId: null // Search across all sessions for memory queries
-      }, {
-        database: coreAgent.context?.database || coreAgent.database,
-        executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
-      });
+      // Extract search parameters from intent classification payload if available
+      let searchQuery = prompt;
+      let searchLimit = 10;
+      let minSimilarity = 0.6;
+      let searchSessionId = null; // Search across all sessions by default
+      
+      if (context.intentClassificationPayload) {
+        const payload = context.intentClassificationPayload;
+        console.log('🎯 [MEMORY-RETRIEVE] Enhancing search with intent classification data');
+        
+        // Use entities from intent classification to enhance search query
+        if (payload.entities && payload.entities.length > 0) {
+          const entityTerms = payload.entities.map(e => e.text || e.value).filter(Boolean);
+          if (entityTerms.length > 0) {
+            searchQuery = `${prompt} ${entityTerms.join(' ')}`;
+            console.log('🔍 [MEMORY-RETRIEVE] Enhanced query with entities:', searchQuery);
+          }
+        }
+        
+        // Adjust search parameters based on intent confidence and type
+        if (payload.confidence && payload.confidence > 0.8) {
+          minSimilarity = 0.5; // Lower threshold for high-confidence classifications
+          searchLimit = 15; // Get more results for high-confidence queries
+        }
+        
+        // Use suggested response context if available
+        if (payload.suggestedResponse && payload.suggestedResponse.includes('memory')) {
+          console.log('🎯 [MEMORY-RETRIEVE] Intent suggests memory-focused search');
+          minSimilarity = 0.4; // Even lower threshold when intent is clearly memory-focused
+        }
+      }
 
-      // Semantic search already returns relevance-ranked results - use them directly
-      if (!searchResult.success || !searchResult.results || searchResult.results.length === 0) {
-        // If no results, try with lower similarity threshold
-        console.log('🔄 [MEMORY-RETRIEVE] No results with high threshold, trying lower threshold...');
+      // HYBRID SEARCH STRATEGY: Try stored memories first, then conversation history
+      let searchResult = null;
+      let searchType = 'unknown';
+      
+      // STEP 1: Try entity-aware search on stored memories (if we have entities)
+      if (context.intentClassificationPayload?.entities && context.intentClassificationPayload.entities.length > 0) {
+        const entities = context.intentClassificationPayload.entities.map(e => e.value || e.text).filter(Boolean);
+        console.log(`🎯 [MEMORY-RETRIEVE] STEP 1: Trying entity-aware search on stored memories with entities: [${entities.join(', ')}]`);
+        
+        try {
+          searchResult = await userMemoryAgent.execute({
+            action: 'memory-semantic-search-with-entities',
+            query: searchQuery,
+            entities: entities,
+            limit: searchLimit,
+            minSimilarity: minSimilarity,
+            sessionId: searchSessionId
+          }, {
+            database: coreAgent.context?.database || coreAgent.database,
+            executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+          });
+          
+          // Handle different response structures for entity search
+          const entityResults = searchResult.result?.results || searchResult.results;
+          if (searchResult.success && entityResults && entityResults.length > 0) {
+            console.log(`✅ [MEMORY-RETRIEVE] STEP 1 SUCCESS: Found ${entityResults.length} stored memories with entities`);
+            searchResult.results = entityResults; // Normalize the structure
+            searchType = 'stored_memories_with_entities';
+          } else {
+            console.log('🔄 [MEMORY-RETRIEVE] STEP 1: No entity-aware results, continuing to step 2...');
+          }
+        } catch (error) {
+          console.log('⚠️ [MEMORY-RETRIEVE] STEP 1 ERROR:', error.message);
+        }
+      }
+      
+      // STEP 2: If no entity results, try conversation history search
+      if (!searchResult || !searchResult.success || !searchResult.results || searchResult.results.length === 0) {
+        console.log(`🎯 [MEMORY-RETRIEVE] STEP 2: Searching conversation history (query: "${searchQuery}", limit: ${searchLimit}, minSimilarity: ${minSimilarity})...`);
+        
         searchResult = await userMemoryAgent.execute({
           action: 'memory-semantic-search',
-          query: prompt,
-          limit: 10,
-          minSimilarity: 0.3, // Lower threshold
-          sessionId: context.sessionId // Try current session first
+          query: searchQuery,
+          limit: searchLimit,
+          minSimilarity: minSimilarity,
+          sessionId: searchSessionId
         }, {
           database: coreAgent.context?.database || coreAgent.database,
           executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
         });
+        
+        if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
+          console.log(`✅ [MEMORY-RETRIEVE] STEP 2 SUCCESS: Found ${searchResult.results.length} conversation messages`);
+          searchType = 'conversation_history';
+        } else {
+          console.log('🔄 [MEMORY-RETRIEVE] STEP 2: No conversation results, trying lower threshold...');
+          
+          // STEP 3: Try with lower threshold as final fallback
+          searchResult = await userMemoryAgent.execute({
+            action: 'memory-semantic-search',
+            query: prompt,
+            limit: 10,
+            minSimilarity: 0.3, // Lower threshold
+            sessionId: context.sessionId // Try current session first
+          }, {
+            database: coreAgent.context?.database || coreAgent.database,
+            executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+          });
+          
+          if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
+            console.log(`✅ [MEMORY-RETRIEVE] STEP 3 SUCCESS: Found ${searchResult.results.length} results with lower threshold`);
+            searchType = 'conversation_history_low_threshold';
+          }
+        }
       }
 
       const totalTime = Date.now() - startTime;
@@ -2097,20 +2319,124 @@ Current question: ${prompt}`;
       if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
         console.log(`✅ [MEMORY-RETRIEVE] Found ${searchResult.results.length} relevant memories (${totalTime}ms)`);
         
-        // Format the response based on found memories
-        const memories = searchResult.results.slice(0, 3); // Top 3 most relevant
-        const memoryTexts = memories.map(m => m.source_text || m.text).filter(Boolean);
+        // Format the response based on found memories or conversation messages
+        const memories = searchResult.results.slice(0, 5); // Top 5 most relevant
+        
+        // Handle both stored memories and conversation messages
+        const memoryTexts = memories.map((m, index) => {
+          console.log(`🔍 [MEMORY-DEBUG] Processing memory item ${index + 1}:`, {
+            hasSourceText: !!m.source_text,
+            hasText: !!m.text,
+            hasMessageText: !!m.message_text,
+            hasContent: !!m.content,
+            sender: m.sender,
+            source: m.source,
+            similarity: m.similarity,
+            keys: Object.keys(m),
+            sourceTextLength: m.source_text ? m.source_text.length : 0,
+            textLength: m.text ? m.text.length : 0
+          });
+          
+          // For stored memories: use source_text or text
+          if (m.source_text && m.source_text.trim()) {
+            console.log(`✅ [MEMORY-DEBUG] Using source_text for item ${index + 1}: "${m.source_text.substring(0, 100)}..."`);
+            return m.source_text.trim();
+          }
+          if (m.text && m.text.trim()) {
+            console.log(`✅ [MEMORY-DEBUG] Using text for item ${index + 1}: "${m.text.substring(0, 100)}..."`);
+            return m.text.trim();
+          }
+          // For conversation messages: use message_text or content
+          if (m.message_text && m.message_text.trim()) {
+            const formatted = `${m.sender}: ${m.message_text.trim()}`;
+            console.log(`✅ [MEMORY-DEBUG] Using message_text for item ${index + 1}: "${formatted.substring(0, 100)}..."`);
+            return formatted;
+          }
+          if (m.content && m.content.trim()) {
+            const formatted = `${m.sender || 'Unknown'}: ${m.content.trim()}`;
+            console.log(`✅ [MEMORY-DEBUG] Using content for item ${index + 1}: "${formatted.substring(0, 100)}..."`);
+            return formatted;
+          }
+          
+          console.log(`⚠️ [MEMORY-DEBUG] No usable text found in memory item ${index + 1} - all text fields are empty or missing`);
+          return null;
+        }).filter(Boolean);
+        
+        console.log(`🔍 [MEMORY-DEBUG] Extracted ${memoryTexts.length} memory texts from ${memories.length} items`);
         
         if (memoryTexts.length > 0) {
-          const response = `Based on your memories:\n\n${memoryTexts.map((text, i) => `${i + 1}. ${text}`).join('\n')}`;
+          // Deduplicate and clean memory texts
+          const cleanedTexts = deduplicateAndCleanMemoryTexts(memoryTexts, searchQuery);
+          console.log(`🧹 [MEMORY-DEBUG] After deduplication: ${cleanedTexts.length} unique items from ${memoryTexts.length} original`);
           
-          return {
+          if (cleanedTexts.length === 0) {
+            console.log(`⚠️ [MEMORY-DEBUG] All texts were filtered out during deduplication`);
+            return {
+              success: true,
+              response: `I searched through our conversation history but couldn't find any specific discussions about "${searchQuery}". Would you like me to search for related topics or help you with something else?`,
+              searchType: searchType,
+              resultsCount: 0,
+              timing: { total: Date.now() - startTime }
+            };
+          }
+          
+          // Generate LLM response based on retrieved memories
+          console.log(`🤖 [MEMORY-LLM] Generating response using Phi3 for query: "${searchQuery}"`);
+          
+          const memoryContext = cleanedTexts.map((text, i) => `${i + 1}. ${text}`).join('\n');
+          const llmPrompt = `Based on the following conversation history and memories, please answer the user's question: "${searchQuery}"
+
+Relevant conversation history:
+${memoryContext}
+
+Please provide a direct, helpful answer to the user's question. If the conversation history shows we have discussed the topics they're asking about, mention what was discussed. If not, clearly state that we haven't discussed those topics.`;
+
+          let response;
+          try {
+            const phi3Agent = coreAgent.getAgent('Phi3Agent');
+            if (phi3Agent) {
+              console.log(`🤖 [MEMORY-LLM] Using Phi3Agent to generate response`);
+              const llmResult = await phi3Agent.execute({
+                action: 'query-phi3-fast',
+                prompt: llmPrompt,
+                options: {
+                  maxTokens: 300,
+                  temperature: 0.7
+                }
+              }, context);
+              
+              if (llmResult.success && llmResult.response) {
+                response = llmResult.response.trim();
+                console.log(`✅ [MEMORY-LLM] Generated LLM response: "${response.substring(0, 100)}..."`);
+              } else {
+                console.log(`⚠️ [MEMORY-LLM] LLM generation failed, falling back to list format`);
+                response = `Based on our conversation history:\n\n${cleanedTexts.map((text, i) => `${i + 1}. ${text}`).join('\n')}`;
+              }
+            } else {
+              console.log(`⚠️ [MEMORY-LLM] Phi3Agent not available, falling back to list format`);
+              response = `Based on our conversation history:\n\n${cleanedTexts.map((text, i) => `${i + 1}. ${text}`).join('\n')}`;
+            }
+          } catch (error) {
+            console.error(`❌ [MEMORY-LLM] Error generating LLM response:`, error.message);
+            response = `Based on our conversation history:\n\n${cleanedTexts.map((text, i) => `${i + 1}. ${text}`).join('\n')}`;
+          }
+          
+          console.log(`🔍 [MEMORY-DEBUG] Final response constructed:`, response?.substring(0, 100) + '...');
+          
+          const result = {
             success: true,
             response: response,
             pipeline: 'memory_retrieve',
             timing: { total: totalTime },
-            memories: memories
+            memories: memories,
+            searchType: searchType,
+            hybridSearchUsed: true
           };
+          
+          console.log(`🔍 [MEMORY-DEBUG] Returning result with response field:`, !!result.response);
+          return result;
+        } else {
+          console.log(`⚠️ [MEMORY-DEBUG] No memory texts extracted, memoryTexts.length: ${memoryTexts.length}`);
         }
       }
 
@@ -2952,7 +3278,17 @@ function initializeLocalLLMHandlers({
   }, 1000); // Small delay to let main initialization complete first
 }
 
+// Export functions for external access
+let handleWebSocketBackendResponseExport = null;
+let extractRecentContextForBackendExport = null;
+
 module.exports = {
   initializeLocalLLMHandlers,
-  setupLocalLLMHandlers
+  setupLocalLLMHandlers,
+  get handleWebSocketBackendResponse() {
+    return handleWebSocketBackendResponseExport;
+  },
+  get extractRecentContextForBackend() {
+    return extractRecentContextForBackendExport;
+  }
 };

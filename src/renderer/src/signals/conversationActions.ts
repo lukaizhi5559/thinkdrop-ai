@@ -243,6 +243,7 @@ export const loadMessages = async (sessionId: string, options?: {
   console.log('📨 [SIGNALS] Loading messages for session:', sessionId, options);
   
   try {
+    isLoading.value = true;
     if (window.electronAPI?.agentExecute) {
       const result = await window.electronAPI.agentExecute({
         agentName: 'ConversationSessionAgent',
@@ -266,6 +267,8 @@ export const loadMessages = async (sessionId: string, options?: {
     }
   } catch (err) {
     console.error('❌ [SIGNALS] Failed to load messages:', err);
+  } finally {
+    isLoading.value = false;
   }
   return [];
 };
