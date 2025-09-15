@@ -1917,29 +1917,50 @@ Current question: ${prompt}`;
       
       const conversationAgent = coreAgent.getAgent('ConversationSessionAgent');
       if (conversationAgent) {
-        // Get recent messages from the session
+        // Get recent messages from the session - exclude the current message being processed
         const recentMessages = await conversationAgent.execute({
           action: 'message-list',
-          sessionId: sessionId, // Fixed: use sessionId parameter instead of context.sessionId
-          limit: messageCount, // Get more messages for better context
+          sessionId: sessionId,
+          limit: messageCount + 2, // Get extra messages to account for filtering
           direction: 'DESC', // Get newest messages first
           includeMetadata: true
         }, coreAgent.context);
         
-        if (recentMessages.success && recentMessages.messages) { // Fixed: use recentMessages instead of result
-          console.log(`✅ [WEBSOCKET-CONTEXT] Retrieved ${recentMessages.messages.length} recent messages`);
+        console.log(`🔍 [WEBSOCKET-CONTEXT] Query result:`, {
+          success: recentMessages.success,
+          hasMessages: !!recentMessages.messages,
+          messageCount: recentMessages.messages?.length || 0,
+          hasData: !!recentMessages.data,
+          dataMessageCount: recentMessages.data?.messages?.length || 0
+        });
+        
+        // Try both possible response formats
+        let messages = recentMessages.messages || recentMessages.data?.messages;
+        
+        if (recentMessages.success && messages && messages.length > 0) {
+          console.log(`✅ [WEBSOCKET-CONTEXT] Retrieved ${messages.length} raw messages`);
           
-          // Format messages for WebSocket backend context
-          const contextMessages = recentMessages.messages.map(msg => ({
-            role: msg.sender === 'user' ? 'user' : 'assistant',
-            content: msg.text,
-            timestamp: msg.timestamp,
-            messageId: msg.id
-          }));
+          // Filter out very recent messages (likely the current query) and format for WebSocket
+          const now = Date.now();
+          const contextMessages = messages
+            .filter(msg => {
+              // Skip messages from the last 5 seconds to avoid including the current query
+              const msgTime = new Date(msg.timestamp).getTime();
+              return (now - msgTime) > 5000;
+            })
+            .slice(0, messageCount) // Limit to requested count
+            .map(msg => ({
+              role: msg.sender === 'user' ? 'user' : 'assistant',
+              content: msg.text,
+              timestamp: msg.timestamp,
+              messageId: msg.id
+            }));
           
+          console.log(`✅ [WEBSOCKET-CONTEXT] Filtered to ${contextMessages.length} context messages`);
           return contextMessages;
         } else {
           console.log('⚠️ [WEBSOCKET-CONTEXT] No messages found or query failed');
+          console.log('🔍 [WEBSOCKET-CONTEXT] Full response:', JSON.stringify(recentMessages, null, 2));
           return [];
         }
       } else {
@@ -1947,7 +1968,8 @@ Current question: ${prompt}`;
         return [];
       }
     } catch (error) {
-      console.warn('⚠️ [WEBSOCKET-BACKEND] Failed to extract context:', error.message);
+      console.warn('⚠️ [WEBSOCKET-CONTEXT] Failed to extract context:', error.message);
+      console.warn('⚠️ [WEBSOCKET-CONTEXT] Error details:', error);
       return [];
     }
   }
@@ -2549,13 +2571,14 @@ Respond concisely with actionable guidance.`,
             
             console.log(`🔍 [CONTEXT-DEBUG] Using session: ${sessionId}`);
             
-            // Now get messages from that session - Human-like context window: 8 messages = ~4 exchange pairs
+            // Use the same successful approach as WebSocket context extraction
             const recentMessages = await conversationAgent.execute({
               action: 'message-list',
               sessionId: sessionId,
               limit: 8,
-              offset: 0
-            });
+              direction: 'DESC', // Get newest messages first
+              includeMetadata: true
+            }, coreAgent.context);
           
           console.log(`🔍 [CONTEXT-DEBUG] Raw result:`, {
             success: recentMessages?.success,
@@ -2564,9 +2587,14 @@ Respond concisely with actionable guidance.`,
             messageCount: recentMessages?.data?.messages?.length || 0
           });
           
-          if (recentMessages && recentMessages.data && recentMessages.data.messages && recentMessages.data.messages.length > 0) {
+          // Try both possible response formats (same as WebSocket extraction)
+          let messages = recentMessages?.messages || recentMessages?.data?.messages;
+          
+          if (recentMessages?.success && messages && messages.length > 0) {
+            console.log(`✅ [CONTEXT-DEBUG] Retrieved ${messages.length} recent messages`);
+            
             // Format context messages (exclude current prompt)
-            const allMessages = recentMessages.data.messages.filter(msg => {
+            const allMessages = messages.filter(msg => {
               // Ensure message object exists and has required properties
               if (!msg || typeof msg !== 'object') return false;
               if (!msg.text || typeof msg.text !== 'string') return false;

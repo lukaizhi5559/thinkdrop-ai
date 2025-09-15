@@ -85,6 +85,15 @@ export interface LLMStreamRequest {
     taskType?: 'ask' | 'generate_agent' | 'orchestrate';
     [key: string]: any;
   };
+  context?: {
+    recentContext?: Array<{
+      role: string;
+      content: string;
+      timestamp: string;
+      messageId: string;
+    }>;
+    [key: string]: any;
+  };
 }
 
 export interface WebSocketConfig {

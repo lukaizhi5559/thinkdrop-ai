@@ -171,22 +171,18 @@ function toggleOverlay() {
 }
 
 app.whenReady().then(async () => {
-  // console.log('🚀 App ready - starting initialization sequence...');
+  console.log('🚀 App ready - starting initialization sequence...');
   
-  // // Setup IPC handlers FIRST to prevent "No handler registered" errors
-  // console.log('🔧 Step 1: Setting up IPC handlers...');
-  // await setupIPCHandlers();
-  // console.log('✅ Step 1: IPC handlers registered');
-  
-  // // Initialize core services after handlers are ready
-  // console.log('🔧 Step 2: Initializing core services...');
-  // await initializeServices();
-  // console.log('✅ Step 2: Core services initialized');
-  
-  // Create overlay window LAST to prevent premature frontend requests
-  // console.log('🔧 Step 3: Creating overlay window...');
-  createOverlayWindow();
-  // console.log('✅ Step 3: Overlay window created');
+    // Step 1: Initialize core services FIRST
+    console.log('🔧 Step 1: Initializing core services...');
+    //await initializeServices();
+    console.log('✅ Step 1: Core services initialized');
+    
+    // Step 2: Setup IPC handlers AFTER services are ready
+    console.log('🔧 Step 2: Setting up IPC handlers...');
+
+    createOverlayWindow();
+    // console.log('✅ Step 3: Overlay window created');
   // Initialize core services including LocalLLMAgent
   initializeServices().then(() => {
     // Verify CoreAgent is properly initialized before setting up IPC handlers

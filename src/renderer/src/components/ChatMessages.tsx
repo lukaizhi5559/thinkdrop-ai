@@ -442,6 +442,18 @@ export default function ChatMessages() {
         // Save WebSocket backend response to local memory
         try {
           console.log('💾 Saving WebSocket backend response to local memory...');
+          
+          // Get the most recent user message from the conversation context
+          let actualUserMessage = lastUserMessage;
+          if (!actualUserMessage || actualUserMessage === 'Unknown user message') {
+            // Try to get the last user message from the current conversation
+            if (currentSessionId) {
+              const currentMessages = signals.messages.value[currentSessionId] || [];
+              const lastUserMsg = [...currentMessages].reverse().find(msg => msg.sender === 'user');
+              actualUserMessage = lastUserMsg?.text || 'Unknown user message';
+            }
+          }
+          
           const websocketResponse = {
             data: finalText,
             queryType: message.payload.primaryIntent === "memory_retrieve" ? 'MEMORY' : message.payload?.queryType || 'GENERAL',
@@ -452,7 +464,7 @@ export default function ChatMessages() {
                 conversationId: activeSessionId,
                 messageId: message.id || `msg_${Date.now()}`
               },
-              userMessage: lastUserMessage || 'Unknown user message',
+              userMessage: actualUserMessage,
               aiResponse: finalText
             },
             pipeline: message.payload?.pipeline || 'websocket_stream',
@@ -818,6 +830,8 @@ export default function ChatMessages() {
       } catch (error) {
         console.warn('⚠️ Failed to extract recent context:', error);
       }
+
+      console.log('THE RECENT CONTEXT', recentContext)
       
       // Send message via WebSocket for backend processing with enhanced orchestration
       await sendLLMRequest({
@@ -827,8 +841,10 @@ export default function ChatMessages() {
           taskType: 'ask',
           stream: true,
           temperature: 0.7,
-          useSemanticFirst: true, // Flag to indicate semantic-first processing preference
-          recentContext: recentContext // Include conversation context
+          useSemanticFirst: true // Flag to indicate semantic-first processing preference
+        },
+        context: {
+          recentContext: recentContext // Include conversation context in the correct location
         }
       });
       
