@@ -313,18 +313,73 @@ const enhanceTextWithEmojis = (text: string): React.ReactNode => {
     'update': '🔄',
     'new': '🆕',
     'deprecated': '⚠️',
-    'beta': '🧪'
+    'beta': '🧪',
+    'react': '⚛️',
+    'javascript': '🟨',
+    'typescript': '🔷',
+    'python': '🐍',
+    'node': '🟢',
+    'npm': '📦',
+    'git': '🌿',
+    'docker': '🐳',
+    'aws': '☁️',
+    'firebase': '🔥',
+    'mongodb': '🍃',
+    'mysql': '🐬',
+    'redis': '🔴',
+    'graphql': '💜',
+    'rest': '🌐',
+    'webhook': '🪝',
+    'auth': '🔐',
+    'jwt': '🎫',
+    'oauth': '🔑',
+    'ssl': '🔒',
+    'https': '🔐',
+    'deploy': '🚀',
+    'build': '🔨',
+    'test': '🧪',
+    'debug': '🐞',
+    'optimize': '⚡',
+    'cache': '💾',
+    'cdn': '🌍',
+    'mobile': '📱',
+    'responsive': '📐',
+    'ui': '🎨',
+    'ux': '👤',
+    'design': '🎨',
+    'component': '🧩',
+    'hook': '🪝',
+    'state': '📊',
+    'props': '📤',
+    'event': '⚡',
+    'async': '⏳',
+    'promise': '🤝',
+    'callback': '↩️',
+    'loop': '🔄',
+    'array': '📋',
+    'object': '📦',
+    'string': '📝',
+    'number': '🔢',
+    'boolean': '✅',
+    'null': '🚫',
+    'undefined': '❓'
   };
 
   let enhancedText = text;
   
-  // Add contextual emojis for certain keywords
+  // Add contextual emojis for certain keywords (limit to avoid emoji overload)
+  let emojiCount = 0;
+  const maxEmojis = 3; // Limit emojis per paragraph for better readability
+  
   Object.entries(emojiMap).forEach(([keyword, emoji]) => {
+    if (emojiCount >= maxEmojis) return;
+    
     const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
     if (regex.test(enhancedText)) {
-      enhancedText = enhancedText.replace(regex, (match) => 
-        `${match} ${emoji}`
-      );
+      enhancedText = enhancedText.replace(regex, (match) => {
+        emojiCount++;
+        return `${match} ${emoji}`;
+      });
     }
   });
 
