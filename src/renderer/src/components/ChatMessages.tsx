@@ -9,7 +9,7 @@ import {
 } from './ui/tooltip';
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
-import MarkdownRenderer from './Markdown';
+import MarkdownRenderer from './MarkdownRenderer';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { useLocalLLM } from '../contexts/LocalLLMContext';
 
@@ -49,7 +49,6 @@ export default function ChatMessages() {
     onDisconnected: () => console.log('🔌 ChatMessages WebSocket disconnected'),
     onError: (error) => console.error('❌ ChatMessages WebSocket error:', error),
     onMessage: (message) => {
-      console.log('📨 ChatMessages received WebSocket message:', message);
       handleWebSocketMessage(message);
     }
   });
@@ -114,20 +113,14 @@ export default function ChatMessages() {
 
   // Debug activeSessionId changes and track good state with localStorage persistence
   React.useEffect(() => {
-    console.log('🔍 [ChatMessages] activeSessionId changed:', activeSessionId);
-    console.log('🔍 [ChatMessages] sessions count:', sessions?.length || 0);
-    console.log('🔍 [ChatMessages] sessions state:', sessions?.map(s => ({ id: s.id, isActive: s.isActive })) || []);
-    
     // Track last known good state with localStorage persistence
     if (activeSessionId) {
       localStorage.setItem('lastKnownActiveSession', activeSessionId);
-      console.log('💾 [ChatMessages] Saved last known active session to localStorage:', activeSessionId);
     }
     if (sessions && sessions.length > 0) {
       const sessionData = sessions.map(s => ({ id: s.id, isActive: s.isActive, title: s.title }));
       localStorage.setItem('lastKnownSessions', JSON.stringify(sessionData));
       setLastKnownSessions(sessionData);
-      console.log('💾 [ChatMessages] Saved last known sessions to localStorage:', sessions.length);
     }
   }, [activeSessionId, sessions]);
   
@@ -135,7 +128,6 @@ export default function ChatMessages() {
   const loadOlderMessages = useCallback(async () => {
     if (!activeSessionId || loadingMoreRef.current || !hasMoreMessages) return;
     
-    console.log('📨 [ChatMessages] Loading older messages...');
     loadingMoreRef.current = true;
     setLoadingOlder(true);
     
@@ -159,8 +151,6 @@ export default function ChatMessages() {
         const messages = result.result.data.messages;
         const totalCount = Number(result.result.data.totalCount) || messages.length;
         
-        console.log(`📨 [ChatMessages] Loaded ${messages.length} total messages (was ${currentCount})`);
-        
         // Update total count
         setTotalMessageCount(totalCount);
         
@@ -174,9 +164,7 @@ export default function ChatMessages() {
           direction: 'DESC'
         });
         
-        console.log(`📨 [ChatMessages] Now showing ${messages.length}/${totalCount} messages`);
       } else {
-        console.warn('📨 [ChatMessages] Failed to load older messages:', result.error || 'Unknown error');
         setHasMoreMessages(false);
       }
     } catch (error) {
@@ -193,7 +181,6 @@ export default function ChatMessages() {
   // Initialize batch loading for active session
   React.useEffect(() => {
     if (activeSessionId) {
-      console.log('🔄 [BatchLoad] Initializing batch loading for session:', activeSessionId);
       setHasMoreMessages(true);
       setTotalMessageCount(0);
       
@@ -260,7 +247,6 @@ export default function ChatMessages() {
   const loadInitialMessages = useCallback(async () => {
     if (!activeSessionId) return;
     
-    console.log('📨 [BatchLoad] Loading initial batch of messages...');
     try {
       // First get total count from backend
       const result = await (window as any).electronAPI.agentExecute({
@@ -278,13 +264,8 @@ export default function ChatMessages() {
         const messages = result.result.data.messages;
         const totalCount = Number(result.result.data.totalCount) || messages.length;
         
-        console.log(`📨 [BatchLoad] Loaded initial ${messages.length} messages`);
-        
         // Set total count from backend
         setTotalMessageCount(totalCount);
-        console.log(`📨 [BatchLoad] Total messages available: ${totalCount}`);
-        console.log(`📨 [BatchLoad] Backend response totalCount:`, result.result.data.totalCount);
-        console.log(`📨 [BatchLoad] Setting totalMessageCount state to:`, totalCount);
         
         // Update signals with the messages
         await signalsLoadMessages(activeSessionId, {
@@ -303,12 +284,10 @@ export default function ChatMessages() {
   // Get messages for the active session only from signals
   const displayMessages = React.useMemo(() => {
     if (!activeSessionId) {
-      console.log('📝 [DISPLAY] No active session, showing empty messages');
       return [];
     }
     
     const sessionMessages = signals.activeMessages.value || [];
-    console.log('📝 [DISPLAY] Session messages for', activeSessionId, ':', sessionMessages.length, 'messages');
     
     // Convert conversation messages to ChatMessage format
     const converted = sessionMessages.map((msg: any) => ({
@@ -322,14 +301,6 @@ export default function ChatMessages() {
     // Ensure ascending chronological order regardless of fetch direction
     converted.sort((a: any, b: any) => a.timestamp.getTime() - b.timestamp.getTime());
     
-    // Update total count when messages change
-    if (converted.length > 0 && totalMessageCount === 0) {
-      // This is a fallback - the proper total should come from the backend
-      console.log('📝 [DISPLAY] Setting fallback total count:', converted.length);
-    }
-    
-    console.log('📝 [DISPLAY] Converted messages:', converted.length, 'messages');
-    console.log('📝 [DISPLAY] Current totalMessageCount state:', totalMessageCount);
     return converted;
   }, [activeSessionId, signals.activeMessages.value, totalMessageCount]);
   
@@ -337,25 +308,19 @@ export default function ChatMessages() {
   const handleWebSocketMessage = async (message: any) => {
     try {
       if (message.type === 'llm_stream_start') {
-        console.log('🚀 Stream started for request:', message.requestId);
-        console.log('🔍 [STREAM-START] Initializing streaming state...');
         setCurrentStreamingMessage('');
         setStreamingMessageId(`streaming_${message.requestId || message.id || Date.now()}`);
         isStreamingEndedRef.current = false; // Reset streaming ended flag
         setIsLoading(false); // Clear loading when streaming starts
-        console.log('✅ [STREAM-START] Streaming state initialized');
         scrollToBottom({ smooth: true, force: false });
       } else if (message.type === 'llm_stream_chunk') {
         // Skip processing if streaming has already ended
         if (isStreamingEndedRef.current) {
-          console.log('⏭️ Skipping chunk - streaming already ended');
           return;
         }
         
         const chunkText = message.payload?.chunk || message.payload?.text || '';
         if (chunkText) {
-          console.log('📝 Processing chunk:', chunkText.substring(0, 50) + '...');
-          
           // Add artificial delay for smooth typing effect
           setTimeout(() => {
             if (!isStreamingEndedRef.current) {
@@ -396,8 +361,7 @@ export default function ChatMessages() {
         // Mark streaming as ended to prevent duplicate processing
         isStreamingEndedRef.current = true;
         
-        // Clear streaming state to prevent duplicate display
-        const finalText = message.payload?.fullText || currentStreamingMessage || 'No response received';
+        const finalText = message.payload?.fullText || currentStreamingMessage;
         
         // Create final AI message using the full text from the payload
         const finalMessage: ChatMessage = {
@@ -427,9 +391,9 @@ export default function ChatMessages() {
             });
             console.log('✅ Final AI message added to session successfully');
 
-            setCurrentStreamingMessage('');
-            setStreamingMessageId(null);
-            setIsLoading(false);
+        setCurrentStreamingMessage('');
+        setStreamingMessageId(null);
+        setIsLoading(false);
           } catch (error) {
             console.error('❌ Error adding final AI message to session:', error);
           }
@@ -1204,7 +1168,7 @@ export default function ChatMessages() {
 
   useEffect(() => {
     // Messages are now managed by ConversationContext, no need for localStorage
-    console.log('💾 Messages are managed by ConversationContext - no localStorage needed');
+    // Messages are managed by ConversationContext - no localStorage needed
   }, []);
 
   const handleRegenerateMessage = useCallback(async (messageId: string) => {
@@ -1322,9 +1286,6 @@ export default function ChatMessages() {
 
   useEffect(() => {
     // Connect WebSocket when component mounts
-    console.log('🔌 ChatMessages mounted - connecting WebSocket...');
-    
-    
     connectWebSocket().catch(error => {
       console.error('❌ Failed to connect WebSocket on mount:', error);
     });
@@ -1335,7 +1296,6 @@ export default function ChatMessages() {
     
     // Cleanup: disconnect when component unmounts
     return () => {
-      console.log('🔌 ChatMessages unmounting - disconnecting WebSocket...');
       disconnectWebSocket();
       clearTimeout(timeoutId);
       
@@ -1411,11 +1371,9 @@ export default function ChatMessages() {
     }
   }, [displayMessages.length, hasMoreMessages, loadingOlder, loadOlderMessages]);
 
-
   useEffect(() => {
     // Listen for new messages from the main process
     if (window.electronAPI?.onChatMessage) {
-      // ...
       window.electronAPI.onChatMessage((_event: any, message: ChatMessage) => {
         // Check if we've already processed this message
         if (processedMessageIds.has(message.id)) {
@@ -1718,7 +1676,7 @@ export default function ChatMessages() {
             {currentStreamingMessage && (
               <div className="flex justify-start">
                 <div className="max-w-[85%] min-w-0 bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2 overflow-x-auto overflow-y-hidden">
-                  <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                <div className="text-sm leading-relaxed whitespace-pre-wrap">
                     <MarkdownRenderer content={currentStreamingMessage} />
                     <span className="inline-block w-2 h-4 bg-white/60 ml-1 animate-pulse">|</span>
                   </div>
