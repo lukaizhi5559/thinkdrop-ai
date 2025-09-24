@@ -64,6 +64,9 @@ declare global {
       pauseOrchestrationWorkflow: (workflowId: string) => Promise<any>;
       resumeOrchestrationWorkflow: (workflowId: string) => Promise<any>;
       
+      // External link handling
+      openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
+      
       platform: string;
     };
   }

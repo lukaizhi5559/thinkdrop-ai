@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Copy, Check, ChevronDown, ChevronUp, Sparkles } from 'lucide-react';
 
 interface MarkdownRendererProps {
@@ -567,14 +567,23 @@ export default function MarkdownRenderer({ content, className = '' }: MarkdownRe
         if (linkMatch.index > 0) {
           parts.push(remaining.substring(0, linkMatch.index));
         }
-        // Add link
+        // Add link with proper Electron external handling
         parts.push(
           <a 
             key={currentIndex++} 
-            href={linkMatch[2]} 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="text-blue-400 hover:text-blue-300 underline"
+            href={linkMatch[2]}
+            onClick={(e) => {
+              e.preventDefault();
+              // Use Electron's shell to open external links
+              if (window.electronAPI?.openExternal) {
+                window.electronAPI.openExternal(linkMatch[2]);
+              } else {
+                // Fallback for non-Electron environments
+                window.open(linkMatch[2], '_blank', 'noopener,noreferrer');
+              }
+            }}
+            className="text-blue-400 hover:text-blue-300 underline cursor-pointer hover:bg-blue-400/10 px-1 py-0.5 rounded transition-colors"
+            title={`Open ${linkMatch[2]} in external browser`}
           >
             {linkMatch[1]}
           </a>

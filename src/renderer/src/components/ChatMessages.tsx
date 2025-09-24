@@ -728,6 +728,7 @@ export default function ChatMessages() {
           }
           
           const result = await window.electronAPI.llmQuery(messageText, {
+            sessionId: signals.activeSessionId.value, // Use sessionId instead of currentSessionId for consistency
             currentSessionId: signals.activeSessionId.value,
             conversationContext: Array.isArray(signals.messages.value) ? 
               signals.messages.value.slice(-10).map((m: ChatMessage) => `${m.sender}: ${m.text}`).join('\n') : '',

@@ -160,14 +160,24 @@ function initializeIPCHandlers({
   // AGENT ORCHESTRATION HANDLERS
   // ========================================
 
+  // External link handler
+  ipcMain.handle('open-external-link', async (event, url) => {
+    const { shell } = require('electron');
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      console.error('❌ Failed to open external link:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
   // Direct agent execution handler
   ipcMain.handle('agent-execute', async (event, request) => {
     try {
       if (!coreAgent || !coreAgent.initialized) {
         return { success: false, error: 'CoreAgent not initialized' };
       }
-      
-      // console.log('🎯 Direct agent execution received:', request);
       
       const result = await coreAgent.executeAgent(request.agentName, {
         action: request.action,

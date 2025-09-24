@@ -163,8 +163,6 @@ export const loadSessions = async () => {
         }
       });
       
-      console.log('🔍 [SIGNALS] Raw backend result:', JSON.stringify(result, (key, value) => 
-        typeof value === 'bigint' ? value.toString() : value, 2));
       console.log('🔍 [SIGNALS] Result structure check:', {
         hasData: !!result.data,
         hasResult: !!result.result,
@@ -200,7 +198,6 @@ export const loadSessions = async () => {
       
       if (result.success && sessionsData) {
         console.log('✅ [SIGNALS] Loaded sessions:', sessionsData.length);
-        console.log('🔍 [SIGNALS] Sessions data:', sessionsData);
         sessions.value = sessionsData;
         
         // Set active session if one exists

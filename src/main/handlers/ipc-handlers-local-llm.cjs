@@ -314,9 +314,26 @@ Please provide a well-structured summary that helps the user understand the curr
       
       console.log(`🔍 [OLD-ROUTING] Classification: ${routingResult.classification} (${routingTime}ms)`);
 
-      // Handle non-context queries (GENERAL, MEMORY, COMMAND)
-      if (['GENERAL', 'MEMORY', 'COMMAND'].includes(routingResult.classification)) {
-        const result = await handleNonContextPipeline(routingResult.classification, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
+      // Handle non-context queries (GENERAL, MEMORY, COMMAND) and CONTEXT queries that need memory search
+      if (['GENERAL', 'MEMORY', 'COMMAND', 'CONTEXT'].includes(routingResult.classification)) {
+        // Route CONTEXT and conversational COMMAND queries to MEMORY pipeline for comprehensive search
+        let queryType = routingResult.classification;
+        
+        // Check if COMMAND query is actually a conversational memory query
+        if (routingResult.classification === 'COMMAND') {
+          const isConversationalMemoryQuery = /\b(have we|did we|have you|did you)\b.*\b(talk|discuss|chat|mention|cover)\b/i.test(prompt) ||
+                                             /\b(we talked|we discussed|we chatted|we mentioned)\b/i.test(prompt) ||
+                                             /\b(talked about|discussed about|chatted about|mentioned about)\b/i.test(prompt);
+          
+          if (isConversationalMemoryQuery) {
+            console.log(`🔄 [ROUTING-FIX] Rerouting COMMAND query "${prompt}" to MEMORY pipeline (conversational memory detected)`);
+            queryType = 'MEMORY';
+          }
+        } else if (routingResult.classification === 'CONTEXT') {
+          console.log(`🔄 [ROUTING-FIX] Routing CONTEXT query "${prompt}" to MEMORY pipeline for comprehensive search`);
+          queryType = 'MEMORY';
+        }
+        const result = await handleNonContextPipeline(queryType, prompt, { sessionId: options.currentSessionId || options.sessionId }, startTime);
         
         // Transform response format for NEW pipeline compatibility
         if (result && result.success && result.response) {
@@ -1944,9 +1961,11 @@ Current question: ${prompt}`;
           const now = Date.now();
           const contextMessages = messages
             .filter(msg => {
-              // Skip messages from the last 5 seconds to avoid including the current query
+              // Skip messages from the last 500ms to avoid including the current query (reduced from 2000ms)
               const msgTime = new Date(msg.timestamp).getTime();
-              return (now - msgTime) > 5000;
+              const timeDiff = now - msgTime;
+              // Also ensure we have valid message content
+              return timeDiff > 500 && msg.text && msg.text.trim().length > 0;
             })
             .slice(0, messageCount) // Limit to requested count
             .map(msg => ({
@@ -1977,10 +1996,10 @@ Current question: ${prompt}`;
   // Export the function for external access
   extractRecentContextForBackendExport = extractRecentContextForBackend;
 
-  // Ultra-fast general knowledge handler
+  // Ultra-fast general knowledge handler with context support
   async function handleGeneralKnowledge(prompt, context, startTime) {
     const llmStartTime = Date.now();
-    console.log('⚡ [GENERAL-ULTRA-FAST] Starting chunked response...');
+    console.log('⚡ [GENERAL-ULTRA-FAST] Starting chunked response with context...');
     broadcastThinkingUpdate(IntentResponses.getThinkingMessage('response_generation'), context.sessionId);
     
     try {
@@ -1989,14 +2008,41 @@ Current question: ${prompt}`;
         throw new Error('Phi3Agent not available');
       }
 
+      // Extract recent conversation context for local LLM (like online mode)
+      let recentContext = [];
+      if (context.sessionId) {
+        try {
+          recentContext = await extractRecentContextForBackend(context.sessionId, 5); // Get last 5 messages
+          console.log(`🔍 [LOCAL-CONTEXT] Retrieved ${recentContext.length} context messages`);
+        } catch (error) {
+          console.warn('⚠️ [LOCAL-CONTEXT] Failed to extract context:', error.message);
+        }
+      }
+
+      // Build context-aware prompt
+      let contextualPrompt = prompt;
+      if (recentContext.length > 0) {
+        const contextStr = recentContext
+          .reverse() // Show chronological order (oldest to newest)
+          .map(msg => `${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}`)
+          .join('\n');
+        contextualPrompt = `You are a helpful AI assistant. Here is our recent conversation:
+
+${contextStr}
+
+Human: ${prompt}
+Assistant:`;
+        console.log('📝 [LOCAL-CONTEXT] Using contextual prompt with conversation history');
+      }
+
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
-        prompt: `${prompt}`,
+        prompt: contextualPrompt,
         options: { 
-          timeout: 1500,
-          maxTokens: 40,
-          temperature: 0.0,
-          stop: [".", "!", "?", "\n"]
+          timeout: 3000, // Increased timeout for context processing
+          maxTokens: 200, // Much higher for context-aware responses
+          temperature: 0.2, // Slightly higher for more natural responses
+          stop: ["\n\n", "Human:", "User:"] // Better stop tokens that don't cut off mid-sentence
         }
       });
 
@@ -2177,44 +2223,161 @@ Current question: ${prompt}`;
     }
   }
 
+  // Helper function to check query relevance for session processing
+  function checkQueryRelevance(query, sessionContent) {
+    if (!query || !sessionContent) return false;
+    
+    const queryLower = query.toLowerCase();
+    const contentLower = sessionContent.toLowerCase();
+    
+    // Simple keyword matching for relevance
+    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 2);
+    const matchCount = queryWords.filter(word => contentLower.includes(word)).length;
+    
+    // Consider relevant if at least 30% of query words match
+    return matchCount / queryWords.length >= 0.3;
+  }
+
+  // Robust repeat question detector using regex patterns and semantic similarity
+  function detectRepeatQuestion(text, embedFn = null) {
+    const q = text.toLowerCase().trim();
+
+    // Comprehensive regex for repeat/recap/context-check intent detection
+    const repeatRe = /\b(?:have\s+we\s+(?:talked|spoken|chatted|discussed|mentioned|covered)|did\s+(?:we|you)\s+(?:talk|speak|chat|discuss|mention|say)|(?:what|which)\s+(?:did\s+you|have\s+we)\s+(?:say|mention)|(?:did\s+you\s+say|you\s+said\s+earlier)|have\s+we\s+(?:already\s+)?covered|remind\s+me\s+(?:what|if)\s+(?:we|you)\s+(?:said|talked))\b/i;
+
+    const regexHit = repeatRe.test(q);
+    const looksLikeQuestion = /[?]$|^(?:did|have|what|which|remind)\b/i.test(q);
+
+    if (regexHit && looksLikeQuestion) return true;
+
+    // Semantic similarity fallback for novel phrasing
+    if (embedFn) {
+      try {
+        const seeds = [
+          "did we talk about this already",
+          "have we discussed this",
+          "what did you say earlier", 
+          "remind me what we were talking about",
+          "didn't we chat about this before",
+          "have we covered this topic"
+        ];
+        
+        const queryVec = embedFn(q);
+        const similarities = seeds.map(seed => {
+          const seedVec = embedFn(seed);
+          return cosineSimilarity(queryVec, seedVec);
+        });
+        
+        if (Math.max(...similarities) > 0.8) return true;
+      } catch (error) {
+        console.log('⚠️ [REPEAT-DETECTION] Semantic similarity fallback failed:', error.message);
+      }
+    }
+
+    return false;
+  }
+
+  // Helper function to calculate cosine similarity between two vectors
+  function cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    
+    for (let i = 0; i < vecA.length; i++) {
+      dotProduct += vecA[i] * vecB[i];
+      normA += vecA[i] * vecA[i];
+      normB += vecB[i] * vecB[i];
+    }
+    
+    if (normA === 0 || normB === 0) return 0;
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+  }
+
+  // Helper function to extract keywords from a query for fallback search
+  function extractKeywords(query) {
+    if (!query || typeof query !== 'string') return [];
+    
+    // Remove common stop words and extract meaningful terms
+    const stopWords = new Set([
+      'have', 'we', 'talked', 'about', 'discussed', 'mentioned', 'said', 'tell', 'me',
+      'what', 'when', 'where', 'who', 'why', 'how', 'did', 'do', 'does', 'is', 'are',
+      'was', 'were', 'been', 'being', 'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on',
+      'at', 'to', 'for', 'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through',
+      'during', 'before', 'after', 'above', 'below', 'between', 'among', 'this', 'that',
+      'these', 'those', 'i', 'you', 'he', 'she', 'it', 'they', 'them', 'their', 'there'
+    ]);
+    
+    // Extract words, filter stop words, and keep meaningful terms
+    const words = query.toLowerCase()
+      .replace(/[^\w\s]/g, ' ') // Remove punctuation
+      .split(/\s+/)
+      .filter(word => word.length > 2 && !stopWords.has(word))
+      .filter(word => !/^\d+$/.test(word)); // Remove pure numbers
+    
+    // Remove duplicates and return up to 3 most relevant keywords
+    return [...new Set(words)].slice(0, 3);
+  }
+
   // Helper function to deduplicate and clean memory texts
   function deduplicateAndCleanMemoryTexts(memoryTexts, query) {
     const seen = new Set();
     const cleaned = [];
     const queryTerms = query.toLowerCase().split(/\s+/).filter(term => term.length > 2);
     
-    for (const text of memoryTexts) {
+    console.log(`🧹 [MEMORY-DEBUG] Processing ${memoryTexts.length} memory texts for query: "${query}"`);
+    console.log(`🧹 [MEMORY-DEBUG] Query terms: [${queryTerms.join(', ')}]`);
+    
+    for (let i = 0; i < memoryTexts.length; i++) {
+      const text = memoryTexts[i];
+      
       // Skip AI responses that are just memory summaries themselves
       if (text.startsWith('Based on your memories:') || text.startsWith('Based on our conversation history:')) {
+        console.log(`🧹 [MEMORY-DEBUG] Skipping AI summary text: "${text.substring(0, 50)}..."`);
         // Extract the actual content from these responses
         const lines = text.split('\n').filter(line => line.trim());
         for (const line of lines) {
           if (line.match(/^\d+\.\s+/) && !line.includes('Based on')) {
             const content = line.replace(/^\d+\.\s+/, '').trim();
             if (content && !seen.has(content.toLowerCase())) {
-              // Check if content is relevant to the query
-              const isRelevant = queryTerms.some(term => content.toLowerCase().includes(term));
-              if (isRelevant || queryTerms.length === 0) {
+              // More lenient relevance check - include if any query term matches or if it's a short query
+              const isRelevant = queryTerms.length <= 2 || queryTerms.some(term => content.toLowerCase().includes(term));
+              if (isRelevant) {
                 seen.add(content.toLowerCase());
                 cleaned.push(content);
+                console.log(`✅ [MEMORY-DEBUG] Added extracted content: "${content.substring(0, 50)}..."`);
+              } else {
+                console.log(`❌ [MEMORY-DEBUG] Filtered out extracted content: "${content.substring(0, 50)}..."`);
               }
             }
           }
         }
       } else {
-        // Regular text - check for duplicates and relevance
+        // Regular text - check for duplicates and more lenient relevance
         const normalized = text.toLowerCase().trim();
-        if (!seen.has(normalized)) {
-          const isRelevant = queryTerms.length === 0 || queryTerms.some(term => normalized.includes(term));
+        if (!seen.has(normalized) && text.trim().length > 0) {
+          // Much more lenient relevance check - include most content for memory queries
+          const isRelevant = queryTerms.length === 0 || 
+                           queryTerms.length <= 2 || // Short queries get more results
+                           queryTerms.some(term => normalized.includes(term)) ||
+                           text.length < 200; // Include shorter texts as they're likely more focused
+          
           if (isRelevant) {
             seen.add(normalized);
             cleaned.push(text.trim());
+            console.log(`✅ [MEMORY-DEBUG] Added text ${i+1}: "${text.substring(0, 50)}..."`);
+          } else {
+            console.log(`❌ [MEMORY-DEBUG] Filtered out text ${i+1}: "${text.substring(0, 50)}..."`);
           }
+        } else if (seen.has(normalized)) {
+          console.log(`🔄 [MEMORY-DEBUG] Duplicate text ${i+1}: "${text.substring(0, 50)}..."`);
         }
       }
     }
     
-    return cleaned.slice(0, 5); // Limit to top 5 most relevant
+    console.log(`🧹 [MEMORY-DEBUG] Final cleaned results: ${cleaned.length} items`);
+    return cleaned.slice(0, 8); // Increase limit to top 8 most relevant
   }
 
   // Handle memory retrieval requests
@@ -2260,81 +2423,81 @@ Current question: ${prompt}`;
         }
       }
 
-      // HYBRID SEARCH STRATEGY: Try stored memories first, then conversation history
+      // GUARANTEED 2-STEP MEMORY SEARCH: Recent context first, then full memory search
       let searchResult = null;
       let searchType = 'unknown';
       
-      // STEP 1: Try entity-aware search on stored memories (if we have entities)
-      if (context.intentClassificationPayload?.entities && context.intentClassificationPayload.entities.length > 0) {
-        const entities = context.intentClassificationPayload.entities.map(e => e.value || e.text).filter(Boolean);
-        console.log(`🎯 [MEMORY-RETRIEVE] STEP 1: Trying entity-aware search on stored memories with entities: [${entities.join(', ')}]`);
-        
-        try {
-          searchResult = await userMemoryAgent.execute({
-            action: 'memory-semantic-search-with-entities',
-            query: searchQuery,
-            entities: entities,
-            limit: searchLimit,
-            minSimilarity: minSimilarity,
-            sessionId: searchSessionId
-          }, {
-            database: coreAgent.context?.database || coreAgent.database,
-            executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
-          });
-          
-          // Handle different response structures for entity search
-          const entityResults = searchResult.result?.results || searchResult.results;
-          if (searchResult.success && entityResults && entityResults.length > 0) {
-            console.log(`✅ [MEMORY-RETRIEVE] STEP 1 SUCCESS: Found ${entityResults.length} stored memories with entities`);
-            searchResult.results = entityResults; // Normalize the structure
-            searchType = 'stored_memories_with_entities';
-          } else {
-            console.log('🔄 [MEMORY-RETRIEVE] STEP 1: No entity-aware results, continuing to step 2...');
-          }
-        } catch (error) {
-          console.log('⚠️ [MEMORY-RETRIEVE] STEP 1 ERROR:', error.message);
-        }
-      }
+      // STEP 1: Search recent conversation context
+      console.log(`🎯 [MEMORY-RETRIEVE] STEP 1: Searching recent conversation context...`);
+      broadcastThinkingUpdate('Searching recent conversation context...', context.sessionId);
       
-      // STEP 2: If no entity results, try conversation history search
-      if (!searchResult || !searchResult.success || !searchResult.results || searchResult.results.length === 0) {
-        console.log(`🎯 [MEMORY-RETRIEVE] STEP 2: Searching conversation history (query: "${searchQuery}", limit: ${searchLimit}, minSimilarity: ${minSimilarity})...`);
-        
-        searchResult = await userMemoryAgent.execute({
-          action: 'memory-semantic-search',
-          query: searchQuery,
-          limit: searchLimit,
-          minSimilarity: minSimilarity,
-          sessionId: searchSessionId
+      searchResult = await userMemoryAgent.execute({
+        action: 'memory-semantic-search',
+        query: searchQuery,
+        limit: searchLimit,
+        minSimilarity: minSimilarity,
+        sessionId: searchSessionId
         }, {
           database: coreAgent.context?.database || coreAgent.database,
           executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
         });
         
+        // Check if recent conversation results are meaningful or just negative/repeat responses
+        let hasPositiveContent = false;
         if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
-          console.log(`✅ [MEMORY-RETRIEVE] STEP 2 SUCCESS: Found ${searchResult.results.length} conversation messages`);
-          searchType = 'conversation_history';
-        } else {
-          console.log('🔄 [MEMORY-RETRIEVE] STEP 2: No conversation results, trying lower threshold...');
+          console.log(`✅ [MEMORY-RETRIEVE] STEP 1 SUCCESS: Found ${searchResult.results.length} recent conversation results`);
           
-          // STEP 3: Try with lower threshold as final fallback
-          searchResult = await userMemoryAgent.execute({
-            action: 'memory-semantic-search',
-            query: prompt,
-            limit: 10,
-            minSimilarity: 0.3, // Lower threshold
-            sessionId: context.sessionId // Try current session first
-          }, {
-            database: coreAgent.context?.database || coreAgent.database,
-            executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+          // Check if results contain actual relevant content vs just repeat questions or negative responses
+          const positiveResults = searchResult.results.filter(r => {
+            const text = r.source_text || r.text || '';
+            const isRepeatQuestion = detectRepeatQuestion(text, null);
+            const isNegativeResponse = /\b(?:no|not|never|haven't|didn't|don't|none?|nothing|absent|lack|without|avoid|exclude|remove|replace)\b.*\b(?:discussed?|talked?|mentioned?|addressed?|covered?|food|topic|meal|eating|cuisine|sustenance|nourishment)\b/i.test(text) ||
+                                      /\b(?:no mention|not.*addressed|haven't.*talked|didn't.*discuss|avoid.*food|exclude.*food|remove.*food)\b/i.test(text);
+            
+            console.log(`🔍 [CONTENT-CHECK] Text: "${text.substring(0, 50)}...", IsRepeat: ${isRepeatQuestion}, IsNegative: ${isNegativeResponse}, Similarity: ${r.similarity}`);
+            
+            return r.similarity > 0.6 && !isRepeatQuestion && !isNegativeResponse;
           });
           
-          if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
-            console.log(`✅ [MEMORY-RETRIEVE] STEP 3 SUCCESS: Found ${searchResult.results.length} results with lower threshold`);
-            searchType = 'conversation_history_low_threshold';
+          hasPositiveContent = positiveResults.length > 0;
+          console.log(`🔍 [STEP 1 RESULT] HasPositiveContent: ${hasPositiveContent} (${positiveResults.length}/${searchResult.results.length} results)`);
+          
+          if (hasPositiveContent) {
+            console.log('✅ [MEMORY-RETRIEVE] STEP 1 COMPLETE: Found relevant recent conversation content');
+            searchType = 'recent_conversation';
           }
         }
-      }
+        
+        // STEP 2: If no positive content in recent conversation, search full memory
+        if (!hasPositiveContent) {
+          console.log('🎯 [MEMORY-RETRIEVE] STEP 2: No relevant recent content found, searching full memory...');
+          broadcastThinkingUpdate('Searching comprehensive memory database...', context.sessionId);
+          
+          // Perform comprehensive memory-only search using UserMemoryAgent.execute
+          try {
+            searchResult = await userMemoryAgent.execute({
+              action: 'memory-legacy-semantic-search',
+              query: searchQuery,
+              limit: 20,
+              minSimilarity: 0.25, // Lower threshold for comprehensive search
+              memoryOnly: true // Exclude conversation messages
+            }, {
+              database: coreAgent.context?.database || coreAgent.database,
+              executeAgent: (agentName, action, context) => coreAgent.executeAgent(agentName, action, context)
+            });
+            
+            if (searchResult.success && searchResult.results && searchResult.results.length > 0) {
+              console.log(`✅ [MEMORY-RETRIEVE] STEP 2 SUCCESS: Found ${searchResult.results.length} stored memories`);
+              searchType = 'comprehensive_memory';
+            } else {
+              console.log('❌ [MEMORY-RETRIEVE] STEP 2: No stored memories found');
+              searchResult = { success: false, results: [] };
+            }
+          } catch (error) {
+            console.error('❌ [MEMORY-RETRIEVE] STEP 2 ERROR:', error.message);
+            searchResult = { success: false, results: [] };
+          }
+        }
 
       const totalTime = Date.now() - startTime;
 
@@ -2405,14 +2568,165 @@ Current question: ${prompt}`;
           // Generate LLM response based on retrieved memories
           console.log(`🤖 [MEMORY-LLM] Generating response using Phi3 for query: "${searchQuery}"`);
           
+          // Extract recent conversation context for local LLM (like in handleGeneralKnowledge)
+          let recentContext = [];
+          if (context.sessionId) {
+            try {
+              recentContext = await extractRecentContextForBackend(context.sessionId, 5); // Get last 5 messages
+              console.log(`🔍 [MEMORY-CONTEXT] Retrieved ${recentContext.length} recent context messages`);
+            } catch (error) {
+              console.warn('⚠️ [MEMORY-CONTEXT] Failed to extract context:', error.message);
+            }
+          }
+          
           const memoryContext = cleanedTexts.map((text, i) => `${i + 1}. ${text}`).join('\n');
-          const llmPrompt = `Based on the following conversation history and memories, please answer the user's question: "${searchQuery}"
+          
+          // Robust detector: "contextual pronoun + general-knowledge style"
+          function detectPronounGK(raw) {
+            const q = (raw || "").toLowerCase().trim();
+          
+            // quick exits
+            if (!q) return { needsHybridApproach: false, score: 0, signals: [] };
+          
+            const signals = [];
+            let score = 0;
+          
+            // 1) Is it a question / query-like?
+            const isQuestion = /[?]\s*$|^(who|what|which|where|when|why|how)\b/.test(q);
+            if (isQuestion) { score += 1; signals.push("question"); }
+          
+            // 2) Personal pronouns likely used for co-reference (not 'you', 'i')
+            const pronounRe = /\b(he|she|they|him|her|them|his|hers|theirs|himself|herself|themselves|it|its)\b/;
+            const hasPronoun = pronounRe.test(q);
+            if (hasPronoun) { score += 2; signals.push("pronoun"); }
+          
+            // 3) General-knowledge cues
+            const gkVerb = /\b(who|what)\s+(?:is|are|was|were)\b/;
+            const gkAsk  = /\b(tell me about|define|explain|what(?:'| i)?s|who(?:'| i)?s)\b/;
+            const gkDomain = /\b(character|person|figure|celebrity|histor(?:y|ical)|myth|legend|game|movie|film|book|novel|series|family|brother|sister|father|mother|son|daughter|wife|husband)\b/;
+            const hasGK = gkVerb.test(q) || gkAsk.test(q) || gkDomain.test(q);
+            if (hasGK) { score += 2; signals.push("general_knowledge"); }
+          
+            // 4) Proximity cue: pronoun near coref words ("mean/refer/mentioned/earlier")
+            const proxCoref = new RegExp(
+              "\\b(he|she|they|him|her|them|his|hers|theirs|it|its)\\b[\\s\\S]{0,40}\\b(mean|refer|referring|talk(?:ing)? about|mentioned|earlier|previous|above|before|in (?:this|that) (?:story|text|article|book|video))\\b"
+            );
+            const hasProx = proxCoref.test(q);
+            if (hasProx) { score += 1; signals.push("proximity_coref"); }
+          
+            // 5) Exclusions / false-positive guards
+          
+            // Rhetorical "who is he to ..." is NOT GK about identity.
+            const rhetorical = /\bwho\s+is\s+(he|she|this (?:guy|girl)|someone)\s+to\b/.test(q);
+          
+            // Imperative/command-y questions that look like GK but aren't (e.g., "who is he to email?")
+            const commandy = /\bto\s+(email|message|call|ping|approve|deny|ban|kick|remove)\b/.test(q);
+          
+            // Tech possessive "its" in non-human contexts without GK cues often noise.
+            const techItsNoise = /\bits\b/.test(q) && !gkVerb.test(q) && !gkAsk.test(q);
+          
+            if (rhetorical) { score -= 3; signals.push("exclude_rhetorical"); }
+            if (commandy)   { score -= 2; signals.push("exclude_commandy"); }
+            if (techItsNoise) { score -= 1; signals.push("exclude_its_noise"); }
+          
+            // 6) Require at least pronoun + (question OR GK) to even consider
+            const minStructure = hasPronoun && (isQuestion || hasGK);
+            if (!minStructure) return { needsHybridApproach: false, score, signals };
+          
+            // 7) Final threshold
+            const needsHybridApproach = score >= 4; // tune 3–5 based on your logs
+          
+            return { needsHybridApproach, score, signals };
+          }
 
-Relevant conversation history:
+          // Detect if this is a contextual pronoun + general knowledge query
+          const hybridDetection = detectPronounGK(searchQuery);
+          const needsHybridApproach = hybridDetection.needsHybridApproach;
+          
+          console.log(`🔍 [HYBRID-DETECTION] Query: "${searchQuery}"`);
+          console.log(`🔍 [HYBRID-DETECTION] Score: ${hybridDetection.score}, Signals: [${hybridDetection.signals.join(', ')}]`);
+          console.log(`🔍 [HYBRID-DETECTION] Needs hybrid approach: ${needsHybridApproach}`);
+          
+          // Build context-aware prompt with recent conversation
+          let llmPrompt;
+          if (recentContext.length > 0) {
+            const contextStr = recentContext
+              .reverse() // Show chronological order (oldest to newest)
+              .map(msg => `${msg.role === 'user' ? 'Human' : 'Assistant'}: ${msg.content}`)
+              .join('\n');
+            
+            if (needsHybridApproach) {
+              // Hybrid approach: Use context for pronoun resolution + general knowledge
+              llmPrompt = `You are a helpful AI assistant with access to conversation history and stored memories. Your primary goal is to provide accurate, contextual responses based on what we've actually discussed.
+
+RECENT CONVERSATION CONTEXT (HIGHEST PRIORITY - USE THIS FIRST):
+${contextStr}
+
+STORED MEMORIES (SUPPLEMENTARY INFORMATION):
 ${memoryContext}
 
-Please provide a direct, helpful answer to the user's question. If the conversation history shows we have discussed the topics they're asking about, mention what was discussed. If not, clearly state that we haven't discussed those topics.`;
+User Question: "${searchQuery}"
 
+RESPONSE INSTRUCTIONS:
+1. ALWAYS start by examining the recent conversation context above
+2. If the question refers to something we discussed recently (people, topics, decisions), reference that discussion specifically
+3. For pronoun questions (who/what/when), use the recent conversation to identify the referent
+4. If recent conversation has the answer, base your response primarily on that
+5. Use stored memories only to supplement or provide additional context
+6. Be specific about what we discussed and when (e.g., "Earlier in our conversation, you mentioned...")
+7. If you can't find the answer in either source, clearly state that
+
+Provide a direct, helpful answer that demonstrates you understand our conversation context.`;
+              console.log('🔄 [MEMORY-HYBRID] Using hybrid context + general knowledge approach');
+            } else {
+              // Standard context-only approach - prioritize recent context over memories
+              llmPrompt = `You are a helpful AI assistant with access to our conversation history and stored information. Your goal is to provide accurate responses based on what we've actually discussed.
+
+RECENT CONVERSATION HISTORY (PRIMARY SOURCE - CHECK THIS FIRST):
+${contextStr}
+
+STORED INFORMATION (SECONDARY SOURCE):
+${memoryContext}
+
+User Question: "${searchQuery}"
+
+RESPONSE GUIDELINES:
+1. FIRST examine the recent conversation history above - this is your primary source of truth
+2. If we discussed this topic recently, reference that specific discussion
+3. Quote or paraphrase what was actually said in our conversation
+4. Use stored information only to supplement recent conversation context
+5. Be explicit about the source: "In our recent conversation..." or "From our previous discussions..."
+6. If the answer isn't in recent conversation but is in stored info, clearly indicate that
+7. If you can't find relevant information in either source, be honest about that
+
+Provide a response that shows you understand and remember our conversation context.`;
+              console.log('📝 [MEMORY-CONTEXT] Using contextual prompt with conversation history');
+            }
+            console.log('🔍 [MEMORY-DEBUG] Context messages:', recentContext.length);
+            console.log('🔍 [MEMORY-DEBUG] Sample context:', contextStr.substring(0, 200) + '...');
+            console.log('🔍 [MEMORY-DEBUG] Memory context length:', memoryContext.length);
+            console.log('🔍 [MEMORY-DEBUG] Sample memory context:', memoryContext.substring(0, 200) + '...');
+          } else {
+            llmPrompt = `You are a helpful AI assistant with access to our conversation history. I have found relevant information from our previous conversations that directly relates to the user's question.
+
+RELEVANT CONVERSATION HISTORY FOUND:
+${memoryContext}
+
+User Question: "${searchQuery}"
+
+CRITICAL INSTRUCTIONS:
+1. The conversation history above contains relevant information - USE IT to answer the question
+2. DO NOT say you don't retain memory or can't recall conversations - you have the conversation data right above
+3. Answer based on what we actually discussed, as shown in the conversation history
+4. Start your response with phrases like "Yes, we have discussed this..." or "Based on our previous conversations..."
+5. Be specific about what was mentioned in our conversations
+6. If the conversation history shows we talked about the topic, acknowledge that and provide details
+
+Answer the question using the conversation history provided above.`;
+          }
+
+          console.log('🔍 [MEMORY-DEBUG] Final LLM prompt preview:', llmPrompt.substring(0, 300) + '...');
+          
           let response;
           try {
             const phi3Agent = coreAgent.getAgent('Phi3Agent');
@@ -2422,8 +2736,12 @@ Please provide a direct, helpful answer to the user's question. If the conversat
                 action: 'query-phi3-fast',
                 prompt: llmPrompt,
                 options: {
-                  maxTokens: 300,
-                  temperature: 0.7
+                  maxTokens: 150, // Reduced to force more focused responses
+                  temperature: 0.1, // Very low for deterministic responses
+                  timeout: 5000, // Increased timeout
+                  stop: ["Human:", "User:", "\n\nHuman:", "\n\nUser:"], // More specific stop tokens
+                  repeatPenalty: 1.1, // Prevent repetitive responses
+                  topP: 0.9 // Focus on high probability tokens
                 }
               }, context);
               
@@ -2449,7 +2767,7 @@ Please provide a direct, helpful answer to the user's question. If the conversat
             success: true,
             response: response,
             pipeline: 'memory_retrieve',
-            timing: { total: totalTime },
+            timing: { total: Date.now() - startTime },
             memories: memories,
             searchType: searchType,
             hybridSearchUsed: true

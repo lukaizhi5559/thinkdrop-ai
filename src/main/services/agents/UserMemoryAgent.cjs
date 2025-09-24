@@ -1600,7 +1600,7 @@ const AGENT_FORMAT = {
             const semanticLimit = params.limit || params.options?.limit || 3;
             const timeWindow = params.timeWindow || params.options?.timeWindow || null;
             // Use higher threshold for cross-session to prevent contamination, lower for same-session
-            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || (needsCrossSessionSearch ? 0.65 : 0.45);
+            const minSimilarity = params.minSimilarity || params.options?.minSimilarity || (needsCrossSessionSearch ? 0.3 : 0.45);
             const useTwoTier = params.useTwoTier !== false; // Default to true for Two-Tier search
             const sessionId = params.sessionId; // Session scoping to prevent cross-session contamination
             
@@ -1789,7 +1789,7 @@ const AGENT_FORMAT = {
                         console.log(`[DEBUG] Session ${session.session_id}: rawSim=${similarity.toFixed(4)}, recency=${recency.toFixed(4)}, finalScore=${finalScore.toFixed(4)}`);
                         
                         // Additional check: ensure the query actually relates to session content
-                        const hasRelevantKeywords = this.checkQueryRelevance(semanticQuery, session.content || session.title);
+                        const hasRelevantKeywords = AGENT_FORMAT.checkQueryRelevance(semanticQuery, session.content || session.title);
                         
                         if (finalScore >= lowerThreshold && hasRelevantKeywords) {
                           sessionResults.push({
@@ -2287,6 +2287,66 @@ const AGENT_FORMAT = {
               throw new Error('Semantic search failed: ' + error.message);
             }
             
+          case 'memory-legacy-semantic-search':
+            // MEMORY-ONLY LEGACY SEMANTIC SEARCH
+            // Searches only stored memories, excluding conversation messages
+            const legacyQuery = params.query || params.searchText || params.input || params.message;
+            const legacyLimit = params.limit || 20;
+            const legacyMinSimilarity = params.minSimilarity || 0.25;
+            const memoryOnly = params.memoryOnly !== false; // Default to true
+            
+            if (!legacyQuery) {
+              throw new Error('Legacy semantic search requires query parameter');
+            }
+            
+            try {
+              console.log(`[INFO] Memory-only legacy semantic search for: "${legacyQuery}"`);
+              
+              // Generate embedding for the search query
+              let legacyQueryEmbedding = null;
+              if (context?.executeAgent) {
+                const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
+                  action: 'generate-embedding',
+                  text: legacyQuery
+                }, context);
+                
+                if (embeddingResult.success && embeddingResult.result?.embedding) {
+                  legacyQueryEmbedding = embeddingResult.result.embedding;
+                  console.log(`[SUCCESS] Generated query embedding with ${legacyQueryEmbedding.length} dimensions`);
+                } else {
+                  throw new Error('Failed to generate query embedding: ' + (embeddingResult.error || 'Unknown error'));
+                }
+              } else {
+                throw new Error('executeAgent not available for embedding generation');
+              }
+              
+              const database = context.database;
+              if (!database) {
+                throw new Error('No database connection available');
+              }
+              
+              // Use the performLegacySemanticSearch method
+              const legacyResult = await this.performLegacySemanticSearch(
+                legacyQuery,
+                legacyQueryEmbedding,
+                database,
+                legacyLimit,
+                legacyMinSimilarity,
+                null, // timeWindow
+                memoryOnly
+              );
+              
+              return legacyResult;
+              
+            } catch (error) {
+              console.error('[ERROR] Memory-only legacy semantic search failed:', error.message);
+              return {
+                success: false,
+                error: error.message,
+                results: []
+              };
+            }
+
           case 'memory-semantic-search-with-entities':
             // DATABASE-OPTIMIZED ENTITY-AWARE SEMANTIC SEARCH
             // Leverages memory_entities table with proper joins and indexing
@@ -3967,36 +4027,55 @@ const AGENT_FORMAT = {
 
 
     // Legacy semantic search method (original implementation)
-    async performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow) {
-      console.log('[INFO] Performing legacy semantic search...');
+    async performLegacySemanticSearch(semanticQuery, queryEmbedding, database, semanticLimit, minSimilarity, timeWindow, memoryOnly = false) {
+      console.log(`[INFO] Performing ${memoryOnly ? 'memory-only' : 'legacy'} semantic search...`);
       
-      // Build unified SQL query to search both memory and conversation_messages tables
-      let sql = `
-        SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
-               created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
-        FROM memory 
-        WHERE embedding IS NOT NULL
-      `;
+      // Build SQL query - either memory-only or unified search
+      let sql;
       let queryParams = [];
       
-      if (timeWindow) {
-        sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+      if (memoryOnly) {
+        // Search ONLY stored memories, exclude conversation messages
+        sql = `
+          SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
+                 created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
+          FROM memory 
+          WHERE embedding IS NOT NULL
+        `;
+        
+        if (timeWindow) {
+          sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+        }
+        
+        sql += ` ORDER BY created_at DESC`;
+      } else {
+        // Build unified SQL query to search both memory and conversation_messages tables
+        sql = `
+          SELECT 'memory' as source, id, backend_memory_id, source_text, suggested_response, primary_intent, 
+                 created_at, updated_at, screenshot, extracted_text, metadata, embedding, NULL as session_id, NULL as sender
+          FROM memory 
+          WHERE embedding IS NOT NULL
+        `;
+        
+        if (timeWindow) {
+          sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+        }
+        
+        // Add conversation messages to the search
+        sql += `
+          UNION ALL
+          SELECT 'conversation' as source, id, NULL as backend_memory_id, text as source_text, NULL as suggested_response, NULL as primary_intent,
+                 created_at, created_at as updated_at, NULL as screenshot, NULL as extracted_text, metadata, embedding, session_id, sender
+          FROM conversation_messages
+          WHERE embedding IS NOT NULL
+        `;
+        
+        if (timeWindow) {
+          sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
+        }
+        
+        sql += ` ORDER BY created_at DESC`;
       }
-      
-      // Add conversation messages to the search
-      sql += `
-        UNION ALL
-        SELECT 'conversation' as source, id, NULL as backend_memory_id, text as source_text, NULL as suggested_response, NULL as primary_intent,
-               created_at, created_at as updated_at, NULL as screenshot, NULL as extracted_text, metadata, embedding, session_id, sender
-        FROM conversation_messages
-        WHERE embedding IS NOT NULL
-      `;
-      
-      if (timeWindow) {
-        sql += ` AND created_at > datetime('now', '-${timeWindow}')`;
-      }
-      
-      sql += ` ORDER BY created_at DESC`;
       
       const memories = await database.query(sql, queryParams);
       console.log(`[INFO] Found ${memories.length} items with embeddings (memory + conversation messages)`);
@@ -4013,10 +4092,22 @@ const AGENT_FORMAT = {
         };
       }
       
-      // Calculate similarity for all memories
+      // Calculate similarity for all memories with timeout protection
       const rankedResults = [];
+      const startTime = Date.now();
+      const maxProcessingTime = 10000; // 10 second timeout
       
-      for (const memory of memories) {
+      console.log(`[INFO] Processing ${memories.length} memories for similarity calculation`);
+      
+      for (let i = 0; i < memories.length; i++) {
+        const memory = memories[i];
+        
+        // Check timeout every 100 items to prevent hanging
+        if (i % 100 === 0 && (Date.now() - startTime) > maxProcessingTime) {
+          console.warn(`[WARN] Memory search timeout after processing ${i}/${memories.length} items`);
+          break;
+        }
+        
         try {
           const memoryEmbedding = Array.isArray(memory.embedding) 
             ? memory.embedding 
@@ -4035,6 +4126,8 @@ const AGENT_FORMAT = {
           console.warn(`[WARN] Failed to parse embedding for memory ${memory.id}:`, error.message);
         }
       }
+      
+      console.log(`[INFO] Processed ${memories.length} memories in ${Date.now() - startTime}ms, found ${rankedResults.length} matches`)
       
       // Sort by similarity (highest first) and limit results
       rankedResults.sort((a, b) => b.similarity - a.similarity);
@@ -4493,8 +4586,11 @@ Answer:`;
       // Ultimate comprehensive pattern for 100% pass rate
       const ULTIMATE_PATTERN = /tell.*previously|show.*3rd.*message|2.*messages.*back|few.*messages.*ago|several.*msgs.*back|give.*conversation.*overview|\d+.*message|\d+.*ago|\d+.*back|show.*\d+|tell.*you.*previously/;
 
+      // Additional patterns for conversation references
+      const CONVERSATION_REF = /\b(was there any conversation|any conversation.*before|conversation.*before.*about|have we.*discussed|did we.*talk about|previous.*conversation)\b/;
+
       // Chat reference detection
-      const hasChatRef = META.test(s) || PRONOUN.test(s) || (ACTION.test(s) && /\b(we|i|you)\b/.test(s)) || TOPIC_PATTERN.test(s) || MESSAGE_REF.test(s) || DISPLAY_PATTERN.test(s) || OVERVIEW_PATTERN.test(s) || ORDINAL_MSG_PATTERN.test(s) || MESSAGES_AGO_PATTERN.test(s) || FEW_MESSAGES_PATTERN.test(s) || LAST_FEW_PATTERN.test(s) || TELL_PREVIOUSLY_PATTERN.test(s) || DISCUSSION_ABOUT_PATTERN.test(s) || CATCH_ALL_PATTERNS.test(s) || FINAL_PATTERNS.test(s) || ULTIMATE_PATTERN.test(s) || JUST_PATTERN.test(s);
+      const hasChatRef = META.test(s) || PRONOUN.test(s) || (ACTION.test(s) && /\b(we|i|you)\b/.test(s)) || TOPIC_PATTERN.test(s) || MESSAGE_REF.test(s) || DISPLAY_PATTERN.test(s) || OVERVIEW_PATTERN.test(s) || ORDINAL_MSG_PATTERN.test(s) || MESSAGES_AGO_PATTERN.test(s) || FEW_MESSAGES_PATTERN.test(s) || LAST_FEW_PATTERN.test(s) || TELL_PREVIOUSLY_PATTERN.test(s) || DISCUSSION_ABOUT_PATTERN.test(s) || CATCH_ALL_PATTERNS.test(s) || FINAL_PATTERNS.test(s) || ULTIMATE_PATTERN.test(s) || JUST_PATTERN.test(s) || CONVERSATION_REF.test(s);
 
       // Temporal/ordering cues
       const hasOrdering = ORDER.test(s);
@@ -4553,7 +4649,7 @@ Answer:`;
       
       // Require at least 1 overlapping word for relevance
       return overlap.length > 0;
-    },
+    }
   };
   
   // Export using CommonJS format
