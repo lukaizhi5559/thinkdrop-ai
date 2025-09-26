@@ -1,0 +1,26 @@
+{
+  "watch": [
+    "src/main/**/*.cjs",
+    "src/main/**/*.js",
+    "src/main/**/*.ts"
+  ],
+  "ignore": [
+    "node_modules/**/*",
+    "dist/**/*",
+    "data/**/*",
+    "screenshots/**/*",
+    "logs/**/*",
+    "*.log",
+    "*.tmp",
+    "*.bak",
+    "*.wal",
+    "*.duckdb*",
+    "src/main/services/background/queue-*.json",
+    "src/main/services/background/memory-*.json"
+  ],
+  "ext": "js,cjs,ts,json",
+  "delay": 2000,
+  "env": {
+    "NODE_ENV": "development"
+  }
+}

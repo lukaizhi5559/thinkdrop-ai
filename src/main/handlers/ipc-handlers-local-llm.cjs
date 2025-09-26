@@ -775,12 +775,15 @@ ${contextMessages}
 CURRENT QUESTION: ${prompt}
 
 INSTRUCTIONS:
-1. First, check if the conversation context contains enough information to answer the question
-2. If the question refers to numbered items (first, second, third, etc.) and the context discusses a topic but doesn't contain the full sequence, use your general knowledge to provide the specific answer
-3. For example, if discussing "miracles in John's Gospel" and asked "what was the second miracle," provide the actual second miracle from John's Gospel even if only the first was mentioned in the conversation
-4. Be specific and informative, connecting the answer to the conversation topic
+1. FIRST, carefully examine the conversation context to understand what we've been discussing
+2. If the question contains pronouns (he, she, his, her, their, it), identify what they refer to from the conversation
+3. For example, if we discussed "Mario" and the user asks "who's his brother", understand that "his" refers to Mario
+4. If the question refers to numbered items (first, second, third, etc.) and the context discusses a topic but doesn't contain the full sequence, use your general knowledge to provide the specific answer
+5. For example, if discussing "miracles in John's Gospel" and asked "what was the second miracle," provide the actual second miracle from John's Gospel even if only the first was mentioned in the conversation
+6. Be specific and informative, connecting the answer to the conversation topic
+7. If you can identify the referent from context, provide a complete answer using your knowledge
 
-Answer the question directly and helpfully:`;
+Answer the question directly and helpfully, making sure to resolve any pronouns using the conversation context:`;
 
       const result = await phi3Agent.execute({
         action: 'query-phi3-fast',
@@ -1295,7 +1298,14 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
         CONTEXT: [
           'what did i', 'what did you', 'what were we', 'earlier you', 'earlier i',
           'before you', 'before i', 'previous', 'recap', 'summarize our',
-          'tell me what i said', 'remind me what', 'what was our'
+          'tell me what i said', 'remind me what', 'what was our',
+          // Follow-up and context-dependent queries
+          'say that again', 'repeat that', 'what do you mean', 'explain that',
+          'tell me more', 'anything else', 'what else', 'more about',
+          'for this', 'about this', 'regarding this', 'concerning this',
+          'why i want', 'why do i', 'do you know why', 'can you tell why',
+          // Pronoun-based context queries
+          'about it', 'for it', 'with it', 'on it', 'from it'
         ],
         MEMORY: [
           // Memory retrieval patterns
@@ -1308,7 +1318,12 @@ Answer in 1-2 sentences using ONLY the information from the conversation history
           'have we', 'did we', 'have you', 'did you', 'we talked', 'we discussed',
           'we chatted', 'we mentioned', 'you mentioned', 'i mentioned',
           'talked about', 'discussed about', 'chatted about', 'mentioned about',
-          'conversation about', 'discussion about', 'chat about'
+          'conversation about', 'discussion about', 'chat about',
+          // Pronoun-based queries that need conversation context
+          'who is his', 'who is her', 'who is their', 'what is his', 'what is her',
+          'what is their', 'who\'s his', 'who\'s her', 'who\'s their', 'what\'s his',
+          'what\'s her', 'what\'s their', 'his brother', 'her brother', 'their brother',
+          'his sister', 'her sister', 'their sister', 'his name', 'her name', 'their name'
         ],
         COMMAND: [
           'write a', 'write me', 'create a', 'create me', 'generate a',
@@ -1850,6 +1865,21 @@ Current question: ${prompt}`;
     if (conversationalMemoryPatterns.some(pattern => pattern.test(prompt))) {
       console.log(`🔍 [HEURISTIC] Rule result: {"label":"MEMORY","score":0.8,"reason":"conversational-memory-pattern"}`);
       return { classification: 'MEMORY', confidence: 0.8, reason: 'conversational-memory-pattern' };
+    }
+    
+    // Enhanced context detection patterns
+    const contextPatterns = [
+      /\b(say that again|repeat that|what do you mean|explain that)\b/i,
+      /\b(tell me more|anything else|what else|more about)\b/i,
+      /\b(for this|about this|regarding this|concerning this)\b/i,
+      /\b(why i want|why do i|do you know why|can you tell why)\b/i,
+      /\b(about it|for it|with it|on it|from it)\b/i
+    ];
+    
+    // Check for context-dependent queries
+    if (contextPatterns.some(pattern => pattern.test(prompt))) {
+      console.log(`🔍 [HEURISTIC] Rule result: {"label":"CONTEXT","score":0.75,"reason":"context-dependent-pattern"}`);
+      return { classification: 'CONTEXT', confidence: 0.75, reason: 'context-dependent-pattern' };
     }
     
     // Basic patterns as fallback
@@ -2456,7 +2486,10 @@ Assistant:`;
             
             console.log(`🔍 [CONTENT-CHECK] Text: "${text.substring(0, 50)}...", IsRepeat: ${isRepeatQuestion}, IsNegative: ${isNegativeResponse}, Similarity: ${r.similarity}`);
             
-            return r.similarity > 0.6 && !isRepeatQuestion && !isNegativeResponse;
+            // Relaxed threshold and allow repeats for conversational queries to pass stage-1 gate
+            // This helps when user re-asks a question (repeat phrasing) and we still want to leverage similar past content
+            const threshold = 0.48; // previously 0.6
+            return r.similarity >= threshold && !isNegativeResponse;
           });
           
           hasPositiveContent = positiveResults.length > 0;

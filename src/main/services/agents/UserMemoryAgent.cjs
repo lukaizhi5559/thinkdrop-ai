@@ -1769,8 +1769,8 @@ const AGENT_FORMAT = {
                 // If no sessions meet threshold but we have sessions, use improved conversational query detection
                 if (sessionResults.length === 0 && sessions.length > 0) {
                   if (AGENT_FORMAT.isConversationalQueryRobust(semanticQuery)) {
-                    // For conversational queries, be more lenient but still prevent hallucination
-                    const lowerThreshold = Math.max(0.35, (minSimilarity || 0.6) * 0.6);
+                    // For conversational queries, be much more lenient to capture relevant conversations
+                    const lowerThreshold = Math.max(0.25, (minSimilarity || 0.6) * 0.4);
                     console.log(`[DEBUG] Conversational query detected, lowering threshold to ${lowerThreshold}`);
                     
                     for (const session of sessions) {
@@ -2326,7 +2326,7 @@ const AGENT_FORMAT = {
               }
               
               // Use the performLegacySemanticSearch method
-              const legacyResult = await this.performLegacySemanticSearch(
+              const legacyResult = await AGENT_FORMAT.performLegacySemanticSearch(
                 legacyQuery,
                 legacyQueryEmbedding,
                 database,
