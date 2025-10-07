@@ -19,9 +19,29 @@ export interface LocalLLMConfig {
   timeout: number;
 }
 
+export interface MCPServiceConfig {
+  endpoint: string;
+  apiKey?: string;
+  timeout: number;
+  enabled: boolean;
+}
+
+export interface MCPConfig {
+  enabled: boolean;
+  routeMemoryToMCP: boolean;
+  routeWebSearchToMCP: boolean;
+  routePhi4ToMCP: boolean;
+  services: {
+    userMemory: MCPServiceConfig;
+    webSearch: MCPServiceConfig;
+    phi4: MCPServiceConfig;
+  };
+}
+
 export interface AppConfig {
   api: APIConfig;
   localLLM: LocalLLMConfig;
+  mcp: MCPConfig;
   features: {
     agentOrchestration: boolean;
     userMemory: boolean;
@@ -56,6 +76,32 @@ const defaultConfig: AppConfig = {
     preferredModel: 'phi4-mini:latest',
     fallbackModels: ['phi3:mini', 'llama3.2:1b', 'tinyllama'],
     timeout: 30000
+  },
+  mcp: {
+    enabled: false,
+    routeMemoryToMCP: false,
+    routeWebSearchToMCP: false,
+    routePhi4ToMCP: false,
+    services: {
+      userMemory: {
+        endpoint: 'http://localhost:3001',
+        apiKey: '',
+        timeout: 5000,
+        enabled: true
+      },
+      webSearch: {
+        endpoint: 'http://localhost:3002',
+        apiKey: '',
+        timeout: 3000,
+        enabled: true
+      },
+      phi4: {
+        endpoint: 'http://localhost:3003',
+        apiKey: '',
+        timeout: 10000,
+        enabled: true
+      }
+    }
   },
   features: {
     agentOrchestration: true,
@@ -170,6 +216,47 @@ class ConfigService {
   disableFeature(feature: keyof AppConfig['features']): void {
     this.updateConfig({
       features: { ...this.config.features, [feature]: false }
+    });
+  }
+
+  // MCP configuration
+  getMCPConfig(): MCPConfig {
+    return { ...this.config.mcp };
+  }
+
+  updateMCPConfig(updates: Partial<MCPConfig>): void {
+    this.updateConfig({ mcp: { ...this.config.mcp, ...updates } });
+  }
+
+  isMCPEnabled(): boolean {
+    return this.config.mcp.enabled;
+  }
+
+  enableMCP(): void {
+    this.updateConfig({
+      mcp: { ...this.config.mcp, enabled: true }
+    });
+  }
+
+  disableMCP(): void {
+    this.updateConfig({
+      mcp: { ...this.config.mcp, enabled: false }
+    });
+  }
+
+  isMCPServiceEnabled(service: 'userMemory' | 'webSearch' | 'phi4'): boolean {
+    return this.config.mcp.services[service].enabled;
+  }
+
+  updateMCPServiceConfig(service: 'userMemory' | 'webSearch' | 'phi4', updates: Partial<MCPServiceConfig>): void {
+    this.updateConfig({
+      mcp: {
+        ...this.config.mcp,
+        services: {
+          ...this.config.mcp.services,
+          [service]: { ...this.config.mcp.services[service], ...updates }
+        }
+      }
     });
   }
 

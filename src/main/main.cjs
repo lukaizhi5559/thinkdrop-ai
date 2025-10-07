@@ -52,6 +52,7 @@ const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-
 const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
 const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversation.cjs');
 const { setupDatabaseNotificationHandlers } = require('./handlers/ipc-handlers-database-notifications.cjs');
+const { registerMCPHandlers } = require('./handlers/ipc-handlers-mcp.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -433,6 +434,11 @@ async function setupIPCHandlers() {
     console.log('🔧 Setting up database notification handlers...');
     await setupDatabaseNotificationHandlers();
     console.log('✅ Database notification IPC handlers setup complete');
+    
+    // Initialize MCP handlers (microservices)
+    console.log('🔧 Setting up MCP handlers...');
+    registerMCPHandlers();
+    console.log('✅ MCP handlers setup complete');
     
     // Initialize main IPC handlers
     console.log('🔧 Setting up main IPC handlers...');
