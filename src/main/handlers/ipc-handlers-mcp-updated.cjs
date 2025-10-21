@@ -67,8 +67,9 @@ async function initializeMCPSystem(database) {
 function registerMCPHandlers() {
   console.log('🔌 Registering MCP IPC handlers...');
 
-  // Initialize MCP on startup
-  initializeMCPSystem();
+  // ============================================
+  // Core Service Handlers
+  // ============================================
 
   /**
    * Parse intent via MCP (Phi4 service)
@@ -203,159 +204,90 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Update memory via MCP (UserMemory service)
-   */
-  ipcMain.handle('mcp:memory:update', async (event, { memoryId, updates, context = {} }) => {
-    try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.executeMemoryOperation(
-        'update',
-        { memoryId, updates },
-        context,
-        async () => {
-          // Fallback to local agent
-          const agents = getFallbackAgents();
-          return await agents.userMemory.updateMemory(memoryId, updates);
-        }
-      );
-
-      return {
-        success: true,
-        data: result,
-        source: result ? 'mcp' : 'local'
-      };
-    } catch (error) {
-      console.error('❌ Memory update failed:', error);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  });
-
-  /**
-   * Delete memory via MCP (UserMemory service)
-   */
-  ipcMain.handle('mcp:memory:delete', async (event, { memoryId, context = {} }) => {
-    try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.executeMemoryOperation(
-        'delete',
-        { memoryId },
-        context,
-        async () => {
-          // Fallback to local agent
-          const agents = getFallbackAgents();
-          return await agents.userMemory.deleteMemory(memoryId);
-        }
-      );
-
-      return {
-        success: true,
-        data: result,
-        source: result ? 'mcp' : 'local'
-      };
-    } catch (error) {
-      console.error('❌ Memory delete failed:', error);
-      return {
-        success: false,
-        error: error.message
-      };
-    }
-  });
-
-  /**
    * List memories via MCP (UserMemory service)
    */
-  ipcMain.handle('mcp:memory:list', async (event, { options = {}, context = {} }) => {
+  ipcMain.handle('mcp:memory:list', async (event, { options = {} }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.executeMemoryOperation(
-        'list',
-        options,
-        context,
-        async () => {
-          // Fallback to local agent
-          const agents = getFallbackAgents();
-          return await agents.userMemory.listMemories(options);
-        }
-      );
+      const client = getMCPClient();
+      const result = await client.listMemories(options);
 
       return {
         success: true,
         data: result,
-        source: result ? 'mcp' : 'local'
+        source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Memory list failed:', error);
-      return {
-        success: false,
-        error: error.message
-      };
+      console.error('❌ Memory list failed, using fallback:', error.message);
+      
+      try {
+        const agents = getFallbackAgents();
+        const result = await agents.userMemory.listMemories(options);
+        return {
+          success: true,
+          data: result,
+          source: 'local'
+        };
+      } catch (fallbackError) {
+        return {
+          success: false,
+          error: fallbackError.message
+        };
+      }
     }
   });
 
   /**
    * Web search via MCP (WebSearch service)
    */
-  ipcMain.handle('mcp:web:search', async (event, { query, options = {}, context = {} }) => {
+  ipcMain.handle('mcp:web:search', async (event, { query, options = {} }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.executeWebSearch(
-        query,
-        options,
-        context,
-        async () => {
-          // Fallback to local agent
-          const agents = getFallbackAgents();
-          return await agents.webSearch.search(query, options);
-        }
-      );
+      const client = getMCPClient();
+      const result = await client.searchWeb(query, options);
 
       return {
         success: true,
         data: result,
-        source: result ? 'mcp' : 'local'
+        source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Web search failed:', error);
-      return {
-        success: false,
-        error: error.message
-      };
+      console.error('❌ Web search failed, using fallback:', error.message);
+      
+      try {
+        const agents = getFallbackAgents();
+        const result = await agents.webSearch.search(query, options);
+        return {
+          success: true,
+          data: result,
+          source: 'local'
+        };
+      } catch (fallbackError) {
+        return {
+          success: false,
+          error: fallbackError.message
+        };
+      }
     }
   });
 
+  // ============================================
+  // Generic Service Call Handler
+  // ============================================
+
   /**
-   * News search via MCP (WebSearch service)
+   * Execute any action on any service
    */
-  ipcMain.handle('mcp:web:news', async (event, { query, options = {}, context = {} }) => {
+  ipcMain.handle('mcp:service:call', async (event, { serviceName, action, payload }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.routeRequest({
-        intent: 'COMMAND',
-        action: 'web.news',
-        payload: { query, ...options },
-        context,
-        fallbackFn: async () => {
-          // Fallback to local agent
-          const agents = getFallbackAgents();
-          return await agents.webSearch.searchNews(query, options);
-        }
-      });
+      const client = getMCPClient();
+      const result = await client.execute(serviceName, action, payload);
 
       return {
         success: true,
         data: result,
-        source: result ? 'mcp' : 'local'
+        source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ News search failed:', error);
+      console.error(`❌ Service call failed: ${serviceName}.${action}`, error.message);
       return {
         success: false,
         error: error.message
@@ -363,29 +295,22 @@ function registerMCPHandlers() {
     }
   });
 
-  /**
-   * Answer question via MCP (Phi4 service)
-   */
-  ipcMain.handle('mcp:general:answer', async (event, { query, context = {} }) => {
-    try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.answerQuestion(
-        query,
-        context,
-        async () => {
-          // Fallback: return null to signal caller to use existing LLM pipeline
-          return null;
-        }
-      );
+  // ============================================
+  // Service Management Handlers
+  // ============================================
 
+  /**
+   * List all services
+   */
+  ipcMain.handle('mcp:services:list', async (event) => {
+    try {
+      const services = MCPConfigManager.getAllServices();
       return {
         success: true,
-        data: result,
-        source: result ? 'mcp' : 'local'
+        data: services
       };
     } catch (error) {
-      console.error('❌ Question answering failed:', error);
+      console.error('❌ Failed to list services:', error);
       return {
         success: false,
         error: error.message
@@ -394,30 +319,23 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Extract entities via MCP (Phi4 service)
+   * Get service by name
    */
-  ipcMain.handle('mcp:entity:extract', async (event, { text, entityTypes = [], context = {} }) => {
+  ipcMain.handle('mcp:services:get', async (event, { serviceName }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.routeRequest({
-        intent: 'GENERAL',
-        action: 'entity.extract',
-        payload: { text, entityTypes },
-        context,
-        fallbackFn: async () => {
-          // Fallback: basic entity extraction
-          return { entities: [] };
-        }
-      });
-
+      const service = MCPConfigManager.getService(serviceName);
+      if (!service) {
+        return {
+          success: false,
+          error: `Service not found: ${serviceName}`
+        };
+      }
       return {
         success: true,
-        data: result,
-        source: result ? 'mcp' : 'local'
+        data: service
       };
     } catch (error) {
-      console.error('❌ Entity extraction failed:', error);
+      console.error('❌ Failed to get service:', error);
       return {
         success: false,
         error: error.message
@@ -426,30 +344,17 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Generate embeddings via MCP (Phi4 service)
+   * Add custom service
    */
-  ipcMain.handle('mcp:embedding:generate', async (event, { text, model = 'all-MiniLM-L6-v2', context = {} }) => {
+  ipcMain.handle('mcp:services:add', async (event, serviceConfig) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
-      const result = await orchestrator.routeRequest({
-        intent: 'GENERAL',
-        action: 'embedding.generate',
-        payload: { text, model },
-        context,
-        fallbackFn: async () => {
-          // Fallback: return null (caller should handle)
-          return null;
-        }
-      });
-
+      await MCPConfigManager.addService(serviceConfig);
       return {
         success: true,
-        data: result,
-        source: result ? 'mcp' : 'local'
+        message: `Service added: ${serviceConfig.name}`
       };
     } catch (error) {
-      console.error('❌ Embedding generation failed:', error);
+      console.error('❌ Failed to add service:', error);
       return {
         success: false,
         error: error.message
@@ -458,23 +363,17 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Get MCP system status
+   * Update service
    */
-  ipcMain.handle('mcp:system:status', async (event) => {
+  ipcMain.handle('mcp:services:update', async (event, { serviceName, updates }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      
+      await MCPConfigManager.updateService(serviceName, updates);
       return {
         success: true,
-        data: {
-          degradationMode: orchestrator.getDegradationMode(),
-          registry: orchestrator.getRegistrySummary(),
-          metrics: orchestrator.getMetricsSummary(),
-          circuitBreakers: orchestrator.getCircuitBreakerStats()
-        }
+        message: `Service updated: ${serviceName}`
       };
     } catch (error) {
-      console.error('❌ Failed to get MCP status:', error);
+      console.error('❌ Failed to update service:', error);
       return {
         success: false,
         error: error.message
@@ -483,19 +382,64 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Get service health
+   * Remove service
    */
-  ipcMain.handle('mcp:system:health', async (event, { serviceName = null }) => {
+  ipcMain.handle('mcp:services:remove', async (event, { serviceName }) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      const health = await orchestrator.getServiceHealth(serviceName);
-      
+      await MCPConfigManager.removeService(serviceName);
+      return {
+        success: true,
+        message: `Service removed: ${serviceName}`
+      };
+    } catch (error) {
+      console.error('❌ Failed to remove service:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
+  /**
+   * Enable/disable service
+   */
+  ipcMain.handle('mcp:services:toggle', async (event, { serviceName, enabled }) => {
+    try {
+      if (enabled) {
+        await MCPConfigManager.enableService(serviceName);
+      } else {
+        await MCPConfigManager.disableService(serviceName);
+      }
+      return {
+        success: true,
+        message: `Service ${enabled ? 'enabled' : 'disabled'}: ${serviceName}`
+      };
+    } catch (error) {
+      console.error('❌ Failed to toggle service:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
+  // ============================================
+  // Health & Monitoring Handlers
+  // ============================================
+
+  /**
+   * Check service health
+   */
+  ipcMain.handle('mcp:health:check', async (event, { serviceName }) => {
+    try {
+      const client = getMCPClient();
+      const health = await client.checkServiceHealth(serviceName);
       return {
         success: true,
         data: health
       };
     } catch (error) {
-      console.error('❌ Failed to get service health:', error);
+      console.error('❌ Health check failed:', error);
       return {
         success: false,
         error: error.message
@@ -504,19 +448,49 @@ function registerMCPHandlers() {
   });
 
   /**
-   * Reset MCP metrics
+   * Check all services health
    */
-  ipcMain.handle('mcp:system:reset-metrics', async (event) => {
+  ipcMain.handle('mcp:health:check-all', async (event) => {
     try {
-      const orchestrator = getMCPOrchestrator();
-      orchestrator.resetMetrics();
+      const client = getMCPClient();
+      const healthChecks = await client.checkAllServicesHealth();
+      return {
+        success: true,
+        data: healthChecks
+      };
+    } catch (error) {
+      console.error('❌ Health check all failed:', error);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
+  /**
+   * Get service call audit logs
+   */
+  ipcMain.handle('mcp:audit:logs', async (event, { serviceName = null, limit = 100 }) => {
+    try {
+      let query = 'SELECT * FROM service_call_audit';
+      const params = [];
+      
+      if (serviceName) {
+        query += ' WHERE to_service = ?';
+        params.push(serviceName);
+      }
+      
+      query += ' ORDER BY timestamp DESC LIMIT ?';
+      params.push(limit);
+      
+      const logs = await MCPConfigManager.db.all(query, params);
       
       return {
         success: true,
-        message: 'Metrics reset successfully'
+        data: logs
       };
     } catch (error) {
-      console.error('❌ Failed to reset metrics:', error);
+      console.error('❌ Failed to get audit logs:', error);
       return {
         success: false,
         error: error.message
