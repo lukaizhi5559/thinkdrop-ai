@@ -85,6 +85,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   localLLMStage3Search: (prompt, context) => ipcRenderer.invoke('local-llm-stage3-search', { prompt, context }),
   onProgressiveSearchIntermediate: (callback) => ipcRenderer.on('progressive-search-intermediate', callback),
   
+  // MCP Private Mode
+  privateModeProcess: (params) => ipcRenderer.invoke('private-mode:process', params),
+  
   // Orchestration workflow communication
   onOrchestrationUpdate: (callback) => ipcRenderer.on('orchestration-update', callback),
   onInsightOrchestrationUpdate: (callback) => ipcRenderer.on('insight-orchestration-update', callback),

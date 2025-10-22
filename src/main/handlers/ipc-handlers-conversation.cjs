@@ -89,10 +89,10 @@ function setupConversationHandlers(ipcMain, coreAgent) {
       
       console.log('🔍 [IPC] Calling ConversationSessionAgent with options:', options);
       
-      const result = await coreAgent.executeAgent('ConversationSessionAgent', {
-        action: 'session-list',
-        ...options
-      });
+      // Check if coreAgent is actually ConversationSessionAgent (MCP mode)
+      const result = coreAgent.execute ? 
+        await coreAgent.execute({ action: 'session-list', ...options }) :
+        await coreAgent.executeAgent('ConversationSessionAgent', { action: 'session-list', ...options });
 
       // Convert BigInt values to regular numbers for JSON serialization
       const sanitizeForJSON = (obj) => {

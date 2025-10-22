@@ -67,8 +67,15 @@ async function initializeMCPSystem(database) {
 function registerMCPHandlers() {
   console.log('🔌 Registering MCP IPC handlers...');
 
-  // Initialize MCP on startup
-  initializeMCPSystem();
+  // Initialize MCP on startup (use global database)
+  // Support both MCP mode (global.databaseManager) and full mode (global.coreAgent.context.database)
+  const database = global.databaseManager || global.coreAgent?.context?.database;
+  
+  if (database) {
+    initializeMCPSystem(database);
+  } else {
+    console.warn('⚠️ Database not available yet, MCP will initialize when database is ready');
+  }
 
   /**
    * Parse intent via MCP (Phi4 service)

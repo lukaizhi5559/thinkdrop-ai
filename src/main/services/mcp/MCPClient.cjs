@@ -43,23 +43,76 @@ class MCPClient {
       await this.checkRateLimit(serviceName);
 
       // 5. Build request URL
-      const actionPath = action.replace('.', '/'); // memory.store -> memory/store
-      const url = `${service.endpoint}/api/${actionPath}`;
+      // Keep dots in action name: memory.store -> /memory.store
+      let url = `${service.endpoint}/${action}`;
 
       console.log(`📡 MCP Call: ${serviceName}.${action} -> ${url}`);
+      console.log(`🔑 API Key: ${service.apiKey ? service.apiKey.substring(0, 10) + '...' : 'MISSING'}`);
 
-      // 6. Make HTTP request
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-API-Key': service.apiKey,
-          'X-Service-Name': 'thinkdrop-ai',
-          'X-Request-ID': this.generateRequestId()
-        },
-        body: JSON.stringify(payload),
-        timeout: 30000 // 30 second timeout
-      });
+      // 6. Build MCP protocol request
+      const requestId = this.generateRequestId();
+      const mcpRequest = {
+        version: 'mcp.v1',
+        service: serviceName,
+        action: action,
+        requestId: requestId,
+        payload: payload
+      };
+
+      console.log(`📦 MCP Request:`, JSON.stringify(mcpRequest, null, 2));
+
+      // 7. Make HTTP request with IPv4/IPv6 fallback
+      let response;
+      let lastError;
+      
+      // Try original URL first
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': service.apiKey,
+            'X-Service-Name': 'thinkdrop-ai',
+            'X-Request-ID': requestId
+          },
+          body: JSON.stringify(mcpRequest),
+          timeout: 30000
+        });
+        console.log(`📥 Response status: ${response.status} ${response.statusText}`);
+      } catch (error) {
+        lastError = error;
+        console.log(`⚠️ First attempt failed: ${error.message}`);
+        
+        // If it's a connection error and URL uses localhost, try IPv4 explicitly
+        if (error.message.includes('ECONNREFUSED') && url.includes('localhost')) {
+          const ipv4Url = url.replace('localhost', '127.0.0.1');
+          console.log(`🔄 Retrying with IPv4: ${ipv4Url}`);
+          
+          try {
+            response = await fetch(ipv4Url, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': service.apiKey,
+                'X-Service-Name': 'thinkdrop-ai',
+                'X-Request-ID': requestId
+              },
+              body: JSON.stringify(mcpRequest),
+              timeout: 30000
+            });
+            console.log(`✅ IPv4 retry succeeded: ${response.status} ${response.statusText}`);
+            
+            // Update service endpoint to use IPv4 for future calls
+            service.endpoint = service.endpoint.replace('localhost', '127.0.0.1');
+            console.log(`💾 Updated service endpoint to: ${service.endpoint}`);
+          } catch (ipv4Error) {
+            console.log(`❌ IPv4 retry also failed: ${ipv4Error.message}`);
+            throw lastError; // Throw original error
+          }
+        } else {
+          throw error;
+        }
+      }
 
       const duration = Date.now() - startTime;
 
@@ -100,9 +153,10 @@ class MCPClient {
     // Get recent calls in last minute
     const oneMinuteAgo = new Date(Date.now() - 60000).toISOString();
     
-    const recentCalls = await this.configManager.db.all(`
+    // DatabaseManager uses query() instead of all()
+    const recentCalls = await this.configManager.db.query(`
       SELECT COUNT(*) as count 
-      FROM mcp.service_call_audit 
+      FROM service_call_audit 
       WHERE to_service = ? 
         AND timestamp > ?
         AND success = 1
@@ -278,7 +332,7 @@ class MCPClient {
    */
   async getAnswer(question, context = {}) {
     return this.callService('phi4', 'general.answer', {
-      question,
+      query: question, // Service expects 'query' not 'question'
       context
     });
   }

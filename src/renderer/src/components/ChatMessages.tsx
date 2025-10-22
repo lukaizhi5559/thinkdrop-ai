@@ -37,6 +37,11 @@ export default function ChatMessages() {
   // LocalLLM integration for pipeline toggle
   const { useNewPipeline } = useLocalLLM();
   
+  // 🎯 MCP Private Mode Feature Flag (NEW)
+  // Set to true to use new MCP orchestrator, false for old pipeline
+  // ✅ ENABLED: MCP system initialized successfully!
+  const USE_MCP_PRIVATE_MODE = true; // Toggle this to switch between old/new
+  
   // WebSocket integration for receiving streaming responses
   const {
     state: wsState,
@@ -658,6 +663,20 @@ export default function ChatMessages() {
       }
     } else {
       console.log('✅ [SIGNALS] Using existing session:', currentSessionId);
+      // For existing sessions, we need to manually add the user message
+      if (signalsAddMessage) {
+        try {
+          await signalsAddMessage(currentSessionId, {
+            text: messageToSend.trim(),
+            sender: 'user',
+            sessionId: currentSessionId,
+            metadata: {}
+          });
+          console.log('✅ [SIGNALS] User message added to existing session');
+        } catch (error) {
+          console.error('❌ [SIGNALS] Failed to add user message:', error);
+        }
+      }
     }
     
     const messageText = messageToSend.trim();
@@ -678,29 +697,12 @@ export default function ChatMessages() {
     
     // Clear any previous error states
     setProcessedMessageIds(new Set());
-    // Add to conversation context if we have an active session
-    if (currentSessionId && signalsAddMessage) {
-      console.log('📝 [USER-MESSAGE] Adding user message to session:', currentSessionId);
-      console.log('📝 [USER-MESSAGE] Message text:', messageText);
-
-      
-      try {
-        await signalsAddMessage(currentSessionId, {
-          text: messageText,
-          sender: 'user',
-          sessionId: currentSessionId,
-          metadata: {}
-        });
-        console.log('✅ [USER-MESSAGE] User message added to session successfully');
-      } catch (error) {
-        console.error('❌ [USER-MESSAGE] Error adding user message to session:', error);
-        // Session add failed - message will be handled by ConversationContext
-        console.log('⚠️ [USER-MESSAGE] Session add failed, relying on ConversationContext');
-      }
-    } else {
-      // No session available - create one first
-      console.log('⚠️ [USER-MESSAGE] No session available, should create session first');
-    }
+    
+    // Scroll to bottom immediately after user sends message to show "Thinking..." indicator
+    // Use setTimeout to ensure DOM has updated before scrolling
+    setTimeout(() => {
+      scrollToBottom({ smooth: true, force: true });
+    }, 100);
     
     try {
       console.log('🔍 [DEBUG] Connection state check:', {
@@ -716,7 +718,61 @@ export default function ChatMessages() {
       if (!wsState.isConnected) {
         console.warn('⚠️ WebSocket not connected, checking pipeline preference...');
         
-        // Check pipeline toggle setting
+        // 🎯 NEW: MCP Private Mode Path
+        if (USE_MCP_PRIVATE_MODE) {
+          console.log('🔒 [MCP-PRIVATE] Using MCP orchestrator for private mode...');
+          scrollToBottom({ smooth: true, force: true });
+          
+          try {
+            // Call MCP private mode orchestrator
+            const result = await (window as any).electronAPI.privateModeProcess({
+              message: messageText,
+              context: {
+                sessionId: currentSessionId,
+                userId: 'default_user',
+                timestamp: new Date().toISOString()
+              }
+            });
+            
+            if (result.success) {
+              console.log('✅ [MCP-PRIVATE] Orchestration successful:', result.action);
+              console.log('📝 [MCP-PRIVATE] Response:', result.response);
+              
+              // Add AI response to conversation
+              if (signalsAddMessage && currentSessionId) {
+                await signalsAddMessage(currentSessionId, {
+                  text: result.response,
+                  sender: 'ai',
+                  sessionId: currentSessionId,
+                  metadata: { 
+                    isFinal: true,
+                    action: result.action,
+                    mcpPrivateMode: true,
+                    elapsedMs: result.elapsedMs
+                  }
+                });
+              }
+              
+              // Stop loading and scroll
+              setIsLoading(false);
+              setIsProcessingLocally(false);
+              scrollToBottom({ smooth: true, force: true });
+            } else {
+              console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
+              setLocalLLMError(`MCP Private Mode error: ${result.error}`);
+              setIsLoading(false);
+              setIsProcessingLocally(false);
+            }
+          } catch (error: any) {
+            console.error('❌ [MCP-PRIVATE] Exception:', error);
+            setLocalLLMError(`MCP Private Mode exception: ${error?.message || 'Unknown error'}`);
+            setIsLoading(false);
+            setIsProcessingLocally(false);
+          }
+          return;
+        }
+        
+        // Check pipeline toggle setting (OLD PATH)
         if (useNewPipeline) {
           scrollToBottom({ smooth: true, force: true });
       

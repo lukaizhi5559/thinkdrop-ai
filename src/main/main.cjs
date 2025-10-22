@@ -53,6 +53,7 @@ const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-ll
 const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversation.cjs');
 const { setupDatabaseNotificationHandlers } = require('./handlers/ipc-handlers-database-notifications.cjs');
 const { registerMCPHandlers } = require('./handlers/ipc-handlers-mcp.cjs');
+const { registerPrivateModeHandlers } = require('./handlers/ipc-handlers-private-mode.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -71,6 +72,7 @@ let visibleWindows = [];
 // CoreAgent instance for dynamic agent management
 let coreAgent = null; // AgentOrchestrator instance
 let localLLMAgent = null; // Local LLM agent instance
+let conversationAgent = null; // ConversationSessionAgent instance (MCP mode)
 
 function createOverlayWindow() {
   const primaryDisplay = screen.getPrimaryDisplay();
@@ -185,6 +187,7 @@ app.whenReady().then(async () => {
     createOverlayWindow();
     // console.log('✅ Step 3: Overlay window created');
   // Initialize core services including LocalLLMAgent
+  let handlersSetup = false;
   initializeServices().then(() => {
     // Verify CoreAgent is properly initialized before setting up IPC handlers
     if (!coreAgent || !coreAgent.initialized) {
@@ -196,12 +199,18 @@ app.whenReady().then(async () => {
       return Promise.resolve();
     }
   }).then(async () => {
-    // Setup IPC handlers after CoreAgent is initialized
-    await setupIPCHandlers();
+    // Setup IPC handlers after CoreAgent is initialized (only once)
+    if (!handlersSetup) {
+      handlersSetup = true;
+      await setupIPCHandlers();
+    }
   }).catch(async error => {
     console.error('❌ Error during initialization sequence:', error);
-    // Setup IPC handlers anyway to allow basic functionality
-    await setupIPCHandlers();
+    // Setup IPC handlers anyway to allow basic functionality (only once)
+    if (!handlersSetup) {
+      handlersSetup = true;
+      await setupIPCHandlers();
+    }
   });
   
   console.log('🎉 Initialization sequence complete!');
@@ -246,6 +255,101 @@ app.on('will-quit', () => {
 // Initialize new services architecture only
 
 async function initializeServices() {
+  // 🔒 MCP PRIVATE MODE: Skip heavy initialization if using MCP services
+  const USE_MCP_PRIVATE_MODE = process.env.USE_MCP_PRIVATE_MODE === 'true';
+  
+  if (USE_MCP_PRIVATE_MODE) {
+    console.log('🔒 [MCP-MODE] Private mode enabled - skipping local agent initialization');
+    console.log('🔒 [MCP-MODE] Using MCP services for all AI operations');
+    
+    // Only initialize minimal database for conversation persistence
+    try {
+      const path = require('path');
+      const fs = require('fs');
+      const projectRoot = path.dirname(path.dirname(__dirname));
+      const dataDir = path.join(projectRoot, 'data');
+      const dbPath = path.join(dataDir, 'agent_memory.duckdb');
+      
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      
+      // Set quiet mode for DatabaseManager in MCP mode
+      process.env.DB_QUIET_MODE = 'true';
+      
+      const { default: databaseManager } = await import('./services/utils/DatabaseManager.js');
+      await databaseManager.initialize(dbPath);
+      global.databaseManager = databaseManager;
+      
+      // Create minimal coreAgent stub for conversation persistence
+      const ConversationSessionAgentModule = require('./services/agents/ConversationSessionAgent.cjs');
+      conversationAgent = ConversationSessionAgentModule; // Assign to module-scope variable
+      
+      // Bootstrap ConversationSessionAgent with correct context structure
+      const agentContext = {
+        database: databaseManager,
+        duckdb: require('duckdb'),
+        path: require('path'),
+        fs: require('fs'),
+        url: require('url')
+      };
+      
+      console.log('🔍 [MCP-MODE] Bootstrapping ConversationSessionAgent with context:', {
+        hasDatabase: !!agentContext.database,
+        databaseType: agentContext.database?.constructor?.name
+      });
+      
+      try {
+        // bootstrap(config, context) - pass empty config, agentContext as context
+        await conversationAgent.bootstrap({}, agentContext);
+        console.log('✅ [MCP-MODE] ConversationSessionAgent bootstrapped successfully');
+      } catch (bootstrapError) {
+        console.error('❌ [MCP-MODE] ConversationSessionAgent bootstrap failed:', bootstrapError.message);
+        console.log('⚠️  [MCP-MODE] Continuing without conversation persistence');
+      }
+      
+      // Create minimal coreAgent stub that only supports ConversationSessionAgent
+      global.coreAgent = {
+        context: { database: databaseManager },
+        executeAgent: async (agentName, params) => {
+          if (agentName === 'ConversationSessionAgent') {
+            return await ConversationSessionAgent.execute(params, agentContext);
+          }
+          throw new Error(`Agent ${agentName} not available in MCP mode`);
+        }
+      };
+      
+      console.log('✅ [MCP-MODE] Minimal database initialized for conversation persistence');
+      console.log('✅ [MCP-MODE] ConversationSessionAgent stub ready');
+      
+      // Register stub handlers EARLY to prevent frontend errors during initialization
+      const { ipcMain } = require('electron');
+      
+      ipcMain.handle('agent-execute', async (event, params) => {
+        return { success: false, error: 'agent-execute not available in MCP mode' };
+      });
+      
+      ipcMain.handle('llm-get-health', async () => {
+        return { success: true, mode: 'mcp', services: {} };
+      });
+      
+      ipcMain.handle('llm-get-cached-agents', async () => {
+        return { success: true, agents: [] };
+      });
+      
+      ipcMain.handle('llm-get-communications', async () => {
+        return { success: true, communications: [] };
+      });
+      
+      console.log('✅ [MCP-MODE] Early stub handlers registered');
+      
+    } catch (error) {
+      console.error('❌ [MCP-MODE] Database initialization failed:', error);
+    }
+    
+    return; // Skip all agent bootstrapping
+  }
+  
   try {
     // Initialize CoreAgent (AgentOrchestrator) for dynamic agent management
     try {
@@ -365,6 +469,8 @@ async function initializeServices() {
 async function setupIPCHandlers() {
   console.log('🔧 Setting up IPC handlers...');
   
+  const USE_MCP_PRIVATE_MODE = process.env.USE_MCP_PRIVATE_MODE === 'true';
+  
   // Unified window state - UI state now managed by React components
   const windowState = {
     isGloballyVisible,
@@ -386,6 +492,14 @@ async function setupIPCHandlers() {
   };
   
   try {
+    // Remove early stub handlers before initializing full handlers
+    if (USE_MCP_PRIVATE_MODE) {
+      ipcMain.removeHandler('agent-execute');
+      ipcMain.removeHandler('llm-get-health');
+      ipcMain.removeHandler('llm-get-cached-agents');
+      ipcMain.removeHandler('llm-get-communications');
+    }
+    
     // Initialize all IPC handlers from modularized files
     const { broadcastOrchestrationUpdate: broadcastUpdate, sendClarificationRequest: sendClarification } = 
       initializeIPCHandlers({
@@ -397,10 +511,14 @@ async function setupIPCHandlers() {
       });
     console.log('✅ Main IPC handlers setup complete');
     
-    // Setup memory handlers
-    console.log('🔧 Setting up memory handlers...');
-    setupMemoryHandlers(ipcMain, coreAgent);
-    console.log('✅ Memory handlers setup complete');
+    if (!USE_MCP_PRIVATE_MODE) {
+      // Setup memory handlers (skip in MCP mode - use MCP user-memory service)
+      console.log('🔧 Setting up memory handlers...');
+      setupMemoryHandlers(ipcMain, coreAgent);
+      console.log('✅ Memory handlers setup complete');
+    } else {
+      console.log('⏭️  [MCP-MODE] Skipping memory handlers - using MCP user-memory service');
+    }
     
     // Initialize screenshot, system health, and legacy LLM handlers
     console.log('🔧 Setting up screenshot and system handlers...');
@@ -412,33 +530,112 @@ async function setupIPCHandlers() {
     });
 
     console.log('🔧 Setting up conversation persistence handlers...');
-    setupConversationHandlers(ipcMain, coreAgent);
+    // In MCP mode, pass conversationAgent directly instead of coreAgent
+    const agentForConversation = USE_MCP_PRIVATE_MODE ? conversationAgent : coreAgent;
+    setupConversationHandlers(ipcMain, agentForConversation);
     console.log('✅ Conversation persistence handlers setup complete');
     
-    console.log('🔧 Setting up Local LLM IPC handlers...');
-    initializeLocalLLMHandlers({
-      ipcMain,
-      coreAgent,
-      windowState,
-      windows
-    });
+    // Declare sendWorkflowClarification outside conditional to avoid undefined error
+    let sendWorkflowClarification = null;
     
-    // Setup orchestration workflow handlers
-    console.log('🔧 Setting up orchestration workflow handlers...');
-    const { sendClarificationRequest: sendWorkflowClarification } = 
-      setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);  
-    console.log('✅ Orchestration workflow handlers setup complete');
+    if (!USE_MCP_PRIVATE_MODE) {
+      // Skip Local LLM handlers in MCP mode (uses MCP phi4 service)
+      console.log('🔧 Setting up Local LLM IPC handlers...');
+      initializeLocalLLMHandlers({
+        ipcMain,
+        coreAgent,
+        windowState,
+        windows
+      });
+      
+      // Setup orchestration workflow handlers
+      console.log('🔧 Setting up orchestration workflow handlers...');
+      const result = setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);
+      sendWorkflowClarification = result.sendClarificationRequest;
+      console.log('✅ Orchestration workflow handlers setup complete');
 
-    console.log('✅ Local LLM IPC handlers setup complete');
+      console.log('✅ Local LLM IPC handlers setup complete');
+    } else {
+      console.log('⏭️  [MCP-MODE] Skipping Local LLM handlers - using MCP phi4 service');
+      console.log('⏭️  [MCP-MODE] Skipping orchestration workflow handlers - using MCP orchestrator');
+    }
     
-    console.log('🔧 Setting up database notification handlers...');
-    await setupDatabaseNotificationHandlers();
-    console.log('✅ Database notification IPC handlers setup complete');
+    if (!USE_MCP_PRIVATE_MODE) {
+      // Skip database notification handlers in MCP mode
+      console.log('🔧 Setting up database notification handlers...');
+      await setupDatabaseNotificationHandlers();
+      console.log('✅ Database notification IPC handlers setup complete');
+    } else {
+      console.log('⏭️  [MCP-MODE] Skipping database notification handlers');
+    }
     
     // Initialize MCP handlers (microservices)
     console.log('🔧 Setting up MCP handlers...');
     registerMCPHandlers();
     console.log('✅ MCP handlers setup complete');
+    
+    // Initialize MCP Private Mode handlers (NEW orchestrator)
+    console.log('🔧 Setting up MCP Private Mode handlers...');
+    registerPrivateModeHandlers();
+    console.log('✅ MCP Private Mode handlers setup complete');
+    
+    // Update stub handlers with full MCP service info (already registered early)
+    if (USE_MCP_PRIVATE_MODE) {
+      console.log('🔧 Updating MCP mode stub handlers with service info...');
+      
+      // Remove early stubs and replace with full versions
+      ipcMain.removeHandler('agent-execute');
+      ipcMain.removeHandler('llm-get-health');
+      ipcMain.removeHandler('llm-get-cached-agents');
+      ipcMain.removeHandler('llm-get-communications');
+      
+      // Partial stub for agent-execute - only ConversationSessionAgent works
+      ipcMain.handle('agent-execute', async (event, params) => {
+        // Allow ConversationSessionAgent to work for session management
+        if (params.agentName === 'ConversationSessionAgent' && global.coreAgent) {
+          try {
+            const result = await global.coreAgent.executeAgent(params.agentName, params);
+            return result;
+          } catch (error) {
+            return {
+              success: false,
+              error: error.message
+            };
+          }
+        }
+        
+        // Block all other agents
+        return {
+          success: false,
+          error: 'agent-execute not available in MCP mode - use private-mode-process instead'
+        };
+      });
+      
+      // Full stub for llm-get-health with MCP service info
+      ipcMain.handle('llm-get-health', async () => {
+        return {
+          success: true,
+          mode: 'mcp',
+          services: {
+            'user-memory': { status: 'available', endpoint: 'http://localhost:3001' },
+            'phi4': { status: 'available', endpoint: 'http://localhost:3003' },
+            'web-search': { status: 'available', endpoint: 'http://localhost:3002' }
+          }
+        };
+      });
+      
+      // Stub for cached agents
+      ipcMain.handle('llm-get-cached-agents', async () => {
+        return { success: true, agents: [] };
+      });
+      
+      // Stub for communications
+      ipcMain.handle('llm-get-communications', async () => {
+        return { success: true, communications: [] };
+      });
+      
+      console.log('✅ MCP mode stub handlers updated');
+    }
     
     // Initialize main IPC handlers
     console.log('🔧 Setting up main IPC handlers...');

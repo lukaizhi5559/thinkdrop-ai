@@ -43,8 +43,18 @@ export const switchToSession = async (sessionId: string) => {
   }
   
   // Load messages for the session if not already loaded
-  if (!messages.value[sessionId] || messages.value[sessionId].length === 0) {
+  const currentMessages = messages.value[sessionId];
+  console.log('🔍 [SIGNALS] Checking if messages need loading:', {
+    sessionId,
+    hasMessages: !!currentMessages,
+    messageCount: currentMessages?.length || 0
+  });
+  
+  if (!currentMessages || currentMessages.length === 0) {
+    console.log('📥 [SIGNALS] Loading messages for newly switched session:', sessionId);
     await loadMessages(sessionId);
+  } else {
+    console.log('✅ [SIGNALS] Messages already loaded, skipping load');
   }
   
   // Close sidebar after selection
@@ -85,12 +95,15 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
       console.log('🔄 [SIGNALS] Response keys:', result ? Object.keys(result) : 'null/undefined');
       console.log('🔄 [SIGNALS] Success value:', result?.success);
       console.log('🔄 [SIGNALS] Error value:', result?.error);
+      console.log('🔄 [SIGNALS] SessionId (top level):', result?.sessionId);
       console.log('🔄 [SIGNALS] Result object:', result?.result);
       console.log('🔄 [SIGNALS] Result keys:', result?.result ? Object.keys(result.result) : 'null/undefined');
       console.log('🔄 [SIGNALS] Result data:', result?.result?.data);
 
-      if (result?.success && result.result?.sessionId) {
-        const sessionId = result.result.sessionId;
+      // Handle both response formats: {success, sessionId, data} and {success, result: {sessionId, data}}
+      const sessionId = result?.sessionId || result?.result?.sessionId;
+      
+      if (result?.success && sessionId) {
         console.log(' [SIGNALS] Session created successfully:', sessionId);
         
         // Create new session object
@@ -146,86 +159,99 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
   }
 };
 
-export const loadSessions = async () => {
-  console.log('📋 [SIGNALS] Loading sessions...');
+export const loadSessions = async (retryCount = 0) => {
+  console.log('📋 [SIGNALS] Loading sessions... (attempt', retryCount + 1, ')');
   
   try {
     isLoading.value = true;
     error.value = null;
     
-    if (window.electronAPI?.agentExecute) {
-      const result = await window.electronAPI.agentExecute({
-        agentName: 'ConversationSessionAgent',
-        action: 'session-list',
-        options: {
-          limit: 50,
-          offset: 0
-        }
-      });
-      
-      console.log('🔍 [SIGNALS] Result structure check:', {
-        hasData: !!result.data,
-        hasResult: !!result.result,
-        dataKeys: result.data ? Object.keys(result.data) : 'no data',
-        resultKeys: result.result ? Object.keys(result.result) : 'no result',
-        directSessions: result.data?.sessions ? result.data.sessions.length : 'no direct sessions',
-        nestedSessions: result.result?.data?.sessions ? result.result.data.sessions.length : 'no nested sessions'
-      });
-      
-      // Handle all possible response formats
-      let sessionsData = null;
-      
-      // Try direct access first: result.data.sessions
-      if (result.data?.sessions) {
-        sessionsData = result.data.sessions;
-        console.log('🎯 [SIGNALS] Found sessions via result.data.sessions');
-      }
-      // Try nested access: result.result.data.sessions  
-      else if (result.result?.data?.sessions) {
-        sessionsData = result.result.data.sessions;
-        console.log('🎯 [SIGNALS] Found sessions via result.result.data.sessions');
-      }
-      // Try direct result access: result.sessions
-      else if (result.sessions) {
-        sessionsData = result.sessions;
-        console.log('🎯 [SIGNALS] Found sessions via result.sessions');
-      }
-      else {
-        console.log('❌ [SIGNALS] No sessions found in any expected location');
-      }
-      
-      console.log('🔍 [SIGNALS] Extracted sessions data:', sessionsData ? sessionsData.length : 'no sessions data');
-      
-      if (result.success && sessionsData) {
-        console.log('✅ [SIGNALS] Loaded sessions:', sessionsData.length);
-        sessions.value = sessionsData;
-        
-        // Set active session if one exists
-        const activeSession = sessionsData.find((s: ConversationSession) => s.isActive);
-        if (activeSession) {
-          activeSessionId.value = activeSession.id;
-          console.log('🎯 [SIGNALS] Found active session:', activeSession.id);
-        } else if (sessionsData.length > 0) {
-          // Auto-activate the first session if none is active
-          const firstSession = sessionsData[0];
-          console.log('🎯 [SIGNALS] Auto-activating first session:', firstSession.id);
-          await switchToSession(firstSession.id);
-        }
-      } else {
-        console.warn('⚠️ [SIGNALS] No sessions data in response:', result);
-        console.warn('⚠️ [SIGNALS] Expected sessions data, got:', {
-          hasDirectData: !!result.data,
-          hasNestedData: !!result.result?.data,
-          directSessions: !!result.data?.sessions,
-          nestedSessions: !!result.result?.data?.sessions,
-          resultKeys: result ? Object.keys(result) : 'no result',
-          dataKeys: result.data ? Object.keys(result.data) : 'no direct data',
-          nestedDataKeys: result.result?.data ? Object.keys(result.result.data) : 'no nested data'
+    // Use direct IPC handler instead of agentExecute (which is disabled in MCP mode)
+    const sessionListHandler = (window.electronAPI as any)?.['conversation-session-list'];
+    if (!sessionListHandler) {
+      console.error('❌ [SIGNALS] conversation-session-list handler not available');
+      return;
+    }
+    
+    console.log('🔄 [SIGNALS] Calling backend conversation-session-list...');
+    const result = await sessionListHandler({
+      limit: 50,
+      offset: 0
+    }).catch((err: Error) => {
+      // Handler not registered yet - retry after delay
+      if (err.message.includes('No handler registered') && retryCount < 3) {
+        console.log('⏳ [SIGNALS] Handler not ready, retrying in 500ms...');
+        return new Promise(resolve => {
+          setTimeout(() => resolve(loadSessions(retryCount + 1)), 500);
         });
       }
+      throw err;
+    });
+    
+    console.log('📥 [SIGNALS] Backend response received:', result);
+    
+    console.log(' [SIGNALS] Result structure check:', {
+      hasData: !!result.data,
+      hasResult: !!result.result,
+      dataKeys: result.data ? Object.keys(result.data) : 'no data',
+      resultKeys: result.result ? Object.keys(result.result) : 'no result',
+      directSessions: result.data?.sessions ? result.data.sessions.length : 'no direct sessions',
+      nestedSessions: result.result?.data?.sessions ? result.result.data.sessions.length : 'no nested sessions'
+    });
+    
+    // Handle all possible response formats
+    let sessionsData = null;
+    
+    // Try direct access first: result.data.sessions
+    if (result.data?.sessions) {
+      sessionsData = result.data.sessions;
+      console.log(' [SIGNALS] Found sessions via result.data.sessions');
+    }
+    // Try nested access: result.result.data.sessions  
+    else if (result.result?.data?.sessions) {
+      sessionsData = result.result.data.sessions;
+      console.log(' [SIGNALS] Found sessions via result.result.data.sessions');
+    }
+    // Try direct result access: result.sessions
+    else if (result.sessions) {
+      sessionsData = result.sessions;
+      console.log(' [SIGNALS] Found sessions via result.sessions');
+    }
+    else {
+      console.log(' [SIGNALS] No sessions found in any expected location');
+    }
+    
+    console.log(' [SIGNALS] Extracted sessions data:', sessionsData ? sessionsData.length : 'no sessions data');
+    
+    if (result.success && sessionsData) {
+      console.log(' [SIGNALS] Loaded sessions:', sessionsData.length);
+      sessions.value = sessionsData;
+      
+      // Set active session if one exists
+      const activeSession = sessionsData.find((s: ConversationSession) => s.isActive);
+      if (activeSession) {
+        activeSessionId.value = activeSession.id;
+        console.log(' [SIGNALS] Found active session:', activeSession.id);
+      } else if (sessionsData.length > 0) {
+        // Auto-activate the first session if none is active
+        const firstSession = sessionsData[0];
+        console.log(' [SIGNALS] Auto-activating first session:', firstSession.id);
+        await switchToSession(firstSession.id);
+      }
+    } else {
+      console.warn(' [SIGNALS] No sessions data in response:', result);
+      console.warn(' [SIGNALS] Expected sessions data, got:', {
+        hasDirectData: !!result.data,
+        hasNestedData: !!result.result?.data,
+        directSessions: !!result.data?.sessions,
+        nestedSessions: !!result.result?.data?.sessions,
+        resultKeys: result ? Object.keys(result) : 'no result',
+        dataKeys: result.data ? Object.keys(result.data) : 'no direct data',
+        nestedDataKeys: result.result?.data ? Object.keys(result.result.data) : 'no nested data'
+      });
     }
   } catch (err) {
-    console.error('❌ [SIGNALS] Failed to load sessions:', err);
+    console.error(' [SIGNALS] Failed to load sessions:', err);
     error.value = err instanceof Error ? err.message : 'Failed to load sessions';
   } finally {
     isLoading.value = false;
@@ -253,13 +279,20 @@ export const loadMessages = async (sessionId: string, options?: {
         }
       });
       
-      if (result.success && result.result?.data?.messages) {
-        console.log('✅ [SIGNALS] Loaded messages:', result.result.data.messages.length);
+      console.log('🔍 [SIGNALS] Load messages result:', JSON.stringify(result, null, 2));
+      
+      // Handle both response formats
+      const messagesData = result.result?.data?.messages || result.result?.messages || result.data?.messages || result.messages;
+      
+      if (result.success && messagesData) {
+        console.log('✅ [SIGNALS] Loaded messages:', messagesData.length);
         messages.value = {
           ...messages.value,
-          [sessionId]: result.result.data.messages
+          [sessionId]: messagesData
         };
-        return result.result.data.messages;
+        return messagesData;
+      } else {
+        console.warn('⚠️ [SIGNALS] No messages found in result:', result);
       }
     }
   } catch (err) {
@@ -272,6 +305,7 @@ export const loadMessages = async (sessionId: string, options?: {
 
 export const addMessage = async (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
   console.log('📝 [SIGNALS] Adding message to session:', sessionId);
+  console.log('📝 [SIGNALS] Message data:', message);
   
   try {
     if (window.electronAPI?.agentExecute) {
@@ -286,15 +320,30 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
         }
       });
       
-      if (result.success && result.result?.data) {
+      console.log('📝 [SIGNALS] Add message result:', JSON.stringify(result, null, 2));
+      
+      // Handle both response formats: result.data or result.result.data
+      const messageData = result.data || result.result?.data;
+      
+      console.log('📝 [SIGNALS] Parsed messageData:', messageData);
+      
+      // Check if this is a duplicate message
+      if (messageData && messageData.isDuplicate) {
+        console.log('⚠️ [SIGNALS] Duplicate message detected, skipping UI update');
+        return null;
+      }
+      
+      if (result.success && messageData && messageData.messageId) {
         const newMessage: ChatMessage = {
-          id: result.result.data.messageId,
-          text: result.result.data.text,
-          sender: result.result.data.sender,
-          timestamp: result.result.data.timestamp,
-          sessionId: result.result.data.sessionId,
-          metadata: result.result.data.metadata || {}
+          id: messageData.messageId,
+          text: messageData.text || '',
+          sender: messageData.sender || 'ai',
+          timestamp: messageData.timestamp || new Date().toISOString(),
+          sessionId: messageData.sessionId || sessionId,
+          metadata: messageData.metadata || {}
         };
+        
+        console.log('📝 [SIGNALS] Created newMessage:', newMessage);
         
         // Add message to the session's messages array
         const currentMessages = messages.value[sessionId] || [];
@@ -309,7 +358,7 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
             ? { 
                 ...session, 
                 messageCount: (session.messageCount || 0) + 1,
-                lastMessage: newMessage.text.substring(0, 30),
+                lastMessage: newMessage.text ? newMessage.text.substring(0, 30) : '',
                 lastActivityAt: new Date().toISOString()
               }
             : session

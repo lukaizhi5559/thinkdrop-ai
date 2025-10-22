@@ -37,6 +37,11 @@ class MCPConfigManager {
   async initialize(database) {
     if (this.initialized) return;
 
+    if (!database) {
+      throw new Error('Database parameter is required for MCPConfigManager initialization');
+    }
+
+    console.log('🔍 MCPConfigManager: Received database:', typeof database);
     this.db = database;
     
     // Create tables if they don't exist
@@ -68,12 +73,23 @@ class MCPConfigManager {
       .map(s => s.trim())
       .filter(s => s.length > 0);
     
-    console.log(`Executing ${statements.length} SQL statements...`);
+    const quietMode = process.env.DB_QUIET_MODE === 'true';
+    
+    if (!quietMode) {
+      console.log(`Executing ${statements.length} SQL statements...`);
+    }
     
     for (let i = 0; i < statements.length; i++) {
       const statement = statements[i];
       try {
-        console.log(`  [${i+1}/${statements.length}] ${statement.substring(0, 50)}...`);
+        if (!quietMode) {
+          console.log(`  [${i+1}/${statements.length}] ${statement.substring(0, 50)}...`);
+        }
+        
+        if (!this.db || !this.db.run) {
+          throw new Error(`Database or run method not available. db type: ${typeof this.db}`);
+        }
+        
         await this.db.run(statement, []);
       } catch (error) {
         console.error(`Failed to execute statement ${i+1}:`, statement.substring(0, 200));
@@ -81,7 +97,9 @@ class MCPConfigManager {
       }
     }
     
-    console.log('✅ MCP database tables created');
+    if (!quietMode) {
+      console.log('✅ MCP database tables created');
+    }
   }
 
   /**
@@ -91,22 +109,26 @@ class MCPConfigManager {
     console.log('Loading services from database...');
     
     try {
-      const services = await this.db.all(`
+      // DatabaseManager uses query() instead of all()
+      const services = await this.db.query(`
         SELECT * FROM mcp_services WHERE enabled = 1
-      `);
+      `, []);
       
       console.log(`Found ${services.length} services in database`);
       
       this.services.clear();
       
       for (const service of services) {
+      const decryptedKey = this.decryptApiKey(service.api_key);
+      console.log(`🔑 Service ${service.name}: API key ${service.api_key} || ${decryptedKey ? 'present (' + decryptedKey.substring(0, 10) + '...)' : 'MISSING'}`);
+      
       this.services.set(service.name, {
         id: service.id,
         name: service.name,
         displayName: service.display_name,
         description: service.description,
         endpoint: service.endpoint,
-        apiKey: this.decryptApiKey(service.api_key),
+        apiKey: decryptedKey,
         enabled: service.enabled,
         capabilities: JSON.parse(service.capabilities || '{}'),
         actions: JSON.parse(service.actions || '[]'),
