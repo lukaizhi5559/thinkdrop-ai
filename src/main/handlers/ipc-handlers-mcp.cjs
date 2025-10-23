@@ -536,6 +536,26 @@ function registerMCPHandlers() {
    */
   ipcMain.handle('mcp:service:call', async (event, { serviceName, action, payload }) => {
     try {
+      // Special handling for orchestrator service
+      if (serviceName === 'orchestrator') {
+        const AgentOrchestrator = require('../services/mcp/AgentOrchestrator.cjs');
+        const orchestrator = new AgentOrchestrator();
+        
+        if (action === 'intent.process') {
+          // Process pre-classified intent from backend
+          const result = await orchestrator.processBackendIntent(
+            payload,
+            payload.userMessage,
+            payload.context
+          );
+          return {
+            success: true,
+            data: result
+          };
+        }
+      }
+      
+      // Default: use MCP client for other services
       const client = getMCPClient();
       const result = await client.callService(serviceName, action, payload);
 

@@ -350,6 +350,13 @@ export const LocalLLMProvider: React.FC<LocalLLMProviderProps> = ({ children }) 
     };
     
     const initialize = async () => {
+      // Skip initialization in MCP Private Mode
+      const USE_MCP_PRIVATE_MODE = true; // TODO: Make this configurable
+      if (USE_MCP_PRIVATE_MODE) {
+        console.log('⏭️ [LocalLLMContext] Skipping initialization - MCP Private Mode active');
+        return;
+      }
+      
       await waitForLocalLLMAgent();
       
       try {

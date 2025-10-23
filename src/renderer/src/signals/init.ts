@@ -1,5 +1,5 @@
 import { loadSessions } from './conversationActions';
-import { debugState } from './conversationSignals';
+// import { debugState } from './conversationSignals';
 
 // Initialize signals when app starts
 export const initializeConversationSignals = async () => {
@@ -9,13 +9,12 @@ export const initializeConversationSignals = async () => {
     // Load existing sessions from backend
     await loadSessions();
     
-    // Set up debug logging
-    if (process.env.NODE_ENV === 'development') {
-      // Log state changes in development
-      debugState.subscribe((state) => {
-        console.log('🔍 [SIGNALS STATE]', state);
-      });
-    }
+    // Debug logging disabled to reduce console noise
+    // if (process.env.NODE_ENV === 'development') {
+    //   debugState.subscribe((state) => {
+    //     console.log('🔍 [SIGNALS STATE]', state);
+    //   });
+    // }
     
     console.log('✅ [SIGNALS] Conversation signals initialized successfully');
   } catch (error) {

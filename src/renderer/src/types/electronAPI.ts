@@ -58,11 +58,16 @@ declare global {
       onOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
       onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
       onClarificationRequest: (callback: (event: any, data: any) => void) => void;
+      onThinkingIndicatorUpdate: (callback: (event: any, data: any) => void) => void;
       submitClarificationResponse: (stepId: string, response: string | boolean) => Promise<any>;
       startOrchestrationWorkflow: (userInput: string, context?: any) => Promise<any>;
       getOrchestrationStatus: (workflowId: string) => Promise<any>;
       pauseOrchestrationWorkflow: (workflowId: string) => Promise<any>;
       resumeOrchestrationWorkflow: (workflowId: string) => Promise<any>;
+      
+      // MCP Service Communication
+      mcpCall: (params: { serviceName: string; action: string; payload: any }) => Promise<any>;
+      privateModeProcess: (params: { message: string; context: any }) => Promise<any>;
       
       // External link handling
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;

@@ -11,7 +11,6 @@ import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useConversationSignals } from '../hooks/useConversationSignals';
-import { useLocalLLM } from '../contexts/LocalLLMContext';
 
 interface ChatMessage {
   id: string;
@@ -34,13 +33,9 @@ export default function ChatMessages() {
 
 
 
-  // LocalLLM integration for pipeline toggle
-  const { useNewPipeline } = useLocalLLM();
-  
-  // 🎯 MCP Private Mode Feature Flag (NEW)
-  // Set to true to use new MCP orchestrator, false for old pipeline
-  // ✅ ENABLED: MCP system initialized successfully!
-  const USE_MCP_PRIVATE_MODE = true; // Toggle this to switch between old/new
+  // 🎯 MCP Private Mode Feature Flag
+  // ✅ ALWAYS ENABLED: MCP system is the only supported mode
+  const USE_MCP_PRIVATE_MODE = true;
   
   // WebSocket integration for receiving streaming responses
   const {
@@ -73,7 +68,6 @@ export default function ChatMessages() {
   const [isProcessingLocally, setIsProcessingLocally] = useState(false);
   const [localLLMError, setLocalLLMError] = useState<string | null>(null);
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState('');
-  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const isStreamingEndedRef = useRef(false);
   
   // Input state from ChatWindow
@@ -314,7 +308,6 @@ export default function ChatMessages() {
     try {
       if (message.type === 'llm_stream_start') {
         setCurrentStreamingMessage('');
-        setStreamingMessageId(`streaming_${message.requestId || message.id || Date.now()}`);
         isStreamingEndedRef.current = false; // Reset streaming ended flag
         setIsLoading(false); // Clear loading when streaming starts
         scrollToBottom({ smooth: true, force: false });
@@ -329,15 +322,7 @@ export default function ChatMessages() {
           // Add artificial delay for smooth typing effect
           setTimeout(() => {
             if (!isStreamingEndedRef.current) {
-              setCurrentStreamingMessage(prev => {
-                const newText = prev + chunkText;
-                console.log('📄 Updated streaming message length:', newText.length);
-                console.log('🔍 [STREAM-CHUNK] Current streaming message:', newText.substring(0, 50) + '...');
-                
-                return newText;
-              });
-            } else {
-              console.log('⏭️ Skipping delayed chunk - streaming ended during delay');
+              setCurrentStreamingMessage(prev => prev + chunkText);
             }
           }, 60); // 60ms delay per chunk for smooth typing effect
         } else {
@@ -345,15 +330,11 @@ export default function ChatMessages() {
         }
         
       } else if (message.type === 'llm_stream_end') {
-        console.log('✅ Stream completed for request:', message.requestId);
-        console.log('📄 Full response text:', message.payload?.fullText);
-        console.log('🔍 [DEBUG]      case \'llm_stream_end\':');
-        console.log('🏁 Stream ended, finalizing message...');
+        console.log('✅ Stream completed');
         // scrollToBottom({ smooth: true, force: false });
 
         // Check if we've already processed a stream end for this message
         if (isStreamingEndedRef.current) {
-          console.log('⚠️ Stream end already processed, ignoring duplicate');
           return;
         }
         
@@ -368,21 +349,6 @@ export default function ChatMessages() {
         
         const finalText = message.payload?.fullText || currentStreamingMessage;
         
-        // Create final AI message using the full text from the payload
-        const finalMessage: ChatMessage = {
-          id: streamingMessageId || `ai_${Date.now()}`,
-          text: finalText,
-          sender: 'ai',
-          timestamp: new Date(),
-          isStreaming: false
-        };
-        
-        // Add final message to conversation context
-        console.log('🤖 Adding final AI message:', finalMessage);
-        console.log('🔍 [DEBUG] activeSessionId:', activeSessionId);
-        console.log('🔍 [DEBUG] signalsAddMessage available:', !!signalsAddMessage);
-        console.log('🔍 [DEBUG] signals.activeSessionId.value:', signals.activeSessionId.value);
-        
         // Use the current active session from signals as fallback
         const currentSessionId = activeSessionId || signals.activeSessionId.value;
         
@@ -394,18 +360,15 @@ export default function ChatMessages() {
               sessionId: currentSessionId,
               metadata: { streamingComplete: true }
             });
-            console.log('✅ Final AI message added to session successfully');
+            // Message added successfully
 
         setCurrentStreamingMessage('');
-        setStreamingMessageId(null);
         setIsLoading(false);
           } catch (error) {
             console.error('❌ Error adding final AI message to session:', error);
           }
         } else {
-          console.log('⚠️ No active session or signalsAddMessage function available');
-          console.log('🔍 [DEBUG] currentSessionId:', currentSessionId);
-          console.log('🔍 [DEBUG] signalsAddMessage type:', typeof signalsAddMessage);
+          console.error('❌ No active session to save message');
         }
 
         // Save WebSocket backend response to local memory
@@ -462,82 +425,42 @@ export default function ChatMessages() {
         // handleAgentOrchestration(message, finalText);
         
       } else if (message.type === 'intent_classification') {
-        console.log('🎯🎯🎯 INTENT CLASSIFICATION MESSAGE FOUND! 🎯🎯🎯');
+        // 🎯 ONLINE MODE: Backend (Phi4) provides intent classification
+        // Forward this to MCP orchestrator for memory storage and action routing
+        console.log('🎯 [INTENT] Backend intent classification received:', message.payload?.primaryIntent);
+        console.log('📊 [INTENT] Confidence:', message.payload?.intents?.[0]?.confidence);
+        console.log('🔍 [INTENT] Query type:', message.payload?.queryType);
         
-        // Extract the actual payload data
-        const payload = message.payload;
-        console.log('  Primary Intent:', payload.primaryIntent);
-        console.log('  Query Type:', payload.queryType);
-        console.log('  Suggested Response:', payload.suggestedResponse);
-        console.log('  Reasoning:', payload.intents?.[0]?.reasoning);
-        console.log('  Full payload:', JSON.stringify(message, null, 2));
-        
-        // STEP 1: Immediately display suggestedResponse to user
-        if (payload.suggestedResponse && signalsAddMessage && activeSessionId) {
-          console.log('📤 [INTENT] Sending suggested response immediately to chat UI');
-          await signalsAddMessage(activeSessionId, {
-            text: payload.suggestedResponse,
-            sender: 'ai',
-            sessionId: activeSessionId,
-            metadata: {
-              source: 'intent_classification_suggested_response',
-              queryType: payload.queryType,
-              primaryIntent: payload.primaryIntent,
-              streamingComplete: true
-            }
-          });
-        }
-        
-        // STEP 2 & 3: For MEMORY or COMMAND queryTypes, start thinking and trigger local pipeline
-        if (payload.primaryIntent === "memory_retrieve" || payload.queryType === 'MEMORY' || payload.queryType === 'COMMAND') {
-          setIsProcessingLocally(true);
-          setInitialThinkingMessage('Thinking');
-          console.log(`🔄 [INTENT] Processing ${payload.queryType} queryType - starting local pipeline`);
-          
-          try {
-            // STEP 2: Start thinking indicator with reasoning message
-            const reasoningMessage = payload.intents?.[0]?.reasoning || `Processing ${payload.queryType.toLowerCase()} request...`;
-            console.log('🤔 [INTENT] Starting thinking indicator with reasoning:', reasoningMessage);
-            setInitialThinkingMessage(reasoningMessage);
-            scrollToBottom({ smooth: true, force: true });
-            // STEP 3: Trigger local pipeline via handleNonContextPipeline
-            console.log('🚀 [INTENT] Triggering local pipeline for', payload.queryType, payload.primaryIntent);
-            
-            if (window.electronAPI?.llmQuery) {
-              const localResult = await window.electronAPI.llmQuery(payload.sourceText || payload.suggestedResponse, {
-                sessionId: activeSessionId,
-                forceQueryType: payload.primaryIntent === "memory_retrieve" ? 'MEMORY' : payload.queryType,
-                intentClassificationPayload: payload,
-                skipIntentClassification: true // We already have the classification
-              });
-              
-              if (localResult.success) {
-                console.log('✅ [INTENT] Local pipeline result:', localResult);
-                
-                // Add AI response to conversation
-                if (signalsAddMessage && signals.activeSessionId.value) {
-                  await signalsAddMessage(signals.activeSessionId.value, {
-                    text: localResult.response || localResult.data,
-                    sender: 'ai',
-                    sessionId: signals.activeSessionId.value,
-                    metadata: { isFinal: true }
-                  });
-
-                  setIsProcessingLocally(false);
-                  scrollToBottom({ smooth: true, force: true });
+        try {
+          // Forward intent to MCP orchestrator for processing
+          if (window.electronAPI?.mcpCall) {
+            const result = await window.electronAPI.mcpCall({
+              serviceName: 'orchestrator',
+              action: 'intent.process',
+              payload: {
+                intent: message.payload?.primaryIntent,
+                queryType: message.payload?.queryType,
+                confidence: message.payload?.intents?.[0]?.confidence,
+                requiresExternalData: message.payload?.requiresExternalData,
+                requiresMemoryAccess: message.payload?.requiresMemoryAccess,
+                suggestedResponse: message.payload?.suggestedResponse,
+                userMessage: lastUserMessage,
+                context: {
+                  sessionId: activeSessionId,
+                  timestamp: message.timestamp
                 }
-                
-              } 
-            }
+              }
+            });
             
-          } catch (error) {
-            console.error('❌ [INTENT] Error in local pipeline processing:', error);
+            if (result?.success) {
+              console.log('✅ [INTENT] MCP orchestrator processed intent:', result.data?.action);
+            }
           }
-        } else if (payload.queryType === 'GENERAL') {
-          console.log('⏭️ [INTENT] Ignoring GENERAL queryType as requested');
-          setIsProcessingLocally(false);
-          scrollToBottom({ smooth: true, force: true });
+        } catch (error) {
+          console.error('❌ [INTENT] Failed to forward intent to MCP orchestrator:', error);
         }
+        
+        setIsProcessingLocally(false);
 
       } else if (message.type === 'connection_status') {
         console.log('🔗 Connection status:', message.status);
@@ -705,12 +628,7 @@ export default function ChatMessages() {
     }, 100);
     
     try {
-      console.log('🔍 [DEBUG] Connection state check:', {
-        isConnected: wsState.isConnected,
-        reconnectCount: wsState.reconnectCount,
-        activeRequests: wsState.activeRequests,
-        messageText: messageText.substring(0, 50) + '...'
-      });
+      // Connection state checked
       
       // 🎯 ENHANCED PIPELINE: Use existing backend infrastructure with better orchestration
       console.log('🧠 [ENHANCED-PIPELINE] Starting message processing with existing backend...');
@@ -725,7 +643,7 @@ export default function ChatMessages() {
           
           try {
             // Call MCP private mode orchestrator
-            const result = await (window as any).electronAPI.privateModeProcess({
+            const result = await window.electronAPI?.privateModeProcess({
               message: messageText,
               context: {
                 sessionId: currentSessionId,
@@ -735,8 +653,8 @@ export default function ChatMessages() {
             });
             
             if (result.success) {
-              console.log('✅ [MCP-PRIVATE] Orchestration successful:', result.action);
-              console.log('📝 [MCP-PRIVATE] Response:', result.response);
+              console.log('✅ [MCP-PRIVATE] Orchestration successful');
+              console.log('🎯 [INTENT]', result.action, '→', result.response.substring(0, 100) + '...');
               
               // Add AI response to conversation
               if (signalsAddMessage && currentSessionId) {
@@ -772,59 +690,11 @@ export default function ChatMessages() {
           return;
         }
         
-        // Check pipeline toggle setting (OLD PATH)
-        if (useNewPipeline) {
-          scrollToBottom({ smooth: true, force: true });
-      
-          console.log('🚀 [NEW-PIPELINE] Using direct llm-query handler...');
-          
-          // Use the NEW ultra-fast pipeline directly
-          if (!window.electronAPI?.llmQuery) {
-            throw new Error('NEW pipeline not available');
-          }
-          
-          const result = await window.electronAPI.llmQuery(messageText, {
-            sessionId: signals.activeSessionId.value, // Use sessionId instead of currentSessionId for consistency
-            currentSessionId: signals.activeSessionId.value,
-            conversationContext: Array.isArray(signals.messages.value) ? 
-              signals.messages.value.slice(-10).map((m: ChatMessage) => `${m.sender}: ${m.text}`).join('\n') : '',
-            userId: 'user'
-          });
-          
-          if (result.success) {
-            console.log('✅ [NEW-PIPELINE] Direct query successful:', result.data);
-            
-            // Add AI response to conversation
-            if (signalsAddMessage && signals.activeSessionId.value) {
-              await signalsAddMessage(signals.activeSessionId.value, {
-                text: result.data,
-                sender: 'ai',
-                sessionId: signals.activeSessionId.value,
-                metadata: { isFinal: true }
-              });
-            }
-            
-            // Stop loading and scroll to bottom
-            setIsLoading(false);
-            setIsProcessingLocally(false);
-            scrollToBottom({ smooth: true, force: true });
-          } else {
-            console.error('❌ [NEW-PIPELINE] Direct query failed:', result.error);
-            setIsLoading(false);
-            setIsProcessingLocally(false);
-            throw new Error(result.error);
-          }
-        } else {
-          console.log('🕐 [OLD-PIPELINE] Using legacy pipeline...');
-          
-          // Try progressive search for cross-session queries
-          const progressiveSuccess = await useProgressiveSearch(messageText);
-          
-          if (!progressiveSuccess) {
-            console.log('🔄 Progressive search failed or not applicable, falling back to local LLM');
-            await handleLocalLLMCall(messageText);
-          }
-        }
+        // ⚠️ DEPRECATED: Old pipeline code removed - MCP Private Mode is now the only path for offline mode
+        console.error('❌ [DEPRECATED] Reached deprecated pipeline code - this should not happen in MCP mode');
+        setLocalLLMError('Configuration error: MCP Private Mode should be enabled');
+        setIsLoading(false);
+        setIsProcessingLocally(false);
         return;
       }
       
@@ -884,216 +754,216 @@ export default function ChatMessages() {
   }, [isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
 
   // Handle local LLM fallback when backend is disconnected
-  const handleLocalLLMCall = useCallback(async (messageText: string) => {
-    let isThinkingMsg = false;
+  // const handleLocalLLMCall = useCallback(async (messageText: string) => {
+  //   let isThinkingMsg = false;
     
-    try {
-      console.log('🤖 Starting local LLM processing...');
-      setIsProcessingLocally(true);
-      setIsLoading(false); // Stop main loading, show local processing instead
-      // Keep current thinking message, don't reset to prevent flash
-      scrollToBottom({ smooth: true, force: true });
+  //   try {
+  //     console.log('🤖 Starting local LLM processing...');
+  //     setIsProcessingLocally(true);
+  //     setIsLoading(false); // Stop main loading, show local processing instead
+  //     // Keep current thinking message, don't reset to prevent flash
+  //     scrollToBottom({ smooth: true, force: true });
       
-      // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
-      if (!window.electronAPI?.llmQueryLocal) {
-        throw new Error('Electron API not available');
-      }
+  //     // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
+  //     if (!window.electronAPI?.llmQueryLocal) {
+  //       throw new Error('Electron API not available');
+  //     }
       
-      // 🎯 ENHANCED: Use existing backend pipeline with semantic-first preferences
-      const result = await window.electronAPI.llmQueryLocal(messageText, {
-        temperature: 0.0,
-        maxTokens: 50,
-        // Enhanced options to guide the existing backend pipeline
-        preferSemanticSearch: true,    // Hint to prioritize semantic search in orchestration
-        enableIntentClassification: true, // Use the sophisticated intent parsers
-        useAgentOrchestration: true    // Leverage the full agent orchestration pipeline
-      });
+  //     // 🎯 ENHANCED: Use existing backend pipeline with semantic-first preferences
+  //     const result = await window.electronAPI.llmQueryLocal(messageText, {
+  //       temperature: 0.0,
+  //       maxTokens: 50,
+  //       // Enhanced options to guide the existing backend pipeline
+  //       preferSemanticSearch: true,    // Hint to prioritize semantic search in orchestration
+  //       enableIntentClassification: true, // Use the sophisticated intent parsers
+  //       useAgentOrchestration: true    // Leverage the full agent orchestration pipeline
+  //     });
       
-      if (result.success) {
-        // Extract the actual AI response from the result
-        // The backend logs show: "Raw Phi3 natural language result: The current President of the USA is Joe Biden..."
-        let aiResponseText = '';
+  //     if (result.success) {
+  //       // Extract the actual AI response from the result
+  //       // The backend logs show: "Raw Phi3 natural language result: The current President of the USA is Joe Biden..."
+  //       let aiResponseText = '';
         
-        // Try to extract from intentClassificationPayload first (this contains the actual Phi3 response)
-        if (result.intentClassificationPayload?.reasoning && result.intentClassificationPayload.reasoning.includes('Raw Phi3 natural language result:')) {
-          // Extract the actual response from the reasoning field
-          const match = result.intentClassificationPayload.reasoning.match(/Raw Phi3 natural language result: (.+)/);
-          if (match) {
-            aiResponseText = match[1].trim();
-          }
-        }
+  //       // Try to extract from intentClassificationPayload first (this contains the actual Phi3 response)
+  //       if (result.intentClassificationPayload?.reasoning && result.intentClassificationPayload.reasoning.includes('Raw Phi3 natural language result:')) {
+  //         // Extract the actual response from the reasoning field
+  //         const match = result.intentClassificationPayload.reasoning.match(/Raw Phi3 natural language result: (.+)/);
+  //         if (match) {
+  //           aiResponseText = match[1].trim();
+  //         }
+  //       }
         
-        // Fallback: try to extract from data.response
-        if (!aiResponseText && result.data?.response) {
-          aiResponseText = result.data.response;
-        }
+  //       // Fallback: try to extract from data.response
+  //       if (!aiResponseText && result.data?.response) {
+  //         aiResponseText = result.data.response;
+  //       }
         
-        // Final fallback: use the full result as string
-        if (!aiResponseText) {
-          aiResponseText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-        }
+  //       // Final fallback: use the full result as string
+  //       if (!aiResponseText) {
+  //         aiResponseText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
+  //       }
         
-        console.log('✅ [LOCAL-LLM] Extracted AI response:', aiResponseText);
+  //       console.log('✅ [LOCAL-LLM] Extracted AI response:', aiResponseText);
 
-        // For question intents, memory operations, show suggested response in ThinkingIndicator while processing
-        if (
-          result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
-          result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
-          result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
-          result.intentClassificationPayload?.primaryIntent === 'question' ||
-          result.intentClassificationPayload?.primaryIntent === 'command'
-        ) {
-          isThinkingMsg = true;
-          // Set the thinking message to the suggested response
-          const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-          setInitialThinkingMessage(thinkingMsg);
+  //       // For question intents, memory operations, show suggested response in ThinkingIndicator while processing
+  //       if (
+  //         result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
+  //         result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
+  //         result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
+  //         result.intentClassificationPayload?.primaryIntent === 'question' ||
+  //         result.intentClassificationPayload?.primaryIntent === 'command'
+  //       ) {
+  //         isThinkingMsg = true;
+  //         // Set the thinking message to the suggested response
+  //         const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
+  //         setInitialThinkingMessage(thinkingMsg);
           
-          // Ensure we stay in processing state to keep ThinkingIndicator visible
-          console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
-          // Don't add the AI message yet - wait for orchestration update
-          return;
-        }
+  //         // Ensure we stay in processing state to keep ThinkingIndicator visible
+  //         console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
+  //         // Don't add the AI message yet - wait for orchestration update
+  //         return;
+  //       }
         
-        // Add AI response to conversation
-        if (signalsAddMessage && signals.activeSessionId.value) {
-          await signalsAddMessage(signals.activeSessionId.value, {
-            text: aiResponseText,
-            sender: 'ai',
-            sessionId: signals.activeSessionId.value,
-            metadata: {
-              source: 'local_llm',
-              processingTime: Date.now(),
-              model: 'phi3'
-            }
-          });
-          console.log('✅ [LOCAL-LLM] AI response added to conversation');
-        }
+  //       // Add AI response to conversation
+  //       if (signalsAddMessage && signals.activeSessionId.value) {
+  //         await signalsAddMessage(signals.activeSessionId.value, {
+  //           text: aiResponseText,
+  //           sender: 'ai',
+  //           sessionId: signals.activeSessionId.value,
+  //           metadata: {
+  //             source: 'local_llm',
+  //             processingTime: Date.now(),
+  //             model: 'phi3'
+  //           }
+  //         });
+  //         console.log('✅ [LOCAL-LLM] AI response added to conversation');
+  //       }
         
-        scrollToBottom({ smooth: true, force: true });
-      } else {
-        console.error('❌ [LOCAL-LLM] Local LLM query failed:', result.error);
-        setLocalLLMError(result.error || 'Local LLM processing failed');
-      }
+  //       scrollToBottom({ smooth: true, force: true });
+  //     } else {
+  //       console.error('❌ [LOCAL-LLM] Local LLM query failed:', result.error);
+  //       setLocalLLMError(result.error || 'Local LLM processing failed');
+  //     }
       
-    } catch (error) {
-      console.error('❌ [LOCAL-LLM] Local LLM processing error:', error);
-      setLocalLLMError('Failed to process with local LLM. Please try again.');
-    } finally {
-      // Only clear processing state if not waiting for memory retrieve or question orchestration
-      if (!isThinkingMsg) {
-        console.log('🎯 [THINKING] Clearing processing state in finally block');
-        setIsProcessingLocally(false);
-        setIsLoading(false);
-      } else {
-        console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory, question, command:', isThinkingMsg);
-      }
-      scrollToBottom({ smooth: true, force: true });
-    }
-  }, [signalsAddMessage, scrollToBottom]);
+  //   } catch (error) {
+  //     console.error('❌ [LOCAL-LLM] Local LLM processing error:', error);
+  //     setLocalLLMError('Failed to process with local LLM. Please try again.');
+  //   } finally {
+  //     // Only clear processing state if not waiting for memory retrieve or question orchestration
+  //     if (!isThinkingMsg) {
+  //       console.log('🎯 [THINKING] Clearing processing state in finally block');
+  //       setIsProcessingLocally(false);
+  //       setIsLoading(false);
+  //     } else {
+  //       console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory, question, command:', isThinkingMsg);
+  //     }
+  //     scrollToBottom({ smooth: true, force: true });
+  //   }
+  // }, [signalsAddMessage, scrollToBottom]);
 
 
 
   // Add progressive search option to existing message handling
-  const useProgressiveSearch = useCallback(async (messageText: string) => {
-    try {
-      console.log('🔍 [PROGRESSIVE] Starting progressive search (backend will handle detection)...');
-      scrollToBottom({ smooth: true, force: true });
+  // const useProgressiveSearch = useCallback(async (messageText: string) => {
+  //   try {
+  //     console.log('🔍 [PROGRESSIVE] Starting progressive search (backend will handle detection)...');
+  //     scrollToBottom({ smooth: true, force: true });
       
-      // Check if progressive search API is available
-      if (!(window.electronAPI as any)?.localLLMProgressiveSearch) {
-        console.warn('⚠️ Progressive search not available, using fallback');
-        return false;
-      }
+  //     // Check if progressive search API is available
+  //     if (!(window.electronAPI as any)?.localLLMProgressiveSearch) {
+  //       console.warn('⚠️ Progressive search not available, using fallback');
+  //       return false;
+  //     }
 
-      // Keep loading states active to show "Thinking..." until first intermediate response
-      console.log('🔍 [PROGRESSIVE] Keeping loading states active for initial thinking indicator...');
-      // Don't clear loading states here - let them show the thinking indicator
+  //     // Keep loading states active to show "Thinking..." until first intermediate response
+  //     console.log('🔍 [PROGRESSIVE] Keeping loading states active for initial thinking indicator...');
+  //     // Don't clear loading states here - let them show the thinking indicator
 
-      // Set up context
-      const context = {
-        currentSessionId: signals.activeSessionId.value,
-        conversationContext: (signals.activeMessages.value || [])
-          .slice(-10)
-          .map((msg: any) => `${msg.sender}: ${msg.text}`)
-          .join('\n'),
-        userId: 'user'
-      };
+  //     // Set up context
+  //     const context = {
+  //       currentSessionId: signals.activeSessionId.value,
+  //       conversationContext: (signals.activeMessages.value || [])
+  //         .slice(-10)
+  //         .map((msg: any) => `${msg.sender}: ${msg.text}`)
+  //         .join('\n'),
+  //       userId: 'user'
+  //     };
 
-      // Set up intermediate response handler
-      const handleIntermediate = async (_event: any, data: any) => {
-        console.log('📨 [PROGRESSIVE] Received intermediate response:', data);
+  //     // Set up intermediate response handler
+  //     const handleIntermediate = async (_event: any, data: any) => {
+  //       console.log('📨 [PROGRESSIVE] Received intermediate response:', data);
         
-        // Only clear loading states if this is the final response (continueToNextStage: false)
-        if (data?.continueToNextStage === false) {
-          console.log('🔍 [PROGRESSIVE] Final stage reached, clearing loading states...');
-          setIsLoading(false);
-          setIsProcessingLocally(false);
-        } else {
-          console.log('🔍 [PROGRESSIVE] Intermediate stage, keeping loading states active...');
-        }
+  //       // Only clear loading states if this is the final response (continueToNextStage: false)
+  //       if (data?.continueToNextStage === false) {
+  //         console.log('🔍 [PROGRESSIVE] Final stage reached, clearing loading states...');
+  //         setIsLoading(false);
+  //         setIsProcessingLocally(false);
+  //       } else {
+  //         console.log('🔍 [PROGRESSIVE] Intermediate stage, keeping loading states active...');
+  //       }
         
-        if (data?.response && signalsAddMessage && signals.activeSessionId.value) {
-          await signalsAddMessage(signals.activeSessionId.value, {
-            text: data.response,
-            sender: 'ai',
-            sessionId: signals.activeSessionId.value,
-            metadata: { 
-              isIntermediate: data?.continueToNextStage !== false,
-              isFinal: data?.continueToNextStage === false,
-              stage: data?.stage 
-            }
-          });
-          scrollToBottom({ smooth: true, force: true });
-          console.log('✅ [PROGRESSIVE] Response added to conversation - Stage:', data?.stage, 'Final:', data?.continueToNextStage === false);
-        }
-      };
+  //       if (data?.response && signalsAddMessage && signals.activeSessionId.value) {
+  //         await signalsAddMessage(signals.activeSessionId.value, {
+  //           text: data.response,
+  //           sender: 'ai',
+  //           sessionId: signals.activeSessionId.value,
+  //           metadata: { 
+  //             isIntermediate: data?.continueToNextStage !== false,
+  //             isFinal: data?.continueToNextStage === false,
+  //             stage: data?.stage 
+  //           }
+  //         });
+  //         scrollToBottom({ smooth: true, force: true });
+  //         console.log('✅ [PROGRESSIVE] Response added to conversation - Stage:', data?.stage, 'Final:', data?.continueToNextStage === false);
+  //       }
+  //     };
 
-      if ((window.electronAPI as any).onProgressiveSearchIntermediate) {
-        (window.electronAPI as any).onProgressiveSearchIntermediate(handleIntermediate);
-      } else {
-        console.warn('⚠️ [PROGRESSIVE] onProgressiveSearchIntermediate not available');
-        console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
-        setIsLoading(false);
-        setIsProcessingLocally(false);
-      }
+  //     if ((window.electronAPI as any).onProgressiveSearchIntermediate) {
+  //       (window.electronAPI as any).onProgressiveSearchIntermediate(handleIntermediate);
+  //     } else {
+  //       console.warn('⚠️ [PROGRESSIVE] onProgressiveSearchIntermediate not available');
+  //       console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
+  //       setIsLoading(false);
+  //       setIsProcessingLocally(false);
+  //     }
 
-      // Execute progressive search
-      console.log('🚀 [PROGRESSIVE] Calling localLLMProgressiveSearch API...');
-      const result = await (window.electronAPI as any).localLLMProgressiveSearch({
-        prompt: messageText,
-        context: context
-      });
+  //     // Execute progressive search
+  //     console.log('🚀 [PROGRESSIVE] Calling localLLMProgressiveSearch API...');
+  //     const result = await (window.electronAPI as any).localLLMProgressiveSearch({
+  //       prompt: messageText,
+  //       context: context
+  //     });
 
-      // Cleanup
-      if ((window.electronAPI as any).removeAllListeners) {
-        (window.electronAPI as any).removeAllListeners('progressive-search-intermediate');
-      }
+  //     // Cleanup
+  //     if ((window.electronAPI as any).removeAllListeners) {
+  //       (window.electronAPI as any).removeAllListeners('progressive-search-intermediate');
+  //     }
 
-      if (result.success && signalsAddMessage && signals.activeSessionId.value) {
-        await signalsAddMessage(signals.activeSessionId.value, {
-          text: result.data.response,
-          sender: 'ai',
-          sessionId: signals.activeSessionId.value,
-          metadata: { isFinal: true }
-        });
+  //     if (result.success && signalsAddMessage && signals.activeSessionId.value) {
+  //       await signalsAddMessage(signals.activeSessionId.value, {
+  //         text: result.data.response,
+  //         sender: 'ai',
+  //         sessionId: signals.activeSessionId.value,
+  //         metadata: { isFinal: true }
+  //       });
         
-        // Clear loading states after final response is added
-        console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
-        setIsLoading(false);
-        setIsProcessingLocally(false);
+  //       // Clear loading states after final response is added
+  //       console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
+  //       setIsLoading(false);
+  //       setIsProcessingLocally(false);
         
-        return true;
-      }
+  //       return true;
+  //     }
 
-      return false;
-    } catch (error) {
-      console.error('❌ Progressive search failed:', error);
-      // Clear loading states on error
-      setIsLoading(false);
-      setIsProcessingLocally(false);
-      return false;
-    }
-  }, [signalsAddMessage]);
+  //     return false;
+  //   } catch (error) {
+  //     console.error('❌ Progressive search failed:', error);
+  //     // Clear loading states on error
+  //     setIsLoading(false);
+  //     setIsProcessingLocally(false);
+  //     return false;
+  //   }
+  // }, [signalsAddMessage]);
 
 
 
@@ -1126,10 +996,7 @@ export default function ChatMessages() {
     e?.preventDefault();
     e?.stopPropagation();
     
-    console.log('🔍 [DEBUG] WebSocket toggle clicked in input area!', {
-      currentState: wsState.isConnected,
-      reconnectCount: wsState.reconnectCount
-    });
+    console.log('🔌 WebSocket toggle clicked');
       
     try {
       if (wsState.isConnected) {
@@ -1381,8 +1248,8 @@ export default function ChatMessages() {
     };
 
     // Set up IPC listener using the same pattern as other listeners
-    if (window.electronAPI && (window.electronAPI as any).onThinkingIndicatorUpdate) {
-      (window.electronAPI as any).onThinkingIndicatorUpdate(handleThinkingUpdate);
+    if (window.electronAPI?.onThinkingIndicatorUpdate) {
+      window.electronAPI.onThinkingIndicatorUpdate(handleThinkingUpdate);
     } else {
       console.warn('⚠️ onThinkingIndicatorUpdate not available in electronAPI');
     }
@@ -1394,7 +1261,6 @@ export default function ChatMessages() {
     if (hasMessages && !isUserScrolling) {
       const lastMessage = displayMessages[displayMessages.length - 1];
       if (lastMessage && lastMessage.sender === 'ai' && !lastMessage.isStreaming) {
-        console.log('🔄 Auto-scrolling after AI message completion');
         scrollToBottom({ smooth: true, force: true });
       }
     }
@@ -1458,7 +1324,6 @@ export default function ChatMessages() {
     // Listen for orchestration updates (final results from background processing)
     
     if (!orchestrationListenerSetup.current && window.electronAPI?.onOrchestrationUpdate) {
-      console.log('🔍 [DEBUG] Setting up orchestration update listener (first time)...');
       orchestrationListenerSetup.current = true;
       
       window.electronAPI.onOrchestrationUpdate(async (_event: any, updateData: any) => {
@@ -1746,9 +1611,7 @@ export default function ChatMessages() {
         {/* Thinking indicator for local LLM processing */}
         {(() => {
           const shouldShow = (isLoading && !wsState.isConnected) || isProcessingLocally;
-          if (shouldShow) {
-            console.log('🎯 [THINKING] Showing ThinkingIndicator - isLoading:', isLoading, 'wsConnected:', wsState.isConnected, 'isProcessingLocally:', isProcessingLocally, 'message:', initialThinkingMessage);
-          }
+          
           return shouldShow;
         })() ? (
           <ThinkingIndicator 

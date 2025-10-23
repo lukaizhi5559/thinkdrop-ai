@@ -173,26 +173,37 @@ export const loadSessions = async (retryCount = 0) => {
     }
     
     console.log('🔄 [SIGNALS] Calling MCP conversation service...');
-    const result = await (window.electronAPI as any).mcpCall({
-      serviceName: 'conversation',
-      action: 'session.list',
-      payload: {
-        limit: 50,
-        offset: 0
-      }
-    }).catch(async (err: Error) => {
+    
+    let result;
+    try {
+      result = await (window.electronAPI as any).mcpCall({
+        serviceName: 'conversation',
+        action: 'session.list',
+        payload: {
+          limit: 50,
+          offset: 0
+        }
+      });
+    } catch (err: any) {
       // Handler not registered yet or service not ready - retry after delay
-      if ((err.message.includes('No handler registered') || err.message.includes('not available')) && retryCount < 5) {
+      if ((err.message?.includes('No handler registered') || err.message?.includes('not available')) && retryCount < 5) {
         console.log(`⏳ [SIGNALS] MCP handler not ready yet, retrying in ${(retryCount + 1) * 500}ms... (attempt ${retryCount + 1}/5)`);
         await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 500));
         return loadSessions(retryCount + 1);
       }
-      throw err;
-    });
+      console.error('❌ [SIGNALS] MCP call error:', err);
+      error.value = err.message || 'Failed to load sessions';
+      return;
+    }
     
-    console.log('📥 [SIGNALS] MCP response received:', result);
-    console.log('📥 [SIGNALS] result.data:', result.data);
-    console.log('📥 [SIGNALS] result.data.data:', result.data?.data);
+    // MCP response received
+    
+    // Check if result exists
+    if (!result) {
+      console.error('❌ [SIGNALS] MCP call returned undefined');
+      error.value = 'MCP service not available';
+      return;
+    }
     
     // MCP response format: { success: true, data: { version, service, action, success, data: { sessions: [...] } } }
     if (!result.success || !result.data?.success) {
@@ -202,7 +213,6 @@ export const loadSessions = async (retryCount = 0) => {
     }
     
     const sessionsData = result.data?.data?.sessions || [];
-    console.log('📥 [SIGNALS] Parsed sessionsData:', sessionsData);
     console.log('✅ [SIGNALS] Loaded sessions:', sessionsData.length);
     
     if (sessionsData.length > 0) {
@@ -212,9 +222,9 @@ export const loadSessions = async (retryCount = 0) => {
       const activeSession = sessionsData.find((s: ConversationSession) => s.isActive);
       if (activeSession) {
         activeSessionId.value = activeSession.id;
-        console.log(' [SIGNALS] Found active session:', activeSession.id);
+        // Found active session
         // Load messages for the active session
-        console.log('📥 [SIGNALS] Loading messages for active session...');
+        // Loading messages for active session
         await loadMessages(activeSession.id);
       } else if (sessionsData.length > 0) {
         // Auto-activate the first session if none is active
@@ -247,7 +257,7 @@ export const loadMessages = async (sessionId: string, options?: {
   offset?: number;
   direction?: 'ASC' | 'DESC';
 }) => {
-  console.log('📨 [SIGNALS] Loading messages for session:', sessionId, options);
+  console.log(' [SIGNALS] Loading messages for session:', sessionId, options);
   
   try {
     isLoading.value = true;
@@ -263,24 +273,24 @@ export const loadMessages = async (sessionId: string, options?: {
         }
       });
       
-      console.log('🔍 [SIGNALS] Load messages result:', JSON.stringify(result, null, 2));
+      // Load messages result received
       
       // MCP response format: { success: true, data: { version, service, action, success, data: { messages } } }
       const messagesData = result.data?.data?.messages;
       
       if (result.success && result.data?.success && messagesData) {
-        console.log('✅ [SIGNALS] Loaded messages:', messagesData.length);
+        console.log(' [SIGNALS] Loaded messages:', messagesData.length);
         messages.value = {
           ...messages.value,
           [sessionId]: messagesData
         };
         return messagesData;
       } else {
-        console.warn('⚠️ [SIGNALS] No messages found in result:', result);
+        console.warn(' [SIGNALS] No messages found in result:', result);
       }
     }
   } catch (err) {
-    console.error('❌ [SIGNALS] Failed to load messages:', err);
+    console.error(' [SIGNALS] Failed to load messages:', err);
   } finally {
     isLoading.value = false;
   }
@@ -288,8 +298,8 @@ export const loadMessages = async (sessionId: string, options?: {
 };
 
 export const addMessage = async (sessionId: string, message: Omit<ChatMessage, 'id' | 'timestamp'>) => {
-  console.log('📝 [SIGNALS] Adding message to session:', sessionId);
-  console.log('📝 [SIGNALS] Message data:', message);
+  console.log(' [SIGNALS] Adding message to session:', sessionId);
+  console.log(' [SIGNALS] Message data:', message);
   
   try {
     if ((window.electronAPI as any)?.mcpCall) {
@@ -304,12 +314,12 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
         }
       });
       
-      console.log('📝 [SIGNALS] Add message result:', JSON.stringify(result, null, 2));
+      // Message add result received
       
       // MCP response format: { success: true, data: { version, service, action, success, data: { messageId, ... } } }
       const messageData = result.data?.data;
       
-      console.log('📝 [SIGNALS] Parsed messageData:', messageData);
+      // Message data parsed
       
       // Check if this is a duplicate message
       if (messageData && messageData.isDuplicate) {
@@ -327,7 +337,7 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
           metadata: messageData.message?.metadata || messageData.metadata || {}
         };
         
-        console.log('📝 [SIGNALS] Created newMessage:', newMessage);
+        // New message created
         
         // Add message to the session's messages array
         const currentMessages = messages.value[sessionId] || [];

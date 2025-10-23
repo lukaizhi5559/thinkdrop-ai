@@ -67,16 +67,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   'conversation-message-list': (params) => ipcRenderer.invoke('conversation-message-list', params),
   'conversation-message-update': (params) => ipcRenderer.invoke('conversation-message-update', params),
   
-  // LocalLLMAgent communication
-  getLocalLLMHealth: () => ipcRenderer.invoke('local-llm:health'),
-  processLocalLLMMessage: (message) => ipcRenderer.invoke('local-llm:process-message', message),
-  llmOrchestrate: (userInput, context) => ipcRenderer.invoke('llm-orchestrate', userInput, context),
-  llmQueryLocal: (prompt, options) => ipcRenderer.invoke('llm-query-local', prompt, options),
-  llmQuery: (prompt, context) => ipcRenderer.invoke('llm-query', prompt, context),
-  llmGetHealth: () => ipcRenderer.invoke('llm-get-health'),
-  llmGetCachedAgents: () => ipcRenderer.invoke('llm-get-cached-agents'),
-  llmGetCommunications: (limit) => ipcRenderer.invoke('llm-get-communications', limit),
-  llmClearCache: () => ipcRenderer.invoke('llm-clear-cache'),
+  // LocalLLMAgent communication (DEPRECATED - use MCP Private Mode)
+  getLocalLLMHealth: () => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  processLocalLLMMessage: (message) => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmOrchestrate: (userInput, context) => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmQueryLocal: (prompt, options) => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmQuery: (prompt, context) => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmGetHealth: () => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmGetCachedAgents: () => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmGetCommunications: (limit) => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
+  llmClearCache: () => Promise.resolve({ success: false, error: 'Deprecated: Use MCP mode' }),
 
   // Progressive search APIs
   localLLMProgressiveSearch: (prompt, context) => ipcRenderer.invoke('local-llm-progressive-search', { prompt, context }),

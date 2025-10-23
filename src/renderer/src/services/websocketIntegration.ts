@@ -237,7 +237,10 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   private handleMessage(event: MessageEvent): void {
     try {
       const message: StreamingMessage = JSON.parse(event.data);
-      console.log(`📨 Received message: ${message.type}`, message);
+      // Only log important messages to reduce noise
+      if (message.type !== 'llm_stream_chunk') {
+        console.log(`📨 ${message.type}`);
+      }
       
       // Emit specific event types
       this.emit(message.type, message);

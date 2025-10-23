@@ -57,6 +57,50 @@ class AgentOrchestrator {
   }
 
   /**
+   * Process pre-classified intent from backend (online mode)
+   * @param {object} intentData - Intent classification from backend
+   * @param {string} userMessage - Original user message
+   * @param {object} context - Context (sessionId, etc.)
+   * @returns {Promise<object>} Processing result
+   */
+  async processBackendIntent(intentData, userMessage, context = {}) {
+    const startTime = Date.now();
+    
+    try {
+      console.log(`\n🎯 [ORCHESTRATOR] Processing backend intent: "${intentData.intent}"`);
+      console.log(`📊 [ORCHESTRATOR] Confidence: ${intentData.confidence}, Query type: ${intentData.queryType}`);
+
+      // Convert backend intent format to internal format
+      const intent = {
+        type: intentData.intent || intentData.primaryIntent || 'general_query',
+        confidence: intentData.confidence || 0.8,
+        queryType: intentData.queryType,
+        requiresMemory: intentData.requiresMemoryAccess || false,
+        requiresExternalData: intentData.requiresExternalData || false,
+        suggestedResponse: intentData.suggestedResponse
+      };
+
+      // Route based on intent type (memory storage, web search, etc.)
+      const result = await this.routeIntent(intent, userMessage, context);
+
+      // Add timing
+      result.elapsedMs = Date.now() - startTime;
+      console.log(`✅ [ORCHESTRATOR] Backend intent processed in ${result.elapsedMs}ms`);
+
+      return result;
+
+    } catch (error) {
+      console.error(`❌ [ORCHESTRATOR] Backend intent error:`, error.message);
+      return {
+        success: false,
+        action: 'backend_intent_failed',
+        error: error.message,
+        response: "I had trouble processing that intent."
+      };
+    }
+  }
+
+  /**
    * Parse intent via phi4 service
    */
   async parseIntent(message, context) {
@@ -104,22 +148,42 @@ class AgentOrchestrator {
     const intentType = intent.type || intent.primaryIntent || 'general_query';
 
     switch (intentType.toLowerCase()) {
+      // Memory operations
       case 'memory_store':
       case 'store_memory':
+      case 'remember':
         return await this.handleMemoryStore(message, intent, context);
 
       case 'memory_retrieve':
       case 'retrieve_memory':
       case 'memory_query':
+      case 'recall':
         return await this.handleMemoryRetrieve(message, intent, context);
 
+      // Web search
       case 'web_search':
       case 'search':
+      case 'lookup':
         return await this.handleWebSearch(message, intent, context);
 
+      // Commands & actions
+      case 'command':
+      case 'action':
+      case 'execute':
+        return await this.handleCommand(message, intent, context);
+
+      // Scheduling
+      case 'schedule':
+      case 'reminder':
+      case 'calendar':
+        return await this.handleScheduling(message, intent, context);
+
+      // General queries (default)
       case 'general_query':
       case 'question':
       case 'general':
+      case 'greeting':
+      case 'chitchat':
       default:
         return await this.handleGeneralQuery(message, intent, context);
     }
@@ -317,6 +381,28 @@ class AgentOrchestrator {
     console.log('💬 [GENERAL_QUERY] Processing query...');
 
     try {
+      // Fetch conversation history for context
+      let conversationHistory = [];
+      if (context.sessionId) {
+        console.log('📜 [GENERAL_QUERY] Fetching conversation history...');
+        try {
+          const historyResult = await this.mcpClient.listMessages(context.sessionId, {
+            limit: 10,
+            direction: 'DESC'
+          });
+          
+          const messages = historyResult.data?.messages || historyResult.messages || [];
+          // Reverse to get chronological order (oldest first)
+          conversationHistory = messages.reverse().map(m => ({
+            role: m.sender === 'user' ? 'user' : 'assistant',
+            content: m.text || m.content
+          }));
+          console.log(`✅ [GENERAL_QUERY] Loaded ${conversationHistory.length} messages from history`);
+        } catch (histError) {
+          console.warn('⚠️ [GENERAL_QUERY] Could not fetch conversation history:', histError.message);
+        }
+      }
+
       // Check if needs memory context
       let memories = [];
       if (intent.requiresMemory || intent.requiresMemoryAccess) {
@@ -330,10 +416,11 @@ class AgentOrchestrator {
         console.log(`✅ [GENERAL_QUERY] Found ${memories.length} relevant memories`);
       }
 
-      // Generate answer via phi4
+      // Generate answer via phi4 with conversation history
       const response = await this.mcpClient.getAnswer(
         message,
         {
+          conversationHistory: conversationHistory,
           memories: memories.map(m => ({
             text: m.text || m.content,
             similarity: m.similarity
@@ -414,6 +501,98 @@ class AgentOrchestrator {
       .join('\n\n');
 
     return `Here's what I found:\n\n${formatted}`;
+  }
+
+  /**
+   * Handle system commands
+   */
+  async handleCommand(message, intent, context) {
+    console.log('⚙️ [COMMAND] Processing command...');
+
+    try {
+      // Extract command type from entities
+      const commandType = intent.entities?.find(e => e.type === 'command')?.value || 'unknown';
+      
+      console.log(`🔧 [COMMAND] Command type: ${commandType}`);
+
+      // For now, route to general query with command context
+      // TODO: Add specific command handlers (screenshot, system info, etc.)
+      const response = await this.mcpClient.getAnswer(
+        message,
+        {
+          commandType: commandType,
+          isCommand: true,
+          sessionId: context.sessionId,
+          userId: context.userId
+        }
+      );
+
+      return {
+        success: true,
+        action: 'command',
+        data: {
+          commandType: commandType,
+          executed: false // Not yet implemented
+        },
+        response: response.data?.answer || response.answer || "Command processing is not yet fully implemented."
+      };
+
+    } catch (error) {
+      console.error('❌ [COMMAND] Error:', error.message);
+      return {
+        success: false,
+        action: 'command_failed',
+        error: error.message,
+        response: "I had trouble processing that command."
+      };
+    }
+  }
+
+  /**
+   * Handle scheduling/reminders
+   */
+  async handleScheduling(message, intent, context) {
+    console.log('📅 [SCHEDULING] Processing scheduling request...');
+
+    try {
+      // Extract time/date entities
+      const timeEntities = intent.entities?.filter(e => 
+        e.type === 'time' || e.type === 'date' || e.type === 'datetime'
+      ) || [];
+
+      console.log(`⏰ [SCHEDULING] Found ${timeEntities.length} time entities`);
+
+      // For now, route to general query with scheduling context
+      // TODO: Add actual scheduling functionality via MCP service
+      const response = await this.mcpClient.getAnswer(
+        message,
+        {
+          isScheduling: true,
+          timeEntities: timeEntities,
+          sessionId: context.sessionId,
+          userId: context.userId
+        }
+      );
+
+      return {
+        success: true,
+        action: 'scheduling',
+        data: {
+          timeEntities: timeEntities,
+          scheduled: false // Not yet implemented
+        },
+        response: response.data?.answer || response.answer || "Scheduling functionality is not yet fully implemented."
+      };
+
+    } catch (error) {
+      console.error('❌ [SCHEDULING] Error:', error.message);
+      return {
+        success: false,
+        action: 'scheduling_failed',
+        error: error.message,
+        response: "I had trouble processing that scheduling request."
+      };
+    }
   }
 
   /**
