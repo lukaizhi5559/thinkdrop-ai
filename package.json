@@ -33,6 +33,9 @@
   ],
   "author": "Thinkdrop AI Team",
   "license": "MIT",
+  "workspaces": [
+    "mcp-services/*"
+  ],
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/react": "^19.1.8",

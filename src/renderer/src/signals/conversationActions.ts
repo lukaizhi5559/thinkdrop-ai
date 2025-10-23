@@ -24,22 +24,22 @@ export const switchToSession = async (sessionId: string) => {
   
   try {
     // Call backend to properly set is_active flags (async, but UI already updated)
-    if (window.electronAPI?.agentExecute) {
-      console.log('📤 [SIGNALS] Calling backend session-switch for:', sessionId);
-      const result = await window.electronAPI.agentExecute({
-        agentName: 'ConversationSessionAgent',
-        action: 'session-switch',
-        options: { sessionId }
+    if ((window.electronAPI as any)?.mcpCall) {
+      console.log('📤 [SIGNALS] Calling MCP session-switch for:', sessionId);
+      const result = await (window.electronAPI as any).mcpCall({
+        serviceName: 'conversation',
+        action: 'session.switch',
+        payload: { sessionId }
       });
       
-      if (result.success) {
-        console.log('✅ [SIGNALS] Backend session switch successful for:', sessionId);
+      if (result.success && result.data?.success) {
+        console.log('✅ [SIGNALS] MCP session switch successful for:', sessionId);
       } else {
-        console.error('❌ [SIGNALS] Backend session switch failed:', result.error);
+        console.error('❌ [SIGNALS] MCP session switch failed:', result.error || result.data?.error);
       }
     }
   } catch (err) {
-    console.error('❌ [SIGNALS] Error calling backend session switch:', err);
+    console.error('❌ [SIGNALS] Error calling MCP session switch:', err);
   }
   
   // Load messages for the session if not already loaded
@@ -75,11 +75,12 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
     isLoading.value = true;
     error.value = null;
     
-    if (window.electronAPI?.agentExecute) {
-      const result = await window.electronAPI.agentExecute({
-        agentName: 'ConversationSessionAgent',
-        action: 'session-create',
-        options: {
+    // Use MCP service instead of agentExecute
+    if ((window.electronAPI as any)?.mcpCall) {
+      const result = await (window.electronAPI as any).mcpCall({
+        serviceName: 'conversation',
+        action: 'session.create',
+        payload: {
           sessionType,
           title: options?.title || `Chat ${sessions.value.length + 1}`,
           triggerReason: 'manual',
@@ -90,20 +91,19 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
         }
       });
 
-      console.log('🔄 [SIGNALS] Backend response:', result);
-      console.log('🔄 [SIGNALS] Response type:', typeof result);
-      console.log('🔄 [SIGNALS] Response keys:', result ? Object.keys(result) : 'null/undefined');
-      console.log('🔄 [SIGNALS] Success value:', result?.success);
-      console.log('🔄 [SIGNALS] Error value:', result?.error);
-      console.log('🔄 [SIGNALS] SessionId (top level):', result?.sessionId);
-      console.log('🔄 [SIGNALS] Result object:', result?.result);
-      console.log('🔄 [SIGNALS] Result keys:', result?.result ? Object.keys(result.result) : 'null/undefined');
-      console.log('🔄 [SIGNALS] Result data:', result?.result?.data);
+      console.log('🔄 [SIGNALS] MCP response:', result);
+      console.log('🔄 [SIGNALS] Response data:', result.data);
+      console.log('🔄 [SIGNALS] Data keys:', result.data ? Object.keys(result.data) : 'no data');
 
-      // Handle both response formats: {success, sessionId, data} and {success, result: {sessionId, data}}
-      const sessionId = result?.sessionId || result?.result?.sessionId;
+      // MCP response format: { success: true, data: { version, service, action, success, requestId, data: { sessionId, session } } }
+      // The actual data is nested at result.data.data
+      if (!result.success || !result.data?.success) {
+        throw new Error(result.error || result.data?.error || 'Failed to create session');
+      }
+
+      const sessionId = result.data?.data?.sessionId;
       
-      if (result?.success && sessionId) {
+      if (sessionId) {
         console.log(' [SIGNALS] Session created successfully:', sessionId);
         
         // Create new session object
@@ -160,71 +160,52 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
 };
 
 export const loadSessions = async (retryCount = 0) => {
-  console.log('📋 [SIGNALS] Loading sessions... (attempt', retryCount + 1, ')');
+  console.log('📋 [SIGNALS] Loading sessions via MCP... (attempt', retryCount + 1, ')');
   
   try {
     isLoading.value = true;
     error.value = null;
     
-    // Use direct IPC handler instead of agentExecute (which is disabled in MCP mode)
-    const sessionListHandler = (window.electronAPI as any)?.['conversation-session-list'];
-    if (!sessionListHandler) {
-      console.error('❌ [SIGNALS] conversation-session-list handler not available');
+    // Use MCP service instead of IPC handlers
+    if (!(window.electronAPI as any)?.mcpCall) {
+      console.error('❌ [SIGNALS] mcpCall not available');
       return;
     }
     
-    console.log('🔄 [SIGNALS] Calling backend conversation-session-list...');
-    const result = await sessionListHandler({
-      limit: 50,
-      offset: 0
-    }).catch((err: Error) => {
-      // Handler not registered yet - retry after delay
-      if (err.message.includes('No handler registered') && retryCount < 3) {
-        console.log('⏳ [SIGNALS] Handler not ready, retrying in 500ms...');
-        return new Promise(resolve => {
-          setTimeout(() => resolve(loadSessions(retryCount + 1)), 500);
-        });
+    console.log('🔄 [SIGNALS] Calling MCP conversation service...');
+    const result = await (window.electronAPI as any).mcpCall({
+      serviceName: 'conversation',
+      action: 'session.list',
+      payload: {
+        limit: 50,
+        offset: 0
+      }
+    }).catch(async (err: Error) => {
+      // Handler not registered yet or service not ready - retry after delay
+      if ((err.message.includes('No handler registered') || err.message.includes('not available')) && retryCount < 5) {
+        console.log(`⏳ [SIGNALS] MCP handler not ready yet, retrying in ${(retryCount + 1) * 500}ms... (attempt ${retryCount + 1}/5)`);
+        await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 500));
+        return loadSessions(retryCount + 1);
       }
       throw err;
     });
     
-    console.log('📥 [SIGNALS] Backend response received:', result);
+    console.log('📥 [SIGNALS] MCP response received:', result);
+    console.log('📥 [SIGNALS] result.data:', result.data);
+    console.log('📥 [SIGNALS] result.data.data:', result.data?.data);
     
-    console.log(' [SIGNALS] Result structure check:', {
-      hasData: !!result.data,
-      hasResult: !!result.result,
-      dataKeys: result.data ? Object.keys(result.data) : 'no data',
-      resultKeys: result.result ? Object.keys(result.result) : 'no result',
-      directSessions: result.data?.sessions ? result.data.sessions.length : 'no direct sessions',
-      nestedSessions: result.result?.data?.sessions ? result.result.data.sessions.length : 'no nested sessions'
-    });
-    
-    // Handle all possible response formats
-    let sessionsData = null;
-    
-    // Try direct access first: result.data.sessions
-    if (result.data?.sessions) {
-      sessionsData = result.data.sessions;
-      console.log(' [SIGNALS] Found sessions via result.data.sessions');
-    }
-    // Try nested access: result.result.data.sessions  
-    else if (result.result?.data?.sessions) {
-      sessionsData = result.result.data.sessions;
-      console.log(' [SIGNALS] Found sessions via result.result.data.sessions');
-    }
-    // Try direct result access: result.sessions
-    else if (result.sessions) {
-      sessionsData = result.sessions;
-      console.log(' [SIGNALS] Found sessions via result.sessions');
-    }
-    else {
-      console.log(' [SIGNALS] No sessions found in any expected location');
+    // MCP response format: { success: true, data: { version, service, action, success, data: { sessions: [...] } } }
+    if (!result.success || !result.data?.success) {
+      console.error('❌ [SIGNALS] MCP call failed:', result.error || result.data?.error);
+      error.value = result.error || result.data?.error || 'Failed to load sessions';
+      return;
     }
     
-    console.log(' [SIGNALS] Extracted sessions data:', sessionsData ? sessionsData.length : 'no sessions data');
+    const sessionsData = result.data?.data?.sessions || [];
+    console.log('📥 [SIGNALS] Parsed sessionsData:', sessionsData);
+    console.log('✅ [SIGNALS] Loaded sessions:', sessionsData.length);
     
-    if (result.success && sessionsData) {
-      console.log(' [SIGNALS] Loaded sessions:', sessionsData.length);
+    if (sessionsData.length > 0) {
       sessions.value = sessionsData;
       
       // Set active session if one exists
@@ -232,6 +213,9 @@ export const loadSessions = async (retryCount = 0) => {
       if (activeSession) {
         activeSessionId.value = activeSession.id;
         console.log(' [SIGNALS] Found active session:', activeSession.id);
+        // Load messages for the active session
+        console.log('📥 [SIGNALS] Loading messages for active session...');
+        await loadMessages(activeSession.id);
       } else if (sessionsData.length > 0) {
         // Auto-activate the first session if none is active
         const firstSession = sessionsData[0];
@@ -267,24 +251,24 @@ export const loadMessages = async (sessionId: string, options?: {
   
   try {
     isLoading.value = true;
-    if (window.electronAPI?.agentExecute) {
-      const result = await window.electronAPI.agentExecute({
-        agentName: 'ConversationSessionAgent',
-        action: 'message-list',
-        options: {
+    if ((window.electronAPI as any)?.mcpCall) {
+      const result = await (window.electronAPI as any).mcpCall({
+        serviceName: 'conversation',
+        action: 'message.list',
+        payload: {
           sessionId,
-          limit: options?.limit || 50,  // Default to 50 for batch loading
+          limit: options?.limit || 50,
           offset: options?.offset || 0,
-          direction: options?.direction || 'DESC'  // Default to DESC for most recent first
+          direction: options?.direction || 'DESC'
         }
       });
       
       console.log('🔍 [SIGNALS] Load messages result:', JSON.stringify(result, null, 2));
       
-      // Handle both response formats
-      const messagesData = result.result?.data?.messages || result.result?.messages || result.data?.messages || result.messages;
+      // MCP response format: { success: true, data: { version, service, action, success, data: { messages } } }
+      const messagesData = result.data?.data?.messages;
       
-      if (result.success && messagesData) {
+      if (result.success && result.data?.success && messagesData) {
         console.log('✅ [SIGNALS] Loaded messages:', messagesData.length);
         messages.value = {
           ...messages.value,
@@ -308,11 +292,11 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
   console.log('📝 [SIGNALS] Message data:', message);
   
   try {
-    if (window.electronAPI?.agentExecute) {
-      const result = await window.electronAPI.agentExecute({
-        agentName: 'ConversationSessionAgent',
-        action: 'message-add',
-        options: {
+    if ((window.electronAPI as any)?.mcpCall) {
+      const result = await (window.electronAPI as any).mcpCall({
+        serviceName: 'conversation',
+        action: 'message.add',
+        payload: {
           sessionId,
           text: message.text,
           sender: message.sender,
@@ -322,8 +306,8 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
       
       console.log('📝 [SIGNALS] Add message result:', JSON.stringify(result, null, 2));
       
-      // Handle both response formats: result.data or result.result.data
-      const messageData = result.data || result.result?.data;
+      // MCP response format: { success: true, data: { version, service, action, success, data: { messageId, ... } } }
+      const messageData = result.data?.data;
       
       console.log('📝 [SIGNALS] Parsed messageData:', messageData);
       
@@ -336,11 +320,11 @@ export const addMessage = async (sessionId: string, message: Omit<ChatMessage, '
       if (result.success && messageData && messageData.messageId) {
         const newMessage: ChatMessage = {
           id: messageData.messageId,
-          text: messageData.text || '',
-          sender: messageData.sender || 'ai',
-          timestamp: messageData.timestamp || new Date().toISOString(),
-          sessionId: messageData.sessionId || sessionId,
-          metadata: messageData.metadata || {}
+          text: messageData.message?.text || messageData.text || '',
+          sender: messageData.message?.sender || messageData.sender || 'ai',
+          timestamp: messageData.message?.timestamp || messageData.timestamp || new Date().toISOString(),
+          sessionId: messageData.message?.sessionId || messageData.sessionId || sessionId,
+          metadata: messageData.message?.metadata || messageData.metadata || {}
         };
         
         console.log('📝 [SIGNALS] Created newMessage:', newMessage);

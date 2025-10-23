@@ -455,6 +455,95 @@ class MCPClient {
       ...(result.status === 'fulfilled' ? result.value : { status: 'error', error: result.reason.message })
     }));
   }
+
+  // ============================================================
+  // CONVERSATION SERVICE CONVENIENCE METHODS
+  // ============================================================
+
+  /**
+   * Create a new conversation session
+   */
+  async createSession(options = {}) {
+    return this.callService('conversation', 'session.create', options);
+  }
+
+  /**
+   * List all conversation sessions
+   */
+  async listSessions(options = {}) {
+    return this.callService('conversation', 'session.list', options);
+  }
+
+  /**
+   * Get a specific session
+   */
+  async getSession(sessionId) {
+    return this.callService('conversation', 'session.get', { sessionId });
+  }
+
+  /**
+   * Update a session
+   */
+  async updateSession(sessionId, updates) {
+    return this.callService('conversation', 'session.update', { sessionId, ...updates });
+  }
+
+  /**
+   * Delete a session
+   */
+  async deleteSession(sessionId) {
+    return this.callService('conversation', 'session.delete', { sessionId });
+  }
+
+  /**
+   * Switch active session
+   */
+  async switchSession(sessionId) {
+    return this.callService('conversation', 'session.switch', { sessionId });
+  }
+
+  /**
+   * Add a message to a session
+   */
+  async addMessage(sessionId, text, sender, metadata = {}) {
+    return this.callService('conversation', 'message.add', {
+      sessionId,
+      text,
+      sender,
+      metadata
+    });
+  }
+
+  /**
+   * List messages in a session
+   */
+  async listMessages(sessionId, options = {}) {
+    return this.callService('conversation', 'message.list', {
+      sessionId,
+      ...options
+    });
+  }
+
+  /**
+   * Get a specific message
+   */
+  async getMessage(messageId) {
+    return this.callService('conversation', 'message.get', { messageId });
+  }
+
+  /**
+   * Update a message
+   */
+  async updateMessage(messageId, updates) {
+    return this.callService('conversation', 'message.update', { messageId, ...updates });
+  }
+
+  /**
+   * Delete a message
+   */
+  async deleteMessage(messageId) {
+    return this.callService('conversation', 'message.delete', { messageId });
+  }
 }
 
 module.exports = MCPClient;

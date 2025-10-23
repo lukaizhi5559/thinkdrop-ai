@@ -2975,6 +2975,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@thinkdrop/conversation-service@workspace:mcp-services/conversation-service":
+  version: 0.0.0-use.local
+  resolution: "@thinkdrop/conversation-service@workspace:mcp-services/conversation-service"
+  dependencies:
+    cors: ^2.8.5
+    duckdb: latest
+    express: ^4.18.2
+    nanoid: ^5.0.0
+    nodemon: ^3.0.1
+  languageName: unknown
+  linkType: soft
+
 "@tokenizer/token@npm:^0.3.0":
   version: 0.3.0
   resolution: "@tokenizer/token@npm:0.3.0"
@@ -5487,6 +5499,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"duckdb@npm:latest":
+  version: 1.4.1
+  resolution: "duckdb@npm:1.4.1"
+  dependencies:
+    "@mapbox/node-pre-gyp": ^2.0.0
+    node-addon-api: ^7.0.0
+    node-gyp: ^9.3.0
+  checksum: e0c31b88bc4fa468dad21adb05cad5b1d126b63892c6eda14810c1b2a44a7a74a1037aac8acb07e9e6bc2572e07d3b74b60ab4299f8afbb8f704c9cd9f38f57f
+  languageName: node
+  linkType: hard
+
 "dunder-proto@npm:^1.0.1":
   version: 1.0.1
   resolution: "dunder-proto@npm:1.0.1"
@@ -6193,7 +6216,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"express@npm:^4.18.0":
+"express@npm:^4.18.0, express@npm:^4.18.2":
   version: 4.21.2
   resolution: "express@npm:4.21.2"
   dependencies:
@@ -10078,6 +10101,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"nanoid@npm:^5.0.0":
+  version: 5.1.6
+  resolution: "nanoid@npm:5.1.6"
+  bin:
+    nanoid: bin/nanoid.js
+  checksum: 4109dbcf596d7f297a9b42f459b8f01694a03ebbdd2f41408d963ad54e5ec7234cbe7b4acad137751f31add11bb4fb3415a3e688082516745812811f05570014
+  languageName: node
+  linkType: hard
+
 "napi-build-utils@npm:^2.0.0":
   version: 2.0.0
   resolution: "napi-build-utils@npm:2.0.0"
@@ -10421,7 +10453,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"nodemon@npm:^3.0.0":
+"nodemon@npm:^3.0.0, nodemon@npm:^3.0.1":
   version: 3.1.10
   resolution: "nodemon@npm:3.1.10"
   dependencies:

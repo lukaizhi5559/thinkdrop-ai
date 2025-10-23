@@ -90,7 +90,7 @@ async function migrate(db) {
   console.log('🔄 Running migration: 001_initial_services');
 
   // Check if services already exist
-  const existingServices = await db.all('SELECT COUNT(*) as count FROM mcp_services');
+  const existingServices = await db.query('SELECT COUNT(*) as count FROM mcp_services');
   
   if (existingServices[0].count > 0) {
     console.log('⚠️  Services already exist, skipping migration');

@@ -88,6 +88,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // MCP Private Mode
   privateModeProcess: (params) => ipcRenderer.invoke('private-mode:process', params),
   
+  // MCP Service Communication
+  mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),
+  
   // Orchestration workflow communication
   onOrchestrationUpdate: (callback) => ipcRenderer.on('orchestration-update', callback),
   onInsightOrchestrationUpdate: (callback) => ipcRenderer.on('insight-orchestration-update', callback),

@@ -281,46 +281,19 @@ async function initializeServices() {
       await databaseManager.initialize(dbPath);
       global.databaseManager = databaseManager;
       
-      // Create minimal coreAgent stub for conversation persistence
-      const ConversationSessionAgentModule = require('./services/agents/ConversationSessionAgent.cjs');
-      conversationAgent = ConversationSessionAgentModule; // Assign to module-scope variable
+      // In MCP mode, conversation persistence is handled by the MCP conversation service
+      // No need to bootstrap ConversationSessionAgent here
+      console.log('✅ [MCP-MODE] Database initialized for MCP services only');
       
-      // Bootstrap ConversationSessionAgent with correct context structure
-      const agentContext = {
-        database: databaseManager,
-        duckdb: require('duckdb'),
-        path: require('path'),
-        fs: require('fs'),
-        url: require('url')
-      };
-      
-      console.log('🔍 [MCP-MODE] Bootstrapping ConversationSessionAgent with context:', {
-        hasDatabase: !!agentContext.database,
-        databaseType: agentContext.database?.constructor?.name
-      });
-      
-      try {
-        // bootstrap(config, context) - pass empty config, agentContext as context
-        await conversationAgent.bootstrap({}, agentContext);
-        console.log('✅ [MCP-MODE] ConversationSessionAgent bootstrapped successfully');
-      } catch (bootstrapError) {
-        console.error('❌ [MCP-MODE] ConversationSessionAgent bootstrap failed:', bootstrapError.message);
-        console.log('⚠️  [MCP-MODE] Continuing without conversation persistence');
-      }
-      
-      // Create minimal coreAgent stub that only supports ConversationSessionAgent
+      // Create minimal coreAgent stub (no conversation agent)
       global.coreAgent = {
         context: { database: databaseManager },
         executeAgent: async (agentName, params) => {
-          if (agentName === 'ConversationSessionAgent') {
-            return await ConversationSessionAgent.execute(params, agentContext);
-          }
-          throw new Error(`Agent ${agentName} not available in MCP mode`);
+          throw new Error(`Agent ${agentName} not available in MCP mode - use MCP services instead`);
         }
       };
       
-      console.log('✅ [MCP-MODE] Minimal database initialized for conversation persistence');
-      console.log('✅ [MCP-MODE] ConversationSessionAgent stub ready');
+      console.log('✅ [MCP-MODE] Minimal stub ready - all operations via MCP services');
       
       // Register stub handlers EARLY to prevent frontend errors during initialization
       const { ipcMain } = require('electron');

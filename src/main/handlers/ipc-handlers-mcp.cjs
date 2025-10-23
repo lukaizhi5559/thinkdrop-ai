@@ -531,6 +531,27 @@ function registerMCPHandlers() {
     }
   });
 
+  /**
+   * Generic service call - Execute any action on any MCP service
+   */
+  ipcMain.handle('mcp:service:call', async (event, { serviceName, action, payload }) => {
+    try {
+      const client = getMCPClient();
+      const result = await client.callService(serviceName, action, payload);
+
+      return {
+        success: true,
+        data: result
+      };
+    } catch (error) {
+      console.error(`❌ Service call failed: ${serviceName}.${action}`, error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
   console.log('✅ MCP IPC handlers registered');
 }
 
