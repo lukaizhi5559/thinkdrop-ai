@@ -11,8 +11,8 @@ const CORE_SERVICES = [
     name: 'user-memory',
     displayName: 'User Memory',
     description: 'Memory storage and retrieval service',
-    endpoint: process.env.MCP_MEMORY_ENDPOINT || 'http://localhost:3001',
-    apiKey: process.env.MCP_MEMORY_API_KEY || 'auto-generated-key-memory',
+    endpoint: process.env.MCP_USER_MEMORY_ENDPOINT || 'http://localhost:3001',
+    apiKey: process.env.MCP_USER_MEMORY_API_KEY || 'auto-generated-key-memory',
     capabilities: {
       storage: true,
       retrieval: true,
@@ -22,7 +22,7 @@ const CORE_SERVICES = [
     actions: [
       'memory.store',
       'memory.retrieve',
-      'memory.query',
+      'memory.search',  // Service uses 'memory.search', not 'memory.query'
       'memory.delete',
       'memory.update',
       'memory.list',
@@ -93,7 +93,24 @@ async function migrate(db) {
   const existingServices = await db.query('SELECT COUNT(*) as count FROM mcp_services');
   
   if (existingServices[0].count > 0) {
-    console.log('⚠️  Services already exist, skipping migration');
+    console.log('⚠️  Services already exist, updating API keys and actions from .env...');
+    
+    // Update API keys and actions from environment variables
+    for (const service of CORE_SERVICES) {
+      try {
+        await db.run(
+          `UPDATE mcp_services SET api_key = ?, actions = ? WHERE name = ?`,
+          [service.apiKey, JSON.stringify(service.actions), service.name]
+        );
+        console.log(`  ✅ Updated ${service.name}:`);
+        console.log(`     API key: ${service.apiKey.substring(0, 10)}...`);
+        console.log(`     Actions: ${service.actions.join(', ')}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to update ${service.name}:`, error.message);
+      }
+    }
+    
+    console.log('✅ API keys and actions updated from .env');
     return;
   }
 

@@ -23,6 +23,25 @@ class MCPClient {
     const startTime = Date.now();
     
     try {
+      // 0. Wait for config manager to be initialized
+      if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
+        console.log(`⏳ [MCP] Waiting for config manager initialization...`);
+        // Wait up to 5 seconds for initialization
+        const maxWait = 5000;
+        const checkInterval = 100;
+        let waited = 0;
+        
+        while ((!this.configManager.isInitialized || !this.configManager.isInitialized()) && waited < maxWait) {
+          await new Promise(resolve => setTimeout(resolve, checkInterval));
+          waited += checkInterval;
+        }
+        
+        if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
+          throw new Error(`Config manager not initialized after ${maxWait}ms`);
+        }
+        console.log(`✅ [MCP] Config manager ready after ${waited}ms`);
+      }
+      
       // 1. Get service from registry
       const service = this.configManager.getService(serviceName);
       if (!service) {
@@ -218,7 +237,7 @@ class MCPClient {
    */
   async storeMemory(content, tags = [], metadata = {}) {
     return this.callService('user-memory', 'memory.store', {
-      content,
+      text: content,  // Service expects 'text', not 'content'
       tags,
       metadata,
       timestamp: new Date().toISOString()
@@ -237,10 +256,10 @@ class MCPClient {
   }
 
   /**
-   * User Memory Service - Query memories
+   * User Memory Service - Query/Search memories
    */
   async queryMemories(query, options = {}) {
-    return this.callService('user-memory', 'memory.query', {
+    return this.callService('user-memory', 'memory.search', {  // Service uses 'memory.search', not 'memory.query'
       query,
       ...options
     });

@@ -32,6 +32,13 @@ class MCPConfigManager {
   }
 
   /**
+   * Check if config manager is initialized
+   */
+  isInitialized() {
+    return this.initialized;
+  }
+
+  /**
    * Initialize database connection and load services
    */
   async initialize(database) {

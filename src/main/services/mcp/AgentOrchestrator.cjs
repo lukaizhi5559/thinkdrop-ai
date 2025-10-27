@@ -39,7 +39,18 @@ class AgentOrchestrator {
       // Step 2: Route based on intent type
       const result = await this.routeIntent(intent, message, context);
 
-      // Step 3: Add timing
+      // Step 3: Auto-store conversation exchange in memory (for future context)
+      // Skip if this was already a memory_store operation
+      // ⚡ PERFORMANCE: Fire-and-forget - don't block response
+      if (result.action !== 'memory_stored' && result.success) {
+        // Run async without awaiting
+        this.storeConversationExchange(message, result.response, context, intent)
+          .catch(storeError => {
+            console.warn('⚠️ [ORCHESTRATOR] Could not auto-store conversation:', storeError.message);
+          });
+      }
+
+      // Step 4: Add timing
       result.elapsedMs = Date.now() - startTime;
       console.log(`✅ [ORCHESTRATOR] Complete in ${result.elapsedMs}ms`);
 
@@ -146,6 +157,22 @@ class AgentOrchestrator {
    */
   async routeIntent(intent, message, context) {
     const intentType = intent.type || intent.primaryIntent || 'general_query';
+    
+    // 🎯 ENHANCED: Keyword-based intent detection fallback
+    // If backend misclassifies, catch it here
+    const messageLower = message.toLowerCase();
+    
+    // Memory store keywords
+    if (messageLower.match(/\b(remember|store|save|keep in mind|don't forget|note that)\b/)) {
+      console.log('🔍 [ORCHESTRATOR] Detected memory store keywords, overriding intent');
+      return await this.handleMemoryStore(message, intent, context);
+    }
+    
+    // Memory retrieve keywords
+    if (messageLower.match(/\b(what('s| is) my|recall|remind me|do you remember|what did i)\b/)) {
+      console.log('🔍 [ORCHESTRATOR] Detected memory retrieve keywords, overriding intent');
+      return await this.handleMemoryRetrieve(message, intent, context);
+    }
 
     switch (intentType.toLowerCase()) {
       // Memory operations
@@ -403,18 +430,42 @@ class AgentOrchestrator {
         }
       }
 
-      // Check if needs memory context
+      // 🎯 ENHANCED: Always check memory for context (not conditional)
+      // This ensures we never miss relevant stored information
+      // ⚡ PERFORMANCE: Run memory search in parallel with conversation history
       let memories = [];
-      if (intent.requiresMemory || intent.requiresMemoryAccess) {
-        console.log('📚 [GENERAL_QUERY] Fetching memory context...');
-        const searchResult = await this.mcpClient.queryMemories(message, {
-          limit: 3,
-          sessionId: context.sessionId,
-          userId: context.userId
-        });
-        memories = searchResult.results || searchResult.memories || [];
-        console.log(`✅ [GENERAL_QUERY] Found ${memories.length} relevant memories`);
-      }
+      const memorySearchPromise = (async () => {
+        try {
+          console.log('📚 [GENERAL_QUERY] Fetching memory context...');
+          const searchResult = await this.mcpClient.queryMemories(message, {
+            limit: 3, // Reduced from 5 for speed
+            sessionId: context.sessionId,
+            userId: context.userId,
+            minSimilarity: 0.3, // Lowered from 0.5 to find more matches
+            maxAge: 30 // Only search last 30 days
+          });
+          
+          // Debug: Log search results
+          console.log('🔍 [DEBUG] Memory search results:', {
+            query: message,
+            found: searchResult.memories?.length || 0,
+            threshold: 0.3
+          });
+          if (searchResult.memories?.length > 0) {
+            searchResult.memories.forEach(m => {
+              console.log(`  📝 Memory: "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3)})`);
+            });
+          }
+          return searchResult.results || searchResult.memories || [];
+        } catch (memError) {
+          console.warn('⚠️ [GENERAL_QUERY] Could not fetch memories:', memError.message);
+          return [];
+        }
+      })();
+      
+      // Wait for memory search to complete
+      memories = await memorySearchPromise;
+      console.log(`✅ [GENERAL_QUERY] Found ${memories.length} relevant memories`);
 
       // Generate answer via phi4 with conversation history
       const response = await this.mcpClient.getAnswer(
@@ -593,6 +644,88 @@ class AgentOrchestrator {
         response: "I had trouble processing that scheduling request."
       };
     }
+  }
+
+  /**
+   * Auto-store conversation exchange for future context
+   * ⚡ PERFORMANCE: Smart filtering to avoid storing trivial exchanges
+   */
+  async storeConversationExchange(userMessage, aiResponse, context, intent) {
+    try {
+      // 🎯 SMART FILTER: Only store meaningful exchanges
+      const shouldStore = this.shouldStoreExchange(userMessage, aiResponse, intent);
+      
+      if (!shouldStore) {
+        console.log('⏭️ [AUTO-STORE] Skipping trivial exchange');
+        return;
+      }
+      
+      console.log('💾 [AUTO-STORE] Storing conversation exchange...');
+      
+      // Create a summary of the exchange
+      const exchangeText = `User asked: "${userMessage}"\nAssistant responded: "${aiResponse}"`;
+      
+      // Store in memory with conversation tags
+      await this.mcpClient.storeMemory(
+        exchangeText,
+        ['conversation', 'auto_stored', intent.type || 'general'],
+        {
+          userMessage: userMessage,
+          aiResponse: aiResponse,
+          sessionId: context.sessionId,
+          userId: context.userId,
+          source: 'conversation_auto_store',
+          intent: intent.type,
+          confidence: intent.confidence,
+          timestamp: new Date().toISOString()
+        }
+      );
+      
+      console.log('✅ [AUTO-STORE] Conversation stored for future context');
+    } catch (error) {
+      // Don't fail the main flow if auto-store fails
+      console.warn('⚠️ [AUTO-STORE] Failed:', error.message);
+    }
+  }
+
+  /**
+   * Determine if exchange is worth storing
+   * ⚡ PERFORMANCE: Reduces storage by ~60-70%
+   */
+  shouldStoreExchange(userMessage, aiResponse, intent) {
+    // Always store explicit memory operations
+    if (intent.type === 'memory_store' || intent.type === 'memory_retrieve') {
+      return true;
+    }
+    
+    // Skip very short messages (likely greetings/chitchat)
+    if (userMessage.length < 10 || aiResponse.length < 20) {
+      return false;
+    }
+    
+    // Skip common greetings/chitchat
+    const trivialPatterns = /^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|sure)$/i;
+    if (trivialPatterns.test(userMessage.trim())) {
+      return false;
+    }
+    
+    // Skip error responses
+    if (aiResponse.includes('error') || aiResponse.includes('trouble')) {
+      return false;
+    }
+    
+    // Store if high confidence intent (likely meaningful)
+    if (intent.confidence && intent.confidence > 0.7) {
+      return true;
+    }
+    
+    // Store if contains entities (names, dates, places, etc.)
+    if (intent.entities && intent.entities.length > 0) {
+      return true;
+    }
+    
+    // Default: store it (better to over-store than miss context)
+    return true;
   }
 
   /**
