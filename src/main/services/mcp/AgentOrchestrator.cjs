@@ -213,13 +213,27 @@ class AgentOrchestrator {
       return await this.handleGeneralQuery(message, intent, context);
     }
     
-    // Memory store keywords
+    // 🎯 PRIORITY 2: Check for web search needs (factual questions about the world)
+    // Questions like "what is the best X", "who is Y", "where is Z" require web search
+    if (this.requiresWebSearch(message)) {
+      console.log('🌐 [ORCHESTRATOR] Factual question detected, routing to web search');
+      return await this.handleWebSearch(message, intent, context);
+    }
+    
+    // 🎯 PRIORITY 3: Memory store keywords (explicit)
     if (messageLower.match(/\b(remember|store|save|keep in mind|don't forget|note that)\b/)) {
       console.log('🔍 [ORCHESTRATOR] Detected memory store keywords, overriding intent');
       return await this.handleMemoryStore(message, intent, context);
     }
     
-    // Memory retrieve keywords (but NOT meta-questions like "what did I just say")
+    // 🎯 PRIORITY 4: Implicit memory storage (declarative statements about user)
+    // Detect statements that should be stored as memories even without explicit keywords
+    if (this.isImplicitMemoryStatement(message)) {
+      console.log('💾 [ORCHESTRATOR] Detected implicit memory statement, routing to memory store');
+      return await this.handleMemoryStore(message, intent, context);
+    }
+    
+    // 🎯 PRIORITY 5: Memory retrieve keywords (but NOT meta-questions like "what did I just say")
     // Exclude patterns that are meta-questions about recent conversation
     if (messageLower.match(/\b(what('s| is) my|recall|remind me)\b/) && 
         !messageLower.match(/\b(just|recent|previous|last)\b/)) {
@@ -543,10 +557,13 @@ class AgentOrchestrator {
         ? this.addRecencyMarkers(cleanedHistory)
         : cleanedHistory;
       
+      // 💡 Inject memory context as system message if memories exist
+      const historyWithMemoryContext = this.injectMemoryContext(markedHistory, memories, message);
+      
       // 🎯 PRIORITIZE: Build context with session first, memories second
       const enrichedContext = {
-        // Layer 1: Conversation history (most recent)
-        conversationHistory: markedHistory,
+        // Layer 1: Conversation history (most recent) with memory context injected
+        conversationHistory: historyWithMemoryContext,
         
         // Layer 2: Session context (current session facts - highest priority)
         sessionFacts: sessionContext.facts || [],
@@ -557,6 +574,9 @@ class AgentOrchestrator {
           text: m.text || m.content,
           similarity: m.similarity
         })),
+        
+        // Layer 4: System instructions for using context
+        systemInstructions: this.buildSystemInstructions(memories, sessionContext),
         
         // Metadata
         sessionId: context.sessionId,
@@ -972,6 +992,95 @@ class AgentOrchestrator {
   }
 
   /**
+   * Detect if a message is an implicit memory statement
+   * Declarative statements about the user that should be stored even without explicit keywords
+   */
+  isImplicitMemoryStatement(message) {
+    if (typeof message !== 'string') return false;
+
+    const normalizedMessage = message.trim().toLowerCase();
+
+    // Exclude questions (these are retrieval, not storage)
+    if (normalizedMessage.match(/^(what|when|where|who|why|how|do|does|did|is|are|was|were|can|could|would|should)/)) {
+      return false;
+    }
+
+    // Patterns that indicate a statement to remember
+    const memoryPatterns = [
+      // Appointments and scheduling
+      /\b(appointment|meeting|scheduled|booked|reservation)\b/i,
+      /\b(next|this|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*\b(at|@)\s*\d/i,
+      
+      // Preferences and favorites
+      /^(my|i)\s+(favorite|preferred|usual|go-to)\b/i,
+      /^i\s+(like|love|enjoy|prefer|hate|dislike)\b/i,
+      
+      // Personal facts
+      /^(my|i)\s+(name|birthday|age|job|work|live|am|have)\b/i,
+      
+      // Goals and intentions
+      /^i\s+(want|need|plan|intend|will|am going)\b/i,
+      
+      // Possessions and relationships
+      /^i\s+(own|have|got)\b/i,
+      /^my\s+(wife|husband|partner|friend|family|dog|cat|car|house)\b/i
+    ];
+
+    return memoryPatterns.some(pattern => pattern.test(normalizedMessage));
+  }
+
+  /**
+   * Detect if a message requires web search (factual questions about the world)
+   * Questions about general knowledge, current events, or information not in memory
+   */
+  requiresWebSearch(message) {
+    if (typeof message !== 'string') return false;
+
+    const normalizedMessage = message.trim().toLowerCase();
+
+    // Exclude user preference questions (these use memory)
+    if (normalizedMessage.match(/\b(my|i|me)\b/) && 
+        normalizedMessage.match(/\b(favorite|like|love|prefer|want)\b/)) {
+      return false;
+    }
+
+    // Factual question patterns that require web search
+    const webSearchPatterns = [
+      // "What is the best X" questions
+      /what('s| is) the (best|top|greatest|worst|most|least)/i,
+      
+      // "Who is X" questions
+      /who (is|was|are|were)/i,
+      
+      // "Where is X" questions
+      /where (is|was|are|were|can i find)/i,
+      
+      // "When did X" questions
+      /when (did|does|do|will|is|was)/i,
+      
+      // "How to X" questions
+      /how (to|do|does|can|should)/i,
+      
+      // "Why is X" questions
+      /why (is|are|was|were|do|does|did)/i,
+      
+      // Definition questions
+      /what (is|are|was|were) (a|an|the) /i,
+      
+      // Current events
+      /\b(news|latest|current|today|recent|update)\b/i,
+      
+      // Comparison questions
+      /\b(compare|difference between|versus|vs|better than)\b/i,
+      
+      // Factual lookups
+      /\b(capital|population|founded|invented|discovered|created)\b/i
+    ];
+
+    return webSearchPatterns.some(pattern => pattern.test(normalizedMessage));
+  }
+
+  /**
    * Detect if a message is a meta-question (asking about the conversation itself)
    * Expanded to cover more meta-question patterns using NLP meta-model concepts.
    */
@@ -1090,6 +1199,102 @@ class AgentOrchestrator {
     }
     
     return marked;
+  }
+
+  /**
+   * Inject memory context into conversation history as a system message
+   * This ensures Phi4 sees and uses the memory facts
+   */
+  injectMemoryContext(history, memories, currentQuery) {
+    if (!memories || memories.length === 0) {
+      return history;
+    }
+    
+    // Detect if query is asking about user preferences/facts
+    const isFactualQuery = currentQuery.toLowerCase().match(
+      /\b(what|who|where|when|my|favorite|like|love|prefer|do i|am i|have i)\b/
+    );
+    
+    if (!isFactualQuery) {
+      return history; // Don't inject for non-factual queries
+    }
+    
+    // Extract relevant facts from memories
+    const facts = [];
+    memories.forEach(m => {
+      const text = m.text || m.content || '';
+      
+      // Extract user statements from memory text
+      const userMatch = text.match(/User (?:asked|said): "([^"]+)"/);
+      if (userMatch) {
+        const userStatement = userMatch[1];
+        
+        // Check if it's a preference statement
+        if (userStatement.match(/\b(love|like|favorite|prefer)\b/i)) {
+          facts.push(userStatement);
+        }
+      }
+    });
+    
+    if (facts.length === 0) {
+      return history;
+    }
+    
+    // Create system message with memory facts
+    const systemMessage = {
+      role: 'system',
+      content: `[CONTEXT] Based on previous conversations, here's what you know about the user:\n${facts.slice(0, 5).map((f, i) => `${i + 1}. "${f}"`).join('\n')}\n\nUse this information to answer the user's question. Speak from the assistant's perspective (use "you" for the user).`
+    };
+    
+    console.log('💡 [ORCHESTRATOR] Injected memory context:', facts.length, 'facts');
+    
+    // Prepend system message to history
+    return [systemMessage, ...history];
+  }
+
+  /**
+   * Build system instructions for Phi4 to use context correctly
+   */
+  buildSystemInstructions(memories, sessionContext) {
+    const instructions = [];
+    
+    // Base instruction
+    instructions.push('You are an AI assistant helping the user. Always respond from the assistant\'s perspective (use "you" for the user, not "I").');
+    
+    // Meta-question handling - make it VERY explicit
+    instructions.push('IMPORTANT: If the user asks "what did I just say", look for the message marked with "[MOST RECENT USER MESSAGE]" in the conversation history.');
+    instructions.push('Extract ONLY the text after "[MOST RECENT USER MESSAGE]" and respond with: "You asked: [that text]"');
+    instructions.push('Example: If you see "[MOST RECENT USER MESSAGE] What do I like to eat", respond EXACTLY: "You asked: What do I like to eat"');
+    
+    // Memory usage instructions
+    if (memories && memories.length > 0) {
+      instructions.push('IMPORTANT: The "memories" section contains factual information about the user from previous conversations. Use these memories to answer questions about the user\'s preferences, history, or past statements.');
+      instructions.push('When the user asks "what do I like" or "what is my favorite", check the memories first before saying you don\'t know.');
+      
+      // Extract key facts from memories for emphasis
+      const foodMemories = memories.filter(m => 
+        (m.text || m.content || '').toLowerCase().match(/\b(food|eat|like|love|favorite|pizza|steak|gummy)\b/)
+      );
+      
+      if (foodMemories.length > 0) {
+        instructions.push('The user has mentioned these food preferences in past conversations (check memories for details):');
+        foodMemories.slice(0, 3).forEach((m, i) => {
+          const text = m.text || m.content || '';
+          const preview = text.substring(0, 150).replace(/\n/g, ' ');
+          instructions.push(`  ${i + 1}. ${preview}...`);
+        });
+      }
+    }
+    
+    // Session context instructions
+    if (sessionContext && (sessionContext.facts?.length > 0 || sessionContext.entities?.length > 0)) {
+      instructions.push('The "sessionFacts" and "sessionEntities" contain information from the current conversation session.');
+    }
+    
+    // Conversation history instructions
+    instructions.push('The "conversationHistory" shows the recent back-and-forth messages. Use this for immediate context and follow-up questions.');
+    
+    return instructions.join('\n');
   }
 }
 
