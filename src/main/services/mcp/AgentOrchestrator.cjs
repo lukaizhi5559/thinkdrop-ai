@@ -491,95 +491,85 @@ class AgentOrchestrator {
 
   /**
    * Handle general query
+   * Uses parallel + prioritized context fetching
    */
   async handleGeneralQuery(message, intent, context) {
     console.log('💬 [GENERAL_QUERY] Processing query...');
+    
+    // 🔍 Detect meta-questions (questions about the conversation itself)
+    const isMetaQuestion = this.isMetaQuestion(message);
+    if (isMetaQuestion) {
+      console.log('🎯 [ORCHESTRATOR] Meta-question detected, prioritizing recent context');
+    }
+    
+    console.log('🔍 [ORCHESTRATOR] Assembling hybrid context (parallel fetch)...');
 
     try {
-      // Fetch conversation history for context
-      let conversationHistory = [];
-      if (context.sessionId) {
-        console.log('📜 [GENERAL_QUERY] Fetching conversation history...');
-        try {
-          const historyResult = await this.mcpClient.listMessages(context.sessionId, {
-            limit: 10,
-            direction: 'DESC'
-          });
-          
-          const messages = historyResult.data?.messages || historyResult.messages || [];
-          // Reverse to get chronological order (oldest first)
-          conversationHistory = messages.reverse().map(m => ({
-            role: m.sender === 'user' ? 'user' : 'assistant',
-            content: m.text || m.content
-          }));
-          console.log(`✅ [GENERAL_QUERY] Loaded ${conversationHistory.length} messages from history`);
-        } catch (histError) {
-          console.warn('⚠️ [GENERAL_QUERY] Could not fetch conversation history:', histError.message);
-        }
-      }
-
-      // 🎯 ENHANCED: Always check memory for context (not conditional)
-      // This ensures we never miss relevant stored information
-      // ⚡ PERFORMANCE: Run memory search in parallel with conversation history
-      let memories = [];
-      const memorySearchPromise = (async () => {
-        try {
-          console.log('📚 [GENERAL_QUERY] Fetching memory context...');
-          const searchResult = await this.mcpClient.queryMemories(message, {
-            limit: 3, // Reduced from 5 for speed
-            sessionId: context.sessionId,
-            userId: context.userId,
-            minSimilarity: 0.3, // Lowered from 0.5 to find more matches
-            maxAge: 30 // Only search last 30 days
-          });
-          
-          // Extract data from MCP response wrapper
-          const data = searchResult.data || searchResult;
-          const memories = data.memories || data.results || [];
-          
-          // Debug: Log search results with enhanced info
-          console.log('🔍 [DEBUG] Memory search results:', {
-            query: message,
-            found: memories.length,
-            threshold: 0.3,
-            duration: data.duration || 'N/A'
-          });
-          if (memories.length > 0) {
-            memories.forEach((m, idx) => {
-              console.log(`  ${idx + 1}. "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3) || 'N/A'})`);
-            });
-          } else {
-            console.log('💡 [DEBUG] No memories found. Check user-memory service logs for diagnostic info.');
-          }
-          return memories;
-        } catch (memError) {
-          console.warn('⚠️ [GENERAL_QUERY] Could not fetch memories:', memError.message);
+      // 🚀 PARALLEL: Fetch all context sources simultaneously
+      const [conversationHistory, sessionContext, memories] = await Promise.all([
+        // 1. Conversation history (recent messages)
+        this.fetchConversationHistory(context.sessionId).catch(err => {
+          console.warn('⚠️ Conversation history failed:', err.message);
           return [];
-        }
-      })();
-      
-      // Wait for memory search to complete
-      memories = await memorySearchPromise;
-      console.log(`✅ [GENERAL_QUERY] Found ${memories.length} relevant memories`);
+        }),
+        
+        // 2. Session context (facts + entities from current session)
+        this.fetchSessionContext(context.sessionId).catch(err => {
+          console.warn('⚠️ Session context failed:', err.message);
+          return { facts: [], entities: [] };
+        }),
+        
+        // 3. Long-term memories (semantic search) - skip for meta-questions
+        isMetaQuestion ? Promise.resolve([]) : this.fetchMemories(message, context).catch(err => {
+          console.warn('⚠️ Memory search failed:', err.message);
+          return [];
+        })
+      ]);
 
-      // Generate answer via phi4 with conversation history
-      const response = await this.mcpClient.getAnswer(
-        message,
-        {
-          conversationHistory: conversationHistory,
-          memories: memories.map(m => ({
-            text: m.text || m.content,
-            similarity: m.similarity
-          })),
-          sessionId: context.sessionId,
-          userId: context.userId
-        }
-      );
+      // 🧹 Clean and deduplicate conversation history
+      const cleanedHistory = this.deduplicateMessages(conversationHistory);
+      
+      // 🎯 Add recency markers for meta-questions
+      const markedHistory = isMetaQuestion 
+        ? this.addRecencyMarkers(cleanedHistory)
+        : cleanedHistory;
+      
+      // 🎯 PRIORITIZE: Build context with session first, memories second
+      const enrichedContext = {
+        // Layer 1: Conversation history (most recent)
+        conversationHistory: markedHistory,
+        
+        // Layer 2: Session context (current session facts - highest priority)
+        sessionFacts: sessionContext.facts || [],
+        sessionEntities: sessionContext.entities || [],
+        
+        // Layer 3: Long-term memories (cross-session - lower priority)
+        memories: memories.map(m => ({
+          text: m.text || m.content,
+          similarity: m.similarity
+        })),
+        
+        // Metadata
+        sessionId: context.sessionId,
+        userId: context.userId
+      };
+
+      console.log('✅ [ORCHESTRATOR] Context assembled:', {
+        conversationMessages: enrichedContext.conversationHistory.length,
+        sessionFacts: enrichedContext.sessionFacts.length,
+        sessionEntities: enrichedContext.sessionEntities.length,
+        memories: enrichedContext.memories.length
+      });
+
+      // 🤖 Generate answer via phi4 with prioritized context
+      const response = await this.mcpClient.getAnswer(message, enrichedContext);
 
       return {
         success: true,
         action: 'general_query',
         data: {
+          sessionFacts: enrichedContext.sessionFacts.length,
+          sessionEntities: enrichedContext.sessionEntities.length,
           memories: memories,
           memoryCount: memories.length
         },
@@ -885,6 +875,205 @@ class AgentOrchestrator {
         response: "I had trouble executing that action."
       };
     }
+  }
+
+  /**
+   * Fetch conversation history
+   */
+  async fetchConversationHistory(sessionId) {
+    if (!sessionId) return [];
+    
+    console.log('📜 [CONTEXT] Fetching conversation history...');
+    const historyResult = await this.mcpClient.listMessages(sessionId, {
+      limit: 10,
+      direction: 'DESC'
+    });
+    
+    const messages = historyResult.data?.messages || historyResult.messages || [];
+    // Reverse to get chronological order (oldest first)
+    const history = messages.reverse().map(m => ({
+      role: m.sender === 'user' ? 'user' : 'assistant',
+      content: m.text || m.content
+    }));
+    
+    console.log(`✅ [CONTEXT] Loaded ${history.length} messages from history`);
+    return history;
+  }
+
+  /**
+   * Fetch session context (facts + entities)
+   */
+  async fetchSessionContext(sessionId) {
+    if (!sessionId) return { facts: [], entities: [] };
+    
+    console.log('🔍 [CONTEXT] Fetching session context...');
+    
+    // Fetch facts and entities in parallel
+    const [factsResult, entitiesResult] = await Promise.all([
+      this.mcpClient.callService('conversation', 'context.get', { 
+        sessionId 
+      }).catch(err => {
+        console.warn('⚠️ [CONTEXT] Failed to fetch facts:', err.message);
+        return { data: { contexts: [] } };
+      }),
+      
+      this.mcpClient.callService('conversation', 'entity.list', { 
+        sessionId 
+      }).catch(err => {
+        console.warn('⚠️ [CONTEXT] Failed to fetch entities:', err.message);
+        return { data: { entities: [] } };
+      })
+    ]);
+    
+    const facts = factsResult.data?.contexts || [];
+    const entities = entitiesResult.data?.entities || [];
+    
+    console.log(`✅ [CONTEXT] Session context: ${facts.length} facts, ${entities.length} entities`);
+    
+    return { facts, entities };
+  }
+
+  /**
+   * Fetch long-term memories
+   */
+  async fetchMemories(query, context) {
+    console.log('📚 [CONTEXT] Fetching long-term memories...');
+    
+    const searchResult = await this.mcpClient.queryMemories(query, {
+      limit: 5,
+      sessionId: context.sessionId,
+      userId: context.userId,
+      minSimilarity: 0.4  // Increased from 0.3 for better relevance
+    });
+    
+    // Extract data from MCP response wrapper
+    const data = searchResult.data || searchResult;
+    const memories = data.memories || data.results || [];
+    
+    console.log(`✅ [CONTEXT] Found ${memories.length} relevant memories`);
+    
+    if (memories.length > 0) {
+      console.log('📊 [CONTEXT] Top memories:');
+      memories.slice(0, 3).forEach((m, idx) => {
+        console.log(`  ${idx + 1}. "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3) || 'N/A'})`);
+      });
+    }
+    
+    return memories;
+  }
+
+  /**
+   * Detect if a message is a meta-question (asking about the conversation itself)
+   * Expanded to cover more meta-question patterns using NLP meta-model concepts.
+   */
+  isMetaQuestion(message) {
+    if (typeof message !== 'string') return false;
+
+    const normalizedMessage = message.trim().toLowerCase();
+
+    const metaPatterns = [
+      // Asking what was said/asked previously
+      /what (did|do) (i|you) (just )?(say|ask|tell|mention)/i,
+      /what (was|is) (my|your|the) (last|previous|recent) (question|message|response)/i,
+      /what (were|are) we (just )?(talking|discussing) about/i,
+      /can you (repeat|recall|remember) what (i|you) (just )?(said|asked)/i,
+      /what (was|is) (my|the) (previous|last) (question|query|message)/i,
+
+      // Asking for clarification about meta conversation
+      /(could|can) you (explain|clarify|elaborate) (that|this|more)/i,
+      /what do you mean by (that|this)/i,
+      /can you summarize (that|this)/i,
+
+      // Asking about conversation state or topic
+      /what are we (talking|discussing|working) on/i,
+      /what is the topic/i,
+      /where are we in our (conversation|discussion|work)/i,
+
+      // Questions about understanding or remembering context
+      /do you (remember|recall|know) (what|that)/i,
+      /are you following/i,
+      /did you understand/i,
+
+      // Meta inquiries about process or interaction
+      /how does this (work|function|operate)/i,
+      /what will you (do|say|answer) next/i,
+      
+      // Additional patterns for completeness
+      /what (did|do) we (just )?(discuss|talk about|cover)/i,
+      /remind me (what|of what) (i|we) (said|asked|discussed)/i,
+      /go back to (what|where) (i|we) (said|were|asked)/i,
+      /what was (that|this) about/i,
+      /can you repeat (that|this|yourself)/i
+    ];
+
+    return metaPatterns.some(pattern => pattern.test(normalizedMessage));
+  }
+
+  /**
+   * Deduplicate consecutive identical messages
+   */
+  deduplicateMessages(messages) {
+    if (!messages || messages.length === 0) return [];
+    
+    const deduplicated = [];
+    let lastContent = null;
+    let lastRole = null;
+    
+    for (const msg of messages) {
+      const content = msg.content || msg.text;
+      const role = msg.role || msg.sender;
+      
+      // Skip if same content and role as previous message
+      if (content === lastContent && role === lastRole) {
+        console.log('🧹 [ORCHESTRATOR] Skipping duplicate message:', content.substring(0, 50) + '...');
+        continue;
+      }
+      
+      deduplicated.push(msg);
+      lastContent = content;
+      lastRole = role;
+    }
+    
+    if (deduplicated.length < messages.length) {
+      console.log(`🧹 [ORCHESTRATOR] Removed ${messages.length - deduplicated.length} duplicate messages`);
+    }
+    
+    return deduplicated;
+  }
+
+  /**
+   * Add recency markers to help AI understand which messages are most recent
+   */
+  addRecencyMarkers(messages) {
+    if (!messages || messages.length === 0) return [];
+    
+    const marked = [...messages];
+    
+    // Find the last user message (excluding the current one being processed)
+    let lastUserMessageIndex = -1;
+    for (let i = marked.length - 1; i >= 0; i--) {
+      const role = marked[i].role || marked[i].sender;
+      if (role === 'user') {
+        lastUserMessageIndex = i;
+        break;
+      }
+    }
+    
+    // Add marker to the most recent user message
+    if (lastUserMessageIndex >= 0) {
+      const msg = marked[lastUserMessageIndex];
+      const content = msg.content || msg.text;
+      
+      // Add "[MOST RECENT]" marker
+      marked[lastUserMessageIndex] = {
+        ...msg,
+        content: `[MOST RECENT USER MESSAGE] ${content}`
+      };
+      
+      console.log('🎯 [ORCHESTRATOR] Added recency marker to message:', content.substring(0, 50) + '...');
+    }
+    
+    return marked;
   }
 }
 

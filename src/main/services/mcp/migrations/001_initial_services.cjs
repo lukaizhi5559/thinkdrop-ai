@@ -82,6 +82,42 @@ const CORE_SERVICES = [
     trustLevel: 'trusted',
     allowedActions: null,
     rateLimit: 1000
+  },
+  {
+    name: 'conversation',
+    displayName: 'Conversation Service',
+    description: 'Conversation session and context management service',
+    endpoint: process.env.MCP_CONVERSATION_ENDPOINT || 'http://localhost:3004',
+    apiKey: process.env.MCP_CONVERSATION_API_KEY || 'auto-generated-key-conversation',
+    capabilities: {
+      session_management: true,
+      message_storage: true,
+      context_extraction: true,
+      entity_tracking: true
+    },
+    actions: [
+      'session.create',
+      'session.list',
+      'session.get',
+      'session.update',
+      'session.delete',
+      'session.switch',
+      'message.add',
+      'message.list',
+      'message.get',
+      'message.update',
+      'message.delete',
+      'context.add',
+      'context.get',
+      'context.extract',
+      'entity.add',
+      'entity.list'
+    ],
+    version: '1.0.0',
+    trusted: true,
+    trustLevel: 'trusted',
+    allowedActions: null,
+    rateLimit: 1000
   }
 ];
 

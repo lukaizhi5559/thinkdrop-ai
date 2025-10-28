@@ -2979,7 +2979,9 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@thinkdrop/conversation-service@workspace:mcp-services/conversation-service"
   dependencies:
+    axios: ^1.6.0
     cors: ^2.8.5
+    dotenv: ^16.3.1
     duckdb: latest
     express: ^4.18.2
     nanoid: ^5.0.0
@@ -5467,7 +5469,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"dotenv@npm:^16.3.0, dotenv@npm:^16.4.5":
+"dotenv@npm:^16.3.0, dotenv@npm:^16.3.1, dotenv@npm:^16.4.5":
   version: 16.6.1
   resolution: "dotenv@npm:16.6.1"
   checksum: e8bd63c9a37f57934f7938a9cf35de698097fadf980cb6edb61d33b3e424ceccfe4d10f37130b904a973b9038627c2646a3365a904b4406514ea94d7f1816b69
