@@ -206,14 +206,23 @@ class AgentOrchestrator {
     // If backend misclassifies, catch it here
     const messageLower = message.toLowerCase();
     
+    // 🎯 PRIORITY 1: Check for meta-questions FIRST (before memory keywords)
+    // Meta-questions ask about the conversation itself, not long-term memory
+    if (this.isMetaQuestion(message)) {
+      console.log('🎯 [ORCHESTRATOR] Meta-question detected, routing to general query with recency context');
+      return await this.handleGeneralQuery(message, intent, context);
+    }
+    
     // Memory store keywords
     if (messageLower.match(/\b(remember|store|save|keep in mind|don't forget|note that)\b/)) {
       console.log('🔍 [ORCHESTRATOR] Detected memory store keywords, overriding intent');
       return await this.handleMemoryStore(message, intent, context);
     }
     
-    // Memory retrieve keywords
-    if (messageLower.match(/\b(what('s| is) my|recall|remind me|do you remember|what did i)\b/)) {
+    // Memory retrieve keywords (but NOT meta-questions like "what did I just say")
+    // Exclude patterns that are meta-questions about recent conversation
+    if (messageLower.match(/\b(what('s| is) my|recall|remind me)\b/) && 
+        !messageLower.match(/\b(just|recent|previous|last)\b/)) {
       console.log('🔍 [ORCHESTRATOR] Detected memory retrieve keywords, overriding intent');
       return await this.handleMemoryRetrieve(message, intent, context);
     }
@@ -1050,16 +1059,23 @@ class AgentOrchestrator {
     const marked = [...messages];
     
     // Find the last user message (excluding the current one being processed)
+    // The last message in the array is the current query, so we skip it
     let lastUserMessageIndex = -1;
+    let foundCount = 0;
+    
     for (let i = marked.length - 1; i >= 0; i--) {
       const role = marked[i].role || marked[i].sender;
       if (role === 'user') {
-        lastUserMessageIndex = i;
-        break;
+        foundCount++;
+        // Skip the first user message (current query) and mark the second one (previous)
+        if (foundCount === 2) {
+          lastUserMessageIndex = i;
+          break;
+        }
       }
     }
     
-    // Add marker to the most recent user message
+    // Add marker to the most recent user message (before current)
     if (lastUserMessageIndex >= 0) {
       const msg = marked[lastUserMessageIndex];
       const content = msg.content || msg.text;
