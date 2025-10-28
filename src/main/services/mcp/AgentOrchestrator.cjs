@@ -16,7 +16,51 @@ const MCPConfigManager = require('./MCPConfigManager.cjs');
 class AgentOrchestrator {
   constructor() {
     this.mcpClient = new MCPClient(MCPConfigManager);
+    this.memoryServiceHealthy = false;
     console.log('🎯 MCP AgentOrchestrator initialized');
+    
+    // Run health check on initialization (async, non-blocking)
+    this.checkMemoryServiceHealth().catch(err => {
+      console.warn('⚠️ [ORCHESTRATOR] Memory service health check failed:', err.message);
+    });
+  }
+
+  /**
+   * Check memory service health and embedding coverage
+   */
+  async checkMemoryServiceHealth() {
+    try {
+      console.log('🏥 [ORCHESTRATOR] Checking memory service health...');
+      
+      const healthResult = await this.mcpClient.callService('user-memory', 'memory.health-check', {});
+      
+      if (healthResult.status === 'healthy') {
+        console.log('✅ [ORCHESTRATOR] Memory service healthy');
+        console.log(`📊 [ORCHESTRATOR] Embedding coverage: ${healthResult.database?.embeddingCoverage || 'unknown'}`);
+        console.log(`📊 [ORCHESTRATOR] Total memories: ${healthResult.database?.totalMemories || 0}`);
+        this.memoryServiceHealthy = true;
+      } else {
+        console.warn('⚠️ [ORCHESTRATOR] Memory service degraded:', healthResult.warnings);
+        this.memoryServiceHealthy = false;
+      }
+      
+      // Check embedding coverage
+      if (healthResult.database?.embeddingCoverage !== '100.0%') {
+        console.warn(`⚠️ [ORCHESTRATOR] Embedding coverage is ${healthResult.database?.embeddingCoverage}, should be 100%`);
+      }
+      
+      return healthResult;
+    } catch (error) {
+      // Health check is optional - don't fail if not supported
+      if (error.message.includes('Action not supported')) {
+        console.log('ℹ️ [ORCHESTRATOR] Memory service health check not available (older version)');
+        this.memoryServiceHealthy = true; // Assume healthy if endpoint doesn't exist
+      } else {
+        console.error('❌ [ORCHESTRATOR] Memory health check failed:', error.message);
+        this.memoryServiceHealthy = false;
+      }
+      return null;
+    }
   }
 
   /**
@@ -244,30 +288,62 @@ class AgentOrchestrator {
         }
       );
 
-      console.log('✅ [MEMORY_STORE] Memory stored:', storeResult.memoryId);
+      // Extract data from MCP response wrapper
+      const data = storeResult.data || storeResult;
+      
+      // Verify embedding was generated (new requirement from memory service)
+      if (!data.embeddingDimensions || data.embeddingDimensions !== 384) {
+        console.warn('⚠️ [MEMORY_STORE] Memory stored without valid embedding!');
+      } else {
+        console.log(`✅ [MEMORY_STORE] Memory stored with ${data.embeddingDimensions}D embedding`);
+      }
+      
+      console.log('✅ [MEMORY_STORE] Memory ID:', data.memoryId);
 
-      // Generate confirmation response via phi4
-      const response = await this.mcpClient.getAnswer(
-        `Confirm that you've remembered: "${message}"`,
-        {
-          action: 'memory_stored',
-          memoryId: storeResult.memoryId
-        }
-      );
+      // Use suggestedResponse from intent parser if available (faster)
+      let confirmationResponse;
+      if (intent.suggestedResponse) {
+        console.log('💡 [MEMORY_STORE] Using suggested response from intent parser');
+        confirmationResponse = intent.suggestedResponse;
+      } else {
+        // Fallback: Generate confirmation response via phi4
+        console.log('🔄 [MEMORY_STORE] Generating confirmation via phi4');
+        const response = await this.mcpClient.getAnswer(
+          `Confirm that you've remembered: "${message}"`,
+          {
+            action: 'memory_stored',
+            memoryId: data.memoryId
+          }
+        );
+        confirmationResponse = response.answer || "Got it! I'll remember that.";
+      }
 
       return {
         success: true,
         action: 'memory_stored',
         data: {
-          memoryId: storeResult.memoryId,
+          memoryId: data.memoryId,
           entities: entities,
-          stored: true
+          stored: true,
+          embeddingDimensions: data.embeddingDimensions
         },
-        response: response.answer || "Got it! I'll remember that."
+        response: confirmationResponse
       };
 
     } catch (error) {
       console.error('❌ [MEMORY_STORE] Error:', error.message);
+      
+      // Check if error is due to embedding generation failure
+      if (error.message.includes('Cannot store memory without embedding')) {
+        console.error('❌ [MEMORY_STORE] Embedding generation failed - memory not stored');
+        return {
+          success: false,
+          action: 'memory_store_failed',
+          error: 'Embedding generation failed',
+          response: "I couldn't generate the embedding for that memory. The memory service may be initializing. Please try again in a moment."
+        };
+      }
+      
       return {
         success: false,
         action: 'memory_store_failed',
@@ -292,8 +368,20 @@ class AgentOrchestrator {
         minSimilarity: 0.3
       });
 
-      const memories = searchResult.results || searchResult.memories || [];
+      // Extract data from MCP response wrapper
+      const data = searchResult.data || searchResult;
+      const memories = data.memories || data.results || [];
       console.log(`✅ [MEMORY_RETRIEVE] Found ${memories.length} memories`);
+      
+      // Log similarity scores for debugging
+      if (memories.length > 0) {
+        console.log('📊 [MEMORY_RETRIEVE] Top results:');
+        memories.slice(0, 3).forEach((m, idx) => {
+          console.log(`  ${idx + 1}. "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3) || 'N/A'})`);
+        });
+      } else if (data.count === 0) {
+        console.log('💡 [MEMORY_RETRIEVE] No results found. Memory service may have diagnostic info in logs.');
+      }
 
       if (memories.length === 0) {
         return {
@@ -445,18 +533,25 @@ class AgentOrchestrator {
             maxAge: 30 // Only search last 30 days
           });
           
-          // Debug: Log search results
+          // Extract data from MCP response wrapper
+          const data = searchResult.data || searchResult;
+          const memories = data.memories || data.results || [];
+          
+          // Debug: Log search results with enhanced info
           console.log('🔍 [DEBUG] Memory search results:', {
             query: message,
-            found: searchResult.memories?.length || 0,
-            threshold: 0.3
+            found: memories.length,
+            threshold: 0.3,
+            duration: data.duration || 'N/A'
           });
-          if (searchResult.memories?.length > 0) {
-            searchResult.memories.forEach(m => {
-              console.log(`  📝 Memory: "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3)})`);
+          if (memories.length > 0) {
+            memories.forEach((m, idx) => {
+              console.log(`  ${idx + 1}. "${m.text?.substring(0, 50)}..." (similarity: ${m.similarity?.toFixed(3) || 'N/A'})`);
             });
+          } else {
+            console.log('💡 [DEBUG] No memories found. Check user-memory service logs for diagnostic info.');
           }
-          return searchResult.results || searchResult.memories || [];
+          return memories;
         } catch (memError) {
           console.warn('⚠️ [GENERAL_QUERY] Could not fetch memories:', memError.message);
           return [];
@@ -666,7 +761,7 @@ class AgentOrchestrator {
       const exchangeText = `User asked: "${userMessage}"\nAssistant responded: "${aiResponse}"`;
       
       // Store in memory with conversation tags
-      await this.mcpClient.storeMemory(
+      const storeResult = await this.mcpClient.storeMemory(
         exchangeText,
         ['conversation', 'auto_stored', intent.type || 'general'],
         {
@@ -681,10 +776,22 @@ class AgentOrchestrator {
         }
       );
       
-      console.log('✅ [AUTO-STORE] Conversation stored for future context');
+      // Extract data from MCP response wrapper
+      const data = storeResult.data || storeResult;
+      
+      // Verify embedding was generated
+      if (data.embeddingDimensions === 384) {
+        console.log('✅ [AUTO-STORE] Conversation stored for future context');
+      } else {
+        console.warn('⚠️ [AUTO-STORE] Stored but embedding may be missing');
+      }
     } catch (error) {
       // Don't fail the main flow if auto-store fails
-      console.warn('⚠️ [AUTO-STORE] Failed:', error.message);
+      if (error.message.includes('Cannot store memory without embedding')) {
+        console.warn('⚠️ [AUTO-STORE] Embedding generation failed - conversation not stored');
+      } else {
+        console.warn('⚠️ [AUTO-STORE] Failed:', error.message);
+      }
     }
   }
 
@@ -726,6 +833,30 @@ class AgentOrchestrator {
     
     // Default: store it (better to over-store than miss context)
     return true;
+  }
+
+  /**
+   * Debug embedding generation for a given text
+   * Useful for troubleshooting memory issues
+   */
+  async debugEmbedding(text) {
+    try {
+      console.log('🔧 [DEBUG] Testing embedding generation...');
+      
+      const result = await this.mcpClient.callService('user-memory', 'memory.debug-embedding', {
+        text: text
+      });
+      
+      console.log('✅ [DEBUG] Embedding test results:');
+      console.log(`  Dimensions: ${result.embedding?.dimensions}`);
+      console.log(`  Sample: ${result.embedding?.sample?.slice(0, 5).join(', ')}...`);
+      console.log(`  Statistics:`, result.embedding?.statistics);
+      
+      return result;
+    } catch (error) {
+      console.error('❌ [DEBUG] Embedding test failed:', error.message);
+      throw error;
+    }
   }
 
   /**

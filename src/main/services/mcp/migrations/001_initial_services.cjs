@@ -26,7 +26,9 @@ const CORE_SERVICES = [
       'memory.delete',
       'memory.update',
       'memory.list',
-      'memory.stats'
+      'memory.stats',
+      'memory.health-check',  // NEW: Health check endpoint
+      'memory.debug-embedding'  // NEW: Debug embedding endpoint
     ],
     version: '1.0.0',
     trusted: true,
