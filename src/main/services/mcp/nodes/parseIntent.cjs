@@ -1,12 +1,12 @@
 /**
  * Parse Intent Node
- * Extracts intent and entities from user message
+ * Extracts intent and entities from user message via phi4 service
  */
 
 module.exports = async function parseIntent(state) {
   const { mcpClient, message, context } = state;
 
-  console.log('🧠 [NODE:PARSE_INTENT] Parsing intent...');
+  console.log(' [NODE:PARSE_INTENT] Parsing intent...');
 
   try {
     const result = await mcpClient.callService('phi4', 'intent.parse', {
@@ -27,7 +27,7 @@ module.exports = async function parseIntent(state) {
       }
     };
   } catch (error) {
-    console.error('❌ [NODE:PARSE_INTENT] Failed:', error.message);
+    console.error(' [NODE:PARSE_INTENT] Failed:', error.message);
     throw error;
   }
 };

@@ -23,7 +23,7 @@
     "test:conv:all": "npm run -s test:conv:detect && npm run -s test:conv:extra && npm run -s test:conv:retrieve",
     "start:services": "./scripts/start-all-services.sh",
     "stop:services": "./scripts/stop-all-services.sh",
-    "restart:services": "./scripts/stop-all-services.sh && ./start-all-services.sh",
+    "restart:services": "./scripts/stop-all-services.sh && ./scripts/start-all-services.sh",
     "db:clean:wal": "./scripts/clean-wal.sh"
   },
   "keywords": [
