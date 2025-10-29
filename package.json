@@ -21,9 +21,10 @@
     "test:conv:retrieve": "node tests/test_conversational_retrieval.js",
     "test:conv:extra": "node tests/test_conversational_detection_extra.js",
     "test:conv:all": "npm run -s test:conv:detect && npm run -s test:conv:extra && npm run -s test:conv:retrieve",
-    "start:services": "./start-all-services.sh",
-    "stop:services": "./stop-all-services.sh",
-    "restart:services": "./stop-all-services.sh && ./start-all-services.sh"
+    "start:services": "./script/start-all-services.sh",
+    "stop:services": "./script/stop-all-services.sh",
+    "restart:services": "./script/stop-all-services.sh && ./start-all-services.sh",
+    "db:clean:wal": "./script/clean-wal.sh"
   },
   "keywords": [
     "electron",
