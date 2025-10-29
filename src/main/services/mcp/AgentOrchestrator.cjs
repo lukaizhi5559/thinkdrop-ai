@@ -12,17 +12,135 @@
 
 const MCPClient = require('./MCPClient.cjs');
 const MCPConfigManager = require('./MCPConfigManager.cjs');
+const StateGraph = require('./StateGraph.cjs');
+
+// Import node implementations
+const parseIntentNode = require('./nodes/parseIntent.cjs');
+const retrieveMemoryNode = require('./nodes/retrieveMemory.cjs');
+const filterMemoryNode = require('./nodes/filterMemory.cjs');
+const answerNode = require('./nodes/answer.cjs');
+const validateAnswerNode = require('./nodes/validateAnswer.cjs');
+const storeConversationNode = require('./nodes/storeConversation.cjs');
 
 class AgentOrchestrator {
   constructor() {
     this.mcpClient = new MCPClient(MCPConfigManager);
     this.memoryServiceHealthy = false;
+    this.stateGraph = null; // Will be initialized on first use
     console.log('🎯 MCP AgentOrchestrator initialized');
     
     // Run health check on initialization (async, non-blocking)
     this.checkMemoryServiceHealth().catch(err => {
       console.warn('⚠️ [ORCHESTRATOR] Memory service health check failed:', err.message);
     });
+  }
+
+  /**
+   * Build the StateGraph for workflow orchestration
+   * @returns {StateGraph} Configured state graph
+   */
+  _buildStateGraph() {
+    if (this.stateGraph) {
+      return this.stateGraph;
+    }
+
+    console.log('🔧 [ORCHESTRATOR] Building StateGraph...');
+
+    // Create nodes with mcpClient bound
+    const nodes = {
+      parseIntent: (state) => parseIntentNode({ ...state, mcpClient: this.mcpClient }),
+      retrieveMemory: (state) => retrieveMemoryNode({ ...state, mcpClient: this.mcpClient }),
+      filterMemory: filterMemoryNode,
+      answer: (state) => answerNode({ ...state, mcpClient: this.mcpClient }),
+      validateAnswer: validateAnswerNode,
+      storeConversation: (state) => storeConversationNode({ ...state, mcpClient: this.mcpClient })
+    };
+
+    // Define edges (routing logic)
+    const edges = {
+      start: 'parseIntent',
+      parseIntent: 'retrieveMemory',
+      retrieveMemory: 'filterMemory',
+      filterMemory: 'answer',
+      answer: 'validateAnswer',
+      validateAnswer: (state) => {
+        // If validation failed and we haven't retried too many times, retry
+        if (state.needsRetry && (state.retryCount || 0) < 2) {
+          console.log(`🔄 [ORCHESTRATOR] Validation failed, retrying (attempt ${state.retryCount})`);
+          return 'answer'; // Retry answer generation
+        }
+        // Otherwise, proceed to store
+        return 'storeConversation';
+      },
+      storeConversation: 'end'
+    };
+
+    this.stateGraph = new StateGraph(nodes, edges);
+    console.log('✅ [ORCHESTRATOR] StateGraph built');
+
+    return this.stateGraph;
+  }
+
+  /**
+   * Process message using StateGraph workflow
+   * This is the new graph-based approach with conditional routing and retry logic
+   * @param {string} message - User message
+   * @param {object} context - Context (sessionId, userId, etc.)
+   * @returns {Promise<object>} Orchestration result with full trace
+   */
+  async processMessageWithGraph(message, context = {}) {
+    console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
+    
+    try {
+      // Build the graph (cached after first call)
+      const graph = this._buildStateGraph();
+
+      // Create initial state
+      const initialState = {
+        reqId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        message,
+        context: {
+          sessionId: context.sessionId || 'default_session',
+          userId: context.userId || 'default_user',
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      // Execute the graph workflow
+      const finalState = await graph.execute(initialState);
+
+      // Format result
+      return {
+        success: finalState.success,
+        action: finalState.intent?.type || 'general_query',
+        data: {
+          sessionFacts: finalState.sessionFacts?.length || 0,
+          sessionEntities: finalState.sessionEntities?.length || 0,
+          memories: finalState.filteredMemories || [],
+          memoryCount: finalState.filteredMemories?.length || 0,
+          memoriesFiltered: finalState.memoriesFiltered || 0,
+          validationIssues: finalState.validationIssues || [],
+          retryCount: finalState.retryCount || 0
+        },
+        response: finalState.answer || "I apologize, but I was unable to generate a response.",
+        elapsedMs: finalState.elapsedMs,
+        trace: finalState.trace, // Full execution trace for debugging
+        debug: {
+          iterations: finalState.iterations,
+          failedNode: finalState.failedNode,
+          error: finalState.error
+        }
+      };
+
+    } catch (error) {
+      console.error(`❌ [ORCHESTRATOR:GRAPH] Error:`, error.message);
+      return {
+        success: false,
+        error: error.message,
+        response: "I encountered an error processing your request. Please try again.",
+        trace: []
+      };
+    }
   }
 
   /**
@@ -235,7 +353,8 @@ class AgentOrchestrator {
     
     // 🎯 PRIORITY 5: Memory retrieve keywords (but NOT meta-questions like "what did I just say")
     // Exclude patterns that are meta-questions about recent conversation
-    if (messageLower.match(/\b(what('s| is) my|recall|remind me)\b/) && 
+    if ((messageLower.match(/\b(what('s| is) my|what.*do i (like|love|prefer|want|enjoy|hate)|recall|remind me)\b/) ||
+         messageLower.match(/\bdo i (like|love|prefer|want|enjoy)\b/)) && 
         !messageLower.match(/\b(just|recent|previous|last)\b/)) {
       console.log('🔍 [ORCHESTRATOR] Detected memory retrieve keywords, overriding intent');
       return await this.handleMemoryRetrieve(message, intent, context);
