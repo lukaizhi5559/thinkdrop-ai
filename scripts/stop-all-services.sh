@@ -55,5 +55,5 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "✅ All services stopped"
 echo ""
 echo "📝 Logs preserved in ./logs/"
-echo "🚀 To restart: ./start-all-services.sh"
+echo "🚀 To restart: yarn restart:services"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

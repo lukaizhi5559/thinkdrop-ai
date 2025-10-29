@@ -61,19 +61,19 @@ echo "Starting services with optimized memory limits..."
 echo ""
 
 # 1. User Memory Service (lightweight)
-start_service "user-memory" "mcp-services/thinkdrop-user-memory-service" 512
+start_service "user-memory" "$PROJECT_ROOT/mcp-services/thinkdrop-user-memory-service" 512
 sleep 2
 
 # 2. Web Search Service (lightweight)
-start_service "web-search" "mcp-services/thinkdrop-web-search" 256
+start_service "web-search" "$PROJECT_ROOT/mcp-services/thinkdrop-web-search" 256
 sleep 2
 
 # 3. Conversation Service (medium)
-start_service "conversation" "mcp-services/conversation-service" 512
+start_service "conversation" "$PROJECT_ROOT/mcp-services/conversation-service" 512
 sleep 2
 
 # 4. Phi4 Service (heavy - load last)
-start_service "phi4" "mcp-services/thinkdrop-phi4-service" 768
+start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -124,7 +124,7 @@ echo "   • View phi4:         tail -f logs/phi4.log"
 echo "   • View conversation: tail -f logs/conversation.log"
 echo ""
 echo "🛑 To stop all services:"
-echo "   ./stop-all-services.sh"
+echo "   yarn stop:services"
 echo ""
 echo "💡 Tip: Wait 5-10 seconds for all services to fully initialize"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
