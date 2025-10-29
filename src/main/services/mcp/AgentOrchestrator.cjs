@@ -323,22 +323,15 @@ class AgentOrchestrator {
       
       console.log('✅ [MEMORY_STORE] Memory ID:', data.memoryId);
 
-      // Use suggestedResponse from intent parser if available (faster)
+      // Use suggestedResponse from intent parser if available, otherwise use static message
       let confirmationResponse;
       if (intent.suggestedResponse) {
         console.log('💡 [MEMORY_STORE] Using suggested response from intent parser');
         confirmationResponse = intent.suggestedResponse;
       } else {
-        // Fallback: Generate confirmation response via phi4
-        console.log('🔄 [MEMORY_STORE] Generating confirmation via phi4');
-        const response = await this.mcpClient.getAnswer(
-          `Confirm that you've remembered: "${message}"`,
-          {
-            action: 'memory_stored',
-            memoryId: data.memoryId
-          }
-        );
-        confirmationResponse = response.answer || "Got it! I'll remember that.";
+        // Use fast static confirmation (no LLM call needed)
+        console.log('⚡ [MEMORY_STORE] Using fast static confirmation');
+        confirmationResponse = "Got it! I'll remember that.";
       }
 
       return {
@@ -1011,9 +1004,11 @@ class AgentOrchestrator {
       /\b(appointment|meeting|scheduled|booked|reservation)\b/i,
       /\b(next|this|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b.*\b(at|@)\s*\d/i,
       
-      // Preferences and favorites
-      /^(my|i)\s+(favorite|preferred|usual|go-to)\b/i,
+      // Preferences and favorites (more flexible - can be anywhere in sentence)
+      /\b(my|i)\s+(favorite|preferred|usual|go-to)\b/i,
+      /\bis\s+my\s+(favorite|preferred|usual|go-to)\b/i,  // "Pizza is my favorite"
       /^i\s+(like|love|enjoy|prefer|hate|dislike)\b/i,
+      /^(love|like|enjoy|prefer|hate|dislike)\s+the\b/i,  // "Love the smell of..."
       
       // Personal facts
       /^(my|i)\s+(name|birthday|age|job|work|live|am|have)\b/i,
