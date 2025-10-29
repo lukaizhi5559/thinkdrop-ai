@@ -43,7 +43,8 @@ function registerPrivateModeHandlers() {
       const orch = getOrchestrator();
       console.log('🎯 [PRIVATE-MODE] Orchestrator obtained:', !!orch);
       
-      const result = await orch.processMessage(message, {
+      // 🔄 Use StateGraph for all routing (intent-based subgraphs)
+      const result = await orch.processMessageWithGraph(message, {
         sessionId: context.sessionId,
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
@@ -51,6 +52,16 @@ function registerPrivateModeHandlers() {
       });
 
       console.log(`✅ [PRIVATE-MODE] Success: ${result.action}`);
+      console.log(`📊 [PRIVATE-MODE] Trace: ${result.trace?.length || 0} nodes executed`);
+      
+      // Optional: Log trace for debugging
+      if (process.env.DEBUG_TRACE === 'true' && result.trace) {
+        console.log('📊 [PRIVATE-MODE] Execution trace:');
+        result.trace.forEach((step, i) => {
+          console.log(`  ${i + 1}. ${step.success ? '✅' : '❌'} ${step.node} (${step.duration}ms)`);
+        });
+      }
+      
       console.log('📤 [PRIVATE-MODE] Returning result:', JSON.stringify(result, null, 2));
 
       return {
