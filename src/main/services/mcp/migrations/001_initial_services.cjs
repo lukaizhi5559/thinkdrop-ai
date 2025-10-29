@@ -73,9 +73,9 @@ const CORE_SERVICES = [
       summarization: true
     },
     actions: [
-      'search.web',
-      'search.news',
-      'content.extract'
+      'web.search',
+      'web.news',
+      'web.scrape'
     ],
     version: '1.0.0',
     trusted: true,

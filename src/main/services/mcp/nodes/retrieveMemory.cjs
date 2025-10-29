@@ -44,15 +44,20 @@ module.exports = async function retrieveMemory(state) {
         : Promise.resolve({ results: [] })
     ]);
 
+    // MCP protocol wraps responses in 'data' field
+    const conversationData = conversationResult.data || conversationResult;
+    const sessionContextData = sessionContextResult.data || sessionContextResult;
+    const memoriesData = memoriesResult.data || memoriesResult;
+
     // Process conversation history
-    const conversationHistory = (conversationResult.messages || []).map(msg => ({
+    const conversationHistory = (conversationData.messages || []).map(msg => ({
       role: msg.sender === 'user' ? 'user' : 'assistant',
       content: msg.text,
       timestamp: msg.timestamp
     }));
 
     // Process memories
-    const memories = (memoriesResult.results || []).map(mem => ({
+    const memories = (memoriesData.results || []).map(mem => ({
       id: mem.id,
       text: mem.text,
       similarity: mem.similarity,
@@ -66,8 +71,8 @@ module.exports = async function retrieveMemory(state) {
     return {
       ...state,
       conversationHistory,
-      sessionFacts: sessionContextResult.facts || [],
-      sessionEntities: sessionContextResult.entities || [],
+      sessionFacts: sessionContextData.facts || [],
+      sessionEntities: sessionContextData.entities || [],
       memories,
       rawMemoriesCount: memories.length
     };

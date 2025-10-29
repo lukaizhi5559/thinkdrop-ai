@@ -17,13 +17,16 @@ module.exports = async function parseIntent(state) {
       }
     });
 
+    // MCP protocol wraps response in 'data' field
+    const intentData = result.data || result;
+
     return {
       ...state,
       intent: {
-        type: result.intent || 'general_query',
-        confidence: result.confidence || 0.5,
-        entities: result.entities || [],
-        requiresMemory: result.requiresMemory || false
+        type: intentData.intent || 'general_query',
+        confidence: intentData.confidence || 0.5,
+        entities: intentData.entities || [],
+        requiresMemory: intentData.requiresMemory || false
       }
     };
   } catch (error) {

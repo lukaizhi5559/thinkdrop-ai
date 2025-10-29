@@ -11,7 +11,7 @@
  * 
  * Subgraphs:
  * - memory_store: parseIntent → storeMemory → end
- * - web_search: parseIntent → webSearch → sanitizeWeb → answer → validate → store → end
+ * - web_search: parseIntent → webSearch → sanitizeWeb → retrieveMemory → filterMemory → answer → validate → store → end
  * - retrieve/general: parseIntent → retrieveMemory → filterMemory → answer → validate → store → end
  */
 
@@ -99,9 +99,9 @@ class AgentOrchestrator {
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
       
-      // Web search subgraph
+      // Web search subgraph (now includes memory retrieval for context)
       webSearch: 'sanitizeWeb',
-      sanitizeWeb: 'answer',
+      sanitizeWeb: 'retrieveMemory',
       
       // Memory retrieve / general query subgraph
       retrieveMemory: 'filterMemory',

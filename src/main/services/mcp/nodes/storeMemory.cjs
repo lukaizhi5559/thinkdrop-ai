@@ -36,12 +36,15 @@ module.exports = async function storeMemory(state) {
       timestamp: new Date().toISOString()
     });
 
+    // MCP protocol wraps response in 'data' field
+    const memoryData = result.data || result;
+
     console.log('✅ [NODE:STORE_MEMORY] Memory stored successfully');
 
     return {
       ...state,
       memoryStored: true,
-      memoryId: result.id,
+      memoryId: memoryData.id,
       answer: "Got it! I'll remember that."
     };
   } catch (error) {

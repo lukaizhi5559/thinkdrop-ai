@@ -5,7 +5,9 @@
 
 set -e  # Exit on error
 
-PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Get the project root (parent of scripts directory)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$PROJECT_ROOT"
 
 echo "🚀 ThinkDrop AI - Starting All Services (Optimized Mode)"
@@ -29,7 +31,7 @@ start_service() {
     echo "   Path: $service_path"
     echo "   Memory Limit: ${memory_limit}MB"
     
-    cd "$PROJECT_ROOT/$service_path"
+cd "$service_path"
     
     # Set memory limit
     export NODE_OPTIONS="--max-old-space-size=$memory_limit"
@@ -61,19 +63,19 @@ echo "Starting services with optimized memory limits..."
 echo ""
 
 # 1. User Memory Service (lightweight)
-start_service "user-memory" "../mcp-services/thinkdrop-user-memory-service" 512
+start_service "user-memory" "$PROJECT_ROOT/mcp-services/thinkdrop-user-memory-service" 512
 sleep 2
 
 # 2. Web Search Service (lightweight)
-start_service "web-search" "../mcp-services/thinkdrop-web-search" 256
+start_service "web-search" "$PROJECT_ROOT/mcp-services/thinkdrop-web-search" 256
 sleep 2
 
 # 3. Conversation Service (medium)
-start_service "conversation" "../mcp-services/conversation-service" 512
+start_service "conversation" "$PROJECT_ROOT/mcp-services/conversation-service" 512
 sleep 2
 
 # 4. Phi4 Service (heavy - load last)
-start_service "phi4" "../mcp-services/thinkdrop-phi4-service" 768
+start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
