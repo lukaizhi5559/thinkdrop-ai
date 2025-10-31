@@ -58,6 +58,49 @@ cd "$service_path"
     cd "$PROJECT_ROOT"
 }
 
+# Function to start a Python service
+start_python_service() {
+    local service_name=$1
+    local service_path=$2
+    
+    echo "🐍 Starting $service_name (Python)..."
+    echo "   Path: $service_path"
+    
+    cd "$service_path"
+    
+    # Check if virtual environment exists
+    if [ ! -d "venv" ]; then
+        echo "   ⚠️  Virtual environment not found. Run setup first:"
+        echo "      cd $service_path && ./setup.sh"
+        echo ""
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    # Activate virtual environment and start service
+    source venv/bin/activate
+    python server.py > "$PROJECT_ROOT/logs/$service_name.log" 2>&1 &
+    local pid=$!
+    
+    echo "   PID: $pid"
+    echo "$service_name:$pid" >> "$PIDS_FILE"
+    
+    # Wait a moment for service to start
+    sleep 1
+    
+    # Check if still running
+    if kill -0 $pid 2>/dev/null; then
+        echo "   ✅ Started successfully"
+    else
+        echo "   ❌ Failed to start (check logs/$service_name.log)"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    echo ""
+    cd "$PROJECT_ROOT"
+}
+
 # Start services in order with staggered timing
 echo "Starting services with optimized memory limits..."
 echo ""
@@ -74,7 +117,11 @@ sleep 2
 start_service "conversation" "$PROJECT_ROOT/mcp-services/conversation-service" 512
 sleep 2
 
-# 4. Phi4 Service (heavy - load last)
+# 4. Coreference Service (Python - lightweight NLP)
+start_python_service "coreference" "$PROJECT_ROOT/mcp-services/coreference-service"
+sleep 2
+
+# 5. Phi4 Service (heavy - load last)
 start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
@@ -86,6 +133,7 @@ echo "   • User Memory:   http://localhost:3001/service.health"
 echo "   • Web Search:    http://localhost:3002/service.health"
 echo "   • Phi4:          http://localhost:3003/service.health"
 echo "   • Conversation:  http://localhost:3004/service.health"
+echo "   • Coreference:   http://localhost:3005/health"
 echo ""
 echo "🔌 Available API Endpoints:"
 echo ""
@@ -114,9 +162,14 @@ echo "      • POST /session.create        - Create session"
 echo "      • POST /session.list          - List sessions"
 echo "      • POST /message.add           - Add message"
 echo "      • POST /message.list          - List messages"
+echo "      • POST /message.search        - Semantic search"
 echo "      • POST /context.get           - Get context"
 echo "      • POST /entity.add            - Add entity"
 echo "      • GET  /service.health        - Health check"
+echo ""
+echo "   🔗 Coreference (Port 3005):"
+echo "      • POST /resolve               - Resolve references"
+echo "      • GET  /health                - Health check"
 echo ""
 echo "📝 Logs:"
 echo "   • View all:          tail -f logs/*.log"
@@ -124,6 +177,7 @@ echo "   • View user-memory:  tail -f logs/user-memory.log"
 echo "   • View web-search:   tail -f logs/web-search.log"
 echo "   • View phi4:         tail -f logs/phi4.log"
 echo "   • View conversation: tail -f logs/conversation.log"
+echo "   • View coreference:  tail -f logs/coreference.log"
 echo ""
 echo "🛑 To stop all services:"
 echo "   yarn stop:services"

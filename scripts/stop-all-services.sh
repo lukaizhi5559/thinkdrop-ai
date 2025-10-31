@@ -18,11 +18,12 @@ PIDS_FILE="$PROJECT_ROOT/.service-pids"
 if [ ! -f "$PIDS_FILE" ]; then
     echo "⚠️  No running services found (PID file missing)"
     echo ""
-    echo "Attempting to kill all node processes running MCP services..."
+    echo "Attempting to kill all processes running MCP services..."
     pkill -f "thinkdrop-user-memory-service" || true
     pkill -f "thinkdrop-phi4-service" || true
     pkill -f "thinkdrop-web-search" || true
     pkill -f "conversation-service" || true
+    pkill -f "coreference-service.*server.py" || true
     echo "✅ Done"
     exit 0
 fi

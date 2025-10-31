@@ -11,14 +11,21 @@ module.exports = async function retrieveMemory(state) {
   try {
     // Parallel fetch: conversation history, session context, and memories
     const [conversationResult, sessionContextResult, memoriesResult] = await Promise.all([
-      // Conversation history
-      mcpClient.callService('conversation', 'message.list', {
+      // Conversation history - use semantic search for better context
+      mcpClient.callService('conversation', 'message.search', {
         sessionId: context.sessionId,
+        query: message,
         limit: 10,
-        direction: 'DESC'
+        minSimilarity: 0.3,
+        includeRecent: 3 // Always include 3 most recent messages
       }).catch(err => {
-        console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Conversation fetch failed:', err.message);
-        return { messages: [] };
+        console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Semantic search failed, falling back to chronological:', err.message);
+        // Fallback to chronological if semantic search fails
+        return mcpClient.callService('conversation', 'message.list', {
+          sessionId: context.sessionId,
+          limit: 10,
+          direction: 'DESC'
+        }).catch(() => ({ messages: [] }));
       }),
 
       // Session context

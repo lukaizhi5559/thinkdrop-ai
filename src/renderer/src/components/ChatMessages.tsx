@@ -642,15 +642,81 @@ export default function ChatMessages() {
           scrollToBottom({ smooth: true, force: true });
           
           try {
-            // Call MCP private mode orchestrator
+            // 🔑 CRITICAL: Fetch conversation history BEFORE adding user message for context-aware caching
+            let conversationHistory: any[] = [];
+            try {
+              const historyResult = await (window.electronAPI as any)?.mcpCall({
+                serviceName: 'conversation',
+                action: 'message.list',
+                payload: {
+                  sessionId: currentSessionId,
+                  limit: 10,
+                  direction: 'DESC'
+                }
+              });
+              
+              if (historyResult?.success && historyResult.data?.data?.messages) {
+                conversationHistory = historyResult.data.data.messages.map((msg: any) => ({
+                  role: msg.sender === 'user' ? 'user' : 'assistant',
+                  content: msg.text,
+                  timestamp: msg.timestamp
+                }));
+                console.log(`🔑 [CACHE-CONTEXT] Fetched ${conversationHistory.length} messages for cache key`);
+              }
+            } catch (err) {
+              console.warn('⚠️ [CACHE-CONTEXT] Failed to fetch history:', err);
+            }
+            
+            // Set up early response listener (Phase 1 optimization)
+            let intentMessageTimeout: NodeJS.Timeout | null = null;
+            let intentMessage: string | null = null;
+            
+            const handleEarlyResponse = (_event: any, data: any) => {
+              console.log('💬 [EARLY-RESPONSE] Received:', data.message);
+              
+              // Store the intent message but don't show it immediately
+              intentMessage = data.message;
+              
+              // Show intent message after 2 seconds if response hasn't arrived yet
+              intentMessageTimeout = setTimeout(() => {
+                if (intentMessage) {
+                  setInitialThinkingMessage(intentMessage);
+                }
+              }, 4000); // 2 second delay
+            };
+            
+            // Set up progress listener
+            const handleProgress = (_event: any, data: any) => {
+              console.log('📊 [PROGRESS]', data.node, data.status);
+              // Could update UI with progress indicators here
+            };
+            
+            // Register listeners
+            if (window.electronAPI?.onPrivateModeEarlyResponse) {
+              window.electronAPI.onPrivateModeEarlyResponse(handleEarlyResponse);
+            }
+            if (window.electronAPI?.onPrivateModeProgress) {
+              window.electronAPI.onPrivateModeProgress(handleProgress);
+            }
+            
+            // Call MCP private mode orchestrator with conversation history
             const result = await window.electronAPI?.privateModeProcess({
               message: messageText,
               context: {
                 sessionId: currentSessionId,
                 userId: 'default_user',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
+                conversationHistory // Pass history for context-aware cache key
               }
             });
+            
+            // Cleanup listeners and timeout
+            if (intentMessageTimeout) {
+              clearTimeout(intentMessageTimeout);
+            }
+            if (window.electronAPI?.removePrivateModeListeners) {
+              window.electronAPI.removePrivateModeListeners();
+            }
             
             if (result.success) {
               console.log('✅ [MCP-PRIVATE] Orchestration successful');

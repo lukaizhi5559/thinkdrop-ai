@@ -8,19 +8,54 @@
  * - Trace: Execution history for debugging
  */
 
+// Conditional logging based on environment variable
+const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
+
 class StateGraph {
   constructor(nodes = {}, edges = {}) {
     this.nodes = nodes;
     this.edges = edges;
     this.startNode = edges.start || 'start';
+    
+    // Caching layer for repeated queries
+    this.cache = new Map();
+    this.cacheStats = { hits: 0, misses: 0 };
+    this.cacheTTL = 300000; // 5 minutes
   }
 
   /**
    * Execute the graph workflow
    * @param {Object} initialState - Starting state
+   * @param {Function} onProgress - Optional callback for progress updates (nodeName, state, duration)
    * @returns {Object} Final state with trace
    */
-  async execute(initialState) {
+  async execute(initialState, onProgress = null) {
+    // Generate cache key from message + sessionId
+    const cacheKey = this._generateCacheKey(initialState);
+    
+    // Check cache for repeated queries
+    const cached = this.cache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+      this.cacheStats.hits++;
+      console.log(`✅ [STATEGRAPH:CACHE] Cache hit! (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+      
+      // Send cached result immediately
+      if (onProgress && typeof onProgress === 'function') {
+        try {
+          await onProgress('cached', cached.result, 0, 'cached');
+        } catch (err) {
+          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+        }
+      }
+      
+      return { ...cached.result, fromCache: true, cacheAge: Date.now() - cached.timestamp };
+    }
+    
+    this.cacheStats.misses++;
+    if (DEBUG) {
+      console.log(`⚠️ [STATEGRAPH:CACHE] Cache miss - executing workflow (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+    }
+    
     const state = {
       ...initialState,
       trace: [],
@@ -47,7 +82,18 @@ class StateGraph {
 
       // Execute node
       const nodeStartTime = Date.now();
-      console.log(`🔄 [STATEGRAPH] Executing node: ${currentNode}`);
+      if (DEBUG) {
+        console.log(`🔄 [STATEGRAPH] Executing node: ${currentNode}`);
+      }
+
+      // Call progress callback before node execution
+      if (onProgress && typeof onProgress === 'function') {
+        try {
+          await onProgress(currentNode, state, 0, 'started');
+        } catch (err) {
+          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+        }
+      }
 
       try {
         const nodeFunction = this.nodes[currentNode];
@@ -75,14 +121,54 @@ class StateGraph {
           success: true
         });
 
-        console.log(`✅ [STATEGRAPH] Node ${currentNode} completed in ${duration}ms`);
+        if (DEBUG) {
+          console.log(`✅ [STATEGRAPH] Node ${currentNode} completed in ${duration}ms`);
+        }
 
         // Update state
         Object.assign(state, updatedState);
 
+        // Call progress callback after node completion
+        if (onProgress && typeof onProgress === 'function') {
+          try {
+            await onProgress(currentNode, state, duration, 'completed');
+          } catch (err) {
+            console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+          }
+        }
+
+        // Early intent response: Send contextual message immediately after parseIntent
+        if (currentNode === 'parseIntent' && state.intent?.type && onProgress) {
+          try {
+            // Load shared IntentResponses utility (decoupled from any specific MCP service)
+            const IntentResponses = require('../utils/IntentResponses.cjs');
+            
+            // Get intent-specific early message
+            const earlyMessage = IntentResponses.getSuggestedResponse(
+              state.intent.type, 
+              state.message
+            );
+            
+            // Send early response to UI immediately (before slow operations start)
+            await onProgress('earlyResponse', { 
+              ...state,
+              earlyMessage,
+              intentType: state.intent.type 
+            }, 0, 'early');
+            
+            if (DEBUG) {
+              console.log(`💬 [STATEGRAPH] Early response sent: "${earlyMessage}"`);
+            }
+          } catch (err) {
+            console.warn('⚠️ [STATEGRAPH] Early response error:', err.message);
+          }
+        }
+
         // Determine next node
         const nextNode = this._getNextNode(currentNode, state);
-        console.log(`➡️  [STATEGRAPH] Routing: ${currentNode} → ${nextNode}`);
+        if (DEBUG) {
+          console.log(`➡️  [STATEGRAPH] Routing: ${currentNode} → ${nextNode}`);
+        }
 
         currentNode = nextNode;
 
@@ -109,7 +195,24 @@ class StateGraph {
     state.iterations = iterations;
     state.success = !state.error;
 
-    console.log(`🏁 [STATEGRAPH] Workflow completed in ${state.elapsedMs}ms (${iterations} iterations)`);
+    if (DEBUG) {
+      console.log(`🏁 [STATEGRAPH] Workflow completed in ${state.elapsedMs}ms (${iterations} iterations)`);
+    }
+
+    // Cache successful results
+    if (state.success && state.answer) {
+      this.cache.set(cacheKey, {
+        result: state,
+        timestamp: Date.now()
+      });
+      
+      // Cleanup old cache entries
+      this._cleanupCache();
+      
+      if (DEBUG) {
+        console.log(`💾 [STATEGRAPH:CACHE] Result cached (${this.cache.size} entries)`);
+      }
+    }
 
     return state;
   }
@@ -144,20 +247,223 @@ class StateGraph {
   }
 
   /**
+   * Execute multiple nodes in parallel
+   * @param {Array<string>} nodeNames - Node names to execute
+   * @param {Object} state - Current state
+   * @param {Function} onProgress - Optional progress callback
+   * @returns {Object} Merged state from all nodes
+   */
+  async executeParallel(nodeNames, state, onProgress = null) {
+    console.log(`⚡ [STATEGRAPH:PARALLEL] Executing ${nodeNames.length} nodes in parallel: ${nodeNames.join(', ')}`);
+    
+    const promises = nodeNames.map(async (nodeName) => {
+      const nodeFunction = this.nodes[nodeName];
+      
+      if (!nodeFunction) {
+        throw new Error(`Node not found: ${nodeName}`);
+      }
+      
+      const nodeStartTime = Date.now();
+      
+      // Call progress callback before node execution
+      if (onProgress && typeof onProgress === 'function') {
+        try {
+          await onProgress(nodeName, state, 0, 'started');
+        } catch (err) {
+          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+        }
+      }
+      
+      try {
+        const inputSnapshot = this._captureStateSnapshot(state);
+        const result = await nodeFunction(state);
+        const duration = Date.now() - nodeStartTime;
+        const outputSnapshot = this._captureStateSnapshot(result);
+        
+        console.log(`✅ [STATEGRAPH:PARALLEL] Node ${nodeName} completed in ${duration}ms`);
+        
+        // Call progress callback after completion
+        if (onProgress && typeof onProgress === 'function') {
+          try {
+            await onProgress(nodeName, result, duration, 'completed');
+          } catch (err) {
+            console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+          }
+        }
+        
+        return { 
+          success: true, 
+          nodeName, 
+          result, 
+          duration,
+          trace: {
+            node: nodeName,
+            duration,
+            timestamp: new Date().toISOString(),
+            input: inputSnapshot,
+            output: outputSnapshot,
+            success: true
+          }
+        };
+        
+      } catch (error) {
+        const duration = Date.now() - nodeStartTime;
+        console.error(`❌ [STATEGRAPH:PARALLEL] Node ${nodeName} failed:`, error.message);
+        
+        return { 
+          success: false, 
+          nodeName, 
+          error: error.message,
+          duration,
+          trace: {
+            node: nodeName,
+            duration,
+            timestamp: new Date().toISOString(),
+            error: error.message,
+            success: false
+          }
+        };
+      }
+    });
+    
+    const results = await Promise.all(promises);
+    
+    // Merge all results into state
+    const mergedState = { ...state };
+    const parallelTraces = [];
+    
+    for (const { success, nodeName, result, error, trace } of results) {
+      parallelTraces.push(trace);
+      
+      if (success) {
+        // Merge successful result into state
+        Object.assign(mergedState, result);
+      } else {
+        console.warn(`⚠️ [STATEGRAPH:PARALLEL] Skipping failed parallel node: ${nodeName}`);
+        mergedState.parallelErrors = mergedState.parallelErrors || [];
+        mergedState.parallelErrors.push({ nodeName, error });
+      }
+    }
+    
+    // Add all parallel traces to state
+    mergedState.trace = mergedState.trace || [];
+    mergedState.trace.push(...parallelTraces);
+    
+    const totalDuration = Math.max(...results.map(r => r.duration));
+    console.log(`⚡ [STATEGRAPH:PARALLEL] All nodes completed in ${totalDuration}ms (parallel)`);
+    
+    return mergedState;
+  }
+
+  /**
    * Capture a snapshot of relevant state for tracing
+   * Only captures essential metrics, not full objects (optimized for performance)
    * @param {Object} state - Current state
    * @returns {Object} State snapshot
    */
   _captureStateSnapshot(state) {
     return {
-      intent: state.intent,
+      intentType: state.intent?.type,
+      intentConfidence: state.intent?.confidence,
       memoriesCount: state.memories?.length || 0,
       filteredMemoriesCount: state.filteredMemories?.length || 0,
       contextDocsCount: state.contextDocs?.length || 0,
       hasAnswer: !!state.answer,
+      answerLength: state.answer?.length || 0,
       needsRetry: state.needsRetry,
+      retryCount: state.retryCount || 0,
       error: state.error
     };
+  }
+
+  /**
+   * Generate cache key from message, session, and conversation context
+   * @param {Object} state - Initial state
+   * @returns {string} Cache key
+   */
+  _generateCacheKey(state) {
+    const message = (state.message || '').toLowerCase().trim();
+    const sessionId = state.context?.sessionId || 'default';
+    
+    // Include conversation context to prevent stale responses
+    // Use last 5 messages to detect context changes
+    const conversationHistory = state.context?.conversationHistory || [];
+    const recentMessages = conversationHistory
+      .slice(-5)
+      .map(msg => `${msg.role}:${(msg.content || '').substring(0, 50)}`)
+      .join('|');
+    
+    // Simple hash of recent context
+    const contextHash = this._simpleHash(recentMessages);
+    
+    const cacheKey = `${sessionId}:${message}:${contextHash}`;
+    
+    // Always log cache key for debugging context-awareness
+    console.log(`🔑 [STATEGRAPH:CACHE] Cache key generated:`);
+    console.log(`   Message: "${message}"`);
+    console.log(`   Context hash: ${contextHash} (from ${conversationHistory.length} messages)`);
+    console.log(`   Recent context: ${recentMessages.substring(0, 100)}...`);
+    console.log(`   Full key: ${cacheKey}`);
+    
+    return cacheKey;
+  }
+
+  /**
+   * Simple hash function for context fingerprinting
+   * @param {string} str - String to hash
+   * @returns {string} Hash
+   */
+  _simpleHash(str) {
+    if (!str) return '0';
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return Math.abs(hash).toString(36);
+  }
+
+  /**
+   * Cleanup expired cache entries
+   */
+  _cleanupCache() {
+    const now = Date.now();
+    let cleaned = 0;
+    
+    for (const [key, value] of this.cache.entries()) {
+      if (now - value.timestamp > this.cacheTTL) {
+        this.cache.delete(key);
+        cleaned++;
+      }
+    }
+    
+    if (cleaned > 0 && DEBUG) {
+      console.log(`🧹 [STATEGRAPH:CACHE] Cleaned ${cleaned} expired entries`);
+    }
+  }
+
+  /**
+   * Get cache statistics
+   * @returns {Object} Cache stats
+   */
+  getCacheStats() {
+    const total = this.cacheStats.hits + this.cacheStats.misses;
+    return {
+      hits: this.cacheStats.hits,
+      misses: this.cacheStats.misses,
+      size: this.cache.size,
+      hitRate: total > 0 ? (this.cacheStats.hits / total * 100).toFixed(2) + '%' : '0%'
+    };
+  }
+
+  /**
+   * Clear cache (useful for testing)
+   */
+  clearCache() {
+    this.cache.clear();
+    this.cacheStats = { hits: 0, misses: 0 };
+    console.log('🧹 [STATEGRAPH:CACHE] Cache cleared');
   }
 
   /**

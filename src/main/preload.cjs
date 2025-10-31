@@ -87,6 +87,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // MCP Private Mode
   privateModeProcess: (params) => ipcRenderer.invoke('private-mode:process', params),
+  onPrivateModeProgress: (callback) => ipcRenderer.on('private-mode:progress', callback),
+  onPrivateModeEarlyResponse: (callback) => ipcRenderer.on('private-mode:early-response', callback),
+  removePrivateModeListeners: () => {
+    ipcRenderer.removeAllListeners('private-mode:progress');
+    ipcRenderer.removeAllListeners('private-mode:early-response');
+  },
   
   // MCP Service Communication
   mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),

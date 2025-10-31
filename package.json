@@ -38,7 +38,8 @@
   "author": "Thinkdrop AI Team",
   "license": "MIT",
   "workspaces": [
-    "mcp-services/*"
+    "mcp-services/*",
+    "!mcp-services/coreference-service"
   ],
   "devDependencies": {
     "@types/node": "^20.0.0",

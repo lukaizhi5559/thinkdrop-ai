@@ -20,48 +20,32 @@ module.exports = async function answer(state) {
   console.log(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
 
   try {
-    // Build system instructions based on intent
-    let systemInstructions = `You are an AI assistant helping the user. Always respond from the assistant's perspective (use "you" for the user, not "I").`;
+    // Build system instructions - simple and clear
+    let systemInstructions = `You are an AI assistant. Use the conversation history to understand context and answer questions naturally.
 
-    // Add pronoun resolution FIRST (highest priority) for queries with "he", "she", "it", "they", etc.
-    const hasPronoun = /\b(he|she|it|they|him|her|his|their)\b/i.test(message);
-    if (hasPronoun && conversationHistory.length > 0) {
-      systemInstructions = `🚨 **CRITICAL - PRONOUN RESOLUTION** 🚨
-The user's query contains a pronoun ("he", "she", "it", "they", etc.).
-
-MANDATORY STEPS:
-1. FIRST: Read the conversation history to identify who/what "he/she/it/they" refers to
-2. Look at the most recent 2-3 assistant messages to see who was being discussed
-3. ONLY AFTER identifying the person from context, use web search results to answer about THAT SPECIFIC PERSON
-4. IGNORE web search results about other people - they are irrelevant
-
-` + systemInstructions;
-    }
-
-    // Add follow-up detection for short affirmative responses (e.g., "yes football", "tell me more about X")
-    const isShortFollowUp = message.trim().split(/\s+/).length <= 4 && conversationHistory.length > 0;
-    const hasAffirmative = /\b(yes|yeah|yep|sure|ok|okay|tell me|more about)\b/i.test(message);
-    if (isShortFollowUp && hasAffirmative) {
-      systemInstructions = `🎯 **FOLLOW-UP CONTEXT** 🎯
-The user is responding to your previous question with a short affirmative phrase.
-
-MANDATORY STEPS:
-1. Look at your MOST RECENT assistant message to see what question you asked
-2. The user's response is answering that question - identify which option/topic they chose
-3. Address THAT SPECIFIC TOPIC mentioned in their response
-4. Stay on topic - don't switch to a different subject
-
-Example:
-- You asked: "Would you like to know about his hobbies or medical conditions?"
-- User says: "yes football"
-- You should: Talk about football/hobbies, NOT medical conditions
-
-` + systemInstructions;
-    }
+IMPORTANT:
+- When the user refers to "the show", "the cartoon", "he", "she", "it", or "they", check the conversation history to understand what they're referring to.
+- If the user asks to "go back" to a previous topic, find that topic in the conversation history and continue it.
+- Do not ask the user to repeat information that's already in the conversation history.
+- Always respond from the assistant's perspective (use "you" for the user, not "I").`;
 
     // Add meta-question handling
     if (message.toLowerCase().includes('what did i')) {
-      systemInstructions += `\nIMPORTANT: If the user asks "what did I just say", look for the message marked with "[MOST RECENT USER MESSAGE]" in the conversation history.\nExtract ONLY the text after "[MOST RECENT USER MESSAGE]" and respond with: "You asked: [that text]"\nExample: If you see "[MOST RECENT USER MESSAGE] What do I like to eat", respond EXACTLY: "You asked: What do I like to eat"`;
+      systemInstructions += `\nCRITICAL INSTRUCTION: The user is asking what they previously said.
+STEP 1: SKIP the first user message in the conversation history (that's the current question).
+STEP 2: Find the SECOND user message that has "[MOST RECENT USER MESSAGE]" at the very start.
+STEP 3: Extract ONLY the text AFTER "[MOST RECENT USER MESSAGE] " (note the space).
+STEP 4: Respond with EXACTLY: "You asked: [extracted text]"
+
+Example conversation history:
+[
+  {"role": "user", "content": "what did I just say"},  ← SKIP THIS (current question)
+  {"role": "assistant", "content": "..."},
+  {"role": "user", "content": "[MOST RECENT USER MESSAGE] What do I like to eat"}  ← EXTRACT FROM THIS
+]
+Correct response: "You asked: What do I like to eat"
+
+DO NOT extract from the first user message. DO NOT extract from assistant messages. ONLY extract from the marked user message.`;
     }
 
     // Add memory usage instructions
@@ -90,18 +74,28 @@ Example:
       systemInstructions += `\nWeb search found these results:\n${webTopics}`;
     }
 
-    systemInstructions += `\nThe "conversationHistory" shows the recent back-and-forth messages. Use this for immediate context and follow-up questions.`;
-
     // Mark most recent user message for meta-questions
     let processedHistory = [...conversationHistory];
     if (message.toLowerCase().includes('what did i')) {
       // Find the previous user message (excluding current one which is the first in DESC order)
-      const userMessages = conversationHistory.filter(m => m.role === 'user');
-      if (userMessages.length > 1) {
-        // userMessages[0] is the current message, userMessages[1] is the previous one
-        const previousUserMessage = userMessages[1];
-        processedHistory = conversationHistory.map(m => 
-          m === previousUserMessage 
+      let userMessageCount = 0;
+      let targetIndex = -1;
+      
+      for (let i = 0; i < conversationHistory.length; i++) {
+        if (conversationHistory[i].role === 'user') {
+          userMessageCount++;
+          if (userMessageCount === 2) {
+            // This is the second user message (the one before current)
+            targetIndex = i;
+            break;
+          }
+        }
+      }
+      
+      if (targetIndex !== -1) {
+        // Mark the previous user message by index (more reliable than object comparison)
+        processedHistory = conversationHistory.map((m, idx) => 
+          idx === targetIndex 
             ? { ...m, content: `[MOST RECENT USER MESSAGE] ${m.content}` }
             : m
         );

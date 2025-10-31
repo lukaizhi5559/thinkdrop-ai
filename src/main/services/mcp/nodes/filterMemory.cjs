@@ -3,7 +3,7 @@
  * Filters out low-similarity memories to prevent hallucinations
  */
 
-const SIMILARITY_THRESHOLD = 0.7; // Only use memories with >70% similarity
+const SIMILARITY_THRESHOLD = 0.5; // Only use memories with >50% similarity (lowered to capture more context)
 
 module.exports = async function filterMemory(state) {
   const { memories = [] } = state;

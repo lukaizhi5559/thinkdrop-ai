@@ -19,10 +19,14 @@ const MCPClient = require('./MCPClient.cjs');
 const MCPConfigManager = require('./MCPConfigManager.cjs');
 const StateGraph = require('./StateGraph.cjs');
 
+// Conditional logging based on environment variable
+const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
+
 // Import node implementations
 const parseIntentNode = require('./nodes/parseIntent.cjs');
 const retrieveMemoryNode = require('./nodes/retrieveMemory.cjs');
 const filterMemoryNode = require('./nodes/filterMemory.cjs');
+const resolveReferencesNode = require('./nodes/resolveReferences.cjs');
 const answerNode = require('./nodes/answer.cjs');
 const validateAnswerNode = require('./nodes/validateAnswer.cjs');
 const storeConversationNode = require('./nodes/storeConversation.cjs');
@@ -53,7 +57,9 @@ class AgentOrchestrator {
       return this.stateGraph;
     }
 
-    console.log('🔧 [ORCHESTRATOR] Building StateGraph with intent-based routing...');
+    if (DEBUG) {
+      console.log('🔧 [ORCHESTRATOR] Building StateGraph with intent-based routing...');
+    }
 
     // Create nodes with mcpClient bound
     const nodes = {
@@ -70,6 +76,17 @@ class AgentOrchestrator {
       // Memory retrieve / general query subgraph
       retrieveMemory: (state) => retrieveMemoryNode({ ...state, mcpClient: this.mcpClient }),
       filterMemory: filterMemoryNode,
+      resolveReferences: (state) => resolveReferencesNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // Parallel execution nodes
+      parallelWebAndMemory: async (state) => {
+        console.log('🔄 [NODE:PARALLEL] Running webSearch + retrieveMemory in parallel...');
+        return await this.stateGraph.executeParallel(['webSearch', 'retrieveMemory'], state);
+      },
+      parallelSanitizeAndFilter: async (state) => {
+        console.log('🔄 [NODE:PARALLEL] Running sanitizeWeb + filterMemory in parallel...');
+        return await this.stateGraph.executeParallel(['sanitizeWeb', 'filterMemory'], state);
+      },
       
       // Shared answer/validate/store tail
       answer: (state) => answerNode({ ...state, mcpClient: this.mcpClient }),
@@ -90,7 +107,7 @@ class AgentOrchestrator {
           return 'storeMemory';
         }
         if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup') {
-          return 'webSearch';
+          return 'parallelWebAndMemory'; // ⚡ PARALLEL: webSearch + retrieveMemory
         }
         // memory_retrieve, general_query, and unknowns go to retrieve path
         return 'retrieveMemory';
@@ -99,13 +116,14 @@ class AgentOrchestrator {
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
       
-      // Web search subgraph (now includes memory retrieval for context)
-      webSearch: 'sanitizeWeb',
-      sanitizeWeb: 'retrieveMemory',
+      // Web search subgraph with parallel execution
+      parallelWebAndMemory: 'parallelSanitizeAndFilter', // ⚡ PARALLEL: sanitizeWeb + filterMemory
+      parallelSanitizeAndFilter: 'resolveReferences',
       
-      // Memory retrieve / general query subgraph
+      // Memory retrieve / general query subgraph (sequential)
       retrieveMemory: 'filterMemory',
-      filterMemory: 'answer',
+      filterMemory: 'resolveReferences',
+      resolveReferences: 'answer',
       
       // Shared tail: answer → validate → store
       answer: 'validateAnswer',
@@ -122,7 +140,9 @@ class AgentOrchestrator {
     };
 
     this.stateGraph = new StateGraph(nodes, edges);
-    console.log('✅ [ORCHESTRATOR] StateGraph built with 3 subgraphs (memory_store, web_search, retrieve/general)');
+    if (DEBUG) {
+      console.log('✅ [ORCHESTRATOR] StateGraph built with 3 subgraphs (memory_store, web_search, retrieve/general)');
+    }
 
     return this.stateGraph;
   }
@@ -132,28 +152,35 @@ class AgentOrchestrator {
    * This is the main entry point for all message processing
    * @param {string} message - User message
    * @param {object} context - Context (sessionId, userId, etc.)
+   * @param {Function} onProgress - Optional callback for progress updates
    * @returns {Promise<object>} Orchestration result with full trace
    */
-  async processMessageWithGraph(message, context = {}) {
-    console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
+  async processMessageWithGraph(message, context = {}, onProgress = null) {
+    if (DEBUG) {
+      console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
+    }
     
     try {
       // Build the graph (cached after first call)
       const graph = this._buildStateGraph();
 
-      // Create initial state
+      // Use conversation history from context if provided (caller should fetch BEFORE adding user message)
+      const conversationHistory = context.conversationHistory || [];
+
+      // Create initial state with conversation history for cache key generation
       const initialState = {
         reqId: `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         message,
         context: {
           sessionId: context.sessionId || 'default_session',
           userId: context.userId || 'default_user',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
+          conversationHistory // Include for context-aware cache key
         }
       };
 
-      // Execute the graph workflow
-      const finalState = await graph.execute(initialState);
+      // Execute the graph workflow with progress callback
+      const finalState = await graph.execute(initialState, onProgress);
 
       // Format result
       return {

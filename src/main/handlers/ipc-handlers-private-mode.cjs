@@ -43,13 +43,42 @@ function registerPrivateModeHandlers() {
       const orch = getOrchestrator();
       console.log('🎯 [PRIVATE-MODE] Orchestrator obtained:', !!orch);
       
+      // Progress callback to stream updates to renderer
+      const onProgress = async (nodeName, state, duration, status) => {
+        try {
+          // Handle early intent response (Phase 1 optimization)
+          if (status === 'early' && nodeName === 'earlyResponse') {
+            console.log('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
+            event.sender.send('private-mode:early-response', {
+              message: state.earlyMessage,
+              intentType: state.intentType,
+              timestamp: new Date().toISOString()
+            });
+            return;
+          }
+          
+          // Send regular progress update to renderer
+          event.sender.send('private-mode:progress', {
+            node: nodeName,
+            status: status, // 'started', 'completed', or 'early'
+            duration: duration,
+            timestamp: new Date().toISOString(),
+            hasAnswer: !!state.answer,
+            contextDocsCount: state.contextDocs?.length || 0,
+            intentType: state.intent?.type
+          });
+        } catch (err) {
+          console.warn('⚠️ [PRIVATE-MODE] Failed to send progress update:', err.message);
+        }
+      };
+      
       // 🔄 Use StateGraph for all routing (intent-based subgraphs)
       const result = await orch.processMessageWithGraph(message, {
         sessionId: context.sessionId,
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
         ...context
-      });
+      }, onProgress);
 
       console.log(`✅ [PRIVATE-MODE] Success: ${result.action}`);
       console.log(`📊 [PRIVATE-MODE] Trace: ${result.trace?.length || 0} nodes executed`);
