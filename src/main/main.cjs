@@ -54,6 +54,7 @@ const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversat
 const { setupDatabaseNotificationHandlers } = require('./handlers/ipc-handlers-database-notifications.cjs');
 const { registerMCPHandlers } = require('./handlers/ipc-handlers-mcp.cjs');
 const { registerPrivateModeHandlers } = require('./handlers/ipc-handlers-private-mode.cjs');
+const { setupMCPMemoryHandlers } = require('./handlers/ipc-handlers-mcp-memory.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -551,6 +552,16 @@ async function setupIPCHandlers() {
     console.log('🔧 Setting up MCP Private Mode handlers...');
     registerPrivateModeHandlers();
     console.log('✅ MCP Private Mode handlers setup complete');
+    
+    // Initialize MCP Memory handlers (for Memory Debugger in private mode)
+    if (USE_MCP_PRIVATE_MODE) {
+      console.log('🔧 Setting up MCP Memory handlers...');
+      const MCPClient = require('./services/mcp/MCPClient.cjs');
+      const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
+      const mcpClient = new MCPClient(MCPConfigManager);
+      setupMCPMemoryHandlers(mcpClient);
+      console.log('✅ MCP Memory handlers setup complete');
+    }
     
     // Update stub handlers with full MCP service info (already registered early)
     if (USE_MCP_PRIVATE_MODE) {

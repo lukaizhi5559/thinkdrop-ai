@@ -24,11 +24,12 @@ module.exports = async function storeMemory(state) {
     const result = await mcpClient.callService('user-memory', 'memory.store', {
       text: message,
       tags: tags,
+      entities: entities, // TOP-LEVEL: Required for memory_entities table
       metadata: {
         source: 'user_input',
         intent: intent.type,
         confidence: intent.confidence,
-        entities: entities,
+        entities: entities, // Also in metadata for reference
         sessionId: context.sessionId,
         userId: context.userId,
         timestamp: new Date().toISOString()
@@ -41,11 +42,14 @@ module.exports = async function storeMemory(state) {
 
     console.log('✅ [NODE:STORE_MEMORY] Memory stored successfully');
 
+    // Use the suggestedResponse from intent parser, or fallback
+    const response = intent.suggestedResponse || "Got it! I'll remember that.";
+
     return {
       ...state,
       memoryStored: true,
       memoryId: memoryData.id,
-      answer: "Got it! I'll remember that."
+      answer: response
     };
   } catch (error) {
     console.error('❌ [NODE:STORE_MEMORY] Error:', error.message);

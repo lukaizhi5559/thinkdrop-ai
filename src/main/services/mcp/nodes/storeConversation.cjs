@@ -12,10 +12,16 @@ module.exports = async function storeConversation(state) {
     // Build storage text
     const storageText = `User asked: "${message}"\nAssistant responded: "${answer}"`;
 
+    // Use entities from intent parser (already extracted during intent classification)
+    // Intent parser extracts temporal entities (dates, times) which entity.extract doesn't
+    const entities = intent.entities || [];
+    console.log(`📋 [NODE:STORE_CONVERSATION] Using ${entities.length} entities from intent parser:`, entities);
+
     // Store in user-memory
     await mcpClient.callService('user-memory', 'memory.store', {
       text: storageText,
       tags: ['conversation', 'auto_stored', intent.type],
+      entities: entities, // TOP-LEVEL: Required for memory_entities table
       metadata: {
         userMessage: message,
         aiResponse: answer,
@@ -24,6 +30,7 @@ module.exports = async function storeConversation(state) {
         source: 'conversation_auto_store',
         intent: intent.type,
         confidence: intent.confidence,
+        entities: entities, // Also in metadata for reference
         timestamp: new Date().toISOString()
       },
       timestamp: new Date().toISOString()
