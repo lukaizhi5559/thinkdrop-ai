@@ -72,13 +72,25 @@ function registerPrivateModeHandlers() {
         }
       };
       
+      // Streaming token callback to forward tokens from answer node to renderer
+      const onStreamToken = (token) => {
+        try {
+          event.sender.send('private-mode:stream-token', {
+            token,
+            timestamp: new Date().toISOString()
+          });
+        } catch (err) {
+          console.warn('⚠️ [PRIVATE-MODE] Failed to send stream token:', err.message);
+        }
+      };
+      
       // 🔄 Use StateGraph for all routing (intent-based subgraphs)
       const result = await orch.processMessageWithGraph(message, {
         sessionId: context.sessionId,
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
         ...context
-      }, onProgress);
+      }, onProgress, onStreamToken);
 
       console.log(`✅ [PRIVATE-MODE] Success: ${result.action}`);
       console.log(`📊 [PRIVATE-MODE] Trace: ${result.trace?.length || 0} nodes executed`);

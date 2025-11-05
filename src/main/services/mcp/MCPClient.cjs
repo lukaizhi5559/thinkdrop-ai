@@ -563,6 +563,163 @@ class MCPClient {
   async deleteMessage(messageId) {
     return this.callService('conversation', 'message.delete', { messageId });
   }
+
+  /**
+   * Call MCP service with streaming support (Server-Sent Events)
+   * @param {string} serviceName - Service name from registry
+   * @param {string} action - Action to perform (e.g., 'general.answer.stream')
+   * @param {object} payload - Request payload
+   * @param {Function} onToken - Callback for each token: (token: string) => void
+   * @param {Function} onProgress - Optional callback for progress events
+   * @returns {Promise<object>} Final response with complete answer
+   */
+  async callServiceStream(serviceName, action, payload, onToken, onProgress = null) {
+    const startTime = Date.now();
+    
+    try {
+      // Wait for config manager initialization
+      if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
+        console.log(`⏳ [MCP:STREAM] Waiting for config manager initialization...`);
+        const maxWait = 5000;
+        const checkInterval = 100;
+        let waited = 0;
+        
+        while ((!this.configManager.isInitialized || !this.configManager.isInitialized()) && waited < maxWait) {
+          await new Promise(resolve => setTimeout(resolve, checkInterval));
+          waited += checkInterval;
+        }
+        
+        if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
+          throw new Error(`Config manager not initialized after ${maxWait}ms`);
+        }
+      }
+      
+      // Get service from registry
+      const service = this.configManager.getService(serviceName);
+      if (!service) {
+        throw new Error(`Service not found in registry: ${serviceName}`);
+      }
+
+      if (!service.enabled) {
+        throw new Error(`Service is disabled: ${serviceName}`);
+      }
+
+      // Build request URL
+      let url = `${service.endpoint}/${action}`;
+      console.log(`🌊 [MCP:STREAM] Starting stream: ${serviceName}.${action} -> ${url}`);
+
+      // Build MCP protocol request
+      const requestId = this.generateRequestId();
+      const mcpRequest = {
+        version: 'mcp.v1',
+        service: serviceName,
+        action: action,
+        requestId: requestId,
+        payload: payload
+      };
+
+      // Make streaming HTTP request
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': service.apiKey,
+          'X-Service-Name': 'thinkdrop-ai',
+          'X-Request-ID': requestId
+        },
+        body: JSON.stringify(mcpRequest)
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      console.log(`✅ [MCP:STREAM] Stream connected`);
+
+      // Process SSE stream
+      let fullAnswer = '';
+      let tokenCount = 0;
+      let buffer = '';
+
+      return new Promise((resolve, reject) => {
+        response.body.on('data', (chunk) => {
+          buffer += chunk.toString();
+          const lines = buffer.split('\n');
+          
+          // Keep last incomplete line in buffer
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                
+                if (data.type === 'start') {
+                  console.log(`🌊 [MCP:STREAM] Stream started`);
+                  if (onProgress) onProgress({ type: 'start', timestamp: data.timestamp });
+                }
+                
+                else if (data.type === 'token') {
+                  fullAnswer += data.token;
+                  tokenCount++;
+                  onToken(data.token);
+                  if (onProgress) onProgress({ type: 'token', tokenCount, timestamp: data.timestamp });
+                }
+                
+                else if (data.type === 'done') {
+                  console.log(`✅ [MCP:STREAM] Stream complete (${tokenCount} tokens, ${Date.now() - startTime}ms)`);
+                  if (onProgress) onProgress({ type: 'done', tokenCount, metrics: data.metrics });
+                  
+                  resolve({
+                    success: true,
+                    data: {
+                      answer: fullAnswer,
+                      tokenCount,
+                      metrics: {
+                        elapsedMs: Date.now() - startTime,
+                        ...data.metrics
+                      }
+                    }
+                  });
+                }
+                
+                else if (data.type === 'error') {
+                  console.error(`❌ [MCP:STREAM] Stream error:`, data.error);
+                  reject(new Error(data.error));
+                }
+              } catch (err) {
+                console.warn(`⚠️ [MCP:STREAM] Failed to parse SSE line:`, line);
+              }
+            }
+          }
+        });
+
+        response.body.on('end', () => {
+          // If we haven't received a 'done' event, resolve with what we have
+          if (fullAnswer && tokenCount > 0) {
+            console.log(`⚠️ [MCP:STREAM] Stream ended without 'done' event, returning partial response`);
+            resolve({
+              success: true,
+              data: {
+                answer: fullAnswer,
+                tokenCount,
+                metrics: { elapsedMs: Date.now() - startTime }
+              }
+            });
+          }
+        });
+
+        response.body.on('error', (err) => {
+          console.error(`❌ [MCP:STREAM] Stream error:`, err);
+          reject(err);
+        });
+      });
+
+    } catch (error) {
+      console.error(`❌ [MCP:STREAM] Failed:`, error.message);
+      throw error;
+    }
+  }
 }
 
 module.exports = MCPClient;

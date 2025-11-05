@@ -89,13 +89,54 @@ contextBridge.exposeInMainWorld('electronAPI', {
   privateModeProcess: (params) => ipcRenderer.invoke('private-mode:process', params),
   onPrivateModeProgress: (callback) => ipcRenderer.on('private-mode:progress', callback),
   onPrivateModeEarlyResponse: (callback) => ipcRenderer.on('private-mode:early-response', callback),
+  onPrivateModeStreamToken: (callback) => ipcRenderer.on('private-mode:stream-token', callback),
   removePrivateModeListeners: () => {
     ipcRenderer.removeAllListeners('private-mode:progress');
     ipcRenderer.removeAllListeners('private-mode:early-response');
+    ipcRenderer.removeAllListeners('private-mode:stream-token');
   },
   
   // MCP Service Communication
   mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),
+  
+  // MCP Streaming Service Communication
+  mcpCallStream: (params, onToken, onProgress) => {
+    const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Set up event listeners for this stream
+    const tokenListener = (event, data) => {
+      if (onToken) onToken(data.token);
+    };
+    
+    const progressListener = (event, data) => {
+      if (onProgress) onProgress(data);
+    };
+    
+    const doneListener = (event, data) => {
+      // Clean up listeners when done
+      ipcRenderer.removeListener(`mcp:stream:token:${streamId}`, tokenListener);
+      ipcRenderer.removeListener(`mcp:stream:progress:${streamId}`, progressListener);
+      ipcRenderer.removeListener(`mcp:stream:done:${streamId}`, doneListener);
+      ipcRenderer.removeListener(`mcp:stream:error:${streamId}`, errorListener);
+    };
+    
+    const errorListener = (event, data) => {
+      // Clean up listeners on error
+      ipcRenderer.removeListener(`mcp:stream:token:${streamId}`, tokenListener);
+      ipcRenderer.removeListener(`mcp:stream:progress:${streamId}`, progressListener);
+      ipcRenderer.removeListener(`mcp:stream:done:${streamId}`, doneListener);
+      ipcRenderer.removeListener(`mcp:stream:error:${streamId}`, errorListener);
+    };
+    
+    // Register listeners
+    ipcRenderer.on(`mcp:stream:token:${streamId}`, tokenListener);
+    ipcRenderer.on(`mcp:stream:progress:${streamId}`, progressListener);
+    ipcRenderer.on(`mcp:stream:done:${streamId}`, doneListener);
+    ipcRenderer.on(`mcp:stream:error:${streamId}`, errorListener);
+    
+    // Start the stream
+    return ipcRenderer.invoke('mcp:service:call:stream', { ...params, streamId });
+  },
   
   // Orchestration workflow communication
   onOrchestrationUpdate: (callback) => ipcRenderer.on('orchestration-update', callback),

@@ -57,11 +57,15 @@ module.exports = async function retrieveMemory(state) {
     const memoriesData = memoriesResult.data || memoriesResult;
 
     // Process conversation history
-    const conversationHistory = (conversationData.messages || []).map(msg => ({
-      role: msg.sender === 'user' ? 'user' : 'assistant',
-      content: msg.text,
-      timestamp: msg.timestamp
-    }));
+    // CRITICAL: Messages come in DESC order (newest first), but LLM needs chronological order (oldest first)
+    // We must reverse the array so the LLM can follow the conversation flow correctly
+    const conversationHistory = (conversationData.messages || [])
+      .map(msg => ({
+        role: msg.sender === 'user' ? 'user' : 'assistant',
+        content: msg.text,
+        timestamp: msg.timestamp
+      }))
+      .reverse(); // Reverse to chronological order (oldest → newest)
 
     // Process memories
     const memories = (memoriesData.results || []).map(mem => ({

@@ -4,13 +4,19 @@
  */
 
 module.exports = async function parseIntent(state) {
-  const { mcpClient, message, context } = state;
+  const { mcpClient, message, resolvedMessage, context } = state;
 
+  // Use resolved message if available (after coreference resolution), otherwise use original
+  const messageToClassify = resolvedMessage || message;
+  
   console.log(' [NODE:PARSE_INTENT] Parsing intent...');
+  if (resolvedMessage && resolvedMessage !== message) {
+    console.log(`📝 [NODE:PARSE_INTENT] Using resolved message: "${message}" → "${resolvedMessage}"`);
+  }
 
   try {
     const result = await mcpClient.callService('phi4', 'intent.parse', {
-      message,
+      message: messageToClassify,
       context: {
         sessionId: context.sessionId,
         userId: context.userId

@@ -13,12 +13,7 @@ const { storeTurn } = require('../services/background/AsyncMemoryStorage.cjs');
 // LIGHTWEIGHT IPC HANDLERS - BUSINESS LOGIC IN ORCHESTRATOR
 // ========================================
 
-// Configure parser preferences (can be changed at runtime)
-parserFactory.configure({
-  useHybrid: true,   // Best: TensorFlow.js + USE + Compromise + Natural
-  useFast: false,    // Good: Natural + Compromise only
-  useOriginal: false // Fallback: Original heavy parser
-});
+// Parser configuration moved to initializeLocalLLMHandlers (only runs in non-MCP mode)
 
 // Parser instance (managed by factory)
 let currentParser = null;
@@ -3645,6 +3640,13 @@ function initializeLocalLLMHandlers({
   windowState,
   windows
 }) {
+  // Configure parser preferences (only in non-MCP mode)
+  parserFactory.configure({
+    useHybrid: true,   // Best: TensorFlow.js + USE + Compromise + Natural
+    useFast: false,    // Good: Natural + Compromise only
+    useOriginal: false // Fallback: Original heavy parser
+  });
+  
   setupLocalLLMHandlers(ipcMain, coreAgent, windows);
   
   // Start background agent bootstrapping for instant first queries

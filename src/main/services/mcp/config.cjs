@@ -47,7 +47,7 @@ const MCPConfig = {
     },
     phi4: {
       name: 'phi4',
-      endpoint: process.env.MCP_PHI4_ENDPOINT || 'http://localhost:3003',
+      endpoint: process.env.MCP_PHI4_ENDPOINT || 'http://127.0.0.1:3003',
       apiKey: process.env.MCP_PHI4_API_KEY || '',
       timeout: parseInt(process.env.MCP_PHI4_TIMEOUT || '10000'),
       retries: parseInt(process.env.MCP_PHI4_RETRIES || '2'),

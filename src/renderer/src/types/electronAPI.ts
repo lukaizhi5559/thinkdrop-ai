@@ -67,9 +67,15 @@ declare global {
       
       // MCP Service Communication
       mcpCall: (params: { serviceName: string; action: string; payload: any }) => Promise<any>;
+      mcpCallStream: (
+        params: { serviceName: string; action: string; payload: any },
+        onToken: (token: string) => void,
+        onProgress?: (progress: any) => void
+      ) => Promise<any>;
       privateModeProcess: (params: { message: string; context: any }) => Promise<any>;
       onPrivateModeProgress: (callback: (event: any, data: any) => void) => void;
       onPrivateModeEarlyResponse: (callback: (event: any, data: any) => void) => void;
+      onPrivateModeStreamToken: (callback: (event: any, data: { token: string; timestamp: string }) => void) => void;
       removePrivateModeListeners: () => void;
       
       // External link handling

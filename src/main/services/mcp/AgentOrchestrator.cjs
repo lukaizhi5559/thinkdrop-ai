@@ -63,6 +63,9 @@ class AgentOrchestrator {
 
     // Create nodes with mcpClient bound
     const nodes = {
+      // Early coreference resolution (before intent parsing)
+      earlyResolveReferences: (state) => resolveReferencesNode({ ...state, mcpClient: this.mcpClient }),
+      
       // Router node
       parseIntent: (state) => parseIntentNode({ ...state, mcpClient: this.mcpClient }),
       
@@ -76,7 +79,25 @@ class AgentOrchestrator {
       // Memory retrieve / general query subgraph
       retrieveMemory: (state) => retrieveMemoryNode({ ...state, mcpClient: this.mcpClient }),
       filterMemory: filterMemoryNode,
-      resolveReferences: (state) => resolveReferencesNode({ ...state, mcpClient: this.mcpClient }),
+      resolveReferences: (state) => {
+        // Skip if already resolved early and no new context was added
+        // This avoids redundant coreference calls when we already resolved before intent parsing
+        const hasNewContext = (state.contextDocs && state.contextDocs.length > 0) || 
+                              (state.memories && state.memories.length > 0);
+        
+        if (state.resolvedMessage && !hasNewContext) {
+          console.log('⏭️  [NODE:RESOLVE_REFERENCES] Skipping - already resolved early, no new context');
+          return state;
+        }
+        
+        // Re-resolve if we have new context (web search results, memories)
+        // The fresh context might help resolve references better
+        if (hasNewContext) {
+          console.log('🔄 [NODE:RESOLVE_REFERENCES] Re-resolving with new context (web/memory results)');
+        }
+        
+        return resolveReferencesNode({ ...state, mcpClient: this.mcpClient });
+      },
       
       // Parallel execution nodes
       parallelWebAndMemory: async (state) => {
@@ -96,20 +117,36 @@ class AgentOrchestrator {
 
     // Define edges with intent-based routing
     const edges = {
-      start: 'parseIntent',
+      start: 'earlyResolveReferences',
+      earlyResolveReferences: 'parseIntent',
       
       // Router: Route based on intent type
       parseIntent: (state) => {
         const intentType = state.intent?.type || 'general_query';
         console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph`);
         
+        // Memory store: save information
         if (intentType === 'memory_store' || intentType === 'store_memory' || intentType === 'remember') {
           return 'storeMemory';
         }
+        
+        // Web search: time-sensitive queries
         if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup') {
           return 'parallelWebAndMemory'; // ⚡ PARALLEL: webSearch + retrieveMemory
         }
-        // memory_retrieve, general_query, and unknowns go to retrieve path
+        
+        // Greeting: quick response, no memory needed
+        if (intentType === 'greeting') {
+          return 'answer'; // Skip memory retrieval for greetings
+        }
+        
+        // Command: system commands (TODO: implement command execution node)
+        if (intentType === 'command') {
+          console.warn('⚠️ [STATEGRAPH:ROUTER] Command intent not yet implemented, routing to answer');
+          return 'answer'; // For now, just answer (future: add command execution node)
+        }
+        
+        // Context, question, general_knowledge, memory_retrieve, and unknowns: standard path
         return 'retrieveMemory';
       },
       
@@ -128,14 +165,34 @@ class AgentOrchestrator {
       // Shared tail: answer → validate → store
       answer: 'validateAnswer',
       validateAnswer: (state) => {
-        // Retry logic: if validation failed and we haven't retried too many times
-        if (state.needsRetry && (state.retryCount || 0) < 2) {
+        const isStreaming = !!state.streamCallback;
+        
+        // PRIORITY 1: Check if LLM requested web search
+        // This should happen EVEN in streaming mode because it's a new search, not a retry
+        if (state.shouldPerformWebSearch) {
+          console.log(`🔍 [STATEGRAPH:WEB_SEARCH_NEEDED] LLM needs web search, routing to webSearch node`);
+          // For streaming mode, we need to send a follow-up message
+          if (isStreaming && state.streamCallback) {
+            // Send a message that we're now searching
+            state.streamCallback('\n\n🔍 Searching online for that information...\n\n');
+          }
+          return 'webSearch'; // Perform web search then retry answer
+        }
+        
+        // PRIORITY 2: Retry logic for other validation failures
+        // BUT: Don't retry if streaming (causes double responses in UI)
+        if (state.needsRetry && (state.retryCount || 0) < 2 && !isStreaming) {
           console.log(`🔄 [STATEGRAPH:RETRY] Validation failed, retrying (attempt ${state.retryCount + 1})`);
           return 'answer'; // Retry answer generation
+        }
+        if (state.needsRetry && isStreaming) {
+          console.log(`⏭️  [STATEGRAPH:RETRY] Skipping retry for streaming mode (would cause double response)`);
         }
         // Otherwise, proceed to store conversation
         return 'storeConversation';
       },
+      webSearch: 'sanitizeWeb', // After web search, sanitize and re-answer
+      sanitizeWeb: 'answer', // Go back to answer with web results
       storeConversation: 'end'
     };
 
@@ -153,11 +210,13 @@ class AgentOrchestrator {
    * @param {string} message - User message
    * @param {object} context - Context (sessionId, userId, etc.)
    * @param {Function} onProgress - Optional callback for progress updates
+   * @param {Function} onStreamToken - Optional callback for streaming tokens from answer node
    * @returns {Promise<object>} Orchestration result with full trace
    */
-  async processMessageWithGraph(message, context = {}, onProgress = null) {
+  async processMessageWithGraph(message, context = {}, onProgress = null, onStreamToken = null) {
     if (DEBUG) {
       console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
+      console.log(`🌊 [ORCHESTRATOR:GRAPH] Streaming enabled: ${!!onStreamToken}`);
     }
     
     try {
@@ -176,7 +235,8 @@ class AgentOrchestrator {
           userId: context.userId || 'default_user',
           timestamp: new Date().toISOString(),
           conversationHistory // Include for context-aware cache key
-        }
+        },
+        streamCallback: onStreamToken // Pass streaming callback to answer node
       };
 
       // Execute the graph workflow with progress callback

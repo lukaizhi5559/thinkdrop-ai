@@ -50,7 +50,34 @@ module.exports = async function validateAnswer(state) {
     console.warn('⚠️ [NODE:VALIDATE_ANSWER] Answer is too short');
   }
 
-  // Check 3: Generic fallback responses (might indicate confusion)
+  // Check 3: Web search request detection
+  // IMPORTANT: Skip this check if we're in streaming mode on first attempt
+  // because the streaming response already handles web search triggers in the frontend
+  const isFirstStreamingAttempt = (state.retryCount === 0 || !state.retryCount) && 
+                                   typeof state.streamCallback === 'function';
+  
+  const webSearchTriggers = [
+    /I need to search online/i,
+    /I'll search online/i,
+    /Let me search online/i,
+    /I'll look that up/i
+  ];
+  const needsWebSearch = !isFirstStreamingAttempt && 
+                         webSearchTriggers.some(pattern => pattern.test(answer));
+  
+  if (needsWebSearch) {
+    issues.push({
+      type: 'needs_web_search',
+      severity: 'high',
+      message: 'LLM requested web search for factual information',
+      suggestion: 'Perform web search and retry with results'
+    });
+    console.warn('⚠️ [NODE:VALIDATE_ANSWER] LLM needs web search to answer question');
+  } else if (isFirstStreamingAttempt && webSearchTriggers.some(pattern => pattern.test(answer))) {
+    console.log('ℹ️  [NODE:VALIDATE_ANSWER] Streaming mode detected web search trigger, but skipping validation (frontend will handle)');
+  }
+
+  // Check 4: Generic fallback responses (might indicate confusion)
   const genericPatterns = [
     /^(I understand|I see|Okay|Alright|Sure)\./i,
     /^I apologize/i,
@@ -70,6 +97,7 @@ module.exports = async function validateAnswer(state) {
 
   // Determine if retry is needed
   const needsRetry = issues.some(issue => issue.severity === 'high');
+  const shouldPerformWebSearch = needsWebSearch && (!state.contextDocs || state.contextDocs.length === 0);
 
   if (issues.length > 0) {
     console.log(`⚠️ [NODE:VALIDATE_ANSWER] Found ${issues.length} issues (retry: ${needsRetry})`);
@@ -80,10 +108,15 @@ module.exports = async function validateAnswer(state) {
     console.log('✅ [NODE:VALIDATE_ANSWER] Answer quality looks good');
   }
 
+  // Increment retry count if we're going to retry OR perform web search
+  // This prevents double streaming when we route back to answer node
+  const willRetry = needsRetry || shouldPerformWebSearch;
+
   return {
     ...state,
     validationIssues: issues,
     needsRetry,
-    retryCount: (state.retryCount || 0) + (needsRetry ? 1 : 0)
+    shouldPerformWebSearch, // Flag to trigger web search before retry
+    retryCount: (state.retryCount || 0) + (willRetry ? 1 : 0)
   };
 };

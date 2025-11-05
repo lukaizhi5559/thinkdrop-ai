@@ -70,6 +70,11 @@ export default function ChatMessages() {
   const [currentStreamingMessage, setCurrentStreamingMessage] = useState('');
   const isStreamingEndedRef = useRef(false);
   
+  // ⚡ Streaming state
+  const [isStreamingResponse, setIsStreamingResponse] = useState(false);
+  const [streamedAnswer, setStreamedAnswer] = useState('');
+  const streamedAnswerRef = useRef('');
+  
   // Input state from ChatWindow
   const [currentMessage, setCurrentMessage] = useState('');
   const [displayMessage, setDisplayMessage] = useState(''); // For immediate display
@@ -642,31 +647,6 @@ export default function ChatMessages() {
           scrollToBottom({ smooth: true, force: true });
           
           try {
-            // 🔑 CRITICAL: Fetch conversation history BEFORE adding user message for context-aware caching
-            let conversationHistory: any[] = [];
-            try {
-              const historyResult = await (window.electronAPI as any)?.mcpCall({
-                serviceName: 'conversation',
-                action: 'message.list',
-                payload: {
-                  sessionId: currentSessionId,
-                  limit: 10,
-                  direction: 'DESC'
-                }
-              });
-              
-              if (historyResult?.success && historyResult.data?.data?.messages) {
-                conversationHistory = historyResult.data.data.messages.map((msg: any) => ({
-                  role: msg.sender === 'user' ? 'user' : 'assistant',
-                  content: msg.text,
-                  timestamp: msg.timestamp
-                }));
-                console.log(`🔑 [CACHE-CONTEXT] Fetched ${conversationHistory.length} messages for cache key`);
-              }
-            } catch (err) {
-              console.warn('⚠️ [CACHE-CONTEXT] Failed to fetch history:', err);
-            }
-            
             // Set up early response listener (Phase 1 optimization)
             let intentMessageTimeout: NodeJS.Timeout | null = null;
             let intentMessage: string | null = null;
@@ -699,16 +679,36 @@ export default function ChatMessages() {
               window.electronAPI.onPrivateModeProgress(handleProgress);
             }
             
-            // Call MCP private mode orchestrator with conversation history
-            const result = await window.electronAPI?.privateModeProcess({
-              message: messageText,
-              context: {
-                sessionId: currentSessionId,
-                userId: 'default_user',
-                timestamp: new Date().toISOString(),
-                conversationHistory // Pass history for context-aware cache key
+            
+              // ⚡ Streaming via orchestrator (proper architecture)
+              let streamedAnswer = '';
+              let isStreamingActive = false;
+              
+              // Register stream token listener
+              const handleStreamToken = (_event: any, data: { token: string }) => {
+                if (!isStreamingActive) {
+                  isStreamingActive = true;
+                  setIsStreamingResponse(true);
+                }
+                streamedAnswer += data.token;
+                streamedAnswerRef.current = streamedAnswer;
+                setStreamedAnswer(streamedAnswer);
+                scrollToBottom({ smooth: true, force: false });
+              };
+              
+              if (window.electronAPI?.onPrivateModeStreamToken) {
+                window.electronAPI.onPrivateModeStreamToken(handleStreamToken);
               }
-            });
+              
+              // Call MCP private mode orchestrator (with streaming support)
+              const result = await window.electronAPI?.privateModeProcess({
+                message: messageText,
+                context: {
+                  sessionId: currentSessionId,
+                  userId: 'default_user',
+                  timestamp: new Date().toISOString()
+                }
+              });
             
             // Cleanup listeners and timeout
             if (intentMessageTimeout) {
@@ -718,43 +718,49 @@ export default function ChatMessages() {
               window.electronAPI.removePrivateModeListeners();
             }
             
-            if (result.success) {
-              console.log('✅ [MCP-PRIVATE] Orchestration successful');
-              console.log('🎯 [INTENT]', result.action, '→', result.response.substring(0, 100) + '...');
-              
-              // Add AI response to conversation
-              if (signalsAddMessage && currentSessionId) {
-                await signalsAddMessage(currentSessionId, {
-                  text: result.response,
-                  sender: 'ai',
-                  sessionId: currentSessionId,
-                  metadata: { 
-                    isFinal: true,
-                    action: result.action,
-                    mcpPrivateMode: true,
-                    elapsedMs: result.elapsedMs
-                  }
-                });
+            if (result?.success) {
+                console.log('✅ [MCP-PRIVATE] Orchestration successful');
+                console.log('🎯 [INTENT]', result.action, '→', result.response.substring(0, 100) + '...');
+                
+                // Determine final answer: use streamed if available, otherwise use result.response
+                const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result.response;
+                console.log(`💾 [MCP-PRIVATE] Saving answer (streamed: ${isStreamingActive}):`, finalAnswer.substring(0, 50) + '...');
+                
+                // Add AI response to conversation (only if not already saved during streaming)
+                if (signalsAddMessage && currentSessionId && finalAnswer) {
+                  await signalsAddMessage(currentSessionId, {
+                    text: finalAnswer,
+                    sender: 'ai',
+                    sessionId: currentSessionId,
+                    metadata: { 
+                      isFinal: true,
+                      action: result.action,
+                      mcpPrivateMode: true,
+                      elapsedMs: result.elapsedMs,
+                      streaming: isStreamingActive
+                    }
+                  });
+                }
+                
+                // Stop loading and scroll
+                setIsStreamingResponse(false);
+                setIsLoading(false);
+                setIsProcessingLocally(false);
+                scrollToBottom({ smooth: true, force: true });
+              } else {
+                console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
+                setLocalLLMError(`MCP Private Mode error: ${result.error}`);
+                setIsLoading(false);
+                setIsProcessingLocally(false);
               }
-              
-              // Stop loading and scroll
-              setIsLoading(false);
-              setIsProcessingLocally(false);
-              scrollToBottom({ smooth: true, force: true });
-            } else {
-              console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
-              setLocalLLMError(`MCP Private Mode error: ${result.error}`);
+            } catch (error: any) {
+              console.error('❌ [MCP-PRIVATE] Exception:', error);
+              setLocalLLMError(`MCP Private Mode exception: ${error?.message || 'Unknown error'}`);
               setIsLoading(false);
               setIsProcessingLocally(false);
             }
-          } catch (error: any) {
-            console.error('❌ [MCP-PRIVATE] Exception:', error);
-            setLocalLLMError(`MCP Private Mode exception: ${error?.message || 'Unknown error'}`);
-            setIsLoading(false);
-            setIsProcessingLocally(false);
+            return;
           }
-          return;
-        }
         
         // ⚠️ DEPRECATED: Old pipeline code removed - MCP Private Mode is now the only path for offline mode
         console.error('❌ [DEPRECATED] Reached deprecated pipeline code - this should not happen in MCP mode');
@@ -1671,11 +1677,26 @@ export default function ChatMessages() {
                 </div>
               </div>
             )}
+            
+            {/* ⚡ NEW: Streaming response display */}
+            {isStreamingResponse && streamedAnswer && (
+              <div className="flex justify-start group">
+                <div className="max-w-[85%] min-w-0 bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2 overflow-x-auto overflow-y-hidden">
+                  <div className="text-sm leading-relaxed whitespace-pre-wrap text-white">
+                    {streamedAnswer}
+                    <span className="inline-block w-2 h-4 bg-white/60 ml-1 animate-pulse">▊</span>
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
         
         {/* Thinking indicator for local LLM processing */}
         {(() => {
+          // Hide thinking indicator if streaming has started
+          if (isStreamingResponse) return false;
+          
           const shouldShow = (isLoading && !wsState.isConnected) || isProcessingLocally;
           
           return shouldShow;
@@ -1684,7 +1705,7 @@ export default function ChatMessages() {
             isVisible={true} 
             message={initialThinkingMessage || undefined} 
           />
-        ) : isLoading && wsState.isConnected ? (
+        ) : (isLoading && wsState.isConnected && !isStreamingResponse) ? (
           <div className="flex justify-start">
             <div className="bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2">
               <div className="flex items-center space-x-2">

@@ -572,6 +572,53 @@ function registerMCPHandlers() {
     }
   });
 
+  /**
+   * Streaming service call - Execute streaming action with token callbacks
+   * Sends tokens back to renderer via IPC events
+   */
+  ipcMain.handle('mcp:service:call:stream', async (event, { serviceName, action, payload, streamId }) => {
+    try {
+      console.log(`🌊 [IPC:STREAM] Starting stream: ${serviceName}.${action} (streamId: ${streamId})`);
+      
+      const client = getMCPClient();
+      
+      // Call streaming service with token callback
+      const result = await client.callServiceStream(
+        serviceName,
+        action,
+        payload,
+        (token) => {
+          // Send each token back to renderer
+          event.sender.send(`mcp:stream:token:${streamId}`, { token });
+        },
+        (progress) => {
+          // Send progress events back to renderer
+          event.sender.send(`mcp:stream:progress:${streamId}`, progress);
+        }
+      );
+
+      console.log(`✅ [IPC:STREAM] Stream complete: ${streamId}`);
+      
+      // Send completion event
+      event.sender.send(`mcp:stream:done:${streamId}`, result);
+
+      return {
+        success: true,
+        data: result.data
+      };
+    } catch (error) {
+      console.error(`❌ [IPC:STREAM] Stream failed: ${serviceName}.${action}`, error.message);
+      
+      // Send error event
+      event.sender.send(`mcp:stream:error:${streamId}`, { error: error.message });
+      
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
   console.log('✅ MCP IPC handlers registered');
 }
 
