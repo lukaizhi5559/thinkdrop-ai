@@ -99,6 +99,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // MCP Service Communication
   mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),
   
+  // MCP Workflow Performance Monitoring
+  getWorkflowTraces: (params) => ipcRenderer.invoke('mcp:workflow:traces', params),
+  clearWorkflowTraces: () => ipcRenderer.invoke('mcp:workflow:clear-traces'),
+  
   // MCP Streaming Service Communication
   mcpCallStream: (params, onToken, onProgress) => {
     const streamId = `stream_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;

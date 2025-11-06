@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Database, X, Check, AlertCircle, Eye, Brain, Cloud, CloudOff, RefreshCw } from 'lucide-react';
+import WorkflowTraceViewer from './WorkflowTraceViewer';
 import './MemoryDebugger.css';
 
 /**
@@ -73,7 +74,7 @@ const MemoryDebugger = () => {
   const [paginationInfo, setPaginationInfo] = useState<any>(null);
   
   // Tab state
-  const [activeTab, setActiveTab] = useState<'memories' | 'database'>('memories');
+  const [activeTab, setActiveTab] = useState<'memories' | 'database' | 'workflow'>('memories');
   
   // Database health state
   const [dbMetrics, setDbMetrics] = useState<DatabaseMetrics | null>(null);
@@ -591,6 +592,18 @@ const MemoryDebugger = () => {
           <Brain className="w-4 h-4 inline-block mr-2" />
           Database Health
         </button>
+        <button
+          onClick={() => setActiveTab('workflow')}
+          className={`px-6 py-3 text-sm font-medium transition-colors ${
+            activeTab === 'workflow'
+              ? 'text-yellow-300 border-b-2 border-yellow-500 bg-yellow-500/10'
+              : 'text-gray-400 hover:text-gray-200 hover:bg-white/5'
+          }`}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        >
+          <RefreshCw className="w-4 h-4 inline-block mr-2" />
+          Workflow Performance
+        </button>
       </div>
 
       {/* Controls Section */}
@@ -646,7 +659,7 @@ const MemoryDebugger = () => {
           maxHeight: '100%',
         } as React.CSSProperties}
       >
-        {activeTab === 'memories' ? (
+        {activeTab === 'memories' && (
           // Memory Debugger Content
           <>
             {error && (
@@ -903,7 +916,9 @@ const MemoryDebugger = () => {
               )}
             </div>
           </>
-        ) : (
+        )}
+        
+        {activeTab === 'database' && (
           // Database Health Dashboard
           <div className="space-y-6">
             {/* Database Health Controls */}
@@ -1048,6 +1063,13 @@ const MemoryDebugger = () => {
               </div>
             )}
           </div>
+        )}
+        
+        {activeTab === 'workflow' && (
+          // Workflow Performance Monitor - needs full height for proper scrolling
+          
+          <WorkflowTraceViewer />
+          
         )}
       </div>
     </div>

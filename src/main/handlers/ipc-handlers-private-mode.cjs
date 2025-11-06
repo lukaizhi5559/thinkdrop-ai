@@ -191,6 +191,54 @@ function registerPrivateModeHandlers() {
     }
   });
 
+  /**
+   * Get workflow traces for performance monitoring
+   */
+  ipcMain.handle('mcp:workflow:traces', async (event, { limit = 50, includeCache = true, sessionId = null }) => {
+    try {
+      const orch = getOrchestrator();
+      
+      const traces = orch.getWorkflowTraces({
+        limit,
+        includeCache,
+        sessionId
+      });
+
+      return {
+        success: true,
+        traces
+      };
+    } catch (error) {
+      console.error('❌ [IPC:WORKFLOW] Failed to get traces:', error.message);
+      return {
+        success: false,
+        error: error.message,
+        traces: []
+      };
+    }
+  });
+
+  /**
+   * Clear workflow trace history
+   */
+  ipcMain.handle('mcp:workflow:clear-traces', async (event) => {
+    try {
+      const orch = getOrchestrator();
+      orch.clearTraceHistory();
+
+      return {
+        success: true,
+        message: 'Trace history cleared'
+      };
+    } catch (error) {
+      console.error('❌ [IPC:WORKFLOW] Failed to clear traces:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  });
+
   console.log('✅ Private mode IPC handlers registered');
 }
 

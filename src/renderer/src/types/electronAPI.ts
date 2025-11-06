@@ -78,6 +78,18 @@ declare global {
       onPrivateModeStreamToken: (callback: (event: any, data: { token: string; timestamp: string }) => void) => void;
       removePrivateModeListeners: () => void;
       
+      // Workflow Performance Monitoring
+      getWorkflowTraces: (params?: { limit?: number; includeCache?: boolean; sessionId?: string | null }) => Promise<{
+        success: boolean;
+        traces: any[];
+        error?: string;
+      }>;
+      clearWorkflowTraces: () => Promise<{
+        success: boolean;
+        message?: string;
+        error?: string;
+      }>;
+      
       // External link handling
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
       

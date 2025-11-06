@@ -40,6 +40,11 @@ class AgentOrchestrator {
     this.mcpClient = new MCPClient(MCPConfigManager);
     this.memoryServiceHealthy = false;
     this.stateGraph = null; // Will be initialized on first use
+    
+    // Trace storage for performance monitoring
+    this.traceHistory = [];
+    this.maxTraceHistory = 100; // Keep last 100 traces
+    
     console.log('🎯 MCP AgentOrchestrator initialized (StateGraph Edition)');
     
     // Run health check on initialization (async, non-blocking)
@@ -244,6 +249,22 @@ class AgentOrchestrator {
       // Execute the graph workflow with progress callback
       const finalState = await graph.execute(initialState, onProgress);
 
+      // Store trace for performance monitoring
+      this._storeTrace({
+        id: initialState.reqId,
+        message,
+        sessionId: context.sessionId || 'default_session',
+        intentType: finalState.intent?.type,
+        startTime: finalState.startTime,
+        elapsedMs: finalState.elapsedMs,
+        iterations: finalState.iterations,
+        success: finalState.success,
+        trace: finalState.trace,
+        error: finalState.error,
+        fromCache: finalState.fromCache,
+        cacheAge: finalState.cacheAge
+      });
+
       // Format result
       return {
         success: finalState.success,
@@ -307,6 +328,55 @@ class AgentOrchestrator {
       console.error('❌ [ORCHESTRATOR] Memory service health check failed:', error.message);
       this.memoryServiceHealthy = false;
     }
+  }
+
+  /**
+   * Store workflow trace for performance monitoring
+   * @private
+   */
+  _storeTrace(trace) {
+    this.traceHistory.unshift(trace); // Add to beginning (most recent first)
+    
+    // Trim to max size
+    if (this.traceHistory.length > this.maxTraceHistory) {
+      this.traceHistory = this.traceHistory.slice(0, this.maxTraceHistory);
+    }
+  }
+
+  /**
+   * Get workflow traces for performance monitoring
+   * @param {object} options - Query options
+   * @returns {Array} Traces
+   */
+  getWorkflowTraces(options = {}) {
+    const {
+      limit = 50,
+      includeCache = true,
+      sessionId = null
+    } = options;
+
+    let traces = this.traceHistory;
+
+    // Filter by session if specified
+    if (sessionId) {
+      traces = traces.filter(t => t.sessionId === sessionId);
+    }
+
+    // Filter out cached results if requested
+    if (!includeCache) {
+      traces = traces.filter(t => !t.fromCache);
+    }
+
+    // Limit results
+    return traces.slice(0, limit);
+  }
+
+  /**
+   * Clear trace history
+   */
+  clearTraceHistory() {
+    this.traceHistory = [];
+    console.log('🧹 [ORCHESTRATOR] Trace history cleared');
   }
 }
 
