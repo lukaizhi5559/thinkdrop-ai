@@ -15,10 +15,33 @@ module.exports = async function storeConversation(state) {
     // Build storage text
     const storageText = `User asked: "${userMessage}"\nAssistant responded: "${answer}"`;
 
-    // Use entities from intent parser (already extracted during intent classification)
-    // Intent parser extracts temporal entities (dates, times) which entity.extract doesn't
-    const entities = intent.entities || [];
-    console.log(`📋 [NODE:STORE_CONVERSATION] Using ${entities.length} entities from intent parser:`, entities);
+    // Start with entities from user's message (extracted during intent parsing)
+    const userEntities = intent.entities || [];
+    console.log(`📋 [NODE:STORE_CONVERSATION] User message entities: ${userEntities.length}`, userEntities);
+
+    // Extract entities from AI response (contains rich information like names, dates, places)
+    let responseEntities = [];
+    try {
+      const extractResult = await mcpClient.callService('phi4', 'entity.extract', {
+        text: answer
+      });
+      responseEntities = extractResult.data?.entities || extractResult.entities || [];
+      console.log(`📋 [NODE:STORE_CONVERSATION] AI response entities: ${responseEntities.length}`, responseEntities);
+    } catch (error) {
+      console.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to extract entities from response:', error.message);
+    }
+
+    // Combine entities from both user message and AI response
+    // Remove duplicates based on value (case-insensitive)
+    const seenValues = new Set();
+    const entities = [...userEntities, ...responseEntities].filter(entity => {
+      const key = entity.value?.toLowerCase();
+      if (!key || seenValues.has(key)) return false;
+      seenValues.add(key);
+      return true;
+    });
+    
+    console.log(`📋 [NODE:STORE_CONVERSATION] Total unique entities: ${entities.length}`, entities);
 
     // Store in user-memory
     await mcpClient.callService('user-memory', 'memory.store', {

@@ -4,13 +4,16 @@
  */
 
 module.exports = async function webSearch(state) {
-  const { mcpClient, message, intent } = state;
+  const { mcpClient, message, resolvedMessage, intent } = state;
 
   console.log('🌐 [NODE:WEB_SEARCH] Performing web search...');
 
   try {
+    // Use resolved message if available (after coreference resolution), otherwise original
+    const searchMessage = resolvedMessage || message;
+    
     // Extract search query
-    const query = message.replace(/^(search for|search|find|look up|google)\s+/i, '').trim();
+    const query = searchMessage.replace(/^(search for|search|find|look up|google)\s+/i, '').trim();
     
     console.log(`🔍 [NODE:WEB_SEARCH] Query: "${query}"`);
 

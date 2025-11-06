@@ -51,6 +51,8 @@ module.exports = async function validateAnswer(state) {
   }
 
   // Check 3: Web search request detection
+  // Only check if we don't already have web results (prevents duplicate search)
+  const hasWebResults = state.contextDocs && state.contextDocs.length > 0;
   const webSearchTriggers = [
     /I need to search online/i,
     /I'll search online/i,
@@ -58,7 +60,7 @@ module.exports = async function validateAnswer(state) {
     /I'll look that up/i,
     /Let me look that up/i
   ];
-  const needsWebSearch = webSearchTriggers.some(pattern => pattern.test(answer));
+  const needsWebSearch = !hasWebResults && webSearchTriggers.some(pattern => pattern.test(answer));
   
   if (needsWebSearch) {
     issues.push({

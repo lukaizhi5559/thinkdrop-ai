@@ -130,8 +130,10 @@ class AgentOrchestrator {
           return 'storeMemory';
         }
         
-        // Web search: time-sensitive queries
-        if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup') {
+        // Web search: time-sensitive queries, factual questions, and general knowledge
+        // These should always try web search first, fallback to LLM if offline/no results
+        if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup' ||
+            intentType === 'question' || intentType === 'general_knowledge') {
           return 'parallelWebAndMemory'; // ⚡ PARALLEL: webSearch + retrieveMemory
         }
         
@@ -146,7 +148,7 @@ class AgentOrchestrator {
           return 'answer'; // For now, just answer (future: add command execution node)
         }
         
-        // Context, question, general_knowledge, memory_retrieve, and unknowns: standard path
+        // Context, memory_retrieve, and unknowns: standard path (retrieve from memory only)
         return 'retrieveMemory';
       },
       
