@@ -17,10 +17,10 @@ module.exports = async function webSearch(state) {
     
     console.log(`🔍 [NODE:WEB_SEARCH] Query: "${query}"`);
 
-    // Call web-search service
+    // Call web-search service (limit 3 for faster response)
     const result = await mcpClient.callService('web-search', 'web.search', {
       query: query,
-      limit: 5
+      limit: 3
     });
 
     // MCP protocol wraps response in 'data' field

@@ -46,10 +46,11 @@ process.on('uncaughtException', (err) => {
 
 // Import modularized IPC handlers
 const { initializeIPCHandlers } = require('./handlers/ipc-handlers.cjs');
-const { setupMemoryHandlers } = require('./handlers/ipc-handlers-memory.cjs');
-const { initializeHandlers: initializeHandlersPart3 } = require('./handlers/ipc-handlers-screenshot.cjs');
-const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-orchestration.cjs');
-const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
+// DEPRECATED - Only used in non-MCP mode (commented out to prevent import errors from deleted files)
+// const { setupMemoryHandlers } = require('./handlers/ipc-handlers-memory.cjs');
+// const { initializeHandlers: initializeHandlersPart3 } = require('./handlers/ipc-handlers-screenshot.cjs');
+// const { setupOrchestrationWorkflowHandlers } = require('./handlers/ipc-handlers-orchestration.cjs');
+// const { initializeLocalLLMHandlers } = require('./handlers/ipc-handlers-local-llm.cjs');
 const { setupConversationHandlers } = require('./handlers/ipc-handlers-conversation.cjs');
 const { setupDatabaseNotificationHandlers } = require('./handlers/ipc-handlers-database-notifications.cjs');
 const { registerMCPHandlers } = require('./handlers/ipc-handlers-mcp.cjs');
@@ -486,22 +487,18 @@ async function setupIPCHandlers() {
     console.log('✅ Main IPC handlers setup complete');
     
     if (!USE_MCP_PRIVATE_MODE) {
-      // Setup memory handlers (skip in MCP mode - use MCP user-memory service)
-      console.log('🔧 Setting up memory handlers...');
-      setupMemoryHandlers(ipcMain, coreAgent);
-      console.log('✅ Memory handlers setup complete');
+      // DEPRECATED - Setup memory handlers (skip in MCP mode - use MCP user-memory service)
+      console.log('⏭️  [DEPRECATED] Skipping memory handlers - removed in Phase 1 cleanup');
+      // setupMemoryHandlers(ipcMain, coreAgent);
     } else {
       console.log('⏭️  [MCP-MODE] Skipping memory handlers - using MCP user-memory service');
     }
     
-    // Initialize screenshot, system health, and legacy LLM handlers
-    console.log('🔧 Setting up screenshot and system handlers...');
-    initializeHandlersPart3({
-      ipcMain,
-      coreAgent,
-      windowState,
-      windows
-    });
+    // DEPRECATED - Initialize screenshot, system health, and legacy LLM handlers
+    if (!USE_MCP_PRIVATE_MODE) {
+      console.log('⏭️  [DEPRECATED] Skipping screenshot handlers - removed in Phase 1 cleanup');
+      // initializeHandlersPart3({ ipcMain, coreAgent, windowState, windows });
+    }
 
     console.log('🔧 Setting up conversation persistence handlers...');
     // In MCP mode, pass conversationAgent directly instead of coreAgent
@@ -513,22 +510,14 @@ async function setupIPCHandlers() {
     let sendWorkflowClarification = null;
     
     if (!USE_MCP_PRIVATE_MODE) {
-      // Skip Local LLM handlers in MCP mode (uses MCP phi4 service)
-      console.log('🔧 Setting up Local LLM IPC handlers...');
-      initializeLocalLLMHandlers({
-        ipcMain,
-        coreAgent,
-        windowState,
-        windows
-      });
+      // DEPRECATED - Skip Local LLM handlers (removed in Phase 1 cleanup)
+      console.log('⏭️  [DEPRECATED] Skipping Local LLM handlers - removed in Phase 1 cleanup');
+      // initializeLocalLLMHandlers({ ipcMain, coreAgent, windowState, windows });
       
-      // Setup orchestration workflow handlers
-      console.log('🔧 Setting up orchestration workflow handlers...');
-      const result = setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);
-      sendWorkflowClarification = result.sendClarificationRequest;
-      console.log('✅ Orchestration workflow handlers setup complete');
-
-      console.log('✅ Local LLM IPC handlers setup complete');
+      // DEPRECATED - Setup orchestration workflow handlers (removed in Phase 1 cleanup)
+      console.log('⏭️  [DEPRECATED] Skipping orchestration handlers - removed in Phase 1 cleanup');
+      // const result = setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);
+      // sendWorkflowClarification = result.sendClarificationRequest;
     } else {
       console.log('⏭️  [MCP-MODE] Skipping Local LLM handlers - using MCP phi4 service');
       console.log('⏭️  [MCP-MODE] Skipping orchestration workflow handlers - using MCP orchestrator');
