@@ -43,7 +43,7 @@ module.exports = async function retrieveMemory(state) {
             limit: 5,
             sessionId: context.sessionId,
             userId: context.userId,
-            minSimilarity: 0.4
+            minSimilarity: 0.35 // Lowered to capture appointment queries (38% similarity)
           }).catch(err => {
             console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Memory search failed:', err.message);
             return { results: [] };

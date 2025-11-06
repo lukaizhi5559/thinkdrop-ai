@@ -4,7 +4,7 @@
  */
 
 module.exports = async function validateAnswer(state) {
-  const { answer, filteredMemories = [], conversationHistory = [] } = state;
+  const { answer, filteredMemories = [], conversationHistory = [], intent } = state;
 
   console.log('🔍 [NODE:VALIDATE_ANSWER] Validating answer quality...');
 
@@ -51,19 +51,14 @@ module.exports = async function validateAnswer(state) {
   }
 
   // Check 3: Web search request detection
-  // IMPORTANT: Skip this check if we're in streaming mode on first attempt
-  // because the streaming response already handles web search triggers in the frontend
-  const isFirstStreamingAttempt = (state.retryCount === 0 || !state.retryCount) && 
-                                   typeof state.streamCallback === 'function';
-  
   const webSearchTriggers = [
     /I need to search online/i,
     /I'll search online/i,
     /Let me search online/i,
-    /I'll look that up/i
+    /I'll look that up/i,
+    /Let me look that up/i
   ];
-  const needsWebSearch = !isFirstStreamingAttempt && 
-                         webSearchTriggers.some(pattern => pattern.test(answer));
+  const needsWebSearch = webSearchTriggers.some(pattern => pattern.test(answer));
   
   if (needsWebSearch) {
     issues.push({
@@ -72,9 +67,7 @@ module.exports = async function validateAnswer(state) {
       message: 'LLM requested web search for factual information',
       suggestion: 'Perform web search and retry with results'
     });
-    console.warn('⚠️ [NODE:VALIDATE_ANSWER] LLM needs web search to answer question');
-  } else if (isFirstStreamingAttempt && webSearchTriggers.some(pattern => pattern.test(answer))) {
-    console.log('ℹ️  [NODE:VALIDATE_ANSWER] Streaming mode detected web search trigger, but skipping validation (frontend will handle)');
+    console.log('🔍 [NODE:VALIDATE_ANSWER] LLM requested web search, will trigger webSearch node');
   }
 
   // Check 4: Generic fallback responses (might indicate confusion)
@@ -95,9 +88,25 @@ module.exports = async function validateAnswer(state) {
     console.warn('⚠️ [NODE:VALIDATE_ANSWER] Generic response despite available context');
   }
 
+  // Check 5: Fallback for general_knowledge intents with "I don't have that information"
+  // This catches cases where the LLM should have used the web search trigger but didn't
+  const isFactualQuery = intent?.type === 'general_knowledge';
+  const saysNoInfo = /I don't have that information/i.test(answer);
+  const noWebResults = !state.contextDocs || state.contextDocs.length === 0;
+  
+  if (isFactualQuery && saysNoInfo && noWebResults) {
+    console.log('🔍 [NODE:VALIDATE_ANSWER] Detected "I don\'t have that information" for general_knowledge query - triggering web search');
+    issues.push({
+      type: 'needs_web_search',
+      severity: 'high',
+      message: 'LLM indicated no information for factual query - should search online',
+      suggestion: 'Perform web search and retry with results'
+    });
+  }
+
   // Determine if retry is needed
   const needsRetry = issues.some(issue => issue.severity === 'high');
-  const shouldPerformWebSearch = needsWebSearch && (!state.contextDocs || state.contextDocs.length === 0);
+  const shouldPerformWebSearch = (needsWebSearch || (isFactualQuery && saysNoInfo)) && noWebResults;
 
   if (issues.length > 0) {
     console.log(`⚠️ [NODE:VALIDATE_ANSWER] Found ${issues.length} issues (retry: ${needsRetry})`);

@@ -13,13 +13,14 @@ class MCPClient {
   }
 
   /**
-   * Call any MCP service dynamically
+   * Call an MCP service with automatic retries and circuit breaker
    * @param {string} serviceName - Service name from registry
-   * @param {string} action - Action to perform (e.g., 'memory.store')
+   * @param {string} action - Action to perform
    * @param {object} payload - Request payload
+   * @param {object} options - Optional settings (e.g., { timeout: 60000 })
    * @returns {Promise<object>} Service response
    */
-  async callService(serviceName, action, payload) {
+  async callService(serviceName, action, payload, options = {}) {
     const startTime = Date.now();
     
     try {
@@ -85,6 +86,7 @@ class MCPClient {
       let lastError;
       
       // Try original URL first
+      const timeout = options.timeout || 30000;
       try {
         response = await fetch(url, {
           method: 'POST',
@@ -95,7 +97,7 @@ class MCPClient {
             'X-Request-ID': requestId
           },
           body: JSON.stringify(mcpRequest),
-          timeout: 30000
+          timeout: timeout
         });
         console.log(`📥 Response status: ${response.status} ${response.statusText}`);
       } catch (error) {
@@ -117,7 +119,7 @@ class MCPClient {
                 'X-Request-ID': requestId
               },
               body: JSON.stringify(mcpRequest),
-              timeout: 30000
+              timeout: timeout
             });
             console.log(`✅ IPv4 retry succeeded: ${response.status} ${response.statusText}`);
             

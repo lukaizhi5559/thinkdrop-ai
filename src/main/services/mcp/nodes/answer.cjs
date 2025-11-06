@@ -7,6 +7,7 @@ module.exports = async function answer(state) {
   const { 
     mcpClient, 
     message, 
+    resolvedMessage, // Use resolved message if available
     context, 
     intent,
     conversationHistory = [],
@@ -17,6 +18,9 @@ module.exports = async function answer(state) {
     streamCallback = null, // Optional callback for streaming tokens
     retryCount = 0 // Track if this is a retry
   } = state;
+  
+  // Use resolved message if available (after coreference resolution), otherwise original
+  const queryMessage = resolvedMessage || message;
 
   // Only stream on first attempt, not on retries (prevents double responses)
   const isStreaming = typeof streamCallback === 'function' && retryCount === 0;
@@ -36,19 +40,25 @@ Guidelines:
 - Don't repeat information already discussed
 
 CRITICAL FACTUAL INFORMATION PROTOCOL:
-1. If the user asks about FACTUAL INFORMATION about the world (e.g., "who is X", "what is Y", "how old is Z", "strongest man", etc.) and you DON'T have it in conversation history or memories, respond EXACTLY:
-   "I need to search online for that information. Let me look that up for you."
+1. If web search results are provided below, USE THEM to answer the question. Extract key facts and provide a direct, informative answer.
 
-2. If the user asks about THEIR OWN preferences or past statements (e.g., "what do I like", "what did I say") and you DON'T have it in memories, respond:
+2. If NO web results are provided AND the user asks about FACTUAL INFORMATION about the world (e.g., "who is X", "what is Y", "when was X created", "how old is Z", etc.):
+   - IMPORTANT: Questions like "When was X created", "Who is X", "What is Y" are FACTUAL QUERIES about the world, NOT about user preferences
+   - Check if you have the ACTUAL ANSWER in conversation history or memories
+   - If memories only contain "I'll search online" or "I don't have that information" (but NOT the actual answer), that doesn't count as having the information
+   - If you DON'T have the actual answer, you MUST respond EXACTLY: "I need to search online for that information. Let me look that up for you."
+   - DO NOT respond with "I don't have that information stored yet" for factual queries - that phrase is ONLY for user preferences
+
+3. If the user asks about THEIR OWN preferences or past statements (e.g., "what do I like", "what did I say about myself") and you DON'T have it in memories, respond:
    "I don't have that information stored yet."
 
-3. If the user explicitly asks you to search online (e.g., "can you look online", "search for it"), respond EXACTLY:
+4. If the user explicitly asks you to search online (e.g., "can you look online", "search for it"), respond EXACTLY:
    "I'll search online for that information now."
 
 These exact phrases will trigger a web search to get the answer.`;
 
     // Add meta-question handling
-    if (message.toLowerCase().includes('what did i')) {
+    if (queryMessage.toLowerCase().includes('what did i')) {
       systemInstructions += `\nCRITICAL INSTRUCTION: The user is asking what they previously said.
 The conversation history is in CHRONOLOGICAL ORDER (oldest → newest).
 STEP 1: Find the user message that has "[MOST RECENT USER MESSAGE]" at the very start.
@@ -69,7 +79,10 @@ DO NOT extract from the last user message (that's the current question). ONLY ex
     // Add memory usage instructions
     if (filteredMemories.length > 0) {
       systemInstructions += `\nIMPORTANT: The "memories" section contains factual information from PREVIOUS conversations (possibly from days or weeks ago).
-CRITICAL: When resolving pronouns like "he", "she", "it", ALWAYS prioritize the MOST RECENT conversation history over old memories.
+
+APPOINTMENT QUERIES: If the user asks about appointments (e.g., "when do I have an appt", "when is my appointment"), USE THE MEMORIES to provide specific details (date, time, type).
+
+PRONOUN RESOLUTION: When resolving pronouns like "he", "she", "it", ALWAYS prioritize the MOST RECENT conversation history over old memories.
 - If the last few messages discuss a specific person, that person is the referent for pronouns.
 - Only use memories if there's NO relevant person mentioned in recent conversation history.
 Example: If recent messages discuss "Anthony Albanese" and user asks "how old is he", they mean Anthony Albanese, NOT someone from an old memory.`;
@@ -99,7 +112,7 @@ Use these current web results to answer. Extract key facts and answer directly.`
 
     // Mark most recent user message for meta-questions
     let processedHistory = [...conversationHistory];
-    if (message.toLowerCase().includes('what did i')) {
+    if (queryMessage.toLowerCase().includes('what did i')) {
       // Find the previous user message (excluding current one which is the LAST in chronological order)
       // conversationHistory is now in chronological order (oldest → newest)
       let userMessageCount = 0;
@@ -129,7 +142,7 @@ Use these current web results to answer. Extract key facts and answer directly.`
 
     // Prepare payload for phi4
     const payload = {
-      query: message,
+      query: queryMessage,
       context: {
         conversationHistory: processedHistory,
         sessionFacts,
@@ -177,7 +190,8 @@ Use these current web results to answer. Extract key facts and answer directly.`
         // If not, fall back to blocking call to get the actual answer
         if (!accumulatedAnswer || accumulatedAnswer.trim().length === 0) {
           console.warn('⚠️ [NODE:ANSWER] Streaming produced no content (0 tokens), falling back to blocking call...');
-          const blockingResult = await mcpClient.callService('phi4', 'general.answer', payload);
+          const timeout = contextDocs.length > 0 ? 60000 : 30000;
+          const blockingResult = await mcpClient.callService('phi4', 'general.answer', payload, { timeout });
           answerData = blockingResult.data || blockingResult;
           finalAnswer = answerData.answer || answerData.text || 'I apologize, but I was unable to generate a response.';
           
@@ -201,7 +215,8 @@ Use these current web results to answer. Extract key facts and answer directly.`
         console.log('🔄 [NODE:ANSWER] Falling back to blocking call...');
         
         // Fall back to blocking call
-        const blockingResult = await mcpClient.callService('phi4', 'general.answer', payload);
+        const timeout = contextDocs.length > 0 ? 60000 : 30000;
+        const blockingResult = await mcpClient.callService('phi4', 'general.answer', payload, { timeout });
         answerData = blockingResult.data || blockingResult;
         finalAnswer = answerData.answer || answerData.text || 'I apologize, but I was unable to generate a response.';
         
@@ -215,7 +230,10 @@ Use these current web results to answer. Extract key facts and answer directly.`
     } else {
       console.log('📦 [NODE:ANSWER] Using blocking mode...');
       // Blocking call for non-streaming
-      const result = await mcpClient.callService('phi4', 'general.answer', payload);
+      // Use longer timeout when web results are present (large context to process)
+      const timeout = contextDocs.length > 0 ? 60000 : 30000;
+      console.log(`⏱️  [NODE:ANSWER] Using ${timeout}ms timeout (${contextDocs.length} web results)`);
+      const result = await mcpClient.callService('phi4', 'general.answer', payload, { timeout });
       
       // MCP protocol wraps response in 'data' field
       answerData = result.data || result;

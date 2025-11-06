@@ -4,13 +4,16 @@
  */
 
 module.exports = async function storeConversation(state) {
-  const { mcpClient, message, answer, context, intent } = state;
+  const { mcpClient, message, resolvedMessage, answer, context, intent } = state;
+  
+  // Use resolved message if available (after coreference resolution), otherwise original
+  const userMessage = resolvedMessage || message;
 
   console.log('💾 [NODE:STORE_CONVERSATION] Storing conversation exchange...');
 
   try {
     // Build storage text
-    const storageText = `User asked: "${message}"\nAssistant responded: "${answer}"`;
+    const storageText = `User asked: "${userMessage}"\nAssistant responded: "${answer}"`;
 
     // Use entities from intent parser (already extracted during intent classification)
     // Intent parser extracts temporal entities (dates, times) which entity.extract doesn't
@@ -23,7 +26,7 @@ module.exports = async function storeConversation(state) {
       tags: ['conversation', 'auto_stored', intent.type],
       entities: entities, // TOP-LEVEL: Required for memory_entities table
       metadata: {
-        userMessage: message,
+        userMessage: userMessage,
         aiResponse: answer,
         sessionId: context.sessionId,
         userId: context.userId,

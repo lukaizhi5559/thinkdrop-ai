@@ -106,8 +106,7 @@ module.exports = async function resolveReferences(state) {
 
     return {
       ...state,
-      message: resolvedMessage, // Replace with resolved message
-      resolvedMessage: resolvedMessage, // Also set resolvedMessage for parseIntent node
+      resolvedMessage: resolvedMessage, // Set resolved message for downstream nodes
       originalMessage: message, // Keep original for debugging
       coreferenceReplacements: replacements,
       coreferenceMethod: method
@@ -119,6 +118,7 @@ module.exports = async function resolveReferences(state) {
     // This ensures the system still works even if coreference service is down
     return {
       ...state,
+      resolvedMessage: message, // Use original message as resolved
       originalMessage: message,
       coreferenceReplacements: [],
       coreferenceMethod: 'fallback'
