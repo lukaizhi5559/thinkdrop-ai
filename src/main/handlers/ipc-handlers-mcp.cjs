@@ -18,22 +18,11 @@ let fallbackAgents = null;
 
 /**
  * Get fallback agents (lazy load)
+ * DEPRECATED: Fallback agents removed in Phase 2 cleanup - MCP services only
  */
 function getFallbackAgents() {
-  if (!fallbackAgents) {
-    const UserMemoryAgent = require('../services/agents/UserMemoryAgent.cjs');
-    const WebSearchAgent = require('../services/agents/WebSearchAgent.cjs');
-    const FastIntentParser = require('../services/utils/FastIntentParser.cjs');
-    
-    fallbackAgents = {
-      userMemory: new UserMemoryAgent(),
-      webSearch: new WebSearchAgent(),
-      intentParser: new FastIntentParser()
-    };
-    
-    console.log('⚠️ Loaded fallback agents (MCP unavailable)');
-  }
-  return fallbackAgents;
+  // Fallback agents no longer available - throw error to force MCP service usage
+  throw new Error('Fallback agents not available - MCP services must be running');
 }
 
 /**

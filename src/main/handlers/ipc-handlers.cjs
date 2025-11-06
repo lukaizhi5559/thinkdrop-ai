@@ -234,29 +234,18 @@ function initializeIPCHandlers({
         return result; // Return result directly (already has success/error structure)
       }
       
-      // Handle WebSocket backend response storage
+      // DEPRECATED: WebSocket backend response storage (removed in Phase 3 cleanup)
       if (intentPayload.intent === 'websocket_backend_response') {
-        console.log('🌐 Processing WebSocket backend response for memory storage');
-        const { handleWebSocketBackendResponse } = require('./ipc-handlers-local-llm.cjs');
-        const result = await handleWebSocketBackendResponse(
-          intentPayload.payload,
-          intentPayload.payload.userMessage,
-          intentPayload.context || {}
-        );
-        console.log('✅ WebSocket backend response processed:', result);
-        return { success: true, data: result };
+        console.warn('⚠️ websocket_backend_response intent deprecated - handler removed in Phase 3 cleanup');
+        // TODO: Implement MCP-compatible WebSocket response storage if needed
+        return { success: false, error: 'WebSocket backend response handler deprecated' };
       }
 
-      // Handle WebSocket context extraction
+      // DEPRECATED: WebSocket context extraction (removed in Phase 3 cleanup)
       if (intentPayload.intent === 'extract_websocket_context') {
-        console.log('🔍 Extracting recent context for WebSocket backend');
-        const { extractRecentContextForBackend } = require('./ipc-handlers-local-llm.cjs');
-        const result = await extractRecentContextForBackend(
-          intentPayload.sessionId,
-          intentPayload.messageCount || 6
-        );
-        console.log(`✅ Extracted ${result.length} context messages for WebSocket`);
-        return { success: true, data: result };
+        console.warn('⚠️ extract_websocket_context intent deprecated - handler removed in Phase 3 cleanup');
+        // TODO: Implement MCP-compatible context extraction if needed
+        return { success: false, error: 'WebSocket context extraction handler deprecated' };
       }
 
       // Route all other requests through AgentOrchestrator.ask()
