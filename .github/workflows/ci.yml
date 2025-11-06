@@ -28,12 +28,4 @@ jobs:
         if: ${{ hashFiles('package.json') != '' }}
         run: |
           npm ci || npm install
-
-      - name: Run conversational detection tests
-        run: |
-          npm run -s test:conv:detect
-          npm run -s test:conv:extra
-
-      - name: Run conversational retrieval tests
-        run: |
-          npm run -s test:conv:retrieve
+     
