@@ -128,13 +128,34 @@ class AgentOrchestrator {
       // Router: Route based on intent type
       parseIntent: (state) => {
         const intentType = state.intent?.type || 'general_query';
-        console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph`);
+        const useOnlineMode = state.useOnlineMode || false;
+        console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
         
         // Memory store: save information
         if (intentType === 'memory_store' || intentType === 'store_memory' || intentType === 'remember') {
           return 'storeMemory';
         }
         
+        // 🌐 ONLINE MODE: Skip web search, online LLMs have up-to-date knowledge
+        if (useOnlineMode) {
+          console.log('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
+          
+          // Commands: system commands (TODO: implement command execution node)
+          if (intentType === 'command') {
+            console.warn('⚠️ [STATEGRAPH:ROUTER] Command intent not yet implemented, routing to answer');
+            return 'answer'; // For now, just answer (future: add command execution node)
+          }
+          
+          // For greetings, skip memory retrieval
+          if (intentType === 'greeting') {
+            return 'answer';
+          }
+          
+          // For all other intents, retrieve memory but skip web search
+          return 'retrieveMemory';
+        }
+        
+        // 🔒 PRIVATE MODE: Use web search for time-sensitive queries
         // Web search: time-sensitive queries, factual questions, and general knowledge
         // These should always try web search first, fallback to LLM if offline/no results
         if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup' ||
@@ -173,10 +194,11 @@ class AgentOrchestrator {
       answer: 'validateAnswer',
       validateAnswer: (state) => {
         const isStreaming = !!state.streamCallback;
+        const useOnlineMode = state.useOnlineMode || false;
         
         // PRIORITY 1: Check if LLM requested web search
-        // This should happen EVEN in streaming mode because it's a new search, not a retry
-        if (state.shouldPerformWebSearch) {
+        // 🌐 SKIP in online mode - online LLMs have up-to-date knowledge
+        if (state.shouldPerformWebSearch && !useOnlineMode) {
           console.log(`🔍 [STATEGRAPH:WEB_SEARCH_NEEDED] LLM needs web search, routing to webSearch node`);
           // For streaming mode, we need to send a follow-up message
           if (isStreaming && state.streamCallback) {
@@ -184,6 +206,11 @@ class AgentOrchestrator {
             state.streamCallback('\n\n🔍 Searching online for that information...\n\n');
           }
           return 'webSearch'; // Perform web search then retry answer
+        }
+        
+        // 🌐 Log if web search was requested but skipped due to online mode
+        if (state.shouldPerformWebSearch && useOnlineMode) {
+          console.log(`⏭️  [STATEGRAPH:WEB_SEARCH_SKIPPED] Online mode active - skipping web search request`);
         }
         
         // PRIORITY 2: Retry logic for other validation failures
@@ -212,18 +239,21 @@ class AgentOrchestrator {
   }
 
   /**
-   * Process message using StateGraph workflow
-   * This is the main entry point for all message processing
+   * Process message using StateGraph workflow with intent-based routing
    * @param {string} message - User message
-   * @param {object} context - Context (sessionId, userId, etc.)
+   * @param {object} context - Context (sessionId, userId, useOnlineMode, onlineLLMClient, etc.)
    * @param {Function} onProgress - Optional callback for progress updates
    * @param {Function} onStreamToken - Optional callback for streaming tokens from answer node
    * @returns {Promise<object>} Orchestration result with full trace
    */
   async processMessageWithGraph(message, context = {}, onProgress = null, onStreamToken = null) {
+    // 🌐 Extract online mode flag from context
+    const useOnlineMode = context.useOnlineMode || false;
+    
     if (DEBUG) {
       console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
       console.log(`🌊 [ORCHESTRATOR:GRAPH] Streaming enabled: ${!!onStreamToken}`);
+      console.log(`🌐 [ORCHESTRATOR:GRAPH] Online mode: ${useOnlineMode ? 'ENABLED (fallback to private)' : 'DISABLED'}`);
     }
     
     try {
@@ -243,7 +273,8 @@ class AgentOrchestrator {
           timestamp: new Date().toISOString(),
           conversationHistory // Include for context-aware cache key
         },
-        streamCallback: onStreamToken // Pass streaming callback to answer node
+        streamCallback: onStreamToken, // Pass streaming callback to answer node
+        useOnlineMode // 🌐 Pass online mode flag to answer node
       };
 
       // Execute the graph workflow with progress callback

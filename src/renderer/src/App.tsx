@@ -13,7 +13,7 @@ import './types/electronAPI'; // Import Electron API types
 import { ViewType } from '@/types/view';
 
 // Initialize signals immediately when module loads (before React mounts)
-console.log('🚀 [APP MODULE] Initializing conversation signals at module level...');
+// Initializing conversation signals
 
 
 function App() {
@@ -41,14 +41,13 @@ function App() {
   const [showResponse, setShowResponse] = useState(false);
   const [currentView, setCurrentView] = useState(mode)
 
-  console.log('currentView', currentView)
   const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
   }
 
   // Initialize signals when app starts - moved to module level for earlier execution
   useEffect(() => {
-    console.log('🚀 [APP] Signals should already be initialized at module level');
+    // Signals initialized
     initializeConversationSignals().catch(error => {
       console.error('❌ [APP MODULE] Failed to initialize signals at module level:', error);
     });
@@ -72,7 +71,7 @@ function App() {
         clearTimeout(responseTimer);
       };
     } else {
-      console.log('Stopped listening...');
+      // Cleanup listeners
       setIsAnalyzing(false);
       setShowResponse(false);
     }

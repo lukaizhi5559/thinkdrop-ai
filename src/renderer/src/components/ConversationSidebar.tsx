@@ -44,17 +44,12 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   
   // Debug logging for sidebar state
   React.useEffect(() => {
-    console.log('🔍 [ConversationSidebar] State update:', {
-      isSidebarOpen,
-      sessionsCount: sessions.length,
-      activeSessionId,
-      isLoading
-    });
+    // State update
   }, [isSidebarOpen, sessions.length, activeSessionId, isLoading]);
 
   // Track component renders
   React.useEffect(() => {
-    console.log('🎨 [ConversationSidebar] Component rendered with sessions:', sessions.map(s => ({ id: s.id, title: s.title })));
+    // Component rendered.map(s => ({ id: s.id, title: s.title })));
   });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -73,16 +68,10 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
 
   // Handle new chat creation
   const handleNewChat = useCallback(async () => {
-    console.log('🔥 [ConversationSidebar] NEW CHAT BUTTON CLICKED!');
     try {
-      console.log('🆕 [ConversationSidebar] Creating new chat, current sessions count:', sessions.length);
-      
       const sessionId = await createSession('user-initiated', {
         title: `Chat ${sessions.length + 1}`
       });
-      
-      console.log('✅ [ConversationSidebar] New session created:', sessionId);
-      console.log('📊 [ConversationSidebar] Sessions after creation:', sessions.length);
       
       await switchToSession(sessionId);
       
@@ -170,8 +159,6 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
       return 'Unknown';
     }
   }, []);
-
-  console.log('[filteredSessions]', filteredSessions.length, filteredSessions.map(s => ({ id: s.id, title: s.title })));
 
   return (
     <>
@@ -270,7 +257,7 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
                       console.log('🔄 [ConversationSidebar] Calling switchToSession for:', session.id);
                       switchToSession(session.id);
                       // Also close sidebar directly from here as backup
-                      console.log('🚪 [ConversationSidebar] Closing sidebar directly');
+                      // Closing sidebar
                       closeSidebar();
                     } else {
                       console.log('⚠️ [ConversationSidebar] Session is being edited, ignoring click');

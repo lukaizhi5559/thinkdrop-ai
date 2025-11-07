@@ -33,24 +33,20 @@ export default function ChatMessages() {
 
 
 
-  // 🎯 MCP Private Mode Feature Flag
-  // ✅ ALWAYS ENABLED: MCP system is the only supported mode
-  const USE_MCP_PRIVATE_MODE = true;
+  // 🎯 MCP Unified Pipeline
+  // ✅ ALWAYS ENABLED: All messages go through MCP StateGraph (handles both online and private modes)
   
-  // WebSocket integration for receiving streaming responses
+  // WebSocket integration - only for connection status (mode detection)
   const {
     state: wsState,
-    sendLLMRequest,
     connect: connectWebSocket,
     disconnect: disconnectWebSocket
   } = useWebSocket({
     autoConnect: false, // Manual connection control
-    onConnected: () => console.log('✅ ChatMessages WebSocket connected'),
-    onDisconnected: () => console.log('🔌 ChatMessages WebSocket disconnected'),
-    onError: (error) => console.error('❌ ChatMessages WebSocket error:', error),
-    onMessage: (message) => {
-      handleWebSocketMessage(message);
-    }
+    onConnected: () => {},
+    onDisconnected: () => {},
+    onError: () => {}
+    // Note: onMessage removed - all streaming handled by MCP pipeline
   });
 
 
@@ -67,8 +63,7 @@ export default function ChatMessages() {
   const [isLoading, setIsLoading] = useState(false);
   const [isProcessingLocally, setIsProcessingLocally] = useState(false);
   const [localLLMError, setLocalLLMError] = useState<string | null>(null);
-  const [currentStreamingMessage, setCurrentStreamingMessage] = useState('');
-  const isStreamingEndedRef = useRef(false);
+  // Note: Old WebSocket streaming state removed - now using MCP streaming
   
   // ⚡ Streaming state
   const [isStreamingResponse, setIsStreamingResponse] = useState(false);
@@ -90,9 +85,7 @@ export default function ChatMessages() {
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [processedOrchestrationMessages, setProcessedOrchestrationMessages] = useState<Set<string>>(new Set());
   
-  // WebSocket conversation tracking
-  const [lastUserMessage, setLastUserMessage] = useState<string>('');
-  const [streamStartTime, setStreamStartTime] = useState<number>(0);
+  // Note: WebSocket conversation tracking removed - now handled by MCP pipeline
   
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -102,7 +95,8 @@ export default function ChatMessages() {
   const currentMessageRef = useRef<string>('');
   const debounceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resizeTimeoutRef = useRef<number | null>(null);
-  const streamTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Note: streamTimeoutRef removed - handled by MCP pipeline
+  const scrollThrottleRef = useRef<number | null>(null);
   const [isUserScrolling, setIsUserScrolling] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const isProgrammaticScrolling = useRef(false);
@@ -308,254 +302,27 @@ export default function ChatMessages() {
     return converted;
   }, [activeSessionId, signals.activeMessages.value, totalMessageCount]);
   
-  // Handle incoming WebSocket messages for streaming
-  const handleWebSocketMessage = async (message: any) => {
-    try {
-      if (message.type === 'llm_stream_start') {
-        setCurrentStreamingMessage('');
-        isStreamingEndedRef.current = false; // Reset streaming ended flag
-        setIsLoading(false); // Clear loading when streaming starts
-        scrollToBottom({ smooth: true, force: false });
-      } else if (message.type === 'llm_stream_chunk') {
-        // Skip processing if streaming has already ended
-        if (isStreamingEndedRef.current) {
-          return;
-        }
-        
-        const chunkText = message.payload?.chunk || message.payload?.text || '';
-        if (chunkText) {
-          // Add artificial delay for smooth typing effect
-          setTimeout(() => {
-            if (!isStreamingEndedRef.current) {
-              setCurrentStreamingMessage(prev => prev + chunkText);
-            }
-          }, 60); // 60ms delay per chunk for smooth typing effect
-        } else {
-          console.warn('⚠️ No chunk text found in message');
-        }
-        
-      } else if (message.type === 'llm_stream_end') {
-        console.log('✅ Stream completed');
-        // scrollToBottom({ smooth: true, force: false });
-
-        // Check if we've already processed a stream end for this message
-        if (isStreamingEndedRef.current) {
-          return;
-        }
-        
-        // // Clear the timeout since we received the proper end signal
-        // if (streamTimeoutRef.current) {
-        //   clearTimeout(streamTimeoutRef.current);
-        //   streamTimeoutRef.current = null;
-        // }
-        
-        // Mark streaming as ended to prevent duplicate processing
-        isStreamingEndedRef.current = true;
-        
-        const finalText = message.payload?.fullText || currentStreamingMessage;
-        
-        // Use the current active session from signals as fallback
-        const currentSessionId = activeSessionId || signals.activeSessionId.value;
-        
-        if (currentSessionId && signalsAddMessage) {          
-          try {
-            await signalsAddMessage(currentSessionId, {
-              text: finalText,
-              sender: 'ai',
-              sessionId: currentSessionId,
-              metadata: { streamingComplete: true }
-            });
-            // Message added successfully
-
-        setCurrentStreamingMessage('');
-        setIsLoading(false);
-          } catch (error) {
-            console.error('❌ Error adding final AI message to session:', error);
-          }
-        } else {
-          console.error('❌ No active session to save message');
-        }
-
-        // Save WebSocket backend response to local memory
-        try {
-          console.log('💾 Saving WebSocket backend response to local memory...');
-          
-          // Get the most recent user message from the conversation context
-          let actualUserMessage = lastUserMessage;
-          if (!actualUserMessage || actualUserMessage === 'Unknown user message') {
-            // Try to get the last user message from the current conversation
-            if (currentSessionId) {
-              const currentMessages = signals.messages.value[currentSessionId] || [];
-              const lastUserMsg = [...currentMessages].reverse().find(msg => msg.sender === 'user');
-              actualUserMessage = lastUserMsg?.text || 'Unknown user message';
-            }
-          }
-          
-          const websocketResponse = {
-            data: finalText,
-            queryType: message.payload.primaryIntent === "memory_retrieve" ? 'MEMORY' : message.payload?.queryType || 'GENERAL',
-            memoryTurn: {
-              sessionId: activeSessionId,
-              context: {
-                userId: 'default-user',
-                conversationId: activeSessionId,
-                messageId: message.id || `msg_${Date.now()}`
-              },
-              userMessage: actualUserMessage,
-              aiResponse: finalText
-            },
-            pipeline: message.payload?.pipeline || 'websocket_stream',
-            timing: {
-              total: Date.now() - (streamStartTime || Date.now())
-            }
-          };
-
-          // Use the existing IPC method for agent orchestration
-          if (window.electronAPI?.agentOrchestrate) {
-            await window.electronAPI.agentOrchestrate({
-              intent: 'websocket_backend_response',
-              payload: websocketResponse,
-              context: { source: 'websocket_frontend' }
-            });
-            console.log('✅ WebSocket backend response saved to local memory');
-          }
-        } catch (error) {
-          console.error('❌ Failed to save WebSocket backend response:', error);
-        }
-        
-        
-        
-        // 🧠 CRITICAL: Trigger AgentOrchestrator for intent classification and memory storage
-        console.log('🧠 [AGENT] Triggering AgentOrchestrator for intent classification...');
-        // handleAgentOrchestration(message, finalText);
-        
-      } else if (message.type === 'intent_classification') {
-        // 🎯 ONLINE MODE: Backend (Phi4) provides intent classification
-        // Forward this to MCP orchestrator for memory storage and action routing
-        console.log('🎯 [INTENT] Backend intent classification received:', message.payload?.primaryIntent);
-        console.log('📊 [INTENT] Confidence:', message.payload?.intents?.[0]?.confidence);
-        console.log('🔍 [INTENT] Query type:', message.payload?.queryType);
-        
-        try {
-          // Forward intent to MCP orchestrator for processing
-          if (window.electronAPI?.mcpCall) {
-            const result = await window.electronAPI.mcpCall({
-              serviceName: 'orchestrator',
-              action: 'intent.process',
-              payload: {
-                intent: message.payload?.primaryIntent,
-                queryType: message.payload?.queryType,
-                confidence: message.payload?.intents?.[0]?.confidence,
-                requiresExternalData: message.payload?.requiresExternalData,
-                requiresMemoryAccess: message.payload?.requiresMemoryAccess,
-                suggestedResponse: message.payload?.suggestedResponse,
-                userMessage: lastUserMessage,
-                context: {
-                  sessionId: activeSessionId,
-                  timestamp: message.timestamp
-                }
-              }
-            });
-            
-            if (result?.success) {
-              console.log('✅ [INTENT] MCP orchestrator processed intent:', result.data?.action);
-            }
-          }
-        } catch (error) {
-          console.error('❌ [INTENT] Failed to forward intent to MCP orchestrator:', error);
-        }
-        
-        setIsProcessingLocally(false);
-
-      } else if (message.type === 'connection_status') {
-        console.log('🔗 Connection status:', message.status);
-      }
-    } catch (error) {
-      console.error('❌ Error handling WebSocket message:', error);
-    }
-  };
-
-  // 🎯 Semantic Search First - Try to find relevant stored memories
-  // const trySemanticSearchFirst = useCallback(async (query: string) => {
-  //   try {
-  //     console.log('🔍 Performing semantic search for:', query.substring(0, 50) + '...');
-      
-  //     // Call semantic search via Electron API
-  //     const result = await window.electronAPI?.agentExecute({
-  //       agentName: 'UserMemoryAgent',
-  //       action: 'memory-semantic-search',
-  //       input: query,
-  //       options: {
-  //         limit: 3,
-  //         minSimilarity: 0.6 // Higher threshold for better relevance
-  //       }
-  //     });
-      
-  //     if (result?.success && result.results && result.results.length > 0) {
-  //       console.log(`✅ Found ${result.results.length} relevant memories`);
-        
-  //       // Format the response with found memories
-  //       const memories = result.results;
-  //       let response = "Based on what I remember:\n\n";
-        
-  //       memories.forEach((memory: any, index: number) => {
-  //         const similarity = Math.round(memory.similarity * 100);
-  //         response += `**Memory ${index + 1}** (${similarity}% match):\n`;
-  //         response += `${memory.source_text || memory.suggested_response}\n\n`;
-  //       });
-        
-  //       response += "Is this what you were looking for, or would you like me to help with something else?";
-        
-  //       return {
-  //         hasRelevantResults: true,
-  //         response: response,
-  //         memories: memories
-  //       };
-  //     }
-      
-  //     console.log('📝 No relevant memories found with sufficient similarity');
-  //     return {
-  //       hasRelevantResults: false,
-  //       response: '',
-  //       memories: []
-  //     };
-      
-  //   } catch (error) {
-  //     console.error('❌ Semantic search failed:', error);
-  //     return {
-  //       hasRelevantResults: false,
-  //       response: '',
-  //       memories: []
-  //     };
-  //   }
-  // }, []);
+  // Note: handleWebSocketMessage removed - all streaming now handled by MCP pipeline
 
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
     const currentMsg = currentMessageRef.current;
     const textareaValue = textareaRef.current?.value || '';
     
-    console.log('🚀 [SEND-DEBUG] handleSendMessage called');
-    console.log('🚀 [SEND-DEBUG] currentMessageRef.current:', JSON.stringify(currentMsg));
-    console.log('🚀 [SEND-DEBUG] textareaRef.current.value:', JSON.stringify(textareaValue));
-    console.log('🚀 [SEND-DEBUG] isLoading:', isLoading);
-    console.log('🚀 [SEND-DEBUG] isProcessingLocally:', isProcessingLocally);
+    // Sending message...
     
     // Use textarea value as fallback if ref is empty
     const messageToSend = currentMsg || textareaValue;
     
     if (!messageToSend.trim() || isLoading || isProcessingLocally) {
-      console.log('🚀 [SEND-DEBUG] Message sending blocked - no message or already processing');
       return;
     }
     
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
     logDebugState(); // Debug current signals state
     
-    // Check if context is still loading - read directly from signal for fresh value
-    console.log('🚀 [SEND-DEBUG] signals.isLoading.value:', signals.isLoading.value);
+    // Check if context is still loading
     if (signals.isLoading.value) {
-      console.log('⏳ [SIGNALS] Context is still loading, please wait...');
       return;
     }
     
@@ -564,11 +331,9 @@ export default function ChatMessages() {
     
     // If no active session, create one using signals
     if (!currentSessionId) {
-      console.log('⚠️ [SIGNALS] No active session found, creating one...');
       try {
         // Use signals sendMessage which handles session creation automatically
         const messageText = messageToSend.trim();
-        console.log('🚀 [SIGNALS] Using signalsSendMessage for automatic session handling');
         
         // Clear UI immediately
         setCurrentMessage('');
@@ -582,7 +347,6 @@ export default function ChatMessages() {
         
         // Use signals sendMessage - this handles session creation AND message sending
         currentSessionId = await signalsSendMessage(messageText);
-        console.log('✅ [SIGNALS] Message sent and session handled:', currentSessionId);
         
         // Continue with the rest of the flow...
       } catch (error) {
@@ -590,7 +354,6 @@ export default function ChatMessages() {
         return;
       }
     } else {
-      console.log('✅ [SIGNALS] Using existing session:', currentSessionId);
       // For existing sessions, we need to manually add the user message
       if (signalsAddMessage) {
         try {
@@ -600,7 +363,6 @@ export default function ChatMessages() {
             sessionId: currentSessionId,
             metadata: {}
           });
-          console.log('✅ [SIGNALS] User message added to existing session');
         } catch (error) {
           console.error('❌ [SIGNALS] Failed to add user message:', error);
         }
@@ -633,183 +395,140 @@ export default function ChatMessages() {
     }, 100);
     
     try {
-      // Connection state checked
+      // 🎯 UNIFIED PIPELINE: Always use MCP StateGraph
+      const isOnlineMode = wsState.isConnected;
       
-      // 🎯 ENHANCED PIPELINE: Use existing backend infrastructure with better orchestration
-      console.log('🧠 [ENHANCED-PIPELINE] Starting message processing with existing backend...');
+      // Note: WebSocket tracking removed - handled by MCP pipeline
       
-      if (!wsState.isConnected) {
-        console.warn('⚠️ WebSocket not connected, checking pipeline preference...');
-        
-        // 🎯 NEW: MCP Private Mode Path
-        if (USE_MCP_PRIVATE_MODE) {
-          console.log('🔒 [MCP-PRIVATE] Using MCP orchestrator for private mode...');
-          scrollToBottom({ smooth: true, force: true });
+      // Note: Context extraction removed - StateGraph nodes fetch context internally via MCP
+      // The frontend only needs to pass sessionId, and nodes like resolveReferences, 
+      // parseIntent, and answer will fetch messages as needed from conversation service
+      
+      // Use MCP StateGraph pipeline
+      scrollToBottom({ smooth: true, force: true });
           
-          try {
-            // Set up early response listener (Phase 1 optimization)
-            let intentMessageTimeout: NodeJS.Timeout | null = null;
-            let intentMessage: string | null = null;
-            
-            const handleEarlyResponse = (_event: any, data: any) => {
-              console.log('💬 [EARLY-RESPONSE] Received:', data.message);
-              
-              // Store the intent message but don't show it immediately
-              intentMessage = data.message;
-              
-              // Show intent message after 2 seconds if response hasn't arrived yet
-              intentMessageTimeout = setTimeout(() => {
-                if (intentMessage) {
-                  setInitialThinkingMessage(intentMessage);
-                }
-              }, 4000); // 2 second delay
-            };
-            
-            // Set up progress listener
-            const handleProgress = (_event: any, data: any) => {
-              console.log('📊 [PROGRESS]', data.node, data.status);
-              // Could update UI with progress indicators here
-            };
-            
-            // Register listeners
-            if (window.electronAPI?.onPrivateModeEarlyResponse) {
-              window.electronAPI.onPrivateModeEarlyResponse(handleEarlyResponse);
+      try {
+        // Set up early response listener (Phase 1 optimization)
+        let intentMessageTimeout: NodeJS.Timeout | null = null;
+        let intentMessage: string | null = null;
+        
+        const handleEarlyResponse = (_event: any, data: any) => {
+          // Store the intent message but don't show it immediately
+          intentMessage = data.message;
+          
+          // Show intent message after 2 seconds if response hasn't arrived yet
+          intentMessageTimeout = setTimeout(() => {
+            if (intentMessage) {
+              setInitialThinkingMessage(intentMessage);
             }
-            if (window.electronAPI?.onPrivateModeProgress) {
-              window.electronAPI.onPrivateModeProgress(handleProgress);
-            }
-            
-            
-              // ⚡ Streaming via orchestrator (proper architecture)
-              let streamedAnswer = '';
-              let isStreamingActive = false;
-              
-              // Register stream token listener
-              const handleStreamToken = (_event: any, data: { token: string }) => {
-                if (!isStreamingActive) {
-                  isStreamingActive = true;
-                  setIsStreamingResponse(true);
-                }
-                streamedAnswer += data.token;
-                streamedAnswerRef.current = streamedAnswer;
-                setStreamedAnswer(streamedAnswer);
-                scrollToBottom({ smooth: true, force: false });
-              };
-              
-              if (window.electronAPI?.onPrivateModeStreamToken) {
-                window.electronAPI.onPrivateModeStreamToken(handleStreamToken);
+          }, 4000); // 2 second delay
+        };
+        
+        // Set up progress listener
+        const handleProgress = (_event: any, data: any) => {
+          // Progress tracking
+        };
+        
+        // Register listeners
+        if (window.electronAPI?.onPrivateModeEarlyResponse) {
+          window.electronAPI.onPrivateModeEarlyResponse(handleEarlyResponse);
+        }
+        if (window.electronAPI?.onPrivateModeProgress) {
+          window.electronAPI.onPrivateModeProgress(handleProgress);
+        }
+        
+        // ⚡ Streaming via orchestrator (proper architecture)
+        let streamedAnswer = '';
+        let isStreamingActive = false;
+        
+        // Register stream token listener
+        const handleStreamToken = (_event: any, data: { token: string }) => {
+          if (!isStreamingActive) {
+            isStreamingActive = true;
+            setIsStreamingResponse(true);
+          }
+          streamedAnswer += data.token;
+          streamedAnswerRef.current = streamedAnswer;
+          setStreamedAnswer(streamedAnswer);
+          
+          // Throttle scroll updates during streaming (every 100ms instead of every token)
+          if (!scrollThrottleRef.current) {
+            scrollThrottleRef.current = window.setTimeout(() => {
+              scrollThrottleRef.current = null;
+              // Smooth scroll to bottom without interrupting user
+              if (!isUserScrolling && messagesContainerRef.current) {
+                messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
               }
-              
-              // Call MCP private mode orchestrator (with streaming support)
-              const result = await window.electronAPI?.privateModeProcess({
-                message: messageText,
-                context: {
-                  sessionId: currentSessionId,
-                  userId: 'default_user',
-                  timestamp: new Date().toISOString()
+            }, 200);
+          }
+        };
+        
+        if (window.electronAPI?.onPrivateModeStreamToken) {
+          window.electronAPI.onPrivateModeStreamToken(handleStreamToken);
+        }
+        
+        // Call MCP unified orchestrator (with streaming support)
+        // 🌐 Pass sessionId and online mode flag - StateGraph fetches context internally
+        const result = await window.electronAPI?.privateModeProcess({
+          message: messageText,
+          context: {
+            sessionId: currentSessionId,
+            userId: 'default_user',
+            timestamp: new Date().toISOString(),
+            conversationHistory: [], // StateGraph nodes fetch context via MCP
+            useOnlineMode: isOnlineMode
+          }
+        });
+        
+        // Cleanup listeners and timeout
+        if (intentMessageTimeout) {
+          clearTimeout(intentMessageTimeout);
+        }
+        if (scrollThrottleRef.current) {
+          clearTimeout(scrollThrottleRef.current);
+          scrollThrottleRef.current = null;
+        }
+        if (window.electronAPI?.removePrivateModeListeners) {
+          window.electronAPI.removePrivateModeListeners();
+        }
+        
+        if (result?.success) {
+            // Determine final answer: use streamed if available, otherwise use result.response
+            const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result.response;
+            
+            // Add AI response to conversation (only if not already saved during streaming)
+            if (signalsAddMessage && currentSessionId && finalAnswer) {
+              await signalsAddMessage(currentSessionId, {
+                text: finalAnswer,
+                sender: 'ai',
+                sessionId: currentSessionId,
+                metadata: { 
+                  isFinal: true,
+                  action: result.action,
+                  mcpPrivateMode: true,
+                  elapsedMs: result.elapsedMs,
+                  streaming: isStreamingActive
                 }
               });
-            
-            // Cleanup listeners and timeout
-            if (intentMessageTimeout) {
-              clearTimeout(intentMessageTimeout);
-            }
-            if (window.electronAPI?.removePrivateModeListeners) {
-              window.electronAPI.removePrivateModeListeners();
             }
             
-            if (result?.success) {
-                console.log('✅ [MCP-PRIVATE] Orchestration successful');
-                console.log('🎯 [INTENT]', result.action, '→', result.response.substring(0, 100) + '...');
-                
-                // Determine final answer: use streamed if available, otherwise use result.response
-                const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result.response;
-                console.log(`💾 [MCP-PRIVATE] Saving answer (streamed: ${isStreamingActive}):`, finalAnswer.substring(0, 50) + '...');
-                
-                // Add AI response to conversation (only if not already saved during streaming)
-                if (signalsAddMessage && currentSessionId && finalAnswer) {
-                  await signalsAddMessage(currentSessionId, {
-                    text: finalAnswer,
-                    sender: 'ai',
-                    sessionId: currentSessionId,
-                    metadata: { 
-                      isFinal: true,
-                      action: result.action,
-                      mcpPrivateMode: true,
-                      elapsedMs: result.elapsedMs,
-                      streaming: isStreamingActive
-                    }
-                  });
-                }
-                
-                // Stop loading and scroll
-                setIsStreamingResponse(false);
-                setIsLoading(false);
-                setIsProcessingLocally(false);
-                scrollToBottom({ smooth: true, force: true });
-              } else {
-                console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
-                setLocalLLMError(`MCP Private Mode error: ${result.error}`);
-                setIsLoading(false);
-                setIsProcessingLocally(false);
-              }
-            } catch (error: any) {
-              console.error('❌ [MCP-PRIVATE] Exception:', error);
-              setLocalLLMError(`MCP Private Mode exception: ${error?.message || 'Unknown error'}`);
-              setIsLoading(false);
-              setIsProcessingLocally(false);
-            }
-            return;
+            // Stop loading and scroll
+            setIsStreamingResponse(false);
+            setIsLoading(false);
+            setIsProcessingLocally(false);
+            scrollToBottom({ smooth: true, force: true });
+          } else {
+            console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
+            setLocalLLMError(`MCP Private Mode error: ${result.error}`);
+            setIsLoading(false);
+            setIsProcessingLocally(false);
           }
-        
-        // ⚠️ DEPRECATED: Old pipeline code removed - MCP Private Mode is now the only path for offline mode
-        console.error('❌ [DEPRECATED] Reached deprecated pipeline code - this should not happen in MCP mode');
-        setLocalLLMError('Configuration error: MCP Private Mode should be enabled');
+      } catch (error: any) {
+        console.error('❌ [MCP-UNIFIED] Exception:', error);
+        setLocalLLMError(`MCP Unified Pipeline exception: ${error?.message || 'Unknown error'}`);
         setIsLoading(false);
         setIsProcessingLocally(false);
-        return;
       }
-      
-      // Track user message and stream start time for WebSocket backend response saving
-      setLastUserMessage(messageText);
-      setStreamStartTime(Date.now());
-      
-      // Extract recent conversation context for WebSocket backend
-      let recentContext = [];
-      try {
-        if (activeSessionId && window.electronAPI?.agentOrchestrate) {
-          const contextResult = await window.electronAPI.agentOrchestrate({
-            intent: 'extract_websocket_context',
-            sessionId: activeSessionId,
-            messageCount: 6,
-            context: { source: 'websocket_frontend' }
-          });
-          
-          if (contextResult.success && contextResult.data) {
-            recentContext = contextResult.data;
-            console.log(`🔍 Retrieved ${recentContext.length} context messages for WebSocket backend`);
-          }
-        }
-      } catch (error) {
-        console.warn('⚠️ Failed to extract recent context:', error);
-      }
-
-      console.log('THE RECENT CONTEXT', recentContext)
-      
-      // Send message via WebSocket for backend processing with enhanced orchestration
-      await sendLLMRequest({
-        prompt: messageText,
-        provider: 'openai',
-        options: {
-          taskType: 'ask',
-          stream: true,
-          temperature: 0.7,
-          useSemanticFirst: true // Flag to indicate semantic-first processing preference
-        },
-        context: {
-          recentContext: recentContext // Include conversation context in the correct location
-        }
-      });
       
     } catch (error) {
       console.error('❌ Failed to send message:', error);
@@ -823,222 +542,9 @@ export default function ChatMessages() {
         textareaRef.current.focus();
       }
     }, 100);
-  }, [isLoading, isProcessingLocally, wsState.isConnected, sendLLMRequest]);
+  }, [isLoading, isProcessingLocally, wsState.isConnected]);
 
-  // Handle local LLM fallback when backend is disconnected
-  // const handleLocalLLMCall = useCallback(async (messageText: string) => {
-  //   let isThinkingMsg = false;
-    
-  //   try {
-  //     console.log('🤖 Starting local LLM processing...');
-  //     setIsProcessingLocally(true);
-  //     setIsLoading(false); // Stop main loading, show local processing instead
-  //     // Keep current thinking message, don't reset to prevent flash
-  //     scrollToBottom({ smooth: true, force: true });
-      
-  //     // 🚀 FAST PATH: Call Phi3Agent directly for immediate response
-  //     if (!window.electronAPI?.llmQueryLocal) {
-  //       throw new Error('Electron API not available');
-  //     }
-      
-  //     // 🎯 ENHANCED: Use existing backend pipeline with semantic-first preferences
-  //     const result = await window.electronAPI.llmQueryLocal(messageText, {
-  //       temperature: 0.0,
-  //       maxTokens: 50,
-  //       // Enhanced options to guide the existing backend pipeline
-  //       preferSemanticSearch: true,    // Hint to prioritize semantic search in orchestration
-  //       enableIntentClassification: true, // Use the sophisticated intent parsers
-  //       useAgentOrchestration: true    // Leverage the full agent orchestration pipeline
-  //     });
-      
-  //     if (result.success) {
-  //       // Extract the actual AI response from the result
-  //       // The backend logs show: "Raw Phi3 natural language result: The current President of the USA is Joe Biden..."
-  //       let aiResponseText = '';
-        
-  //       // Try to extract from intentClassificationPayload first (this contains the actual Phi3 response)
-  //       if (result.intentClassificationPayload?.reasoning && result.intentClassificationPayload.reasoning.includes('Raw Phi3 natural language result:')) {
-  //         // Extract the actual response from the reasoning field
-  //         const match = result.intentClassificationPayload.reasoning.match(/Raw Phi3 natural language result: (.+)/);
-  //         if (match) {
-  //           aiResponseText = match[1].trim();
-  //         }
-  //       }
-        
-  //       // Fallback: try to extract from data.response
-  //       if (!aiResponseText && result.data?.response) {
-  //         aiResponseText = result.data.response;
-  //       }
-        
-  //       // Final fallback: use the full result as string
-  //       if (!aiResponseText) {
-  //         aiResponseText = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-  //       }
-        
-  //       console.log('✅ [LOCAL-LLM] Extracted AI response:', aiResponseText);
-
-  //       // For question intents, memory operations, show suggested response in ThinkingIndicator while processing
-  //       if (
-  //         result.intentClassificationPayload?.primaryIntent === 'memory_store' ||
-  //         result.intentClassificationPayload?.primaryIntent === 'memory_retrieve' || 
-  //         result.intentClassificationPayload?.primaryIntent === 'memory-retrieve' ||   
-  //         result.intentClassificationPayload?.primaryIntent === 'question' ||
-  //         result.intentClassificationPayload?.primaryIntent === 'command'
-  //       ) {
-  //         isThinkingMsg = true;
-  //         // Set the thinking message to the suggested response
-  //         const thinkingMsg = result.intentClassificationPayload?.suggestedResponse || result.data || 'Let me look that up for you.';
-  //         setInitialThinkingMessage(thinkingMsg);
-          
-  //         // Ensure we stay in processing state to keep ThinkingIndicator visible
-  //         console.log('🎯 [THINKING] Keeping processing state active for orchestration - intent:', result.intentClassificationPayload?.primaryIntent);
-  //         // Don't add the AI message yet - wait for orchestration update
-  //         return;
-  //       }
-        
-  //       // Add AI response to conversation
-  //       if (signalsAddMessage && signals.activeSessionId.value) {
-  //         await signalsAddMessage(signals.activeSessionId.value, {
-  //           text: aiResponseText,
-  //           sender: 'ai',
-  //           sessionId: signals.activeSessionId.value,
-  //           metadata: {
-  //             source: 'local_llm',
-  //             processingTime: Date.now(),
-  //             model: 'phi3'
-  //           }
-  //         });
-  //         console.log('✅ [LOCAL-LLM] AI response added to conversation');
-  //       }
-        
-  //       scrollToBottom({ smooth: true, force: true });
-  //     } else {
-  //       console.error('❌ [LOCAL-LLM] Local LLM query failed:', result.error);
-  //       setLocalLLMError(result.error || 'Local LLM processing failed');
-  //     }
-      
-  //   } catch (error) {
-  //     console.error('❌ [LOCAL-LLM] Local LLM processing error:', error);
-  //     setLocalLLMError('Failed to process with local LLM. Please try again.');
-  //   } finally {
-  //     // Only clear processing state if not waiting for memory retrieve or question orchestration
-  //     if (!isThinkingMsg) {
-  //       console.log('🎯 [THINKING] Clearing processing state in finally block');
-  //       setIsProcessingLocally(false);
-  //       setIsLoading(false);
-  //     } else {
-  //       console.log('🎯 [THINKING] Keeping processing state active for orchestration - memory, question, command:', isThinkingMsg);
-  //     }
-  //     scrollToBottom({ smooth: true, force: true });
-  //   }
-  // }, [signalsAddMessage, scrollToBottom]);
-
-
-
-  // Add progressive search option to existing message handling
-  // const useProgressiveSearch = useCallback(async (messageText: string) => {
-  //   try {
-  //     console.log('🔍 [PROGRESSIVE] Starting progressive search (backend will handle detection)...');
-  //     scrollToBottom({ smooth: true, force: true });
-      
-  //     // Check if progressive search API is available
-  //     if (!(window.electronAPI as any)?.localLLMProgressiveSearch) {
-  //       console.warn('⚠️ Progressive search not available, using fallback');
-  //       return false;
-  //     }
-
-  //     // Keep loading states active to show "Thinking..." until first intermediate response
-  //     console.log('🔍 [PROGRESSIVE] Keeping loading states active for initial thinking indicator...');
-  //     // Don't clear loading states here - let them show the thinking indicator
-
-  //     // Set up context
-  //     const context = {
-  //       currentSessionId: signals.activeSessionId.value,
-  //       conversationContext: (signals.activeMessages.value || [])
-  //         .slice(-10)
-  //         .map((msg: any) => `${msg.sender}: ${msg.text}`)
-  //         .join('\n'),
-  //       userId: 'user'
-  //     };
-
-  //     // Set up intermediate response handler
-  //     const handleIntermediate = async (_event: any, data: any) => {
-  //       console.log('📨 [PROGRESSIVE] Received intermediate response:', data);
-        
-  //       // Only clear loading states if this is the final response (continueToNextStage: false)
-  //       if (data?.continueToNextStage === false) {
-  //         console.log('🔍 [PROGRESSIVE] Final stage reached, clearing loading states...');
-  //         setIsLoading(false);
-  //         setIsProcessingLocally(false);
-  //       } else {
-  //         console.log('🔍 [PROGRESSIVE] Intermediate stage, keeping loading states active...');
-  //       }
-        
-  //       if (data?.response && signalsAddMessage && signals.activeSessionId.value) {
-  //         await signalsAddMessage(signals.activeSessionId.value, {
-  //           text: data.response,
-  //           sender: 'ai',
-  //           sessionId: signals.activeSessionId.value,
-  //           metadata: { 
-  //             isIntermediate: data?.continueToNextStage !== false,
-  //             isFinal: data?.continueToNextStage === false,
-  //             stage: data?.stage 
-  //           }
-  //         });
-  //         scrollToBottom({ smooth: true, force: true });
-  //         console.log('✅ [PROGRESSIVE] Response added to conversation - Stage:', data?.stage, 'Final:', data?.continueToNextStage === false);
-  //       }
-  //     };
-
-  //     if ((window.electronAPI as any).onProgressiveSearchIntermediate) {
-  //       (window.electronAPI as any).onProgressiveSearchIntermediate(handleIntermediate);
-  //     } else {
-  //       console.warn('⚠️ [PROGRESSIVE] onProgressiveSearchIntermediate not available');
-  //       console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
-  //       setIsLoading(false);
-  //       setIsProcessingLocally(false);
-  //     }
-
-  //     // Execute progressive search
-  //     console.log('🚀 [PROGRESSIVE] Calling localLLMProgressiveSearch API...');
-  //     const result = await (window.electronAPI as any).localLLMProgressiveSearch({
-  //       prompt: messageText,
-  //       context: context
-  //     });
-
-  //     // Cleanup
-  //     if ((window.electronAPI as any).removeAllListeners) {
-  //       (window.electronAPI as any).removeAllListeners('progressive-search-intermediate');
-  //     }
-
-  //     if (result.success && signalsAddMessage && signals.activeSessionId.value) {
-  //       await signalsAddMessage(signals.activeSessionId.value, {
-  //         text: result.data.response,
-  //         sender: 'ai',
-  //         sessionId: signals.activeSessionId.value,
-  //         metadata: { isFinal: true }
-  //       });
-        
-  //       // Clear loading states after final response is added
-  //       console.log('🔍 [PROGRESSIVE] Final response added, clearing all loading states...');
-  //       setIsLoading(false);
-  //       setIsProcessingLocally(false);
-        
-  //       return true;
-  //     }
-
-  //     return false;
-  //   } catch (error) {
-  //     console.error('❌ Progressive search failed:', error);
-  //     // Clear loading states on error
-  //     setIsLoading(false);
-  //     setIsProcessingLocally(false);
-  //     return false;
-  //   }
-  // }, [signalsAddMessage]);
-
-
-
+ 
   // Clear local LLM error when connection is restored
   useEffect(() => {
     if (wsState.isConnected && localLLMError) {
@@ -1068,17 +574,11 @@ export default function ChatMessages() {
     e?.preventDefault();
     e?.stopPropagation();
     
-    console.log('🔌 WebSocket toggle clicked');
-      
     try {
       if (wsState.isConnected) {
-        console.log('🔌 Disconnecting WebSocket for local LLM testing...');
         await disconnectWebSocket();
-        console.log('✅ WebSocket disconnected - local LLM fallback will be used');
       } else {
-        console.log('🔌 Reconnecting WebSocket...');
         await connectWebSocket();
-        console.log('✅ WebSocket reconnected - backend streaming will be used');
       }
     } catch (error) {
       console.error('❌ Error toggling WebSocket connection:', error);
@@ -1144,7 +644,6 @@ export default function ChatMessages() {
   const handleCopyMessage = useCallback(async (messageText: string, messageId: string) => {
     try {
       await navigator.clipboard.writeText(messageText);
-      console.log('✅ Message copied to clipboard');
       
       // Show checkmark feedback
       setCopiedMessageIds(prev => new Set(prev).add(messageId));
@@ -1173,7 +672,6 @@ export default function ChatMessages() {
     if (displayMessages.length > 0) {
       const lastMessage = displayMessages[displayMessages.length - 1];
       if (lastMessage.sender === 'user') {
-        console.log('🔄 Last message was from user, regenerating...');
         await handleSendMessage();
       }
     }
@@ -1294,12 +792,6 @@ export default function ChatMessages() {
     return () => {
       disconnectWebSocket();
       clearTimeout(timeoutId);
-      
-      // Clear stream timeout to prevent memory leaks
-      if (streamTimeoutRef.current) {
-        clearTimeout(streamTimeoutRef.current);
-        streamTimeoutRef.current = null;
-      }
     };
   }, []); // Remove dependencies to prevent re-mounting
 
@@ -1465,17 +957,39 @@ export default function ChatMessages() {
     return () => window.removeEventListener('resize', handleResize);
   }, [isUserScrolling]);
 
+  // Continuous auto-scroll during streaming for smooth experience
   useEffect(() => {
-    if (!currentStreamingMessage) return;
-  
-    const interval = setInterval(() => {
-      if (!isUserScrolling && messagesContainerRef.current && messagesEndRef.current) {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (!isStreamingResponse) return;
+    
+    // Use requestAnimationFrame for smooth 60fps scrolling
+    let animationFrameId: number;
+    
+    const smoothScroll = () => {
+      if (!isUserScrolling && messagesContainerRef.current) {
+        const container = messagesContainerRef.current;
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
+        
+        // Only auto-scroll if user is near the bottom
+        if (isNearBottom) {
+          container.scrollTop = container.scrollHeight;
+        }
       }
-    }, 150); // Adjust for smoother feeling: try 50–150ms
-  
-    return () => clearInterval(interval);
-  }, [currentStreamingMessage, isUserScrolling]);
+      
+      // Continue animation loop while streaming
+      if (isStreamingResponse) {
+        animationFrameId = requestAnimationFrame(smoothScroll);
+      }
+    };
+    
+    // Start the animation loop
+    animationFrameId = requestAnimationFrame(smoothScroll);
+    
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+      }
+    };
+  }, [isStreamingResponse, isUserScrolling]);
 
   // Always show the window, even when empty
 
@@ -1507,7 +1021,7 @@ export default function ChatMessages() {
           } as React.CSSProperties}
         >
         <div className="space-y-4">
-        {displayMessages.length === 0 && !currentStreamingMessage ? (
+        {displayMessages.length === 0 ? (
           <div className="text-center py-8">
             <div className="text-white/40 text-sm mb-2">No messages yet</div>
             <div className="text-white/30 text-xs">Start a conversation by typing in the chat input below</div>
@@ -1666,17 +1180,7 @@ export default function ChatMessages() {
               </div>
             ))}
             
-            {/* Streaming message display */}
-            {currentStreamingMessage && (
-              <div className="flex justify-start">
-                <div className="max-w-[85%] min-w-0 bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2 overflow-x-auto overflow-y-hidden">
-                <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                    <MarkdownRenderer content={currentStreamingMessage} />
-                    <span className="inline-block w-2 h-4 bg-white/60 ml-1 animate-pulse">|</span>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* Note: Old WebSocket streaming display removed - using MCP streaming below */}
             
             {/* ⚡ NEW: Streaming response display */}
             {isStreamingResponse && streamedAnswer && (

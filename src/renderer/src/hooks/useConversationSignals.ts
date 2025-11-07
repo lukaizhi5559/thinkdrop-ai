@@ -72,10 +72,7 @@ export const useConversationSignals = () => {
     // Debug helpers
     debugState: debugState.value,
     logDebugState: () => {
-      console.log('🔍 [SIGNALS DEBUG]', debugState.value)
-      console.log('🔍 [SIGNALS] Checking active session:', activeSessionId.value);
-      console.log('🔍 [SIGNALS] Has active session:', hasActiveSession);
-      console.log('🔍 [SIGNALS] Sessions available:', sessions.value.length);
+      // Debug state check
     }
   };
 };

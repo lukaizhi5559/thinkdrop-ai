@@ -40,8 +40,22 @@ module.exports = async function parseIntent(state) {
   }
 
   try {
+    // 🎯 CONTEXT-AWARE INTENT: Include previous exchange for better classification
+    // This helps with elliptical messages like "nothing next week" after "do I have any appts"
+    let enhancedMessage = messageToClassify;
+    if (recentMessages.length >= 2) {
+      const lastUserMsg = recentMessages[recentMessages.length - 3];
+      const lastAiMsg = recentMessages[recentMessages.length - 2];
+      
+      // If current message is very short (≤4 words), prepend context hint
+      if (messageToClassify.split(/\s+/).length <= 4 && lastUserMsg && lastAiMsg) {
+        enhancedMessage = `[Previous question: "${lastUserMsg.content}"] [AI response: "${lastAiMsg.content.substring(0, 100)}..."] [Current: "${messageToClassify}"]`;
+        console.log(`🔗 [NODE:PARSE_INTENT] Enhanced short message with context for better classification`);
+      }
+    }
+    
     const result = await mcpClient.callService('phi4', 'intent.parse', {
-      message: messageToClassify,
+      message: enhancedMessage,
       context: {
         sessionId: context.sessionId,
         userId: context.userId,

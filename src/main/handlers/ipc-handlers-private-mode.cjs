@@ -84,11 +84,17 @@ function registerPrivateModeHandlers() {
         }
       };
       
+      // 🌐 Extract online mode flag from context
+      const useOnlineMode = context.useOnlineMode || false;
+      
+      console.log(`🌐 [PRIVATE-MODE] Online mode: ${useOnlineMode ? 'ENABLED (will fallback to private)' : 'DISABLED'}`);
+      
       // 🔄 Use StateGraph for all routing (intent-based subgraphs)
       const result = await orch.processMessageWithGraph(message, {
         sessionId: context.sessionId,
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
+        useOnlineMode, // 🌐 Pass online mode flag
         ...context
       }, onProgress, onStreamToken);
 

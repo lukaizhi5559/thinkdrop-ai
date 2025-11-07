@@ -145,6 +145,8 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   private activeRequests = new Map<string, { type: string; startTime: number }>();
   private messageQueue: StreamingMessage[] = [];
   private reconnectTimer: any | null = null;
+  private heartbeatTimer: any | null = null;
+  private heartbeatInterval = 30000; // Send ping every 30 seconds
 
   constructor(config: WebSocketConfig) {
     super();
@@ -188,8 +190,7 @@ export class WebSocketIntegration extends SimpleEventEmitter {
       }
       url.searchParams.set('clientId', this.config.clientId);
       
-      console.log(`🔌 Connecting to WebSocket: ${url.toString()}`);
-      
+      // Connecting to WebSocket
       this.ws = new WebSocket(url.toString());
       
       return new Promise((resolve, reject) => {
@@ -219,7 +220,7 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   }
 
   private handleOpen(): void {
-    console.log('✅ WebSocket connected successfully');
+    // WebSocket connected
     this.isConnected = true;
     this.reconnectCount = 0;
     
@@ -227,6 +228,9 @@ export class WebSocketIntegration extends SimpleEventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    
+    // Start heartbeat to keep connection alive
+    this.startHeartbeat();
     
     // Process queued messages
     this.processMessageQueue();
@@ -237,10 +241,7 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   private handleMessage(event: MessageEvent): void {
     try {
       const message: StreamingMessage = JSON.parse(event.data);
-      // Only log important messages to reduce noise
-      if (message.type !== 'llm_stream_chunk') {
-        console.log(`📨 ${message.type}`);
-      }
+      // Skip logging for reduced noise
       
       // Emit specific event types
       this.emit(message.type, message);
@@ -257,9 +258,12 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   }
 
   private handleClose(event: CloseEvent): void {
-    console.warn(`🔌 WebSocket connection closed: ${event.code} - ${event.reason}`);
+    // WebSocket connection closed
     this.isConnected = false;
     this.ws = null;
+    
+    // Stop heartbeat
+    this.stopHeartbeat();
     
     this.emit('disconnected', { code: event.code, reason: event.reason });
     
@@ -277,10 +281,8 @@ export class WebSocketIntegration extends SimpleEventEmitter {
   private attemptReconnect(): void {
     this.reconnectCount++;
     const delay = this.config.reconnectDelay * Math.pow(2, this.reconnectCount - 1);
-    
-    console.log(`🔄 Attempting reconnection ${this.reconnectCount}/${this.config.reconnectAttempts} in ${delay}ms`);
-    
-    this.reconnectTimer = setTimeout(async () => {
+        // Attempting reconnection
+      this.reconnectTimer = setTimeout(async () => {
       try {
         await this.connect();
       } catch (error) {
@@ -311,7 +313,7 @@ export class WebSocketIntegration extends SimpleEventEmitter {
       };
       
       this.ws.send(JSON.stringify(messageWithTimestamp));
-      console.log(`📤 Sent message: ${message.type}`, messageWithTimestamp);
+      // Message sent: ${message.type}
       
     } catch (error) {
       console.error(`Failed to send WebSocket message:`, error);
@@ -323,6 +325,43 @@ export class WebSocketIntegration extends SimpleEventEmitter {
     while (this.messageQueue.length > 0) {
       const message = this.messageQueue.shift()!;
       this.sendMessage(message);
+    }
+  }
+
+  /**
+   * Start heartbeat to keep connection alive
+   */
+  private startHeartbeat(): void {
+    // Clear any existing heartbeat
+    this.stopHeartbeat();
+    
+    // Send ping every 30 seconds to keep connection alive
+    this.heartbeatTimer = setInterval(() => {
+      if (this.isConnected && this.ws) {
+        try {
+          // Send a ping message to keep connection alive
+          this.sendMessage({
+            id: `ping_${Date.now()}`,
+            type: 'connection_status',
+            payload: { status: 'ping' }
+          });
+        } catch (error) {
+          console.error('❌ Failed to send heartbeat:', error);
+        }
+      }
+    }, this.heartbeatInterval);
+    
+    // Heartbeat started
+  }
+
+  /**
+   * Stop heartbeat timer
+   */
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+      // Heartbeat stopped
     }
   }
 
@@ -527,6 +566,9 @@ export class WebSocketIntegration extends SimpleEventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    
+    // Stop heartbeat
+    this.stopHeartbeat();
     
     if (this.ws) {
       this.ws.close(1000, 'Client disconnect');
