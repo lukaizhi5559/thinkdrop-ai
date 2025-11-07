@@ -74,7 +74,7 @@ const defaultConfig: AppConfig = {
     enabled: true,
     ollamaUrl: 'http://localhost:11434',
     preferredModel: 'phi4-mini:latest',
-    fallbackModels: ['phi3:mini', 'llama3.2:1b', 'tinyllama'],
+    fallbackModels: ['qwen2:1.5b', 'llama3.2:latest', 'tinyllama'],
     timeout: 30000
   },
   mcp: {

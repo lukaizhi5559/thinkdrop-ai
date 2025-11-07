@@ -24,6 +24,7 @@ if [ ! -f "$PIDS_FILE" ]; then
     pkill -f "thinkdrop-web-search" || true
     pkill -f "conversation-service" || true
     pkill -f "coreference-service.*server.py" || true
+    pkill -f "command-service.*http-server" || true
     echo "✅ Done"
     exit 0
 fi

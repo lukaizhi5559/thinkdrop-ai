@@ -125,6 +125,26 @@ sleep 2
 start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
+# 6. Command Service (lightweight - uses Ollama)
+echo "⚡ Starting command (Node.js)..."
+echo "   Path: $PROJECT_ROOT/mcp-services/command-service"
+echo "   Memory Limit: 256MB"
+cd "$PROJECT_ROOT/mcp-services/command-service"
+export NODE_OPTIONS="--max-old-space-size=256"
+npm run dev > "$PROJECT_ROOT/logs/command.log" 2>&1 &
+command_pid=$!
+echo "   PID: $command_pid"
+echo "command:$command_pid" >> "$PIDS_FILE"
+sleep 1
+if kill -0 $command_pid 2>/dev/null; then
+    echo "   ✅ Started successfully"
+else
+    echo "   ❌ Failed to start (check logs/command.log)"
+fi
+echo ""
+cd "$PROJECT_ROOT"
+sleep 2
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✅ All services started!"
 echo ""
@@ -134,6 +154,7 @@ echo "   • Web Search:    http://localhost:3002/service.health"
 echo "   • Phi4:          http://localhost:3003/service.health"
 echo "   • Conversation:  http://localhost:3004/service.health"
 echo "   • Coreference:   http://localhost:3005/health"
+echo "   • Command:       http://localhost:3007/health"
 echo ""
 echo "🔌 Available API Endpoints:"
 echo ""
@@ -171,6 +192,12 @@ echo "   🔗 Coreference (Port 3005):"
 echo "      • POST /resolve               - Resolve references"
 echo "      • GET  /health                - Health check"
 echo ""
+echo "   ⚡ Command (Port 3007):"
+echo "      • POST /command.execute       - Execute command"
+echo "      • POST /command.interpret     - Interpret command"
+echo "      • POST /system.query          - System query"
+echo "      • GET  /health                - Health check"
+echo ""
 echo "📝 Logs:"
 echo "   • View all:          tail -f logs/*.log"
 echo "   • View user-memory:  tail -f logs/user-memory.log"
@@ -178,6 +205,7 @@ echo "   • View web-search:   tail -f logs/web-search.log"
 echo "   • View phi4:         tail -f logs/phi4.log"
 echo "   • View conversation: tail -f logs/conversation.log"
 echo "   • View coreference:  tail -f logs/coreference.log"
+echo "   • View command:      tail -f logs/command.log"
 echo ""
 echo "🛑 To stop all services:"
 echo "   yarn stop:services"

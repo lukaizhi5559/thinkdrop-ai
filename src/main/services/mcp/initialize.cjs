@@ -7,6 +7,7 @@ const MCPConfigManager = require('./MCPConfigManager.cjs');
 const migration001 = require('./migrations/001_initial_services.cjs');
 const migration002 = require('./migrations/002_conversation_service.cjs');
 const migration003 = require('./migrations/003_cleanup_conversation_tables.cjs');
+const migration004 = require('./migrations/004_command_service.cjs');
 const migration006 = require('./migrations/006_add_coreference_service.cjs');
 const migration007 = require('./migrations/007_fix_ipv6_endpoints.cjs');
 
@@ -59,6 +60,7 @@ async function runMigrations(database) {
     { name: '001_initial_services', module: migration001 },
     { name: '002_conversation_service', module: migration002 },
     { name: '003_cleanup_conversation_tables', module: migration003 },
+    { name: '004_command_service', module: migration004 },
     { name: '006_add_coreference_service', module: migration006 },
     { name: '007_fix_ipv6_endpoints', module: migration007 }
   ];
@@ -87,6 +89,7 @@ async function rollbackMigrations(database) {
     { name: '001_initial_services', module: migration001 },
     { name: '002_conversation_service', module: migration002 },
     { name: '003_cleanup_conversation_tables', module: migration003 },
+    { name: '004_command_service', module: migration004 },
     { name: '006_add_coreference_service', module: migration006 }
   ];
 

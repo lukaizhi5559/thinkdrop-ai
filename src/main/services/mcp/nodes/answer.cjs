@@ -18,7 +18,10 @@ module.exports = async function answer(state) {
     contextDocs = [], // Web search results
     streamCallback = null, // Optional callback for streaming tokens
     retryCount = 0, // Track if this is a retry
-    useOnlineMode = false // 🌐 NEW: Flag to use online LLM instead of local Phi4
+    useOnlineMode = false, // 🌐 NEW: Flag to use online LLM instead of local Phi4
+    commandOutput = null, // Raw command output to interpret
+    executedCommand = null, // The shell command that was executed
+    needsInterpretation = false // Flag indicating command output needs interpretation
   } = state;
   
   // Use resolved message if available (after coreference resolution), otherwise original
@@ -31,6 +34,105 @@ module.exports = async function answer(state) {
   const llmMode = useOnlineMode ? 'ONLINE' : 'PRIVATE';
   console.log(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
   console.log(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
+  
+  // 🔧 Check if we need to interpret command output
+  // Let phi4 handle all interpretation - no pre-processing needed
+  let processedOutput = commandOutput; // Create mutable copy
+  
+  if (false && needsInterpretation && processedOutput) {
+  //   console.log(`🔧 [NODE:ANSWER] Interpreting command output (${processedOutput.length} chars)`);
+    
+  //   // Pre-process common command outputs for better interpretation
+  //   if (executedCommand && executedCommand.includes('ps aux')) {
+  //     // Extract just the application names from ps aux output
+  //     const lines = commandOutput.split('\n').slice(1); // Skip header
+  //     const apps = new Set();
+      
+  //     for (const line of lines) {
+  //       const parts = line.trim().split(/\s+/);
+  //       if (parts.length > 10) {
+  //         const command = parts.slice(10).join(' ');
+  //         // Extract app names (look for .app or common executables)
+  //         if (command.includes('.app/')) {
+  //           const appMatch = command.match(/([^/]+)\.app/);
+  //           if (appMatch) apps.add(appMatch[1]);
+  //         } else if (command.includes('/')) {
+  //           const execMatch = command.match(/\/([^/\s]+)$/);
+  //           if (execMatch && !execMatch[1].startsWith('-')) {
+  //             apps.add(execMatch[1]);
+  //           }
+  //         }
+  //       }
+  //     }
+      
+  //     // Replace raw output with processed summary
+  //     if (apps.size > 0) {
+  //       processedOutput = `Running applications: ${Array.from(apps).slice(0, 20).join(', ')}${apps.size > 20 ? ` and ${apps.size - 20} more` : ''}`;
+  //       console.log(`✅ [NODE:ANSWER] Pre-processed ps aux output: ${apps.size} apps found`);
+  //     }
+  //   }
+    
+  //   // Pre-process df -h output (disk space)
+  //   if (executedCommand && executedCommand.includes('df -h')) {
+  //     const lines = commandOutput.split('\n').slice(1); // Skip header
+  //     let totalSize = null;
+  //     let totalAvailable = null;
+      
+  //     for (const line of lines) {
+  //       const parts = line.trim().split(/\s+/);
+  //       if (parts.length >= 9) {
+  //         const mountPoint = parts[8];
+  //         // Main system disk
+  //         if (mountPoint === '/' || mountPoint === '/System/Volumes/Data') {
+  //           const size = parts[1];
+  //           const available = parts[3];
+  //           const capacity = parts[4];
+            
+  //           if (!totalSize) totalSize = size;
+  //           if (!totalAvailable) totalAvailable = available;
+            
+  //           console.log(`✅ [NODE:ANSWER] Found disk: ${mountPoint} - ${available} free of ${size}`);
+  //         }
+  //       }
+  //     }
+      
+  //     if (totalAvailable && totalSize) {
+  //       processedOutput = `You have ${totalAvailable} of storage available out of ${totalSize} total`;
+  //       console.log(`✅ [NODE:ANSWER] Pre-processed df -h output: ${totalAvailable} / ${totalSize}`);
+  //     }
+  //   }
+    
+  //   // Pre-process top output (memory)
+  //   if (executedCommand && executedCommand.includes('top') && executedCommand.includes('PhysMem')) {
+  //     const match = processedOutput.match(/PhysMem:\s+(\S+)\s+used.*?(\S+)\s+unused/i);
+  //     if (match) {
+  //       processedOutput = `Memory: ${match[1]} used, ${match[2]} free`;
+  //       console.log(`✅ [NODE:ANSWER] Pre-processed memory output`);
+  //     }
+  //   }
+    
+  //   // Pre-process app count (wc -l output)
+  //   if (executedCommand && executedCommand.includes('wc -l')) {
+  //     const count = parseInt(processedOutput.trim());
+  //     if (!isNaN(count)) {
+  //       processedOutput = `You have ${count} applications currently running`;
+  //       console.log(`✅ [NODE:ANSWER] Pre-processed app count: ${count}`);
+  //     }
+  //   }
+    
+  //   // Pre-process mdfind output (file search)
+  //   if (executedCommand && executedCommand.includes('mdfind')) {
+  //     const lines = processedOutput.split('\n').filter(l => l.trim());
+  //     if (lines.length === 0) {
+  //       processedOutput = 'No matching folders found on your computer';
+  //     } else if (lines.length === 1) {
+  //       processedOutput = `Found folder at: ${lines[0]}`;
+  //     } else {
+  //       processedOutput = `Found ${lines.length} matching folders:\n${lines.slice(0, 5).join('\n')}${lines.length > 5 ? `\n... and ${lines.length - 5} more` : ''}`;
+  //     }
+  //     console.log(`✅ [NODE:ANSWER] Pre-processed mdfind output: ${lines.length} results`);
+  //   }
+  // }
 
   try {
     // Build system instructions
@@ -71,6 +173,27 @@ CRITICAL FACTUAL INFORMATION PROTOCOL:
    "I'll search online for that information now."
 
 These exact phrases will trigger a web search to get the answer.`;
+
+    // Add command output interpretation instructions
+    if (needsInterpretation && processedOutput) {
+      systemInstructions += `\n\nCOMMAND OUTPUT INTERPRETATION:
+The user asked: "${queryMessage}"
+A shell command was executed: ${executedCommand}
+
+Your task is to provide a concise, human-friendly answer based on the command output.
+
+CRITICAL RULES:
+- Answer in 1-2 sentences maximum
+- Be conversational and natural
+- For "what apps are open": list the main applications running
+- For system info: provide key numbers in readable format
+- For file operations: confirm what was done
+- DO NOT describe what the output looks like (e.g., "this is a log file")
+- DO NOT explain the technical format
+- ONLY answer the user's original question
+
+The processed output will be provided below.`;
+    }
 
     // Add meta-question handling
     if (queryMessage.toLowerCase().includes('what did i')) {
@@ -157,7 +280,9 @@ Use these current web results to answer. Extract key facts and answer directly.`
 
     // Prepare payload for phi4
     const payload = {
-      query: queryMessage,
+      query: needsInterpretation && processedOutput 
+        ? `Interpret this command output:\n\n${processedOutput.substring(0, 5000)}` // Truncate very long output
+        : queryMessage,
       context: {
         conversationHistory: processedHistory,
         sessionFacts,
@@ -166,7 +291,15 @@ Use these current web results to answer. Extract key facts and answer directly.`
         webSearchResults: contextDocs, // Add web search results
         systemInstructions,
         sessionId: context.sessionId,
-        userId: context.userId
+        userId: context.userId,
+        // Add command context if interpreting
+        ...(needsInterpretation && {
+          commandContext: {
+            originalQuery: queryMessage,
+            executedCommand,
+            outputLength: processedOutput?.length || 0
+          }
+        })
       }
     };
 

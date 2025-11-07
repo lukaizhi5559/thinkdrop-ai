@@ -34,6 +34,7 @@ const storeConversationNode = require('./nodes/storeConversation.cjs');
 const webSearchNode = require('./nodes/webSearch.cjs');
 const sanitizeWebNode = require('./nodes/sanitizeWeb.cjs');
 const storeMemoryNode = require('./nodes/storeMemory.cjs');
+const executeCommandNode = require('./nodes/executeCommand.cjs');
 
 class AgentOrchestrator {
   constructor() {
@@ -76,6 +77,9 @@ class AgentOrchestrator {
       
       // Memory store subgraph
       storeMemory: (state) => storeMemoryNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // Command execution subgraph
+      executeCommand: (state) => executeCommandNode({ ...state, mcpClient: this.mcpClient }),
       
       // Web search subgraph
       webSearch: (state) => webSearchNode({ ...state, mcpClient: this.mcpClient }),
@@ -140,10 +144,10 @@ class AgentOrchestrator {
         if (useOnlineMode) {
           console.log('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
           
-          // Commands: system commands (TODO: implement command execution node)
+          // Commands: system commands
           if (intentType === 'command') {
-            console.warn('⚠️ [STATEGRAPH:ROUTER] Command intent not yet implemented, routing to answer');
-            return 'answer'; // For now, just answer (future: add command execution node)
+            console.log('⚡ [STATEGRAPH:ROUTER] Command intent detected - routing to executeCommand');
+            return 'executeCommand';
           }
           
           // For greetings, skip memory retrieval
@@ -156,6 +160,13 @@ class AgentOrchestrator {
         }
         
         // 🔒 PRIVATE MODE: Use web search for time-sensitive queries
+        
+        // Commands: system commands (works in both online and private mode)
+        if (intentType === 'command') {
+          console.log('⚡ [STATEGRAPH:ROUTER] Command intent detected - routing to executeCommand');
+          return 'executeCommand';
+        }
+        
         // Web search: time-sensitive queries, factual questions, and general knowledge
         // These should always try web search first, fallback to LLM if offline/no results
         if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup' ||
@@ -168,18 +179,15 @@ class AgentOrchestrator {
           return 'answer'; // Skip memory retrieval for greetings
         }
         
-        // Command: system commands (TODO: implement command execution node)
-        if (intentType === 'command') {
-          console.warn('⚠️ [STATEGRAPH:ROUTER] Command intent not yet implemented, routing to answer');
-          return 'answer'; // For now, just answer (future: add command execution node)
-        }
-        
         // Context, memory_retrieve, and unknowns: standard path (retrieve from memory only)
         return 'retrieveMemory';
       },
       
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
+      
+      // Command execution subgraph (route to answer for interpretation)
+      executeCommand: 'answer', // Let answer node interpret raw command output
       
       // Web search subgraph with parallel execution
       parallelWebAndMemory: 'parallelSanitizeAndFilter', // ⚡ PARALLEL: sanitizeWeb + filterMemory

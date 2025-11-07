@@ -40,17 +40,43 @@ module.exports = async function parseIntent(state) {
   }
 
   try {
+    // ── PRE-CHECK: Catch obvious commands before phi4 classification ──────────────
+    // This prevents misclassification of clear commands like "open slack"
+    const lowerMsg = messageToClassify.toLowerCase().trim();
+    
+    // Strong command indicators (open, close, launch, quit, exit, etc.)
+    // BUT: Exclude questions, conditionals, and statements
+    const isQuestion = /^(can|could|would|should|will|do|does|is|are|what|when|where|why|how|who)\s+/i.test(lowerMsg);
+    const isStatement = /^(i want|i need|i'd like|i would like|i'm going to|let me)\s+/i.test(lowerMsg);
+    
+    if (!isQuestion && !isStatement && /^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
+      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command intent');
+      return {
+        ...state,
+        intent: {
+          type: 'command',
+          confidence: 0.95,
+          entities: [],
+          requiresMemoryAccess: false
+        }
+      };
+    }
+    
     // 🎯 CONTEXT-AWARE INTENT: Include previous exchange for better classification
     // This helps with elliptical messages like "nothing next week" after "do I have any appts"
     let enhancedMessage = messageToClassify;
+    
+    // Only enhance for very short, ambiguous messages (≤3 words)
+    // Don't enhance clear action phrases like "open slack" or "check my memory"
     if (recentMessages.length >= 2) {
       const lastUserMsg = recentMessages[recentMessages.length - 3];
       const lastAiMsg = recentMessages[recentMessages.length - 2];
       
-      // If current message is very short (≤4 words), prepend context hint
-      if (messageToClassify.split(/\s+/).length <= 4 && lastUserMsg && lastAiMsg) {
+      // Only enhance if message is ≤3 words (very short and potentially ambiguous)
+      const wordCount = messageToClassify.split(/\s+/).length;
+      if (wordCount <= 3 && lastUserMsg && lastAiMsg) {
         enhancedMessage = `[Previous question: "${lastUserMsg.content}"] [AI response: "${lastAiMsg.content.substring(0, 100)}..."] [Current: "${messageToClassify}"]`;
-        console.log(`🔗 [NODE:PARSE_INTENT] Enhanced short message with context for better classification`);
+        console.log(`🔗 [NODE:PARSE_INTENT] Enhanced short message (${wordCount} words) with context for better classification`);
       }
     }
     
@@ -65,12 +91,133 @@ module.exports = async function parseIntent(state) {
 
     // MCP protocol wraps response in 'data' field
     const intentData = result.data || result;
+    
+    let finalIntent = intentData.intent || 'general_query';
+    let finalConfidence = intentData.confidence || 0.5;
+    
+    // ── SMART FALLBACK: Check if "question" or "web_search" is actually a "command" ──
+    // System queries like "what apps do I have open" or "how much memory do I have"
+    // are often misclassified as questions or web searches when they should be commands
+    // Also catches "open slack app" misclassified as web_search due to conversation context
+    if ((finalIntent === 'question' && finalConfidence < 0.7) || 
+        (finalIntent === 'web_search' && finalConfidence < 0.9)) {
+      const lowerMessage = message.toLowerCase();
+      
+      // Command indicators: system resource queries
+      const commandPatterns = [
+        // ── SYSTEM RESOURCE & STATUS ─────────────────────────────────────
+        /what (apps?|applications?|programs?|processes?).*(open|running|active|launched)/i,
+        /show.*(apps?|applications?|programs?|processes?).*(open|running|active)/i,
+        /list.*(apps?|applications?|programs?|processes?).*(open|running|active)/i,
+        /how much (memory|ram|disk|storage|space|cpu|battery|power)/i,
+        /what['s]? my (memory|ram|disk|cpu|battery|system|ip|mac address)/i,
+        /check (memory|ram|disk|cpu|battery|system|performance|health|status)/i,
+        /current (cpu|memory|disk|battery|ram) (usage|load|level)/i,
+        /system (info|status|health|specs|uptime)/i,
+        /is my (computer|system|laptop|mac|pc) (on|off|sleeping|locked)/i,
+        /what'?s? the (temperature|temp) of my (cpu|gpu)/i,
+
+        // ── APP CONTROL (Open / Close / Switch) ──────────────────────────
+        /(open|launch|start|run)\s+(.+)/i,
+        /(close|quit|kill|stop|terminate|force quit)\s+(.+)/i,
+        /switch to\s+(.+)/i,
+        /focus\s+(.+)/i,
+        /(hide|show) (desktop|all windows)/i,
+        /minimize all/i,
+        /bring (chrome|safari|finder|terminal|vscode|code|slack|discord|zoom|spotify|notion|figma|postman).*(front|forward)/i,
+
+        // ── COMMON APPS (no need to list all — dynamic in scoring) ───────
+        // But keep a few for high confidence
+        /(open|close) (slack|discord|zoom|teams|chrome|safari|firefox|edge|vscode|code|terminal|finder|iterm|warp|postman|figma|notion|spotify|music|photos|camera|mail|calendar|notes|reminders|messages|facetime)/i,
+
+        // ── SCREEN & MEDIA CONTROL ───────────────────────────────────────
+        /take a (screenshot|screen shot|screen capture)/i,
+        /(start|stop|begin|end) (screen recording|screen record)/i,
+        /record my screen/i,
+        /pause|play|next|previous|skip|volume (up|down)|mute|unmute/i,
+        /turn (up|down) the volume/i,
+        /play.*(music|song|playlist|podcast)/i,
+        /pause.*(music|song|video)/i,
+        /open (youtube|netflix|spotify|apple music)/i,
+
+        // ── TIMERS & ALARMS ─────────────────────────────────────────────
+        /set (a )?timer for (\d+ )?(minutes?|hours?|seconds?)/i,
+        /start a (\d+ )?(minute|hour) timer/i,
+        /set (an )?alarm for (morning|evening|\d+ ?(am|pm))/i,
+        /wake me (up )?at \d+ ?(am|pm)/i,
+        /remind me in (\d+ )?(minutes?|hours?)/i,
+
+        // ── SYSTEM ACTIONS ───────────────────────────────────────────────
+        /(lock|sleep|restart|shutdown|power off|log out) (computer|system|mac|pc|laptop)/i,
+        /empty (trash|recycle bin)/i,
+        /clear (cache|downloads|desktop|clipboard)/i,
+        /turn (on|off) (wifi|bluetooth|dark mode|night shift|do not disturb|focus mode)/i,
+        /enable|disable (dark mode|night shift|dnd|focus)/i,
+        /open (settings|preferences|system preferences|control panel)/i,
+        /show (hidden files|file extensions)/i,
+
+        // ── FILE & NAVIGATION ───────────────────────────────────────────
+        /go to (downloads|desktop|documents|pictures|home)/i,
+        /open (folder|directory) (.+)/i,
+        /find file (.+)/i,
+        /search for (.+)/i,
+        /create (new )?(file|folder|note|document)/i,
+        /do i have.*(file|folder|directory)/i,
+        /is there.*(file|folder|directory)/i,
+        /find.*(folder|directory|file).*called/i,
+
+        // ── NETWORK & CONNECTIVITY ───────────────────────────────────────
+        /what'?s? my (ip|public ip|local ip|mac address)/i,
+        /connect to (wifi|vpn)/i,
+        /disconnect from (wifi|vpn)/i,
+        /show (available )?wifi networks/i,
+        /restart (wifi|router|modem)/i,
+
+        // ── BATTERY & POWER ─────────────────────────────────────────────
+        /how much battery (left|do I have)/i,
+        /is my (laptop|mac) charging/i,
+        /battery (percentage|percent|level)/i,
+        /switch to (battery|power saver|performance) mode/i,
+
+        // ── VOICE & INPUT ───────────────────────────────────────────────
+        /type (.+)/i,
+        /paste (.+)/i,
+        /copy (this|that|selection)/i,
+        /select all/i,
+        /undo|redo/i,
+        /scroll (up|down)/i,
+
+        // ── BROWSER-SPECIFIC ───────────────────────────────────────────
+        /open (new tab|new window|incognito|private window)/i,
+        /go to (url|site|website) (.+)/i,
+        /bookmark this/i,
+        /clear (browser history|cache|cookies)/i,
+
+        // ── MISC USER COMMANDS ──────────────────────────────────────────
+        /what time is it/i,
+        /what'?s? the (date|day|weather)/i,
+        /tell me a joke/i,
+        /flip a coin/i,
+        /roll a dice/i,
+        /show me the (clipboard|last screenshot)/i,
+        /print this/i,
+        /save (this|page|file)/i
+      ];
+      
+      const isLikelyCommand = commandPatterns.some(pattern => pattern.test(lowerMessage));
+      
+      if (isLikelyCommand) {
+        console.log(`🔄 [NODE:PARSE_INTENT] Smart fallback: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "command" (system query detected)`);
+        finalIntent = 'command';
+        finalConfidence = 0.75; // Boost confidence for command
+      }
+    }
 
     return {
       ...state,
       intent: {
-        type: intentData.intent || 'general_query',
-        confidence: intentData.confidence || 0.5,
+        type: finalIntent,
+        confidence: finalConfidence,
         entities: intentData.entities || [],
         requiresMemory: intentData.requiresMemory || false,
         suggestedResponse: intentData.suggestedResponse // Pass through for memory_store
