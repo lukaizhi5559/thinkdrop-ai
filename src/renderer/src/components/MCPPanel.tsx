@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from './ui/button';
+import { useToast } from './Toast';
 import { 
   Plug, 
   PlugZap,
@@ -35,6 +36,7 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
   const [mcpServices, setMcpServices] = useState<MCPService[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const { showToast, ToastContainer } = useToast();
 
   // Load MCP services
   useEffect(() => {
@@ -124,13 +126,13 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
       if (result?.success) {
         // Reload services to update auth status
         await loadMCPServices();
-        alert('✅ Successfully connected to Gemini!');
+        showToast('Successfully connected to Gemini!', 'success');
       } else {
-        alert(`❌ Failed to connect: ${result?.error || 'Unknown error'}`);
+        showToast(`Failed to connect: ${result?.error || 'Unknown error'}`, 'error');
       }
     } catch (error) {
       console.error('OAuth failed:', error);
-      alert('❌ Failed to start OAuth flow');
+      showToast('Failed to start OAuth flow', 'error');
     } finally {
       setIsAuthenticating(false);
     }
@@ -158,10 +160,12 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="w-full h-full flex flex-col bg-transparent overflow-hidden">
+    <>
+      <ToastContainer />
+      <div className="w-full h-full flex flex-col bg-transparent overflow-hidden">
       {/* Header */}
       <div className="p-4 border-b border-white/10">
-        <h2 className="text-lg font-semibold text-white mb-3">MCP Marketplace</h2>
+        <h2 className="text-lg font-semibold text-white mb-3">MCPs</h2>
         
         {/* Search */}
         <div className="relative">
@@ -337,6 +341,7 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
         )}
       </div>
     </div>
+    </>
   );
 };
 

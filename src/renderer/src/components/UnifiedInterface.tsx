@@ -157,7 +157,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
             <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center">
               <Plug className="w-3 h-3 text-white" />
             </div>
-            <span className="text-white/90 font-medium text-sm">MCP Marketplace</span>
+            <span className="text-white/90 font-medium text-sm">MCPs</span>
           </>
         );
       default:
@@ -183,7 +183,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
       {/* Render branding - Start */}
       <div className="flex flex-1 items-center space-x-3">
         {/* Back button for new tabs */}
-        {(currentView === 'search' || currentView === 'agents' || currentView === 'orchestration' || currentView === 'mcp') && (
+        {(currentView === 'search' || currentView === 'agents' || currentView === 'orchestration') && (
           <Button
             variant="ghost"
             size="sm"
@@ -249,7 +249,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
                 ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
                 : 'text-white/60 hover:text-white hover:bg-white/10'
             }`}
-            title="MCP Marketplace"
+            title="MCPs"
           >
             <Plug className="w-4 h-4" />
           </Button>
