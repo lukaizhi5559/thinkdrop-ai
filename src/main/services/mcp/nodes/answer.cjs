@@ -39,7 +39,7 @@ module.exports = async function answer(state) {
   // Let phi4 handle all interpretation - no pre-processing needed
   let processedOutput = commandOutput; // Create mutable copy
   
-  if (false && needsInterpretation && processedOutput) {
+  // if (needsInterpretation && processedOutput) {
   //   console.log(`🔧 [NODE:ANSWER] Interpreting command output (${processedOutput.length} chars)`);
     
   //   // Pre-process common command outputs for better interpretation
@@ -175,24 +175,30 @@ CRITICAL FACTUAL INFORMATION PROTOCOL:
 These exact phrases will trigger a web search to get the answer.`;
 
     // Add command output interpretation instructions
-    if (needsInterpretation && processedOutput) {
+    if (needsInterpretation) {
       systemInstructions += `\n\nCOMMAND OUTPUT INTERPRETATION:
 The user asked: "${queryMessage}"
 A shell command was executed: ${executedCommand}
 
-Your task is to provide a concise, human-friendly answer based on the command output.
+Your task is to provide a concise, confident, human-friendly answer based on the command output.
 
 CRITICAL RULES:
-- Answer in 1-2 sentences maximum
-- Be conversational and natural
-- For "what apps are open": list the main applications running
-- For system info: provide key numbers in readable format
-- For file operations: confirm what was done
-- DO NOT describe what the output looks like (e.g., "this is a log file")
-- DO NOT explain the technical format
-- ONLY answer the user's original question
+- Answer in 1 sentence maximum
+- Be direct and confident - state the result clearly
+- DO NOT hedge with phrases like "likely", "probably", "seems to", "appears to", "not specific enough"
+- DO NOT explain what command was run or how it works
+- DO NOT describe the technical details
+- DO NOT ask clarifying questions - the command has already been executed
+- ONLY provide the direct answer to the user's question
 
-The processed output will be provided below.`;
+SPECIFIC PATTERNS:
+- For "how many apps open": If output is a number, respond: "You have [number] apps currently running."
+- For "what apps are open": List the application names clearly (one per line or comma-separated)
+- For system info (storage, memory, etc.): State the numbers in readable format (e.g., "You have 250 GB free")
+- For file operations: Confirm what was done (e.g., "File created successfully")
+- For empty output: Confirm the action completed successfully
+
+The command output will be provided below. Interpret it confidently and directly.`;
     }
 
     // Add meta-question handling
@@ -280,8 +286,10 @@ Use these current web results to answer. Extract key facts and answer directly.`
 
     // Prepare payload for phi4
     const payload = {
-      query: needsInterpretation && processedOutput 
+      query: needsInterpretation && processedOutput && processedOutput.trim().length > 0
         ? `Interpret this command output:\n\n${processedOutput.substring(0, 5000)}` // Truncate very long output
+        : needsInterpretation && (!processedOutput || processedOutput.trim().length === 0)
+        ? `The command "${executedCommand}" executed successfully with no output. Provide a brief confirmation.`
         : queryMessage,
       context: {
         conversationHistory: processedHistory,
