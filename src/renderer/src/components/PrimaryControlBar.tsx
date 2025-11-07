@@ -6,7 +6,8 @@ import {
   Droplet,
   Lightbulb,
   EyeOff,
-  Database
+  Database,
+  Plug
 } from 'lucide-react';
 
 interface PrimaryControlBarProps {
@@ -27,6 +28,10 @@ interface PrimaryControlBarProps {
   isMemoryDebuggerOpen: boolean;
   handleToggleMemoryDebugger: () => void;
   
+  // MCP panel state
+  isMCPPanelOpen: boolean;
+  handleToggleMCPPanel: () => void;
+  
   // Hide all
   handleHideAll: () => void;
 }
@@ -41,6 +46,8 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
   handleToggleInsight,
   isMemoryDebuggerOpen,
   handleToggleMemoryDebugger,
+  isMCPPanelOpen,
+  handleToggleMCPPanel,
   handleHideAll
 }) => {
   return (
@@ -120,6 +127,20 @@ const PrimaryControlBar: React.FC<PrimaryControlBarProps> = ({
             style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
           >
             <Database className="w-5 h-5" />
+          </Button>
+          
+          {/* MCP Panel Button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`text-white/70 hover:text-white hover:bg-white/10 w-10 h-10 p-0 rounded-xl transition-all duration-200 ${
+              isMCPPanelOpen ? 'bg-green-500/20 text-green-400' : ''
+            }`}
+            onClick={handleToggleMCPPanel}
+            title={isMCPPanelOpen ? 'Close MCP Panel' : 'Open MCP Panel'}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            <Plug className="w-5 h-5" />
           </Button>
           
           {/* Hide All Button */}

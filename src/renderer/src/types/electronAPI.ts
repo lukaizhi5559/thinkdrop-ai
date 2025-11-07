@@ -93,6 +93,11 @@ declare global {
       // External link handling
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>;
       
+      // Gemini OAuth
+      geminiOAuthStart: () => Promise<{ success: boolean; message?: string; status?: any; error?: string }>;
+      geminiOAuthRevoke: () => Promise<{ success: boolean; message?: string; error?: string }>;
+      geminiStatus: () => Promise<{ success: boolean; gemini?: any; usage?: any; error?: string }>;
+      
       platform: string;
     };
   }

@@ -9,7 +9,8 @@ import {
   MoreVertical,
   X,
   Droplet,
-  ArrowLeft
+  ArrowLeft,
+  Plug
 } from 'lucide-react';
 import { Button } from './ui/button';
 import ChatMessages from './ChatMessages';
@@ -18,6 +19,7 @@ import MemoryDebugger from './MemoryDebugger';
 import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
+import MCPPanel from './MCPPanel';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { ViewType } from '@/types/view';
 interface UnifiedInterfaceProps {
@@ -149,6 +151,15 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
             <span className="text-white/90 font-medium text-sm">Orchestration Dashboard</span>
           </>
         );
+      case 'mcp':
+        return (
+          <>
+            <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center">
+              <Plug className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-white/90 font-medium text-sm">MCP Marketplace</span>
+          </>
+        );
       default:
         return (
           <>
@@ -172,7 +183,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
       {/* Render branding - Start */}
       <div className="flex flex-1 items-center space-x-3">
         {/* Back button for new tabs */}
-        {(currentView === 'search' || currentView === 'agents' || currentView === 'orchestration') && (
+        {(currentView === 'search' || currentView === 'agents' || currentView === 'orchestration' || currentView === 'mcp') && (
           <Button
             variant="ghost"
             size="sm"
@@ -228,18 +239,19 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
             <Lightbulb className="w-4 h-4" />
           </Button>
           
-          {/* Memory button */}
+          {/* MCP button */}
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => handleViewChange('memory')}
+            onClick={() => handleViewChange('mcp')}
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
-              currentView === 'memory' 
-                ? 'bg-teal-500/20 text-teal-400 border border-teal-500/30' 
+              currentView === 'mcp' 
+                ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
                 : 'text-white/60 hover:text-white hover:bg-white/10'
             }`}
+            title="MCP Marketplace"
           >
-            <Database className="w-4 h-4" />
+            <Plug className="w-4 h-4" />
           </Button>
           
           {/* Divider */}
@@ -284,6 +296,8 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
         return <AgentStatusPanel />;
       case 'orchestration':
         return <OrchestrationDashboard />;
+      case 'mcp':
+        return <MCPPanel isOpen={true} />;
       default:
         return <ChatMessages />;
     }
@@ -337,7 +351,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
                 Memory
               </Button>
               <hr className="border-white/10 my-2" /> */}
-              <Button
+              {/* <Button
                 variant="ghost"
                 className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
                 onClick={() => handleViewChange('search')}
@@ -360,6 +374,14 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
               >
                 <Network className="w-4 h-4 mr-3" />
                 Orchestration
+              </Button> */}
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
+                onClick={() => handleViewChange('memory')}
+              >
+                <Database className="w-4 h-4 mr-3" />
+                Memory Debugger
               </Button>
               <hr className="border-white/10 my-2" />
               <Button

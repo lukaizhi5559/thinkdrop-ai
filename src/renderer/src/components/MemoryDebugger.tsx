@@ -580,7 +580,7 @@ const MemoryDebugger = () => {
           <Database className="w-4 h-4 inline-block mr-2" />
           Memory Debugger
         </button>
-        <button
+        {/* <button
           onClick={() => setActiveTab('database')}
           className={`px-6 py-3 text-sm font-medium transition-colors ${
             activeTab === 'database'
@@ -591,7 +591,7 @@ const MemoryDebugger = () => {
         >
           <Brain className="w-4 h-4 inline-block mr-2" />
           Database Health
-        </button>
+        </button> */}
         <button
           onClick={() => setActiveTab('workflow')}
           className={`px-6 py-3 text-sm font-medium transition-colors ${

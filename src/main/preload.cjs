@@ -164,6 +164,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // External link handling
   openExternal: (url) => ipcRenderer.invoke('open-external-link', url),
   
+  // Gemini OAuth
+  geminiOAuthStart: () => ipcRenderer.invoke('gemini:oauth:start'),
+  geminiOAuthRevoke: () => ipcRenderer.invoke('gemini:oauth:revoke'),
+  geminiStatus: () => ipcRenderer.invoke('gemini:status'),
+  
   // System info
   platform: process.platform,
   version: process.versions.electron
