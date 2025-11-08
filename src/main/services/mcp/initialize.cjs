@@ -12,6 +12,7 @@ const migration006 = require('./migrations/006_add_coreference_service.cjs');
 const migration007 = require('./migrations/007_fix_ipv6_endpoints.cjs');
 const migration008 = require('./migrations/008_add_oauth_columns.cjs');
 const migration009 = require('./migrations/009_add_vision_service.cjs');
+const migration010 = require('./migrations/010_add_user_settings.cjs');
 
 /**
  * Initialize MCP system
@@ -66,7 +67,8 @@ async function runMigrations(database) {
     { name: '006_add_coreference_service', module: migration006 },
     { name: '007_fix_ipv6_endpoints', module: migration007 },
     { name: '008_add_oauth_columns', module: migration008 },
-    { name: '009_add_vision_service', module: migration009 }
+    { name: '009_add_vision_service', module: migration009 },
+    { name: '010_add_user_settings', module: migration010 }
   ];
 
   for (const migration of migrations) {

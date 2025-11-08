@@ -562,7 +562,7 @@ async function setupIPCHandlers() {
     
     // Initialize Vision OAuth handlers
     console.log('🔧 Setting up Vision OAuth handlers...');
-    setupVisionOAuthHandlers(MCPConfigManager.db);
+    setupVisionOAuthHandlers(MCPConfigManager.db, MCPConfigManager);
     console.log('✅ Vision OAuth handlers setup complete');
     
     // Update stub handlers with full MCP service info (already registered early)

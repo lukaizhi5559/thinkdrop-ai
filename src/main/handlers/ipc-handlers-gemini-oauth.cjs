@@ -38,31 +38,93 @@ function setupGeminiOAuthHandlers(db) {
       if (data.success) {
         console.log('✅ Gemini OAuth completed successfully');
         
-        // Store API key and OAuth tokens in DuckDB
+        // Store API key and OAuth tokens in user_settings (not mcp_services)
         if (data.apiKey && data.tokens && db) {
           try {
+            // Store Google Cloud API key
             await db.run(`
-              UPDATE mcp_services 
-              SET api_key = ?,
-                  oauth_access_token = ?,
-                  oauth_refresh_token = ?,
-                  oauth_token_expiry = ?,
-                  oauth_scope = ?,
-                  gemini_configured = true,
-                  api_key_auto_generated = true,
-                  api_key_service = 'generativelanguage.googleapis.com',
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE name = 'command'
+              INSERT INTO user_settings (id, user_id, setting_key, setting_value, encrypted, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id, setting_key) DO UPDATE SET
+                setting_value = EXCLUDED.setting_value,
+                updated_at = EXCLUDED.updated_at
             `, [
+              'setting_google_cloud_api_key',
+              'default_user',
+              'google_cloud_api_key',
               data.apiKey,
-              data.tokens.access_token,
-              data.tokens.refresh_token,
-              data.tokens.expiry_date ? new Date(data.tokens.expiry_date).toISOString() : null,
-              data.tokens.scope
+              false
             ]);
-            console.log('✅ API key and OAuth tokens stored in DuckDB');
+            
+            // Store OAuth access token
+            await db.run(`
+              INSERT INTO user_settings (id, user_id, setting_key, setting_value, encrypted, created_at, updated_at)
+              VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+              ON CONFLICT (user_id, setting_key) DO UPDATE SET
+                setting_value = EXCLUDED.setting_value,
+                updated_at = EXCLUDED.updated_at
+            `, [
+              'setting_google_oauth_access_token',
+              'default_user',
+              'google_oauth_access_token',
+              data.tokens.access_token,
+              true
+            ]);
+            
+            // Store OAuth refresh token
+            if (data.tokens.refresh_token) {
+              await db.run(`
+                INSERT INTO user_settings (id, user_id, setting_key, setting_value, encrypted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, setting_key) DO UPDATE SET
+                  setting_value = EXCLUDED.setting_value,
+                  updated_at = EXCLUDED.updated_at
+              `, [
+                'setting_google_oauth_refresh_token',
+                'default_user',
+                'google_oauth_refresh_token',
+                data.tokens.refresh_token,
+                true
+              ]);
+            }
+            
+            // Store OAuth token expiry
+            if (data.tokens.expiry_date) {
+              await db.run(`
+                INSERT INTO user_settings (id, user_id, setting_key, setting_value, encrypted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, setting_key) DO UPDATE SET
+                  setting_value = EXCLUDED.setting_value,
+                  updated_at = EXCLUDED.updated_at
+              `, [
+                'setting_google_oauth_token_expiry',
+                'default_user',
+                'google_oauth_token_expiry',
+                new Date(data.tokens.expiry_date).toISOString(),
+                false
+              ]);
+            }
+            
+            // Store OAuth scope
+            if (data.tokens.scope) {
+              await db.run(`
+                INSERT INTO user_settings (id, user_id, setting_key, setting_value, encrypted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT (user_id, setting_key) DO UPDATE SET
+                  setting_value = EXCLUDED.setting_value,
+                  updated_at = EXCLUDED.updated_at
+              `, [
+                'setting_google_oauth_scope',
+                'default_user',
+                'google_oauth_scope',
+                data.tokens.scope,
+                false
+              ]);
+            }
+            
+            console.log('✅ API key and OAuth tokens stored in user_settings');
           } catch (dbError) {
-            console.error('❌ Failed to store OAuth data in DuckDB:', dbError);
+            console.error('❌ Failed to store OAuth data in user_settings:', dbError);
           }
         }
         

@@ -60,7 +60,19 @@ module.exports = async function parseIntent(state) {
       /read text from (my|the) screen/i
     ];
     
-    const isVisionQuery = visionPatterns.some(pattern => pattern.test(lowerMsg));
+    // Check for follow-up vision queries (when previous message was a vision query)
+    // Only match very specific follow-up patterns that clearly indicate wanting to see the screen again
+    let isFollowUpVisionQuery = false;
+    if (recentMessages.length >= 2 && /^(what about now|how about now|and now)$/i.test(lowerMsg)) {
+      // Check if the previous USER message was a vision query
+      const prevUserMsg = recentMessages[recentMessages.length - 2];
+      if (prevUserMsg && prevUserMsg.role === 'user') {
+        // Only trigger if previous message matched vision patterns
+        isFollowUpVisionQuery = visionPatterns.some(pattern => pattern.test(prevUserMsg.content));
+      }
+    }
+    
+    const isVisionQuery = visionPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpVisionQuery;
     
     if (isVisionQuery) {
       console.log('👁️  [NODE:PARSE_INTENT] Pre-check: Detected vision/screen query, forcing vision intent');

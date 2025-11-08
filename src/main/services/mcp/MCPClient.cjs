@@ -768,15 +768,32 @@ class MCPClient {
    * @returns {Promise<object>} Scene description with text, labels, objects
    */
   async describeScreen(options = {}) {
-    // Get service to retrieve API key
-    const service = this.configManager.getService('vision');
-    
-    // Add API key to options if available and not already provided
-    if (service && service.apiKey && !options.api_key) {
-      options.api_key = service.apiKey;
+    // Get Google Cloud API key from user_settings table
+    if (!options.api_key) {
+      try {
+        const result = await this.configManager.db.query(`
+          SELECT setting_value 
+          FROM user_settings 
+          WHERE user_id = 'default_user' AND setting_key = 'google_cloud_api_key'
+        `);
+        
+        if (result.length > 0 && result[0].setting_value) {
+          options.api_key = result[0].setting_value;
+          console.log('🔑 [MCP:VISION] Using Google Cloud API key from user settings');
+        } else {
+          console.log('⚠️  [MCP:VISION] No Google Cloud API key found - vision service will use .env settings');
+          console.log('ℹ️  [MCP:VISION] To set up: See mcp-services/vision-service/GOOGLE_CLOUD_SETUP.md');
+        }
+      } catch (error) {
+        console.error('❌ [MCP:VISION] Failed to retrieve Google Cloud API key:', error);
+      }
     }
     
-    return this.callService('vision', 'describe', options);
+    // Vision processing can take longer (especially with local Qwen model on CPU)
+    // Use environment variable or default to 60 seconds
+    const visionTimeout = parseInt(process.env.MCP_VISION_TIMEOUT || '60000');
+    
+    return this.callService('vision', 'describe', options, { timeout: visionTimeout });
   }
 
   /**

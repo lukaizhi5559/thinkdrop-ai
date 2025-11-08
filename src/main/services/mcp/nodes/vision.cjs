@@ -70,6 +70,10 @@ module.exports = async function vision(state) {
     }
     
     console.log('📝 [NODE:VISION] Visual context added to state');
+    console.log('=' .repeat(80));
+    console.log('📊 VISUAL CONTEXT BEING PASSED TO ANSWER NODE:');
+    console.log(visualContext);
+    console.log('=' .repeat(80));
     
     return state;
     
@@ -90,35 +94,32 @@ module.exports = async function vision(state) {
 function buildVisualContext(data) {
   const parts = [];
   
+  // Start with clear header
+  parts.push('=== SCREEN ANALYSIS ===');
+  parts.push('I analyzed your screen and found the following:');
+  parts.push('');
+  
   // Add description
   if (data.description) {
-    parts.push(`Description: ${data.description}`);
+    parts.push(`📝 Content: ${data.description}`);
   }
   
   // Add extracted text
   if (data.text && data.text.trim()) {
-    parts.push(`\nVisible Text:\n${data.text.trim()}`);
+    parts.push(`\n📄 Text on screen:\n${data.text.trim()}`);
   }
   
   // Add labels
   if (data.labels && data.labels.length > 0) {
-    parts.push(`\nDetected Elements: ${data.labels.slice(0, 10).join(', ')}`);
+    parts.push(`\n🏷️  Elements detected: ${data.labels.slice(0, 10).join(', ')}`);
   }
   
   // Add objects
   if (data.objects && data.objects.length > 0) {
-    parts.push(`\nObjects: ${data.objects.slice(0, 10).join(', ')}`);
+    parts.push(`\n🎯 Objects found: ${data.objects.slice(0, 10).join(', ')}`);
   }
   
-  // Add metadata
-  const metadata = [];
-  if (data.mode) metadata.push(`mode: ${data.mode}`);
-  if (data.cached) metadata.push('cached');
-  if (data.latency_ms) metadata.push(`${Math.round(data.latency_ms)}ms`);
-  
-  if (metadata.length > 0) {
-    parts.push(`\n[${metadata.join(', ')}]`);
-  }
+  parts.push('\n=== END SCREEN ANALYSIS ===');
   
   return parts.join('\n');
 }

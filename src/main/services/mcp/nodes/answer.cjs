@@ -310,12 +310,19 @@ Use these current web results to answer. Extract key facts and answer directly.`
     // conversation history, memories, or web results
     const isCommandWithInterpretedOutput = needsInterpretation && processedOutput;
     
+    // Prepare the query - add visual context directly to query for vision intents
+    let finalQuery = queryMessage;
+    if (state.visualContext && state.intent?.type === 'vision') {
+      finalQuery = `${queryMessage}\n\n${state.visualContext}`;
+      console.log('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
+    }
+    
     const payload = {
       query: needsInterpretation && processedOutput && processedOutput.trim().length > 0
         ? `Interpret this command output:\n\n${processedOutput.substring(0, 5000)}` // Truncate very long output
         : needsInterpretation && (!processedOutput || processedOutput.trim().length === 0)
         ? `The command "${executedCommand}" executed successfully with no output. Provide a brief confirmation.`
-        : queryMessage,
+        : finalQuery,
       context: {
         // For commands with interpreted output, only include minimal context
         // Use filteredHistory which has context switching applied
@@ -510,6 +517,16 @@ Use these current web results to answer. Extract key facts and answer directly.`
       // 🔒 PRIVATE MODE: Use local Phi4 via MCP
       // ═══════════════════════════════════════════════════════════
       console.log('🔒 [NODE:ANSWER] Using PRIVATE MODE - Local Phi4');
+      
+      // Log the full payload being sent to Phi4
+      console.log('=' .repeat(80));
+      console.log('📤 PAYLOAD BEING SENT TO PHI4:');
+      console.log('Query:', payload.query.substring(0, 200));
+      console.log('System Instructions:', payload.context.systemInstructions?.substring(0, 300));
+      console.log('Conversation History:', payload.context.conversationHistory?.length || 0, 'messages');
+      console.log('Memories:', payload.context.memories?.length || 0);
+      console.log('Web Results:', payload.context.webSearchResults?.length || 0);
+      console.log('=' .repeat(80));
       
       // Use streaming if callback provided, otherwise blocking call
       if (isStreaming) {

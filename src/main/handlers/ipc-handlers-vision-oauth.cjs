@@ -8,8 +8,9 @@ const { ipcMain } = require('electron');
 /**
  * Setup Google Vision OAuth IPC handlers
  * @param {Object} db - DuckDB connection for storing OAuth data
+ * @param {Object} mcpConfigManager - MCP Config Manager instance to reload services
  */
-function setupVisionOAuthHandlers(db) {
+function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
   console.log('🔧 Setting up Vision OAuth handlers...');
 
   /**
@@ -39,34 +40,88 @@ function setupVisionOAuthHandlers(db) {
 
       const data = await response.json();
       
+      console.log('🔍 OAuth response data:', JSON.stringify(data, null, 2));
+      
       if (data.success) {
         console.log('✅ Google Vision OAuth completed successfully');
         
-        // Store API key and OAuth tokens in DuckDB for vision service
-        if (data.apiKey && data.tokens && db) {
+        // Store Google API key and OAuth tokens in user_settings
+        if (data.apiKey && db) {
+          console.log('🔑 Storing Google API key:', data.apiKey.substring(0, 20) + '...');
           try {
+            // Store Google Cloud API key
             await db.run(`
-              UPDATE mcp_services 
-              SET api_key = ?,
-                  oauth_access_token = ?,
-                  oauth_refresh_token = ?,
-                  oauth_token_expiry = ?,
-                  oauth_scope = ?,
-                  gemini_configured = true,
-                  api_key_auto_generated = true,
-                  api_key_service = 'vision.googleapis.com',
-                  updated_at = CURRENT_TIMESTAMP
-              WHERE name = 'vision'
+              INSERT OR REPLACE INTO user_settings (id, user_id, setting_key, setting_value, encrypted, updated_at)
+              VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             `, [
+              'setting_google_cloud_api_key',
+              'default_user',
+              'google_cloud_api_key',
               data.apiKey,
-              data.tokens.access_token,
-              data.tokens.refresh_token,
-              data.tokens.expiry_date ? new Date(data.tokens.expiry_date).toISOString() : null,
-              data.tokens.scope
+              true
             ]);
-            console.log('✅ Google Vision API key and OAuth tokens stored in DuckDB');
+            console.log('✅ Google Cloud API key stored in user_settings');
+            
+            // Store OAuth tokens in user_settings
+            if (data.tokens) {
+              // Access token
+              await db.run(`
+                INSERT OR REPLACE INTO user_settings (id, user_id, setting_key, setting_value, encrypted, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              `, [
+                'setting_google_oauth_access_token',
+                'default_user',
+                'google_oauth_access_token',
+                data.tokens.access_token,
+                true
+              ]);
+              
+              // Refresh token
+              if (data.tokens.refresh_token) {
+                await db.run(`
+                  INSERT OR REPLACE INTO user_settings (id, user_id, setting_key, setting_value, encrypted, updated_at)
+                  VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `, [
+                  'setting_google_oauth_refresh_token',
+                  'default_user',
+                  'google_oauth_refresh_token',
+                  data.tokens.refresh_token,
+                  true
+                ]);
+              }
+              
+              // Token expiry
+              if (data.tokens.expiry_date) {
+                await db.run(`
+                  INSERT OR REPLACE INTO user_settings (id, user_id, setting_key, setting_value, encrypted, updated_at)
+                  VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `, [
+                  'setting_google_oauth_token_expiry',
+                  'default_user',
+                  'google_oauth_token_expiry',
+                  new Date(data.tokens.expiry_date).toISOString(),
+                  false
+                ]);
+              }
+              
+              // Scope
+              if (data.tokens.scope) {
+                await db.run(`
+                  INSERT OR REPLACE INTO user_settings (id, user_id, setting_key, setting_value, encrypted, updated_at)
+                  VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `, [
+                  'setting_google_oauth_scope',
+                  'default_user',
+                  'google_oauth_scope',
+                  data.tokens.scope,
+                  false
+                ]);
+              }
+              
+              console.log('✅ OAuth tokens stored in user_settings');
+            }
           } catch (dbError) {
-            console.error('❌ Failed to store Vision OAuth data in DuckDB:', dbError);
+            console.error('❌ Failed to store Google OAuth data:', dbError);
           }
         }
         
@@ -96,38 +151,34 @@ function setupVisionOAuthHandlers(db) {
    */
   ipcMain.handle('vision:status', async () => {
     try {
-      // Check if vision service has OAuth configured
+      // Check if user has Google OAuth configured in user_settings
       if (db) {
-        const result = await db.query(`
-          SELECT 
-            api_key,
-            oauth_access_token,
-            oauth_token_expiry,
-            gemini_configured,
-            api_key_auto_generated,
-            api_key_service
-          FROM mcp_services 
-          WHERE name = 'vision'
+        const apiKeyResult = await db.query(`
+          SELECT setting_value 
+          FROM user_settings 
+          WHERE user_id = 'default_user' AND setting_key = 'google_api_key'
         `);
         
-        if (result.length > 0) {
-          const service = result[0];
-          const hasApiKey = !!service.api_key;
-          const hasOAuth = !!service.oauth_access_token;
-          const isExpired = service.oauth_token_expiry 
-            ? new Date(service.oauth_token_expiry) < new Date()
-            : false;
-          
-          return {
-            success: true,
-            configured: hasApiKey && hasOAuth && !isExpired,
-            hasApiKey,
-            hasOAuth,
-            isExpired,
-            apiKeyService: service.api_key_service,
-            autoGenerated: service.api_key_auto_generated
-          };
-        }
+        const tokenExpiryResult = await db.query(`
+          SELECT setting_value 
+          FROM user_settings 
+          WHERE user_id = 'default_user' AND setting_key = 'google_oauth_token_expiry'
+        `);
+        
+        const hasApiKey = apiKeyResult.length > 0 && !!apiKeyResult[0].setting_value;
+        const isExpired = tokenExpiryResult.length > 0 && tokenExpiryResult[0].setting_value
+          ? new Date(tokenExpiryResult[0].setting_value) < new Date()
+          : false;
+        
+        return {
+          success: true,
+          configured: hasApiKey && !isExpired,
+          hasApiKey,
+          hasOAuth: hasApiKey,
+          isExpired,
+          apiKeyService: 'vision.googleapis.com',
+          autoGenerated: true
+        };
       }
       
       return {
@@ -150,22 +201,20 @@ function setupVisionOAuthHandlers(db) {
    */
   ipcMain.handle('vision:oauth:revoke', async () => {
     try {
-      // Clear OAuth data from DuckDB
+      // Clear Google OAuth data from user_settings
       if (db) {
         await db.run(`
-          UPDATE mcp_services 
-          SET api_key = NULL,
-              oauth_access_token = NULL,
-              oauth_refresh_token = NULL,
-              oauth_token_expiry = NULL,
-              oauth_scope = NULL,
-              gemini_configured = false,
-              api_key_auto_generated = false,
-              api_key_service = NULL,
-              updated_at = CURRENT_TIMESTAMP
-          WHERE name = 'vision'
+          DELETE FROM user_settings 
+          WHERE user_id = 'default_user' 
+            AND setting_key IN (
+              'google_api_key',
+              'google_oauth_access_token',
+              'google_oauth_refresh_token',
+              'google_oauth_token_expiry',
+              'google_oauth_scope'
+            )
         `);
-        console.log('✅ Google Vision OAuth revoked and cleared from DuckDB');
+        console.log('✅ Google OAuth data cleared from user_settings');
       }
       
       return {

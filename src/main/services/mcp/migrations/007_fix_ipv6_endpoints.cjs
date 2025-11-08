@@ -42,6 +42,18 @@ module.exports = {
         WHERE name = 'coreference'
       `);
       
+      await db.run(`
+        UPDATE mcp_services 
+        SET endpoint = 'http://127.0.0.1:3006'
+        WHERE name = 'vision'
+      `);
+      
+      await db.run(`
+        UPDATE mcp_services 
+        SET endpoint = 'http://127.0.0.1:3007'
+        WHERE name = 'command'
+      `);
+      
       console.log('✅ All service endpoints updated to use 127.0.0.1 (IPv4)');
       
     } catch (error) {

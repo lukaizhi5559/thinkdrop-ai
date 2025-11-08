@@ -148,6 +148,13 @@ class MCPConfigManager {
         lastHealthCheck: service.last_health_check,
         consecutiveFailures: service.consecutive_failures,
         createdBy: service.created_by,
+        // OAuth fields for Google Vision API
+        oauth_access_token: service.oauth_access_token,
+        oauth_refresh_token: service.oauth_refresh_token,
+        oauth_token_expiry: service.oauth_token_expiry,
+        oauth_scope: service.oauth_scope,
+        api_key_auto_generated: service.api_key_auto_generated,
+        api_key_service: service.api_key_service,
         stats: {
           totalRequests: service.total_requests,
           totalErrors: service.total_errors,

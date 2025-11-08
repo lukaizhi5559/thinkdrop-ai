@@ -13,7 +13,21 @@ module.exports = {
     const existing = await db.query(`SELECT id FROM mcp_services WHERE name = 'vision'`);
     
     if (existing.length > 0) {
-      console.log('⚠️  Vision service already exists, skipping migration');
+      console.log('⚠️  Vision service already exists, updating API key and endpoint...');
+      
+      // Update API key and endpoint from environment variables
+      const apiKey = process.env.MCP_VISION_API_KEY || '';
+      const endpoint = process.env.MCP_VISION_ENDPOINT || 'http://localhost:3006';
+      
+      await db.run(
+        `UPDATE mcp_services SET api_key = ?, endpoint = ? WHERE name = ?`,
+        [apiKey, endpoint, 'vision']
+      );
+      
+      console.log(`  ✅ Updated vision service:`);
+      console.log(`     Endpoint: ${endpoint}`);
+      console.log(`     API key: ${apiKey ? apiKey.substring(0, 10) + '...' : 'EMPTY'}`);
+      console.log('✅ Vision service updated');
       return;
     }
     
@@ -63,7 +77,7 @@ module.exports = {
         'Vision Service',
         'Screen capture, OCR, and visual understanding with dual-mode support (Google Vision API for speed, Qwen2-VL for privacy)',
         process.env.MCP_VISION_ENDPOINT || 'http://localhost:3006',
-        process.env.GOOGLE_VISION_API_KEY || '',  // Google Vision API key
+        process.env.MCP_VISION_API_KEY || '',  // Vision service API key
         true,  // enabled
         true,  // trusted
         actions,
@@ -78,7 +92,7 @@ module.exports = {
     );
     
     console.log('✅ Vision service added to database');
-    console.log('💡 Note: Set GOOGLE_VISION_API_KEY in .env for online mode');
-    console.log('💡 Privacy mode (local Qwen2-VL) works without API key');
+    console.log('💡 Note: Set MCP_VISION_API_KEY in .env for API authentication');
+    console.log('💡 Privacy mode (local Qwen2-VL) works without Google API key');
   }
 };
