@@ -45,7 +45,7 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
 
   const loadMCPServices = async () => {
     // TODO: Load from actual MCP registry
-    // For now, hardcoded with command service
+    // For now, hardcoded with command and vision services
     const services: MCPService[] = [
       {
         id: 'command-service',
@@ -62,6 +62,24 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
           {
             label: 'Connect to Gemini',
             action: () => handleGeminiOAuth()
+          }
+        ]
+      },
+      {
+        id: 'vision-service',
+        name: 'Vision Service',
+        description: 'Screen capture, OCR, and visual understanding with Google Vision API',
+        enabled: true,
+        connected: true,
+        toolCount: 6,
+        icon: '👁️',
+        status: 'connected',
+        requiresAuth: true,
+        authenticated: false, // Will be updated from API
+        settings: [
+          {
+            label: 'Connect to Google Vision',
+            action: () => handleVisionOAuth()
           }
         ]
       },
@@ -113,6 +131,20 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
       console.error('Failed to check Gemini status:', error);
     }
 
+    // Check vision service status
+    try {
+      const result = await window.electronAPI?.visionStatus();
+      if (result?.success) {
+        const visionService = services.find(s => s.id === 'vision-service');
+        if (visionService) {
+          visionService.authenticated = result.configured || false;
+          visionService.status = result.configured ? 'connected' : 'disconnected';
+        }
+      }
+    } catch (error) {
+      console.error('Failed to check Vision status:', error);
+    }
+
     setMcpServices(services);
   };
 
@@ -133,6 +165,28 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
     } catch (error) {
       console.error('OAuth failed:', error);
       showToast('Failed to start OAuth flow', 'error');
+    } finally {
+      setIsAuthenticating(false);
+    }
+  };
+
+  const handleVisionOAuth = async () => {
+    setIsAuthenticating(true);
+    
+    try {
+      // Call IPC handler for vision OAuth
+      const result = await window.electronAPI?.visionOAuthStart();
+      
+      if (result?.success) {
+        // Reload services to update auth status
+        await loadMCPServices();
+        showToast('Successfully connected to Google Vision!', 'success');
+      } else {
+        showToast(`Failed to connect: ${result?.error || 'Unknown error'}`, 'error');
+      }
+    } catch (error) {
+      console.error('Vision OAuth failed:', error);
+      showToast('Failed to start Vision OAuth flow', 'error');
     } finally {
       setIsAuthenticating(false);
     }

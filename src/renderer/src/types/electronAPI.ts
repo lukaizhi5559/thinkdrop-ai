@@ -98,6 +98,11 @@ declare global {
       geminiOAuthRevoke: () => Promise<{ success: boolean; message?: string; error?: string }>;
       geminiStatus: () => Promise<{ success: boolean; gemini?: any; usage?: any; error?: string }>;
       
+      // Vision OAuth
+      visionOAuthStart: () => Promise<{ success: boolean; message?: string; status?: any; error?: string }>;
+      visionOAuthRevoke: () => Promise<{ success: boolean; message?: string; error?: string }>;
+      visionStatus: () => Promise<{ success: boolean; configured?: boolean; hasApiKey?: boolean; hasOAuth?: boolean; error?: string }>;
+      
       platform: string;
     };
   }

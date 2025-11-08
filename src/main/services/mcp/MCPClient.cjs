@@ -722,6 +722,91 @@ class MCPClient {
       throw error;
     }
   }
+
+  // ============================================
+  // Vision Service Methods
+  // ============================================
+
+  /**
+   * Vision Service - Capture screenshot
+   * @param {object} options - Capture options
+   * @param {Array<number>} options.region - Optional region [x, y, width, height]
+   * @returns {Promise<object>} Screenshot data
+   */
+  async captureScreen(options = {}) {
+    return this.callService('vision', 'capture', options);
+  }
+
+  /**
+   * Vision Service - Extract text (OCR)
+   * @param {object} options - OCR options
+   * @param {Array<number>} options.region - Optional region [x, y, width, height]
+   * @param {string} options.mode - 'online' or 'privacy' (overrides default)
+   * @param {string} options.api_key - Google Vision API key (optional, from database)
+   * @returns {Promise<object>} Extracted text
+   */
+  async extractText(options = {}) {
+    // Get service to retrieve API key
+    const service = this.configManager.getService('vision');
+    
+    // Add API key to options if available and not already provided
+    if (service && service.apiKey && !options.api_key) {
+      options.api_key = service.apiKey;
+    }
+    
+    return this.callService('vision', 'ocr', options);
+  }
+
+  /**
+   * Vision Service - Describe screen content
+   * @param {object} options - Description options
+   * @param {Array<number>} options.region - Optional region [x, y, width, height]
+   * @param {string} options.task - Optional task/prompt
+   * @param {string} options.mode - 'online' or 'privacy' (overrides default)
+   * @param {string} options.api_key - Google Vision API key (optional, from database)
+   * @param {boolean} options.store_to_memory - Store result to memory (default: true)
+   * @returns {Promise<object>} Scene description with text, labels, objects
+   */
+  async describeScreen(options = {}) {
+    // Get service to retrieve API key
+    const service = this.configManager.getService('vision');
+    
+    // Add API key to options if available and not already provided
+    if (service && service.apiKey && !options.api_key) {
+      options.api_key = service.apiKey;
+    }
+    
+    return this.callService('vision', 'describe', options);
+  }
+
+  /**
+   * Vision Service - Start continuous screen monitoring
+   * @param {object} options - Watch options
+   * @param {number} options.interval_ms - Check interval in milliseconds
+   * @param {number} options.change_threshold - Sensitivity (0-1)
+   * @param {boolean} options.run_ocr - Run OCR on changes
+   * @param {boolean} options.run_vlm - Run VLM on changes
+   * @returns {Promise<object>} Watch status
+   */
+  async startScreenWatch(options = {}) {
+    return this.callService('vision', 'watch.start', options);
+  }
+
+  /**
+   * Vision Service - Stop screen monitoring
+   * @returns {Promise<object>} Stop confirmation
+   */
+  async stopScreenWatch() {
+    return this.callService('vision', 'watch.stop', {});
+  }
+
+  /**
+   * Vision Service - Get watch status
+   * @returns {Promise<object>} Current watch status
+   */
+  async getScreenWatchStatus() {
+    return this.callService('vision', 'watch.status', {});
+  }
 }
 
 module.exports = MCPClient;

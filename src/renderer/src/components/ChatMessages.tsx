@@ -386,6 +386,8 @@ export default function ChatMessages({
     }
     
     const messageText = messageToSend.trim();
+    
+    // ✨ OPTIMISTIC UI UPDATE: Clear input and show "Thinking..." immediately
     setCurrentMessage('');
     setDisplayMessage('');
     currentMessageRef.current = ''; // Keep ref in sync

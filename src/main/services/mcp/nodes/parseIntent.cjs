@@ -40,9 +40,40 @@ module.exports = async function parseIntent(state) {
   }
 
   try {
-    // ── PRE-CHECK: Catch obvious commands before phi4 classification ──────────────
-    // This prevents misclassification of clear commands like "open slack"
+    // ── PRE-CHECK: Catch obvious intents before phi4 classification ──────────────
     const lowerMsg = messageToClassify.toLowerCase().trim();
+    
+    // Check for vision/screen queries FIRST (before command check)
+    const visionPatterns = [
+      /what (do you|can you) see (on|in) (my|the) screen/i,
+      /what'?s? (on|in) (my|the) screen/i,
+      /describe (my|the) screen/i,
+      /analyze (my|the) screen/i,
+      /look at (my|the) screen/i,
+      /read (my|the) screen/i,
+      /what'?s? (visible|showing|displayed) (on|in) (my|the) screen/i,
+      /tell me what'?s? (on|in) (my|the) screen/i,
+      /what am i looking at/i,
+      /what'?s? in (this|the) (image|screenshot|picture)/i,
+      /extract text from (my|the) screen/i,
+      /ocr (my|the) screen/i,
+      /read text from (my|the) screen/i
+    ];
+    
+    const isVisionQuery = visionPatterns.some(pattern => pattern.test(lowerMsg));
+    
+    if (isVisionQuery) {
+      console.log('👁️  [NODE:PARSE_INTENT] Pre-check: Detected vision/screen query, forcing vision intent');
+      return {
+        ...state,
+        intent: {
+          type: 'vision',
+          confidence: 0.95,
+          entities: [],
+          requiresMemoryAccess: false
+        }
+      };
+    }
     
     // Strong command indicators (open, close, launch, quit, exit, etc.)
     // BUT: Exclude questions, conditionals, and statements

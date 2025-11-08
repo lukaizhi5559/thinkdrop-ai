@@ -35,6 +35,7 @@ const webSearchNode = require('./nodes/webSearch.cjs');
 const sanitizeWebNode = require('./nodes/sanitizeWeb.cjs');
 const storeMemoryNode = require('./nodes/storeMemory.cjs');
 const executeCommandNode = require('./nodes/executeCommand.cjs');
+const visionNode = require('./nodes/vision.cjs');
 
 class AgentOrchestrator {
   constructor() {
@@ -80,6 +81,9 @@ class AgentOrchestrator {
       
       // Command execution subgraph
       executeCommand: (state) => executeCommandNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // Vision processing subgraph
+      vision: (state) => visionNode({ ...state, mcpClient: this.mcpClient }),
       
       // Web search subgraph
       webSearch: (state) => webSearchNode({ ...state, mcpClient: this.mcpClient }),
@@ -144,6 +148,12 @@ class AgentOrchestrator {
         if (useOnlineMode) {
           console.log('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
           
+          // Vision: screen capture and analysis (works in both modes)
+          if (intentType === 'vision') {
+            console.log('👁️  [STATEGRAPH:ROUTER] Vision intent detected - routing to vision');
+            return 'vision';
+          }
+          
           // Commands: system commands
           if (intentType === 'command') {
             console.log('⚡ [STATEGRAPH:ROUTER] Command intent detected - routing to executeCommand');
@@ -160,6 +170,12 @@ class AgentOrchestrator {
         }
         
         // 🔒 PRIVATE MODE: Use web search for time-sensitive queries
+        
+        // Vision: screen capture and analysis (works in both online and private mode)
+        if (intentType === 'vision') {
+          console.log('👁️  [STATEGRAPH:ROUTER] Vision intent detected - routing to vision');
+          return 'vision';
+        }
         
         // Commands: system commands (works in both online and private mode)
         if (intentType === 'command') {
@@ -185,6 +201,13 @@ class AgentOrchestrator {
       
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
+      
+      // Vision processing subgraph
+      vision: (state) => {
+        // Vision node adds visual context to state
+        // Always proceed to answer node to interpret visual content
+        return 'answer';
+      },
       
       // Command execution subgraph
       executeCommand: (state) => {

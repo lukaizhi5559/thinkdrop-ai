@@ -57,6 +57,7 @@ const { registerMCPHandlers } = require('./handlers/ipc-handlers-mcp.cjs');
 const { registerPrivateModeHandlers } = require('./handlers/ipc-handlers-private-mode.cjs');
 const { setupMCPMemoryHandlers } = require('./handlers/ipc-handlers-mcp-memory.cjs');
 const { setupGeminiOAuthHandlers } = require('./handlers/ipc-handlers-gemini-oauth.cjs');
+const { setupVisionOAuthHandlers } = require('./handlers/ipc-handlers-vision-oauth.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -558,6 +559,11 @@ async function setupIPCHandlers() {
     const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
     setupGeminiOAuthHandlers(MCPConfigManager.db);
     console.log('✅ Gemini OAuth handlers setup complete');
+    
+    // Initialize Vision OAuth handlers
+    console.log('🔧 Setting up Vision OAuth handlers...');
+    setupVisionOAuthHandlers(MCPConfigManager.db);
+    console.log('✅ Vision OAuth handlers setup complete');
     
     // Update stub handlers with full MCP service info (already registered early)
     if (USE_MCP_PRIVATE_MODE) {

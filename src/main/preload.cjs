@@ -169,6 +169,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   geminiOAuthRevoke: () => ipcRenderer.invoke('gemini:oauth:revoke'),
   geminiStatus: () => ipcRenderer.invoke('gemini:status'),
   
+  // Vision OAuth
+  visionOAuthStart: () => ipcRenderer.invoke('vision:oauth:start'),
+  visionOAuthRevoke: () => ipcRenderer.invoke('vision:oauth:revoke'),
+  visionStatus: () => ipcRenderer.invoke('vision:status'),
+  
   // System info
   platform: process.platform,
   version: process.versions.electron

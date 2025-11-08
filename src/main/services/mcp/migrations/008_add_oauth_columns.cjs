@@ -10,7 +10,7 @@
 module.exports = {
   name: '008_add_oauth_columns',
   
-  async up(db) {
+  async migrate(db) {
     console.log('🔄 Running migration: 008_add_oauth_columns');
     
     try {
