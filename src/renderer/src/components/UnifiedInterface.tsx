@@ -20,6 +20,7 @@ import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
 import MCPPanel from './MCPPanel';
+import { CommandConfirmation } from './CommandConfirmation';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { ViewType } from '@/types/view';
 interface UnifiedInterfaceProps {
@@ -38,8 +39,17 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
   const [currentView, setCurrentView] = useState<ViewType>('chat');
   const [showMenu, setShowMenu] = useState(false);
   
+  // Command confirmation state (lifted from ChatMessages)
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    command: string;
+    category: string;
+    riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    resolvedMessage: string;
+    originalMessage: string;
+  } | null>(null);
+  
   // Conversation context for sidebar integration
-  const { signals, toggleSidebar } = useConversationSignals();
+  const { signals, addMessage: signalsAddMessage, toggleSidebar } = useConversationSignals();
   const isSidebarOpen = signals.isSidebarOpen.value;
   
   // Ref for the menu modal to detect clicks outside
@@ -79,6 +89,81 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
   // Handle close/minimize
   const handleClose = async () => {
     setShowMenu(false);
+  };
+
+  // Command confirmation handlers
+  const handleApproveCommand = async () => {
+    if (!pendingConfirmation) return;
+    
+    const activeSessionId = signals.activeSessionId.value;
+    if (!activeSessionId) return;
+    
+    console.log('✅ [CONFIRMATION] User approved command:', pendingConfirmation.command);
+    
+    try {
+      // Re-send the resolved message with bypass flag
+      const result = await window.electronAPI?.privateModeProcess({
+        message: pendingConfirmation.resolvedMessage,
+        context: {
+          sessionId: activeSessionId,
+          userId: 'default_user',
+          timestamp: new Date().toISOString(),
+          conversationHistory: [],
+          useOnlineMode: false,
+          bypassConfirmation: true
+        }
+      });
+      
+      // Clear confirmation
+      setPendingConfirmation(null);
+      
+      // Add AI response message
+      if (result?.success && result.response && signalsAddMessage) {
+        await signalsAddMessage(activeSessionId, {
+          text: result.response,
+          sender: 'ai',
+          sessionId: activeSessionId,
+          metadata: { 
+            action: result.action,
+            mcpPrivateMode: true,
+            commandApproved: true
+          }
+        });
+      } else if (result?.error && signalsAddMessage) {
+        // Show error message
+        await signalsAddMessage(activeSessionId, {
+          text: `Command execution failed: ${result.error}`,
+          sender: 'ai',
+          sessionId: activeSessionId,
+          metadata: { error: true }
+        });
+      }
+    } catch (error: any) {
+      console.error('❌ [CONFIRMATION] Error executing approved command:', error);
+      setPendingConfirmation(null);
+    }
+  };
+
+  const handleRejectCommand = async () => {
+    if (!pendingConfirmation) return;
+    
+    const activeSessionId = signals.activeSessionId.value;
+    if (!activeSessionId) return;
+    
+    console.log('❌ [CONFIRMATION] User rejected command:', pendingConfirmation.command);
+    
+    // Clear pending confirmation
+    setPendingConfirmation(null);
+    
+    // Add cancellation message
+    if (signalsAddMessage) {
+      await signalsAddMessage(activeSessionId, {
+        text: "Command cancelled by user.",
+        sender: 'ai',
+        sessionId: activeSessionId,
+        metadata: { action: 'command_cancelled' }
+      });
+    }
   };
 
   // Dynamic header renderer based on current view with original functionality
@@ -285,7 +370,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
   const renderContent = () => {
     switch (currentView) {
       case 'chat':
-        return <ChatMessages />;
+        return <ChatMessages onPendingConfirmation={setPendingConfirmation} />;
       case 'insight':
         return <InsightWindow />;
       case 'memory':
@@ -299,7 +384,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
       case 'mcp':
         return <MCPPanel isOpen={true} />;
       default:
-        return <ChatMessages />;
+        return <ChatMessages onPendingConfirmation={setPendingConfirmation} />;
     }
   };
 
@@ -317,6 +402,19 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
           {renderContent()}
         </div>
       </div>
+
+      {/* Command Confirmation Overlay */}
+      {pendingConfirmation && (
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-xl z-50 flex items-center justify-center p-8">
+          <CommandConfirmation
+            command={pendingConfirmation.command}
+            category={pendingConfirmation.category}
+            riskLevel={pendingConfirmation.riskLevel}
+            onApprove={handleApproveCommand}
+            onReject={handleRejectCommand}
+          />
+        </div>
+      )}
 
       {/* Menu overlay */}
       {showMenu && (

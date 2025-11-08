@@ -4,6 +4,117 @@
  * Supports both Private Mode (local Phi4) and Online Mode (backend LLM)
  */
 
+/**
+ * Detect context switching and filter conversation history
+ * Uses semantic similarity to determine message relevance
+ * 
+ * NOTE: The retrieveMemory node already does semantic search on conversation history,
+ * so conversationHistory should already be semantically relevant. However, we still
+ * need to filter out messages from completely different topics when context switches.
+ */
+function detectContextSwitch(conversationHistory, currentMessage) {
+  if (!conversationHistory || conversationHistory.length === 0) {
+    return [];
+  }
+
+  // Always keep the last 2 exchanges (4 messages) for immediate context
+  const IMMEDIATE_CONTEXT_SIZE = 4;
+  const MIN_RELEVANCE_SCORE = 0.3; // Threshold for considering a message relevant
+  
+  // If we have 4 or fewer messages total, just return all of them
+  if (conversationHistory.length <= IMMEDIATE_CONTEXT_SIZE) {
+    console.log(`🔄 [CONTEXT-SWITCH] Small history (${conversationHistory.length} messages), using all`);
+    return conversationHistory;
+  }
+  
+  // For longer histories, score each message by relevance to current query
+  const scoredMessages = conversationHistory.map((msg, index) => {
+    const isRecent = index >= conversationHistory.length - IMMEDIATE_CONTEXT_SIZE;
+    
+    // Recent messages always get high score
+    if (isRecent) {
+      return { msg, index, score: 1.0, reason: 'recent' };
+    }
+    
+    // Score older messages by semantic similarity (simple word overlap)
+    const score = calculateMessageRelevance(msg.content, currentMessage);
+    return { msg, index, score, reason: score >= MIN_RELEVANCE_SCORE ? 'relevant' : 'irrelevant' };
+  });
+  
+  // Filter to keep only relevant messages
+  const relevantMessages = scoredMessages
+    .filter(item => item.score >= MIN_RELEVANCE_SCORE)
+    .map(item => item.msg);
+  
+  // Count how many older messages were filtered out
+  const olderMessagesCount = conversationHistory.length - IMMEDIATE_CONTEXT_SIZE;
+  const keptOlderMessages = relevantMessages.length - IMMEDIATE_CONTEXT_SIZE;
+  const filteredCount = olderMessagesCount - keptOlderMessages;
+  
+  if (filteredCount > 0) {
+    console.log(`🔄 [CONTEXT-SWITCH] Filtered out ${filteredCount} irrelevant older messages`);
+    console.log(`   Kept: ${relevantMessages.length}/${conversationHistory.length} messages (${IMMEDIATE_CONTEXT_SIZE} recent + ${keptOlderMessages} relevant older)`);
+  } else {
+    console.log(`🔄 [CONTEXT-SWITCH] All messages relevant, kept ${relevantMessages.length}/${conversationHistory.length}`);
+  }
+  
+  return relevantMessages;
+}
+
+/**
+ * Calculate semantic relevance between two messages using word overlap
+ * Returns a score between 0 and 1
+ */
+function calculateMessageRelevance(messageText, queryText) {
+  if (!messageText || !queryText) return 0;
+  
+  // Common stop words to ignore
+  const stopWords = new Set([
+    'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+    'of', 'with', 'by', 'from', 'up', 'about', 'into', 'through', 'during',
+    'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
+    'do', 'does', 'did', 'will', 'would', 'should', 'could', 'may', 'might',
+    'can', 'what', 'when', 'where', 'who', 'which', 'how', 'why', 'this',
+    'that', 'these', 'those', 'i', 'you', 'he', 'she', 'it', 'we', 'they',
+    'me', 'him', 'her', 'us', 'them', 'my', 'your', 'his', 'its', 'our', 'their'
+  ]);
+  
+  // Extract meaningful words (3+ chars, not stop words)
+  const extractWords = (text) => {
+    return text.toLowerCase()
+      .match(/\b[a-z]{3,}\b/g)
+      ?.filter(word => !stopWords.has(word)) || [];
+  };
+  
+  const messageWords = new Set(extractWords(messageText));
+  const queryWords = new Set(extractWords(queryText));
+  
+  if (messageWords.size === 0 || queryWords.size === 0) return 0;
+  
+  // Calculate Jaccard similarity (intersection / union)
+  const intersection = new Set([...messageWords].filter(word => queryWords.has(word)));
+  const union = new Set([...messageWords, ...queryWords]);
+  
+  const jaccardScore = intersection.size / union.size;
+  
+  // Boost score if there are exact phrase matches (2+ word sequences)
+  const messageLower = messageText.toLowerCase();
+  const queryLower = queryText.toLowerCase();
+  
+  // Extract 2-word phrases from query
+  const queryPhrases = [];
+  const queryWordArray = extractWords(queryText);
+  for (let i = 0; i < queryWordArray.length - 1; i++) {
+    queryPhrases.push(`${queryWordArray[i]} ${queryWordArray[i + 1]}`);
+  }
+  
+  // Check if any query phrases appear in message
+  const phraseMatches = queryPhrases.filter(phrase => messageLower.includes(phrase));
+  const phraseBoost = phraseMatches.length > 0 ? 0.3 : 0;
+  
+  return Math.min(1.0, jaccardScore + phraseBoost);
+}
+
 module.exports = async function answer(state) {
   const { 
     mcpClient, 
@@ -27,113 +138,22 @@ module.exports = async function answer(state) {
   // Use resolved message if available (after coreference resolution), otherwise original
   const queryMessage = resolvedMessage || message;
 
+  // 🔄 CONTEXT SWITCHING DETECTION
+  // Detect if the user has switched topics and filter conversation history accordingly
+  const filteredHistory = detectContextSwitch(conversationHistory, queryMessage);
+
   // Only stream on first attempt, not on retries (prevents double responses)
   const isStreaming = typeof streamCallback === 'function' && retryCount === 0;
   
   // 🌐 Determine which LLM to use
   const llmMode = useOnlineMode ? 'ONLINE' : 'PRIVATE';
   console.log(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
-  console.log(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
+  console.log(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
   
   // 🔧 Check if we need to interpret command output
   // Let phi4 handle all interpretation - no pre-processing needed
   let processedOutput = commandOutput; // Create mutable copy
   
-  // if (needsInterpretation && processedOutput) {
-  //   console.log(`🔧 [NODE:ANSWER] Interpreting command output (${processedOutput.length} chars)`);
-    
-  //   // Pre-process common command outputs for better interpretation
-  //   if (executedCommand && executedCommand.includes('ps aux')) {
-  //     // Extract just the application names from ps aux output
-  //     const lines = commandOutput.split('\n').slice(1); // Skip header
-  //     const apps = new Set();
-      
-  //     for (const line of lines) {
-  //       const parts = line.trim().split(/\s+/);
-  //       if (parts.length > 10) {
-  //         const command = parts.slice(10).join(' ');
-  //         // Extract app names (look for .app or common executables)
-  //         if (command.includes('.app/')) {
-  //           const appMatch = command.match(/([^/]+)\.app/);
-  //           if (appMatch) apps.add(appMatch[1]);
-  //         } else if (command.includes('/')) {
-  //           const execMatch = command.match(/\/([^/\s]+)$/);
-  //           if (execMatch && !execMatch[1].startsWith('-')) {
-  //             apps.add(execMatch[1]);
-  //           }
-  //         }
-  //       }
-  //     }
-      
-  //     // Replace raw output with processed summary
-  //     if (apps.size > 0) {
-  //       processedOutput = `Running applications: ${Array.from(apps).slice(0, 20).join(', ')}${apps.size > 20 ? ` and ${apps.size - 20} more` : ''}`;
-  //       console.log(`✅ [NODE:ANSWER] Pre-processed ps aux output: ${apps.size} apps found`);
-  //     }
-  //   }
-    
-  //   // Pre-process df -h output (disk space)
-  //   if (executedCommand && executedCommand.includes('df -h')) {
-  //     const lines = commandOutput.split('\n').slice(1); // Skip header
-  //     let totalSize = null;
-  //     let totalAvailable = null;
-      
-  //     for (const line of lines) {
-  //       const parts = line.trim().split(/\s+/);
-  //       if (parts.length >= 9) {
-  //         const mountPoint = parts[8];
-  //         // Main system disk
-  //         if (mountPoint === '/' || mountPoint === '/System/Volumes/Data') {
-  //           const size = parts[1];
-  //           const available = parts[3];
-  //           const capacity = parts[4];
-            
-  //           if (!totalSize) totalSize = size;
-  //           if (!totalAvailable) totalAvailable = available;
-            
-  //           console.log(`✅ [NODE:ANSWER] Found disk: ${mountPoint} - ${available} free of ${size}`);
-  //         }
-  //       }
-  //     }
-      
-  //     if (totalAvailable && totalSize) {
-  //       processedOutput = `You have ${totalAvailable} of storage available out of ${totalSize} total`;
-  //       console.log(`✅ [NODE:ANSWER] Pre-processed df -h output: ${totalAvailable} / ${totalSize}`);
-  //     }
-  //   }
-    
-  //   // Pre-process top output (memory)
-  //   if (executedCommand && executedCommand.includes('top') && executedCommand.includes('PhysMem')) {
-  //     const match = processedOutput.match(/PhysMem:\s+(\S+)\s+used.*?(\S+)\s+unused/i);
-  //     if (match) {
-  //       processedOutput = `Memory: ${match[1]} used, ${match[2]} free`;
-  //       console.log(`✅ [NODE:ANSWER] Pre-processed memory output`);
-  //     }
-  //   }
-    
-  //   // Pre-process app count (wc -l output)
-  //   if (executedCommand && executedCommand.includes('wc -l')) {
-  //     const count = parseInt(processedOutput.trim());
-  //     if (!isNaN(count)) {
-  //       processedOutput = `You have ${count} applications currently running`;
-  //       console.log(`✅ [NODE:ANSWER] Pre-processed app count: ${count}`);
-  //     }
-  //   }
-    
-  //   // Pre-process mdfind output (file search)
-  //   if (executedCommand && executedCommand.includes('mdfind')) {
-  //     const lines = processedOutput.split('\n').filter(l => l.trim());
-  //     if (lines.length === 0) {
-  //       processedOutput = 'No matching folders found on your computer';
-  //     } else if (lines.length === 1) {
-  //       processedOutput = `Found folder at: ${lines[0]}`;
-  //     } else {
-  //       processedOutput = `Found ${lines.length} matching folders:\n${lines.slice(0, 5).join('\n')}${lines.length > 5 ? `\n... and ${lines.length - 5} more` : ''}`;
-  //     }
-  //     console.log(`✅ [NODE:ANSWER] Pre-processed mdfind output: ${lines.length} results`);
-  //   }
-  // }
-
   try {
     // Build system instructions
     let systemInstructions = `You are a helpful AI assistant. Answer concisely and directly.
@@ -255,7 +275,7 @@ Use these current web results to answer. Extract key facts and answer directly.`
     }
 
     // Mark most recent user message for meta-questions
-    let processedHistory = [...conversationHistory];
+    let processedHistory = [...filteredHistory];
     if (queryMessage.toLowerCase().includes('what did i')) {
       // Find the previous user message (excluding current one which is the LAST in chronological order)
       // conversationHistory is now in chronological order (oldest → newest)
@@ -285,6 +305,11 @@ Use these current web results to answer. Extract key facts and answer directly.`
     }
 
     // Prepare payload for phi4
+    // 🎯 OPTIMIZATION: For commands with interpreted output, skip extra context
+    // The command service already interpreted the output, so we don't need
+    // conversation history, memories, or web results
+    const isCommandWithInterpretedOutput = needsInterpretation && processedOutput;
+    
     const payload = {
       query: needsInterpretation && processedOutput && processedOutput.trim().length > 0
         ? `Interpret this command output:\n\n${processedOutput.substring(0, 5000)}` // Truncate very long output
@@ -292,11 +317,13 @@ Use these current web results to answer. Extract key facts and answer directly.`
         ? `The command "${executedCommand}" executed successfully with no output. Provide a brief confirmation.`
         : queryMessage,
       context: {
-        conversationHistory: processedHistory,
-        sessionFacts,
-        sessionEntities,
-        memories: filteredMemories, // Use filtered memories
-        webSearchResults: contextDocs, // Add web search results
+        // For commands with interpreted output, only include minimal context
+        // Use filteredHistory which has context switching applied
+        conversationHistory: isCommandWithInterpretedOutput ? [] : processedHistory,
+        sessionFacts: isCommandWithInterpretedOutput ? [] : sessionFacts,
+        sessionEntities: isCommandWithInterpretedOutput ? [] : sessionEntities,
+        memories: isCommandWithInterpretedOutput ? [] : filteredMemories,
+        webSearchResults: isCommandWithInterpretedOutput ? [] : contextDocs,
         systemInstructions,
         sessionId: context.sessionId,
         userId: context.userId,

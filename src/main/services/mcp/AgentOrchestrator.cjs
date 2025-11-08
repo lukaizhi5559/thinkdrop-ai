@@ -186,8 +186,19 @@ class AgentOrchestrator {
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
       
-      // Command execution subgraph (route to answer for interpretation)
-      executeCommand: 'answer', // Let answer node interpret raw command output
+      // Command execution subgraph
+      executeCommand: (state) => {
+        // If command requires confirmation, end workflow early
+        if (state.requiresConfirmation) {
+          return 'end'; // Don't generate answer, just return confirmation details
+        }
+        // If command service already interpreted output, skip answer node
+        if (state.answer) {
+          return 'validateAnswer'; // Go straight to validation
+        }
+        // Otherwise, route to answer node for interpretation
+        return 'answer';
+      },
       
       // Web search subgraph with parallel execution
       parallelWebAndMemory: 'parallelSanitizeAndFilter', // ⚡ PARALLEL: sanitizeWeb + filterMemory
@@ -279,7 +290,8 @@ class AgentOrchestrator {
           sessionId: context.sessionId || 'default_session',
           userId: context.userId || 'default_user',
           timestamp: new Date().toISOString(),
-          conversationHistory // Include for context-aware cache key
+          conversationHistory, // Include for context-aware cache key
+          ...context // Include all other context properties (e.g., bypassConfirmation)
         },
         streamCallback: onStreamToken, // Pass streaming callback to answer node
         useOnlineMode // 🌐 Pass online mode flag to answer node
@@ -318,6 +330,9 @@ class AgentOrchestrator {
           retryCount: finalState.retryCount || 0
         },
         response: finalState.answer || "I apologize, but I was unable to generate a response.",
+        requiresConfirmation: finalState.requiresConfirmation || false,
+        confirmationDetails: finalState.confirmationDetails || null,
+        geminiWarning: finalState.geminiWarning || null, // Include Gemini configuration warning
         elapsedMs: finalState.elapsedMs,
         trace: finalState.trace, // Full execution trace for debugging
         debug: {

@@ -39,7 +39,6 @@ export function Toast({ message, type, duration = 4000, onClose }: ToastProps) {
   return (
     <div
       className={`
-        fixed top-4 right-4 z-50
         flex items-center gap-3 px-4 py-3 rounded-lg border
         backdrop-blur-sm shadow-lg
         transition-all duration-300 ease-out
@@ -55,6 +54,7 @@ export function Toast({ message, type, duration = 4000, onClose }: ToastProps) {
           setTimeout(onClose, 300);
         }}
         className="ml-2 text-white/50 hover:text-white/80 transition-colors"
+        aria-label="Close notification"
       >
         ×
       </button>
@@ -80,21 +80,16 @@ export function useToast() {
   };
 
   const ToastContainer = () => (
-    <>
-      {toasts.map((toast, index) => (
-        <div
+    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
+      {toasts.map((toast) => (
+        <Toast
           key={toast.id}
-          style={{ top: `${16 + index * 80}px` }}
-          className="fixed right-4 z-50"
-        >
-          <Toast
-            message={toast.message}
-            type={toast.type}
-            onClose={() => removeToast(toast.id)}
-          />
-        </div>
+          message={toast.message}
+          type={toast.type}
+          onClose={() => removeToast(toast.id)}
+        />
       ))}
-    </>
+    </div>
   );
 
   return { showToast, ToastContainer };

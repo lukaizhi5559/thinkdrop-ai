@@ -11,6 +11,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useConversationSignals } from '../hooks/useConversationSignals';
+import { useToast } from './Toast';
 
 interface ChatMessage {
   id: string;
@@ -20,7 +21,22 @@ interface ChatMessage {
   isStreaming?: boolean;
 }
 
-export default function ChatMessages() {
+interface ChatMessagesProps {
+  onPendingConfirmation?: (confirmation: {
+    command: string;
+    category: string;
+    riskLevel: 'low' | 'medium' | 'high' | 'critical';
+    resolvedMessage: string;
+    originalMessage: string;
+  } | null) => void;
+}
+
+export default function ChatMessages({ 
+  onPendingConfirmation
+}: ChatMessagesProps = {}) {
+  // Toast notifications
+  const { showToast, ToastContainer } = useToast();
+  
   // Use signals for session management (eliminates race conditions)
   const {
     signals,
@@ -425,8 +441,8 @@ export default function ChatMessages() {
         };
         
         // Set up progress listener
-        const handleProgress = (_event: any, data: any) => {
-          // Progress tracking
+        const handleProgress = (_event: any, _data: any) => {
+          // Progress tracking (currently unused)
         };
         
         // Register listeners
@@ -467,6 +483,8 @@ export default function ChatMessages() {
           window.electronAPI.onPrivateModeStreamToken(handleStreamToken);
         }
         
+        console.log('🚀 [CALLING-BACKEND] About to call privateModeProcess with message:', messageText);
+        
         // Call MCP unified orchestrator (with streaming support)
         // 🌐 Pass sessionId and online mode flag - StateGraph fetches context internally
         const result = await window.electronAPI?.privateModeProcess({
@@ -480,6 +498,18 @@ export default function ChatMessages() {
           }
         });
         
+        console.log('📦 [RESULT-RECEIVED] Got result from backend:', result);
+        console.log('🔍 [RESULT-DETAILS] requiresConfirmation:', result?.requiresConfirmation, 'confirmationDetails:', result?.confirmationDetails);
+        
+        // Check for Gemini warning
+        if (result?.geminiWarning) {
+          console.warn('⚠️ [GEMINI-WARNING]', result.geminiWarning);
+          showToast(
+            result.geminiWarning.message,
+            result.geminiWarning.severity === 'error' ? 'error' : 'warning'
+          );
+        }
+        
         // Cleanup listeners and timeout
         if (intentMessageTimeout) {
           clearTimeout(intentMessageTimeout);
@@ -491,6 +521,37 @@ export default function ChatMessages() {
         if (window.electronAPI?.removePrivateModeListeners) {
           window.electronAPI.removePrivateModeListeners();
         }
+        
+        // Check if command requires confirmation
+        console.log('🔍 [CONFIRMATION-CHECK] Checking result:', {
+          hasResult: !!result,
+          requiresConfirmation: result?.requiresConfirmation,
+          hasDetails: !!result?.confirmationDetails,
+          fullResult: result
+        });
+        
+        if (result?.requiresConfirmation && result?.confirmationDetails) {
+          console.log('⚠️ [CONFIRMATION] Command requires user confirmation:', result.confirmationDetails);
+          
+          // Set pending confirmation state via prop
+          onPendingConfirmation?.({
+            command: result.confirmationDetails.command,
+            category: result.confirmationDetails.category,
+            riskLevel: result.confirmationDetails.riskLevel,
+            resolvedMessage: result.confirmationDetails.resolvedMessage,
+            originalMessage: result.confirmationDetails.originalMessage
+          });
+          
+          console.log('✅ [CONFIRMATION] Pending confirmation set, stopping loading');
+          
+          // Stop loading
+          setIsStreamingResponse(false);
+          setIsLoading(false);
+          setIsProcessingLocally(false);
+          return; // Don't add AI message yet
+        }
+        
+        console.log('ℹ️ [CONFIRMATION-CHECK] No confirmation required, proceeding normally');
         
         if (result?.success) {
             // Determine final answer: use streamed if available, otherwise use result.response
@@ -995,6 +1056,7 @@ export default function ChatMessages() {
 
   return (
     <>
+    <ToastContainer />
     <TooltipProvider>
       <div 
         className="w-full h-full flex flex-col bg-transparent"

@@ -116,6 +116,42 @@ module.exports = async function parseIntent(state) {
         /system (info|status|health|specs|uptime)/i,
         /is my (computer|system|laptop|mac|pc) (on|off|sleeping|locked)/i,
         /what'?s? the (temperature|temp) of my (cpu|gpu)/i,
+                                                                   
+        // ── VERSION & INSTALLATION QUERIES ────────────────────────────────
+        /what version.*(installed|have|running|using)/i,
+        /which version.*(installed|have|running|using)/i,
+        /check.*(version|installed)/i,
+        /(do i|did i) (have|install).*(installed|on my)/i,
+        /is.*(installed|available)/i,
+        
+        // ── DOCKER & CONTAINER QUERIES ────────────────────────────────────
+        /how many.*(docker|container|pod|image)/i,
+        /list.*(docker|container|pod|image)/i,
+        /show.*(docker|container|pod|image)/i,
+        /what.*(docker|container|pod).*(running|have|in)/i,
+
+        // ── FILE & FOLDER LISTING QUERIES ─────────────────────────────────
+        /list.*(files?|folders?|directories|items?).*(on|in) (my )?(desktop|documents|downloads|home)/i,
+        /show.*(files?|folders?|directories|items?).*(on|in) (my )?(desktop|documents|downloads|home)/i,
+        /what.*(files?|folders?|directories|items?).*(on|in) (my )?(desktop|documents|downloads|home)/i,
+        /list all.*(files?|folders?|on my)/i,
+        /show all.*(files?|folders?|on my)/i,
+        
+        // ── FILE COUNTING QUERIES ─────────────────────────────────────────
+        /how many (files?|folders?|items?).*(on|in) (my )?(desktop|documents|downloads|home|that folder|this (folder|directory))/i,
+        /count.*(files?|folders?|items?).*(on|in) (my )?(desktop|documents|downloads|home)/i,
+        /how many (files?|folders?).*(do|are) (I|there)/i,
+
+        // ── FILE & FOLDER MANIPULATION ────────────────────────────────────
+        /create.*(file|folder|directory).*(on|in|at) (my )?(desktop|documents|downloads|home)/i,
+        /make.*(file|folder|directory).*(on|in|at) (my )?(desktop|documents|downloads|home)/i,
+        /delete.*(file|folder|directory).*(on|in|from) (my )?(desktop|documents|downloads|home)/i,
+        /remove.*(file|folder|directory).*(on|in|from) (my )?(desktop|documents|downloads|home)/i,
+        /move.*(file|folder|directory).*(to|from) (my )?(desktop|documents|downloads|home)/i,
+        /copy.*(file|folder|directory).*(to|from) (my )?(desktop|documents|downloads|home)/i,
+        /rename.*(file|folder|directory)/i,
+        /create.*(file|folder).*(called|named)/i,
+        /make.*(file|folder).*(called|named)/i,
 
         // ── APP CONTROL (Open / Close / Switch) ──────────────────────────
         /(open|launch|start|run)\s+(.+)/i,
@@ -125,6 +161,14 @@ module.exports = async function parseIntent(state) {
         /(hide|show) (desktop|all windows)/i,
         /minimize all/i,
         /bring (chrome|safari|finder|terminal|vscode|code|slack|discord|zoom|spotify|notion|figma|postman).*(front|forward)/i,
+
+        // ── APP QUERIES (Check / List / Info) ────────────────────────────
+        /do (i|we) have.*(app|application|program)/i,
+        /is (there|the).*(app|application|program).*(installed|available|on|in)/i,
+        /what (does|do|is).*(app|application|program).*(have|contain|show)/i,
+        /show me.*(app|application|program)/i,
+        /list.*(apps?|applications?|programs?)/i,
+        /what apps?.*(installed|available|running)/i,
 
         // ── COMMON APPS (no need to list all — dynamic in scoring) ───────
         // But keep a few for high confidence
