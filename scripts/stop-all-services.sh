@@ -24,7 +24,18 @@ if [ ! -f "$PIDS_FILE" ]; then
     pkill -f "thinkdrop-web-search" || true
     pkill -f "conversation-service" || true
     pkill -f "coreference-service.*server.py" || true
+    pkill -f "vision-service.*server.py" || true
     pkill -f "command-service.*http-server" || true
+    
+    # Also kill by port to catch orphaned processes
+    lsof -ti:3001 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3002 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3003 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3004 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3005 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3006 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3007 | xargs kill -9 2>/dev/null || true
+    
     echo "✅ Done"
     exit 0
 fi
@@ -53,6 +64,17 @@ done < "$PIDS_FILE"
 
 # Clean up PID file
 rm -f "$PIDS_FILE"
+
+# Final cleanup: kill any orphaned processes by port
+echo ""
+echo "🧹 Cleaning up orphaned processes..."
+lsof -ti:3001 | xargs kill -9 2>/dev/null || true
+lsof -ti:3002 | xargs kill -9 2>/dev/null || true
+lsof -ti:3003 | xargs kill -9 2>/dev/null || true
+lsof -ti:3004 | xargs kill -9 2>/dev/null || true
+lsof -ti:3005 | xargs kill -9 2>/dev/null || true
+lsof -ti:3006 | xargs kill -9 2>/dev/null || true
+lsof -ti:3007 | xargs kill -9 2>/dev/null || true
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

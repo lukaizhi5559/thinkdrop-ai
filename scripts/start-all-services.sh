@@ -121,11 +121,15 @@ sleep 2
 start_python_service "coreference" "$PROJECT_ROOT/mcp-services/coreference-service"
 sleep 2
 
-# 5. Phi4 Service (heavy - load last)
+# 5. Vision Service (Python - OCR/VLM)
+start_python_service "vision" "$PROJECT_ROOT/mcp-services/vision-service"
+sleep 2
+
+# 6. Phi4 Service (heavy - load last)
 start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
-# 6. Command Service (lightweight - uses Ollama)
+# 7. Command Service (lightweight - uses Ollama)
 echo "⚡ Starting command (Node.js)..."
 echo "   Path: $PROJECT_ROOT/mcp-services/command-service"
 echo "   Memory Limit: 256MB"
@@ -154,6 +158,7 @@ echo "   • Web Search:    http://localhost:3002/service.health"
 echo "   • Phi4:          http://localhost:3003/service.health"
 echo "   • Conversation:  http://localhost:3004/service.health"
 echo "   • Coreference:   http://localhost:3005/health"
+echo "   • Vision:        http://localhost:3006/health"
 echo "   • Command:       http://localhost:3007/health"
 echo ""
 echo "🔌 Available API Endpoints:"
@@ -192,6 +197,15 @@ echo "   🔗 Coreference (Port 3005):"
 echo "      • POST /resolve               - Resolve references"
 echo "      • GET  /health                - Health check"
 echo ""
+echo "   👁️  Vision (Port 3006):"
+echo "      • POST /vision/capture        - Capture screenshot"
+echo "      • POST /vision/ocr            - Extract text"
+echo "      • POST /vision/describe       - Describe scene"
+echo "      • POST /vision/watch/start    - Start monitoring"
+echo "      • POST /vision/watch/stop     - Stop monitoring"
+echo "      • GET  /vision/watch/status   - Watch status"
+echo "      • GET  /health                - Health check"
+echo ""
 echo "   ⚡ Command (Port 3007):"
 echo "      • POST /command.execute       - Execute command"
 echo "      • POST /command.interpret     - Interpret command"
@@ -205,6 +219,7 @@ echo "   • View web-search:   tail -f logs/web-search.log"
 echo "   • View phi4:         tail -f logs/phi4.log"
 echo "   • View conversation: tail -f logs/conversation.log"
 echo "   • View coreference:  tail -f logs/coreference.log"
+echo "   • View vision:       tail -f logs/vision.log"
 echo "   • View command:      tail -f logs/command.log"
 echo ""
 echo "🛑 To stop all services:"
