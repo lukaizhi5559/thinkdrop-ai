@@ -58,6 +58,7 @@ const { registerPrivateModeHandlers } = require('./handlers/ipc-handlers-private
 const { setupMCPMemoryHandlers } = require('./handlers/ipc-handlers-mcp-memory.cjs');
 const { setupGeminiOAuthHandlers } = require('./handlers/ipc-handlers-gemini-oauth.cjs');
 const { setupVisionOAuthHandlers } = require('./handlers/ipc-handlers-vision-oauth.cjs');
+const { registerScreenIntelligenceHandlers } = require('./handlers/ipc-handlers-screen-intelligence.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -226,6 +227,59 @@ app.whenReady().then(async () => {
 
   globalShortcut.register('Control+Space', () => {
     toggleOverlay();
+  });
+  
+  // Screen Intelligence shortcuts
+  globalShortcut.register('CommandOrControl+Shift+I', async () => {
+    console.log('🔍 Screen Intelligence: Discovery Mode triggered');
+    const { createScreenIntelligenceOverlay, showDiscoveryMode, showToast } = require('./windows/screen-intelligence-overlay.cjs');
+    
+    try {
+      // Initialize overlay if needed
+      createScreenIntelligenceOverlay();
+      
+      // Show loading toast
+      showToast('Analyzing screen...', 'info', 2000);
+      
+      // Fetch elements from MCP service
+      const response = await fetch('http://localhost:3008/screen/describe', {
+        method: 'POST',
+        headers: {
+          'x-api-key': 'dev-api-key-screen-intelligence',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          showOverlay: false,
+          includeHidden: false
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`MCP service returned ${response.status}`);
+      }
+      
+      const data = await response.json();
+      
+      if (data.elements && data.elements.length > 0) {
+        // Show discovery mode with all elements
+        showDiscoveryMode(data.elements);
+        showToast(`Found ${data.elements.length} elements`, 'success', 2000);
+      } else {
+        showToast('No elements found', 'warning', 2000);
+      }
+      
+    } catch (error) {
+      console.error('Screen Intelligence error:', error);
+      showToast(`Error: ${error.message}`, 'error', 3000);
+    }
+  });
+  
+  // Clear screen intelligence overlays
+  globalShortcut.register('CommandOrControl+Shift+C', () => {
+    console.log('🧹 Screen Intelligence: Clearing overlays');
+    const { clearOverlays, hideOverlay } = require('./windows/screen-intelligence-overlay.cjs');
+    clearOverlays();
+    hideOverlay();
   });
   
   // Register global shortcut to quit app
@@ -538,6 +592,11 @@ async function setupIPCHandlers() {
     console.log('🔧 Setting up MCP handlers...');
     registerMCPHandlers();
     console.log('✅ MCP handlers setup complete');
+    
+    // Initialize Screen Intelligence handlers
+    console.log('🎯 Setting up Screen Intelligence handlers...');
+    registerScreenIntelligenceHandlers();
+    console.log('✅ Screen Intelligence handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
     console.log('🔧 Setting up MCP Private Mode handlers...');

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Screen Intelligence Overlay</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      pointer-events: none; /* Pass clicks through */
+    }
+
+    /* Highlight boxes for elements */
+    .highlight-box {
+      position: absolute;
+      border: 2px solid;
+      border-radius: 4px;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      animation: fadeIn 0.2s ease;
+    }
+
+    .highlight-box.confidence-high {
+      border-color: #10b981; /* Green */
+      background: rgba(16, 185, 129, 0.1);
+    }
+
+    .highlight-box.confidence-good {
+      border-color: #3b82f6; /* Blue */
+      background: rgba(59, 130, 246, 0.1);
+    }
+
+    .highlight-box.confidence-medium {
+      border-color: #f59e0b; /* Yellow */
+      background: rgba(245, 158, 11, 0.1);
+    }
+
+    .highlight-box.confidence-low {
+      border-color: #ef4444; /* Red */
+      background: rgba(239, 68, 68, 0.1);
+    }
+
+    /* Pulsing animation for active elements */
+    .highlight-box.active {
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.7;
+        transform: scale(1.02);
+      }
+    }
+
+    /* Element labels */
+    .element-label {
+      position: absolute;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      color: white;
+      white-space: nowrap;
+      pointer-events: none;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      z-index: 10;
+    }
+
+    .element-label.confidence-high {
+      background: #10b981;
+    }
+
+    .element-label.confidence-good {
+      background: #3b82f6;
+    }
+
+    .element-label.confidence-medium {
+      background: #f59e0b;
+    }
+
+    .element-label.confidence-low {
+      background: #ef4444;
+    }
+
+    /* Discovery mode container */
+    #discovery-mode {
+      display: none;
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      padding: 16px;
+      color: white;
+      max-width: 300px;
+      pointer-events: auto;
+      box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+      animation: slideIn 0.3s ease;
+    }
+
+    #discovery-mode.visible {
+      display: block;
+    }
+
+    #discovery-mode h3 {
+      font-size: 14px;
+      margin-bottom: 12px;
+      color: #60a5fa;
+    }
+
+    #discovery-mode .element-count {
+      font-size: 24px;
+      font-weight: bold;
+      margin-bottom: 8px;
+    }
+
+    #discovery-mode .element-list {
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+
+    #discovery-mode .element-item {
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    /* Toast notifications */
+    .toast {
+      position: fixed;
+      bottom: 40px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      color: white;
+      pointer-events: auto;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      animation: slideUp 0.3s ease;
+      z-index: 1000;
+    }
+
+    .toast.info {
+      background: #3b82f6;
+    }
+
+    .toast.success {
+      background: #10b981;
+    }
+
+    .toast.warning {
+      background: #f59e0b;
+    }
+
+    .toast.error {
+      background: #ef4444;
+    }
+
+    /* Action guide */
+    .action-guide {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.9);
+      backdrop-filter: blur(10px);
+      border-radius: 16px;
+      padding: 24px;
+      color: white;
+      max-width: 400px;
+      pointer-events: auto;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      animation: fadeIn 0.3s ease;
+      z-index: 1000;
+    }
+
+    .action-guide h2 {
+      font-size: 18px;
+      margin-bottom: 16px;
+      color: #60a5fa;
+    }
+
+    .action-guide .step-indicator {
+      font-size: 14px;
+      color: #9ca3af;
+      margin-bottom: 12px;
+    }
+
+    .action-guide .action-description {
+      font-size: 16px;
+      margin-bottom: 16px;
+    }
+
+    .action-guide .target-info {
+      font-size: 14px;
+      color: #d1d5db;
+      background: rgba(255, 255, 255, 0.1);
+      padding: 8px 12px;
+      border-radius: 6px;
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+      }
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes slideIn {
+      from {
+        opacity: 0;
+        transform: translateX(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(0);
+      }
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translate(-50%, 20px);
+      }
+      to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+    }
+
+    /* Scrollbar styling */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 3px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <!-- Container for highlight boxes -->
+  <div id="highlights-container"></div>
+
+  <!-- Discovery mode panel -->
+  <div id="discovery-mode">
+    <h3>🔍 Discovery Mode</h3>
+    <div class="element-count" id="element-count">0</div>
+    <div class="element-list" id="element-list"></div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <!-- Action guide container -->
+  <div id="guide-container"></div>
+
+  <script>
+    // State
+    let currentHighlights = [];
+    let currentToast = null;
+    let currentGuide = null;
+
+    // Get confidence class
+    function getConfidenceClass(confidence) {
+      if (confidence >= 0.9) return 'confidence-high';
+      if (confidence >= 0.8) return 'confidence-good';
+      if (confidence >= 0.6) return 'confidence-medium';
+      return 'confidence-low';
+    }
+
+    // Show element highlights
+    function showHighlights(data) {
+      clearHighlights();
+      
+      const container = document.getElementById('highlights-container');
+      const { elements, duration } = data;
+
+      elements.forEach((element, index) => {
+        const { bounds, label, confidence = 0.9 } = element;
+        
+        // Create highlight box
+        const box = document.createElement('div');
+        box.className = `highlight-box ${getConfidenceClass(confidence)}`;
+        box.style.left = `${bounds.x}px`;
+        box.style.top = `${bounds.y}px`;
+        box.style.width = `${bounds.width}px`;
+        box.style.height = `${bounds.height}px`;
+        
+        // Create label
+        const labelEl = document.createElement('div');
+        labelEl.className = `element-label ${getConfidenceClass(confidence)}`;
+        labelEl.textContent = `${label} (${Math.round(confidence * 100)}%)`;
+        labelEl.style.left = `${bounds.x}px`;
+        labelEl.style.top = `${bounds.y - 28}px`;
+        
+        container.appendChild(box);
+        container.appendChild(labelEl);
+        
+        currentHighlights.push({ box, label: labelEl });
+      });
+    }
+
+    // Show discovery mode
+    function showDiscoveryMode(data) {
+      clearHighlights();
+      
+      const { elements } = data;
+      const discoveryPanel = document.getElementById('discovery-mode');
+      const elementCount = document.getElementById('element-count');
+      const elementList = document.getElementById('element-list');
+      
+      // Show highlights
+      showHighlights({ elements, duration: 0 });
+      
+      // Update discovery panel
+      elementCount.textContent = elements.length;
+      elementList.innerHTML = elements.map((el, i) => 
+        `<div class="element-item">
+          ${i + 1}. ${el.role}: ${el.label || 'Unlabeled'} (${Math.round((el.confidence || 0.9) * 100)}%)
+        </div>`
+      ).join('');
+      
+      discoveryPanel.classList.add('visible');
+    }
+
+    // Show toast notification
+    function showToast(data) {
+      const { message, type = 'info', duration = 3000 } = data;
+      
+      // Remove existing toast
+      if (currentToast) {
+        currentToast.remove();
+      }
+      
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      
+      document.getElementById('toast-container').appendChild(toast);
+      currentToast = toast;
+      
+      // Auto-remove
+      if (duration > 0) {
+        setTimeout(() => {
+          toast.remove();
+          if (currentToast === toast) {
+            currentToast = null;
+          }
+        }, duration);
+      }
+    }
+
+    // Hide toast
+    function hideToast() {
+      if (currentToast) {
+        currentToast.remove();
+        currentToast = null;
+      }
+    }
+
+    // Show action guide
+    function showActionGuide(data) {
+      const { action, target, text, step, total } = data;
+      
+      const guide = document.createElement('div');
+      guide.className = 'action-guide';
+      guide.innerHTML = `
+        <h2>Action Guide</h2>
+        <div class="step-indicator">Step ${step} of ${total}</div>
+        <div class="action-description">
+          ${action === 'click' ? '🖱️ Click' : '⌨️ Type'}: ${target}
+        </div>
+        ${text ? `<div class="target-info">${text}</div>` : ''}
+      `;
+      
+      document.getElementById('guide-container').appendChild(guide);
+      currentGuide = guide;
+      
+      // Auto-remove after 5 seconds
+      setTimeout(() => {
+        guide.remove();
+        if (currentGuide === guide) {
+          currentGuide = null;
+        }
+      }, 5000);
+    }
+
+    // Clear highlights
+    function clearHighlights() {
+      currentHighlights.forEach(({ box, label }) => {
+        box.remove();
+        label.remove();
+      });
+      currentHighlights = [];
+      
+      document.getElementById('discovery-mode').classList.remove('visible');
+    }
+
+    // Clear all overlays
+    function clearAll() {
+      clearHighlights();
+      hideToast();
+      
+      if (currentGuide) {
+        currentGuide.remove();
+        currentGuide = null;
+      }
+    }
+
+    // Listen for IPC messages from main process
+    if (window.electronAPI) {
+      window.electronAPI.onScreenIntelligence('show-highlights', showHighlights);
+      window.electronAPI.onScreenIntelligence('show-discovery', showDiscoveryMode);
+      window.electronAPI.onScreenIntelligence('show-toast', showToast);
+      window.electronAPI.onScreenIntelligence('hide-toast', hideToast);
+      window.electronAPI.onScreenIntelligence('show-guide', showActionGuide);
+      window.electronAPI.onScreenIntelligence('clear-all', clearAll);
+    }
+
+    console.log('✅ Screen Intelligence overlay loaded');
+  </script>
+</body>
+</html>

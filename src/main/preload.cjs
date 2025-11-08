@@ -174,6 +174,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   visionOAuthRevoke: () => ipcRenderer.invoke('vision:oauth:revoke'),
   visionStatus: () => ipcRenderer.invoke('vision:status'),
   
+  // Screen Intelligence Overlay
+  onScreenIntelligence: (channel, callback) => {
+    const validChannels = [
+      'show-highlights',
+      'show-discovery',
+      'show-toast',
+      'hide-toast',
+      'show-guide',
+      'clear-all'
+    ];
+    if (validChannels.includes(channel)) {
+      ipcRenderer.on(`screen-intelligence:${channel}`, (event, data) => callback(data));
+    }
+  },
+  
   // System info
   platform: process.platform,
   version: process.versions.electron
