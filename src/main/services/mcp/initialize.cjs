@@ -13,6 +13,7 @@ const migration007 = require('./migrations/007_fix_ipv6_endpoints.cjs');
 const migration008 = require('./migrations/008_add_oauth_columns.cjs');
 const migration009 = require('./migrations/009_add_vision_service.cjs');
 const migration010 = require('./migrations/010_add_user_settings.cjs');
+const migration011 = require('./migrations/011_add_screen_intelligence_service.cjs');
 
 /**
  * Initialize MCP system
@@ -68,7 +69,8 @@ async function runMigrations(database) {
     { name: '007_fix_ipv6_endpoints', module: migration007 },
     { name: '008_add_oauth_columns', module: migration008 },
     { name: '009_add_vision_service', module: migration009 },
-    { name: '010_add_user_settings', module: migration010 }
+    { name: '010_add_user_settings', module: migration010 },
+    { name: '011_add_screen_intelligence_service', module: migration011 }
   ];
 
   for (const migration of migrations) {

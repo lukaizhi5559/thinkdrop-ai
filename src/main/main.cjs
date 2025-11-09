@@ -241,11 +241,19 @@ app.whenReady().then(async () => {
       // Show loading toast
       showToast('Analyzing screen...', 'info', 2000);
       
+      // Get screen-intelligence service info from MCP
+      const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
+      const serviceInfo = MCPConfigManager.getService('screen-intelligence');
+      
+      if (!serviceInfo || !serviceInfo.apiKey) {
+        throw new Error('Screen Intelligence service not configured');
+      }
+      
       // Fetch elements from MCP service
-      const response = await fetch('http://127.0.0.1:3008/screen/describe', {
+      const response = await fetch(`${serviceInfo.endpoint}/screen/describe`, {
         method: 'POST',
         headers: {
-          'x-api-key': 'dev-api-key-screen-intelligence',
+          'x-api-key': serviceInfo.apiKey,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -588,6 +596,11 @@ async function setupIPCHandlers() {
       console.log('⏭️  [MCP-MODE] Skipping database notification handlers');
     }
     
+    // Initialize MCP client and config manager (used by multiple handlers)
+    const MCPClient = require('./services/mcp/MCPClient.cjs');
+    const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
+    const mcpClient = new MCPClient(MCPConfigManager);
+    
     // Initialize MCP handlers (microservices)
     console.log('🔧 Setting up MCP handlers...');
     registerMCPHandlers();
@@ -606,16 +619,12 @@ async function setupIPCHandlers() {
     // Initialize MCP Memory handlers (for Memory Debugger in private mode)
     if (USE_MCP_PRIVATE_MODE) {
       console.log('🔧 Setting up MCP Memory handlers...');
-      const MCPClient = require('./services/mcp/MCPClient.cjs');
-      const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
-      const mcpClient = new MCPClient(MCPConfigManager);
       setupMCPMemoryHandlers(mcpClient);
       console.log('✅ MCP Memory handlers setup complete');
     }
     
     // Initialize Gemini OAuth handlers
     console.log('🔧 Setting up Gemini OAuth handlers...');
-    const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
     setupGeminiOAuthHandlers(MCPConfigManager.db);
     console.log('✅ Gemini OAuth handlers setup complete');
     
