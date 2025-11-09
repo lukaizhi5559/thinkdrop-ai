@@ -188,6 +188,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on(`screen-intelligence:${channel}`, (event, data) => callback(data));
     }
   },
+  setOverlayClickable: (isClickable) => {
+    ipcRenderer.send('overlay:set-clickable', isClickable);
+  },
   
   // System info
   platform: process.platform,

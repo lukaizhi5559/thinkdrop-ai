@@ -111,16 +111,24 @@
       pointer-events: auto;
       box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
       animation: slideIn 0.3s ease;
+      cursor: move;
+      user-select: none;
     }
 
     #discovery-mode.visible {
       display: block;
     }
 
+    #discovery-mode.dragging {
+      cursor: grabbing;
+      opacity: 0.9;
+    }
+
     #discovery-mode h3 {
       font-size: 14px;
       margin-bottom: 12px;
       color: #60a5fa;
+      cursor: grab;
     }
 
     #discovery-mode .element-count {
@@ -274,7 +282,10 @@
 
   <!-- Discovery mode panel -->
   <div id="discovery-mode">
-    <h3>🔍 Discovery Mode</h3>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+      <h3 style="margin: 0;">🔍 Discovery Mode</h3>
+      <button id="close-discovery" style="background: rgba(255,255,255,0.1); border: none; color: white; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕</button>
+    </div>
     <div class="element-count" id="element-count">0</div>
     <div class="element-list" id="element-list"></div>
   </div>
@@ -290,6 +301,84 @@
     let currentHighlights = [];
     let currentToast = null;
     let currentGuide = null;
+
+    // Draggable discovery panel
+    let isDragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+
+    // Make discovery panel draggable
+    function initDraggable() {
+      const panel = document.getElementById('discovery-mode');
+      
+      // Toggle click-through when mouse enters/leaves panel
+      panel.addEventListener('mouseenter', () => {
+        if (window.electronAPI && window.electronAPI.setOverlayClickable) {
+          window.electronAPI.setOverlayClickable(true);
+        }
+      });
+      
+      panel.addEventListener('mouseleave', () => {
+        if (!isDragging && window.electronAPI && window.electronAPI.setOverlayClickable) {
+          window.electronAPI.setOverlayClickable(false);
+        }
+      });
+      
+      panel.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        panel.classList.add('dragging');
+        
+        const rect = panel.getBoundingClientRect();
+        dragOffsetX = e.clientX - rect.left;
+        dragOffsetY = e.clientY - rect.top;
+        
+        e.preventDefault();
+      });
+      
+      document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        
+        const x = e.clientX - dragOffsetX;
+        const y = e.clientY - dragOffsetY;
+        
+        // Keep panel within viewport
+        const maxX = window.innerWidth - panel.offsetWidth;
+        const maxY = window.innerHeight - panel.offsetHeight;
+        
+        panel.style.left = `${Math.max(0, Math.min(x, maxX))}px`;
+        panel.style.top = `${Math.max(0, Math.min(y, maxY))}px`;
+        panel.style.right = 'auto'; // Remove right positioning
+        
+        e.preventDefault();
+      });
+      
+      document.addEventListener('mouseup', () => {
+        if (isDragging) {
+          isDragging = false;
+          panel.classList.remove('dragging');
+          
+          // Re-enable click-through after drag if mouse left panel
+          const rect = panel.getBoundingClientRect();
+          const mouseX = event.clientX;
+          const mouseY = event.clientY;
+          const isOverPanel = mouseX >= rect.left && mouseX <= rect.right && 
+                             mouseY >= rect.top && mouseY <= rect.bottom;
+          
+          if (!isOverPanel && window.electronAPI && window.electronAPI.setOverlayClickable) {
+            window.electronAPI.setOverlayClickable(false);
+          }
+        }
+      });
+    }
+
+    // Initialize on load
+    initDraggable();
+
+    // Close button handler
+    document.getElementById('close-discovery').addEventListener('click', (e) => {
+      clearHighlights();
+      e.stopPropagation(); // Prevent drag
+    });
 
     // Get confidence class
     function getConfidenceClass(confidence) {

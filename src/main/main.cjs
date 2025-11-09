@@ -242,7 +242,7 @@ app.whenReady().then(async () => {
       showToast('Analyzing screen...', 'info', 2000);
       
       // Fetch elements from MCP service
-      const response = await fetch('http://localhost:3008/screen/describe', {
+      const response = await fetch('http://127.0.0.1:3008/screen/describe', {
         method: 'POST',
         headers: {
           'x-api-key': 'dev-api-key-screen-intelligence',

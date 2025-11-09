@@ -21,14 +21,16 @@ function createScreenIntelligenceOverlay() {
     return overlayWindow;
   }
 
-  const primaryDisplay = screen.getPrimaryDisplay();
-  const { width, height } = primaryDisplay.bounds;
+  // Get the display where the cursor is currently located
+  const cursorPoint = screen.getCursorScreenPoint();
+  const currentDisplay = screen.getDisplayNearestPoint(cursorPoint);
+  const { x, y, width, height } = currentDisplay.bounds;
 
   overlayWindow = new BrowserWindow({
     width,
     height,
-    x: 0,
-    y: 0,
+    x,
+    y,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -39,6 +41,7 @@ function createScreenIntelligenceOverlay() {
     maximizable: false,
     closable: false,
     focusable: false, // Don't steal focus
+    show: false, // Don't show on creation
     hasShadow: false,
     enableLargerThanScreen: true,
     webPreferences: {
@@ -49,11 +52,18 @@ function createScreenIntelligenceOverlay() {
     }
   });
 
-  // Make window click-through (pass clicks to underlying windows)
+  // Initially make window click-through (pass clicks to underlying windows)
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
   // Set window level to float above everything
   overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+
+  // Handle mouse events from renderer - toggle click-through based on panel hover
+  overlayWindow.webContents.on('ipc-message', (event, channel, isOverPanel) => {
+    if (channel === 'overlay:set-clickable') {
+      overlayWindow.setIgnoreMouseEvents(!isOverPanel, { forward: true });
+    }
+  });
 
   // Load the overlay HTML
   const overlayPath = path.join(__dirname, '../../overlay/screen-intelligence.html');
@@ -101,6 +111,12 @@ function showDiscoveryMode(elements) {
   if (!overlayWindow) {
     createScreenIntelligenceOverlay();
   }
+
+  // Update overlay position to current display before showing
+  const cursorPoint = screen.getCursorScreenPoint();
+  const currentDisplay = screen.getDisplayNearestPoint(cursorPoint);
+  const { x, y, width, height } = currentDisplay.bounds;
+  overlayWindow.setBounds({ x, y, width, height });
 
   overlayWindow.show();
   overlayWindow.webContents.send('screen-intelligence:show-discovery', {
