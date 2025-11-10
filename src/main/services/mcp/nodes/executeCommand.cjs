@@ -193,6 +193,47 @@ module.exports = async function executeCommand(state) {
   } catch (error) {
     console.error('❌ [NODE:EXECUTE_COMMAND] Error:', error.message);
     
+    // Check if this might be a screen intelligence question misclassified as command
+    // Comprehensive list of screen-related keywords that indicate visual/content questions
+    const screenKeywords = [
+      // Question words
+      'what', 'which', 'where', 'how',
+      // Visual verbs
+      'show', 'see', 'display', 'view', 'look', 'watch', 'read',
+      // Screen/content nouns
+      'screen', 'page', 'chapter', 'section', 'article', 'paragraph', 'line',
+      'tab', 'window', 'browser', 'website', 'site',
+      // Content actions
+      'reading', 'viewing', 'watching', 'looking at', 'on my screen',
+      // Document/media
+      'document', 'file', 'video', 'image', 'picture', 'photo',
+      // Specific content
+      'title', 'heading', 'text', 'content', 'verse', 'passage'
+    ];
+    const hasScreenKeyword = screenKeywords.some(keyword => 
+      message.toLowerCase().includes(keyword) || (resolvedMessage && resolvedMessage.toLowerCase().includes(keyword))
+    );
+    
+    // If command service is down AND message contains screen-related keywords, retry as screen_intelligence
+    const isServiceDown = error.message?.includes('ECONNREFUSED') || error.message?.includes('connect');
+    
+    if (isServiceDown && hasScreenKeyword) {
+      console.log('🔄 [NODE:EXECUTE_COMMAND] Command service down + screen keywords detected → Retrying as screen_intelligence');
+      
+      // Override intent to screen_intelligence and let the graph retry
+      return {
+        ...state,
+        intent: {
+          type: 'screen_intelligence',
+          confidence: 0.95,
+          fallbackFrom: 'command'
+        },
+        commandExecuted: false,
+        error: null, // Clear error so validation doesn't fail
+        retryWithIntent: 'screen_intelligence'
+      };
+    }
+    
     return {
       ...state,
       answer: `Sorry, I encountered an error executing that command: ${error.message}`,

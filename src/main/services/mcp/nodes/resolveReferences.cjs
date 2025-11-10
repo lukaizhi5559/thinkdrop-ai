@@ -25,6 +25,11 @@ module.exports = async function resolveReferences(state) {
   console.log('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
   console.log(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
 
+  // NOTE: We always run coreference resolution here, but the answer node will use the
+  // original message (not the resolved one) for screen_intelligence intent.
+  // This allows coreference to work for other intents while preserving "this" references
+  // to screen content for screen intelligence requests.
+
   // Use intelligent coreference service with spaCy NER
   // The Python service now uses Named Entity Recognition to smartly resolve:
   // - Pronouns: "he" → "Donald Trump" (finds PERSON entities)

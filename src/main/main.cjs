@@ -110,6 +110,10 @@ function createOverlayWindow() {
     closable: false, // Prevent close button
     focusable: true,
     hasShadow: true, // Add shadow for better visibility
+    // CRITICAL: Prevent fullscreen exit when clicking this window
+    fullscreenable: false, // This window cannot go fullscreen
+    // CRITICAL: Use panel type which has proper collection behavior for overlays
+    type: 'panel', // Panel windows can appear over fullscreen apps
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
@@ -122,7 +126,14 @@ function createOverlayWindow() {
   // Explicitly disable shadow using setShadow
   overlayWindow.setHasShadow(false);
 
-  // Set window level to float above all apps (similar to Cluely)
+  // CRITICAL: Configure panel window to appear over fullscreen apps
+  // Panel windows (NSPanel) automatically have the right collection behavior on macOS
+  if (process.platform === 'darwin') {
+    overlayWindow.setWindowButtonVisibility(false);
+  }
+  
+  // Set window level - 'floating' is sufficient for panel windows
+  // Panel type + floating level + visibleOnFullScreen = appears over fullscreen apps
   overlayWindow.setAlwaysOnTop(true, 'floating', 1);
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   
@@ -220,6 +231,13 @@ app.whenReady().then(async () => {
   
   console.log('🎉 Initialization sequence complete!');
   
+  // Initialize Virtual Screen DOM for auto-caching
+  console.log('👁️  Initializing Virtual Screen DOM...');
+  const VirtualScreenDOM = require('./services/virtualScreenDOM.cjs');
+  global.virtualScreenDOM = new VirtualScreenDOM();
+  await global.virtualScreenDOM.start();
+  console.log('✅ Virtual Screen DOM initialized');
+  
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   globalShortcut.register('CommandOrControl+Shift+Space', () => {
     toggleOverlay();
@@ -238,8 +256,21 @@ app.whenReady().then(async () => {
       // Initialize overlay if needed
       createScreenIntelligenceOverlay();
       
-      // Show loading toast
-      showToast('Analyzing screen...', 'info', 2000);
+      // 1️⃣ Check cache first
+      const virtualDOM = global.virtualScreenDOM;
+      const cached = virtualDOM?.queryCached(null, 'all');
+      
+      if (cached && Date.now() - cached.timestamp < 5 * 60 * 1000) {
+        // Cache hit - instant response
+        const age = Math.round((Date.now() - cached.timestamp) / 1000);
+        showToast(`Using cached data (${age}s old)`, 'info', 2000);
+        showDiscoveryMode(cached.elements);
+        showToast(`Found ${cached.elementCount} elements`, 'success', 2000);
+        return;
+      }
+      
+      // 2️⃣ Cache miss - analyze screen
+      showToast('Analyzing screen...', 'info', 4000);
       
       // Get screen-intelligence service info from MCP
       const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
@@ -250,6 +281,7 @@ app.whenReady().then(async () => {
       }
       
       // Fetch elements from MCP service
+      const startTime = Date.now();
       const response = await fetch(`${serviceInfo.endpoint}/screen/describe`, {
         method: 'POST',
         headers: {
@@ -267,11 +299,18 @@ app.whenReady().then(async () => {
       }
       
       const data = await response.json();
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
       
       if (data.elements && data.elements.length > 0) {
+        // 3️⃣ Cache the results
+        if (virtualDOM) {
+          await virtualDOM.cacheAnalysis(data);
+          console.log('✅ Cached screen analysis');
+        }
+        
         // Show discovery mode with all elements
         showDiscoveryMode(data.elements);
-        showToast(`Found ${data.elements.length} elements`, 'success', 2000);
+        showToast(`Analysis complete! Found ${data.elements.length} elements (${duration}s)`, 'success', 3000);
       } else {
         showToast('No elements found', 'warning', 2000);
       }

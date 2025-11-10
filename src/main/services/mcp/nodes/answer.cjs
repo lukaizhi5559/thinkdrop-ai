@@ -135,8 +135,9 @@ module.exports = async function answer(state) {
     needsInterpretation = false // Flag indicating command output needs interpretation
   } = state;
   
-  // Use resolved message if available (after coreference resolution), otherwise original
-  const queryMessage = resolvedMessage || message;
+  // For screen intelligence, use original message (coreference resolution can confuse "this" references to screen content)
+  // For other intents, use resolved message (after coreference resolution)
+  const queryMessage = (intent?.type === 'screen_intelligence') ? message : (resolvedMessage || message);
 
   // 🔄 CONTEXT SWITCHING DETECTION
   // Detect if the user has switched topics and filter conversation history accordingly
@@ -202,6 +203,12 @@ CRITICAL CONTEXT AWARENESS:
     if (state.intent?.type === 'screen_intelligence' && state.screenContext) {
       systemInstructions += `
 
+🚨 SCREEN INTELLIGENCE: When you see "USER REQUEST:" + "SCREEN CONTEXT:":
+1. Read the user's request
+2. Find relevant info in "Full Screen Text (OCR):" section
+3. Perform the requested action (don't just describe)
+4. For "draft a response" - write the actual response immediately
+
 🚨 CRITICAL SCREEN INTELLIGENCE PROTOCOL 🚨
 YOU ARE ANALYZING THE USER'S SCREEN RIGHT NOW!
 
@@ -230,13 +237,27 @@ CONTENT EXTRACTION:
 - Focus on the ACTUAL TEXT and CONTENT shown, not on describing the interface itself
 - Be direct and factual - summarize what you see, don't analyze the platform
 
-ACTION-ORIENTED RESPONSES:
-- If asked to "respond to this email" or "draft a reply", compose a professional response based on the email content
-- If asked to "fix grammar" or "polish this", provide the corrected version of the text
-- If asked to "translate" or "what does this say", EXTRACT THE TEXT FROM THE SCREEN and provide the translation immediately
-- If asked to "summarize", provide a concise summary
-- BE HELPFUL - don't just describe, take action on what the user requests
-- NEVER give instructions on how to do something when you can do it directly`;
+🚨 DRAFTING RESPONSES 🚨
+When user asks to "draft a response" or "reply to this message":
+1. Find the sender's name in the OCR text
+2. Read their message
+3. Write a professional response addressing their points
+
+Example: If OCR shows "Daniel Wilken: Hi Chris, I'm recruiting for Georgetown's cybersecurity programs..."
+You write: "Hi Daniel, Thank you for reaching out! I appreciate you thinking of me for Georgetown's programs..."
+
+CODE EDITOR / TERMINAL RESPONSES:
+- If analyzing a CODE EDITOR (VS Code, Windsurf, Cursor), focus on the CODE CONTENT visible in the editor
+- Extract function names, class names, variable names, and code logic from the OCR text
+- If asked "what do you see", describe the code structure, not just "a code editor"
+- For TERMINAL windows, describe the commands and output visible, not just "terminal interface"
+- Be specific about file names, line numbers, and code patterns you can identify
+
+EXAMPLE (Code Editor):
+Screen shows: "function createWindow() { const win = new BrowserWindow({ width: 800 }) }"
+User asks: "what do you see here"
+CORRECT: "I see a JavaScript function called createWindow() that creates a new BrowserWindow with a width of 800 pixels"
+WRONG: "I see a desktop interface with no visible desktop items. There are two accessibility elements in the browser content section - Electron's main.cjs file and no interactive elements."`;
     }
     
     // Web Search Intent
@@ -381,9 +402,9 @@ Use these current web results to answer. Extract key facts and answer directly.`
       finalQuery = `${queryMessage}\n\n${state.visualContext}`;
       console.log('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
     } else if (state.screenContext && state.intent?.type === 'screen_intelligence') {
-      // Frame screen context as actual data the AI can see, not metadata
-      finalQuery = `I have analyzed your screen and here is what I can see:\n\n${state.screenContext}\n\nBased on this screen analysis, ${queryMessage}`;
-      console.log('🎯 [NODE:ANSWER] Added screen context BEFORE query for screen_intelligence intent');
+      // Put user's request FIRST, then provide screen data as context
+      finalQuery = `USER REQUEST: ${queryMessage}\n\nSCREEN CONTEXT (use this to fulfill the user's request):\n${state.screenContext}`;
+      console.log('🎯 [NODE:ANSWER] Added screen context AFTER query for screen_intelligence intent');
     } else if (state.context) {
       // Generic context from other nodes
       finalQuery = `${queryMessage}\n\n${state.context}`;

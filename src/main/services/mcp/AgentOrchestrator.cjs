@@ -315,6 +315,11 @@ class AgentOrchestrator {
       
       // Command execution subgraph
       executeCommand: (state) => {
+        // If command execution requested retry with different intent, route to that intent
+        if (state.retryWithIntent === 'screen_intelligence') {
+          console.log('🔄 [STATEGRAPH:RETRY] Command failed, retrying as screen_intelligence');
+          return 'screenIntelligence';
+        }
         // If command requires confirmation, end workflow early
         if (state.requiresConfirmation) {
           return 'end'; // Don't generate answer, just return confirmation details

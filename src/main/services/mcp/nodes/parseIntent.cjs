@@ -6,12 +6,14 @@
 module.exports = async function parseIntent(state) {
   const { mcpClient, message, resolvedMessage, context, conversationMessages } = state;
 
-  // Use resolved message if available (after coreference resolution), otherwise use original
-  const messageToClassify = resolvedMessage || message;
+  // CRITICAL: Use ORIGINAL message for intent parsing, not resolved
+  // Coreference resolution can break screen intelligence detection by replacing "this" with wrong referents
+  // Example: "summarize this bible chapter" → "summarize AI bible chapter" (wrong!)
+  const messageToClassify = message;
   
   console.log(' [NODE:PARSE_INTENT] Parsing intent...');
   if (resolvedMessage && resolvedMessage !== message) {
-    console.log(`📝 [NODE:PARSE_INTENT] Using resolved message: "${message}" → "${resolvedMessage}"`);
+    console.log(`📝 [NODE:PARSE_INTENT] Coreference resolved: "${message}" → "${resolvedMessage}" (using original for intent)`);
   }
 
   // Fetch recent conversation messages for context-aware intent classification
@@ -80,15 +82,50 @@ module.exports = async function parseIntent(state) {
       // Action-oriented screen queries
       /translate (this|the|that) .* on (my|the) screen/i,
       /(polish|fix|correct|improve|rewrite|proofread|check) (this|the|that) .* on (my|the) screen/i,
-      /respond to (this|the|that) .* on (my|the) screen/i
+      /respond to (this|the|that) .* on (my|the) screen/i,
+      // Vague "this/that" references that likely refer to screen content
+      /^(summarize|explain|translate|analyze|describe|read|extract|what (is|does|'?s?)|tell me about) (this|that|the)/i,
+      /(draft|write|compose|create|put together) (a |an )?(response|reply|answer|message) (to |for )?(this|that|the)/i,
+      // Queries about specific visible items (code, snippets, functions, etc.)
+      /what'?s? (the|that)? ?\w+ (code|snippet|function|method|class|variable|line|section)/i,
+      /(show|find|get|read|explain) (the|that)? ?\w+ (code|snippet|function|method|class|variable)/i
     ];
     
     // Check for follow-up screen queries (when previous message was a screen query)
     let isFollowUpScreenQuery = false;
-    if (recentMessages.length >= 2 && /^(what about now|how about now|and now)$/i.test(lowerMsg)) {
+    if (recentMessages.length >= 2) {
+      // Check if previous user message was a screen query
       const prevUserMsg = recentMessages[recentMessages.length - 2];
       if (prevUserMsg && prevUserMsg.role === 'user') {
-        isFollowUpScreenQuery = screenAnalysisPatterns.some(pattern => pattern.test(prevUserMsg.content));
+        const wasPrevScreenQuery = screenAnalysisPatterns.some(pattern => pattern.test(prevUserMsg.content));
+        
+        if (wasPrevScreenQuery) {
+          // Specific follow-up phrases
+          if (/^(what about now|how about now|and now)$/i.test(lowerMsg)) {
+            isFollowUpScreenQuery = true;
+          }
+          // Follow-up questions with "this/that" reference
+          else if (/(this|that|the screen|my screen|it)\b/i.test(lowerMsg)) {
+            // Phrases like "anything else about this", "more about that", "details on this"
+            const isFollowUpPhrase = /^(anything|something|what|more|tell me|show me|explain|details|info|information).*(about|on|for|regarding|concerning).*(this|that|the|it)/i.test(lowerMsg);
+            if (isFollowUpPhrase) {
+              console.log(`🔗 [NODE:PARSE_INTENT] Detected follow-up with "this/that" reference after screen query: "${lowerMsg}"`);
+              isFollowUpScreenQuery = true;
+            }
+          }
+          // Vague follow-up questions that should maintain screen context
+          if (!isFollowUpScreenQuery && /^(what|how|can you|could you|do you|did you|show|tell|explain|describe|read|extract|find|get|give|list|count)/i.test(lowerMsg)) {
+            // Only if message is short (≤10 words) and doesn't explicitly request web search or memory
+            const wordCount = messageToClassify.split(/\s+/).length;
+            const isWebSearchRequest = /search|google|look up|find online|web/i.test(lowerMsg);
+            const isMemoryRequest = /remember|memory|recall|stored|saved/i.test(lowerMsg);
+            
+            if (wordCount <= 10 && !isWebSearchRequest && !isMemoryRequest) {
+              console.log(`🔗 [NODE:PARSE_INTENT] Detected vague follow-up after screen query: "${lowerMsg}" (${wordCount} words)`);
+              isFollowUpScreenQuery = true;
+            }
+          }
+        }
       }
     }
     
@@ -317,6 +354,49 @@ module.exports = async function parseIntent(state) {
         console.log(`🔄 [NODE:PARSE_INTENT] Smart fallback: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "command" (system query detected)`);
         finalIntent = 'command';
         finalConfidence = 0.75; // Boost confidence for command
+      }
+    }
+ 
+    // ── SEMANTIC CONTEXT MISMATCH DETECTOR ──────────────────────────────────
+    // If query doesn't semantically match recent conversation, it's likely about screen content
+    // This catches cases like "summarize this bible chapter" when previous conversation was about code
+    if ((finalIntent === 'question' || finalIntent === 'web_search') && 
+        finalConfidence < 0.7 && 
+        recentMessages.length >= 3) {
+      
+      // Check if query has vague references (this/that/the) that could refer to screen
+      const hasVagueReference = /(^|\s)(this|that|the|it|here)\s/i.test(messageToClassify);
+      
+      if (hasVagueReference) {
+        // Get last 3-4 user messages to check semantic relevance
+        const recentUserMessages = recentMessages
+          .filter(msg => msg.role === 'user')
+          .slice(-4)
+          .map(msg => msg.content.toLowerCase());
+        
+        // Extract key nouns/topics from current query
+        const queryWords = messageToClassify.toLowerCase()
+          .replace(/\b(this|that|the|it|a|an|my|your|is|are|was|were|do|does|did|can|could|would|should|will|what|how|why|when|where|who)\b/gi, '')
+          .split(/\s+/)
+          .filter(w => w.length > 3);
+        
+        // Check if any query words appear in recent conversation
+        let matchCount = 0;
+        for (const word of queryWords) {
+          if (recentUserMessages.some(msg => msg.includes(word))) {
+            matchCount++;
+          }
+        }
+        
+        const matchRatio = queryWords.length > 0 ? matchCount / queryWords.length : 0;
+        
+        // If less than 30% of query words match recent conversation, likely referring to screen
+        if (matchRatio < 0.3 && queryWords.length >= 2) {
+          console.log(`🎯 [NODE:PARSE_INTENT] Semantic mismatch detected: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "screen_intelligence"`);
+          console.log(`   📊 Query words: [${queryWords.join(', ')}] | Match ratio: ${(matchRatio * 100).toFixed(0)}% | Recent context: [${recentUserMessages.join(' | ')}]`);
+          finalIntent = 'screen_intelligence';
+          finalConfidence = 0.85;
+        }
       }
     }
 

@@ -44,6 +44,9 @@ function createScreenIntelligenceOverlay() {
     show: false, // Don't show on creation
     hasShadow: false,
     enableLargerThanScreen: true,
+    // CRITICAL: Use panel type to appear over fullscreen apps
+    type: 'panel',
+    fullscreenable: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -55,8 +58,9 @@ function createScreenIntelligenceOverlay() {
   // Initially make window click-through (pass clicks to underlying windows)
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
 
-  // Set window level to float above everything
-  overlayWindow.setAlwaysOnTop(true, 'screen-saver');
+  // Set window level to float above everything - 'floating' is sufficient for panel windows
+  overlayWindow.setAlwaysOnTop(true, 'floating', 1);
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   // Handle mouse events from renderer - toggle click-through based on panel hover
   overlayWindow.webContents.on('ipc-message', (event, channel, isOverPanel) => {
@@ -90,7 +94,10 @@ function showHighlights(elements, duration = 3000) {
     createScreenIntelligenceOverlay();
   }
 
-  overlayWindow.show();
+  console.log(`🎨 [OVERLAY] Showing highlights: ${elements.length} elements, duration: ${duration}ms`);
+  overlayWindow.showInactive(); // Show without stealing focus
+  console.log(`🎨 [OVERLAY] Window shown, isVisible: ${overlayWindow.isVisible()}`);
+  
   overlayWindow.webContents.send('screen-intelligence:show-highlights', {
     elements,
     duration
@@ -98,9 +105,13 @@ function showHighlights(elements, duration = 3000) {
 
   // Auto-hide after duration
   if (duration > 0) {
+    console.log(`⏰ [OVERLAY] Setting auto-hide timer for ${duration}ms`);
     setTimeout(() => {
+      console.log(`⏰ [OVERLAY] Auto-hide timer triggered`);
       hideOverlay();
     }, duration);
+  } else {
+    console.log(`✅ [OVERLAY] No auto-hide - overlay will stay visible`);
   }
 }
 
@@ -118,7 +129,7 @@ function showDiscoveryMode(elements) {
   const { x, y, width, height } = currentDisplay.bounds;
   overlayWindow.setBounds({ x, y, width, height });
 
-  overlayWindow.show();
+  overlayWindow.showInactive(); // Show without stealing focus
   overlayWindow.webContents.send('screen-intelligence:show-discovery', {
     elements
   });
@@ -132,7 +143,7 @@ function showToast(message, type = 'info', duration = 3000) {
     createScreenIntelligenceOverlay();
   }
 
-  overlayWindow.show();
+  overlayWindow.showInactive(); // Show without stealing focus
   overlayWindow.webContents.send('screen-intelligence:show-toast', {
     message,
     type,
@@ -153,7 +164,7 @@ function showActionGuide(guide) {
     createScreenIntelligenceOverlay();
   }
 
-  overlayWindow.show();
+  overlayWindow.showInactive(); // Show without stealing focus
   overlayWindow.webContents.send('screen-intelligence:show-guide', guide);
 }
 
@@ -170,9 +181,12 @@ function clearOverlays() {
  * Hide overlay window
  */
 function hideOverlay() {
+  console.log(`🙈 [OVERLAY] hideOverlay() called`);
+  console.trace('hideOverlay call stack');
   if (overlayWindow) {
     overlayWindow.webContents.send('screen-intelligence:clear-all');
     overlayWindow.hide();
+    console.log(`🙈 [OVERLAY] Window hidden`);
   }
 }
 
