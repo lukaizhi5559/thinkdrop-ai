@@ -43,8 +43,10 @@ module.exports = async function parseIntent(state) {
     // ── PRE-CHECK: Catch obvious intents before phi4 classification ──────────────
     const lowerMsg = messageToClassify.toLowerCase().trim();
     
-    // Check for vision/screen queries FIRST (before command check)
-    const visionPatterns = [
+    // Check for screen analysis queries (unified: vision + screen intelligence)
+    // All screen-related queries now route to screen intelligence (with vision fallback)
+    const screenAnalysisPatterns = [
+      // General screen queries (previously "vision")
       /what (do you|can you) see (on|in) (my|the) screen/i,
       /what'?s? (on|in) (my|the) screen/i,
       /describe (my|the) screen/i,
@@ -57,29 +59,47 @@ module.exports = async function parseIntent(state) {
       /what'?s? in (this|the) (image|screenshot|picture)/i,
       /extract text from (my|the) screen/i,
       /ocr (my|the) screen/i,
-      /read text from (my|the) screen/i
+      /read text from (my|the) screen/i,
+      // Specific screen intelligence queries
+      /how many (files?|folders?|items?) (are |is )?(on|in) (my|the) desktop/i,
+      /what (files?|folders?|items?) (are|do i have) (on|in) (my|the) desktop/i,
+      /list (my|the) desktop (files?|folders?|items?)/i,
+      /count (my|the) desktop (files?|folders?|items?)/i,
+      /what (windows?|apps?) (are|do i have) open/i,
+      /what'?s? (in|on) (my|the) (browser|chrome|safari|firefox|edge)/i,
+      /what (email|message|page|website) (am i|is) (looking at|viewing|reading)/i,
+      /what (does|is) (this|the) (email|page|website) (say|about)/i,
+      /what'?s? (this|the|my)? ?(email|message|page|website|document|form|article) (say|about)/i,
+      /what (does|is) (this|the) (section|clause|paragraph|disclaimer|warning|notification|error|popup|dialog) (say|mean|about)/i,
+      /what'?s? (this|the)? ?(section|clause|paragraph|disclaimer|warning|notification|error|popup|dialog|button|icon|menu|field|label|image|chart|graph|table|list|text|heading|title|link|option) (say|mean|about|for|do|showing)/i,
+      /who (is|sent|'?s?) (this|the)? ?(person|email|message)/i,
+      /who (is|are) (in|at) (this|the) (photo|image|picture|bottom|top|left|right|corner)/i,
+      /read (my|the) (email|browser|webpage)/i,
+      /what (buttons?|elements?) (are|can i) (see|click)/i,
+      /find (the|a) (button|element|link) (to|for|that)/i,
+      // Action-oriented screen queries
+      /translate (this|the|that) .* on (my|the) screen/i,
+      /(polish|fix|correct|improve|rewrite|proofread|check) (this|the|that) .* on (my|the) screen/i,
+      /respond to (this|the|that) .* on (my|the) screen/i
     ];
     
-    // Check for follow-up vision queries (when previous message was a vision query)
-    // Only match very specific follow-up patterns that clearly indicate wanting to see the screen again
-    let isFollowUpVisionQuery = false;
+    // Check for follow-up screen queries (when previous message was a screen query)
+    let isFollowUpScreenQuery = false;
     if (recentMessages.length >= 2 && /^(what about now|how about now|and now)$/i.test(lowerMsg)) {
-      // Check if the previous USER message was a vision query
       const prevUserMsg = recentMessages[recentMessages.length - 2];
       if (prevUserMsg && prevUserMsg.role === 'user') {
-        // Only trigger if previous message matched vision patterns
-        isFollowUpVisionQuery = visionPatterns.some(pattern => pattern.test(prevUserMsg.content));
+        isFollowUpScreenQuery = screenAnalysisPatterns.some(pattern => pattern.test(prevUserMsg.content));
       }
     }
     
-    const isVisionQuery = visionPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpVisionQuery;
+    const isScreenAnalysisQuery = screenAnalysisPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpScreenQuery;
     
-    if (isVisionQuery) {
-      console.log('👁️  [NODE:PARSE_INTENT] Pre-check: Detected vision/screen query, forcing vision intent');
+    if (isScreenAnalysisQuery) {
+      console.log('🎯 [NODE:PARSE_INTENT] Pre-check: Detected screen analysis query, routing to screen_intelligence (vision fallback)');
       return {
         ...state,
         intent: {
-          type: 'vision',
+          type: 'screen_intelligence',
           confidence: 0.95,
           entities: [],
           requiresMemoryAccess: false

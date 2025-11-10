@@ -314,7 +314,7 @@ const IntentResponses = {
         return this._getFarewellResponse(message);
 
       default:
-        return "I understand. How can I assist you?";
+        return "Still thinking...";
     }
   },
 

@@ -36,6 +36,7 @@ const sanitizeWebNode = require('./nodes/sanitizeWeb.cjs');
 const storeMemoryNode = require('./nodes/storeMemory.cjs');
 const executeCommandNode = require('./nodes/executeCommand.cjs');
 const visionNode = require('./nodes/vision.cjs');
+const screenIntelligenceNode = require('./nodes/screenIntelligence.cjs');
 
 class AgentOrchestrator {
   constructor() {
@@ -82,7 +83,10 @@ class AgentOrchestrator {
       // Command execution subgraph
       executeCommand: (state) => executeCommandNode({ ...state, mcpClient: this.mcpClient }),
       
-      // Vision processing subgraph
+      // Screen intelligence subgraph (primary screen analysis)
+      screenIntelligence: (state) => screenIntelligenceNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // Vision processing subgraph (fallback for screen intelligence failures)
       vision: (state) => visionNode({ ...state, mcpClient: this.mcpClient }),
       
       // Web search subgraph
@@ -114,6 +118,93 @@ class AgentOrchestrator {
       
       // Parallel execution nodes
       parallelWebAndMemory: async (state) => {
+        // Check if query mentions screen-related keywords that might benefit from screen context
+        // NOTE: This is a TEMPORARY fallback until Phase 3 multi-intent support
+        // Being overly inclusive to avoid false negatives - false positives are acceptable
+        const queryLower = (state.message || '').toLowerCase();
+        const screenKeywords = [
+          // Screen references
+          'on my screen', 'on the screen', 'on this screen', 'on screen',
+          'my screen', 'the screen', 'this screen',
+          'what i see', 'what im seeing', "what i'm seeing", 'what i am seeing',
+          'looking at', 'viewing', 'seeing', 'visible',
+          
+          // Code references
+          'my code', 'this code', 'the code', 'my script', 'this script', 'the script',
+          'my function', 'this function', 'the function',
+          'my class', 'this class', 'the class',
+          'my component', 'this component', 'the component',
+          'my file', 'this file', 'the file',
+          'my program', 'this program', 'the program',
+          'my app', 'this app', 'the app',
+          'my implementation', 'this implementation', 'the implementation',
+          'my logic', 'this logic', 'the logic',
+          'my method', 'this method', 'the method',
+          
+          // Styling references
+          'my css', 'this css', 'the css',
+          'my styles', 'this style', 'the style',
+          'my styling', 'this styling', 'the styling',
+          'my html', 'this html', 'the html',
+          'my layout', 'this layout', 'the layout',
+          
+          // Error references
+          'this error', 'the error', 'error message', 'error code',
+          'this bug', 'the bug', 'this issue', 'the issue',
+          'this problem', 'the problem', 'this warning', 'the warning',
+          'this exception', 'the exception',
+          
+          // Content references
+          'this page', 'the page', 'this website', 'the website',
+          'this email', 'the email', 'this message', 'the message',
+          'this text', 'the text', 'this document', 'the document',
+          'this form', 'the form', 'this field', 'the field',
+          'this section', 'the section', 'this paragraph', 'the paragraph',
+          'this line', 'the line', 'these lines', 'the lines',
+          
+          // UI references
+          'this button', 'the button', 'this link', 'the link',
+          'this menu', 'the menu', 'this dialog', 'the dialog',
+          'this popup', 'the popup', 'this modal', 'the modal',
+          'this window', 'the window', 'this tab', 'the tab',
+          'this panel', 'the panel', 'this sidebar', 'the sidebar',
+          
+          // Demonstrative pronouns (very common in screen queries)
+          'here', 'right here', 'over here',
+          'above', 'below', 'next to',
+          
+          // Action verbs that imply screen content
+          'debug this', 'fix this', 'correct this', 'improve this',
+          'check this', 'review this', 'analyze this', 'explain this',
+          'translate this', 'rewrite this', 'polish this', 'optimize this',
+          
+          // Questions about visible content
+          'what does this', 'what is this', 'what are these',
+          'why does this', 'why is this', 'why are these',
+          'how does this', 'how is this', 'how are these',
+          'where is this', 'where are these',
+          
+          // Possessive references
+          'in my', 'in this', 'in the',
+          'with my', 'with this', 'with the',
+          'from my', 'from this', 'from the'
+        ];
+        
+        const needsScreenContext = screenKeywords.some(keyword => queryLower.includes(keyword));
+        
+        if (needsScreenContext && state.intent?.type === 'question') {
+          console.log('🎯 [NODE:PARALLEL] Question mentions screen content - capturing screen context first...');
+          try {
+            // Capture screen context before parallel execution
+            const screenState = await screenIntelligenceNode({ ...state, mcpClient: this.mcpClient });
+            // Merge screen context into state
+            state = { ...state, ...screenState };
+            console.log('✅ [NODE:PARALLEL] Screen context captured, proceeding with web search + memory retrieval');
+          } catch (error) {
+            console.warn('⚠️  [NODE:PARALLEL] Failed to capture screen context, continuing without it:', error.message);
+          }
+        }
+        
         console.log('🔄 [NODE:PARALLEL] Running webSearch + retrieveMemory in parallel...');
         return await this.stateGraph.executeParallel(['webSearch', 'retrieveMemory'], state);
       },
@@ -148,10 +239,11 @@ class AgentOrchestrator {
         if (useOnlineMode) {
           console.log('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
           
-          // Vision: screen capture and analysis (works in both modes)
-          if (intentType === 'vision') {
-            console.log('👁️  [STATEGRAPH:ROUTER] Vision intent detected - routing to vision');
-            return 'vision';
+          // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
+          // Vision intent now routes to screen intelligence first, falls back to vision service if needed
+          if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
+            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - routing to screenIntelligence (vision fallback available)');
+            return 'screenIntelligence';
           }
           
           // Commands: system commands
@@ -171,10 +263,11 @@ class AgentOrchestrator {
         
         // 🔒 PRIVATE MODE: Use web search for time-sensitive queries
         
-        // Vision: screen capture and analysis (works in both online and private mode)
-        if (intentType === 'vision') {
-          console.log('👁️  [STATEGRAPH:ROUTER] Vision intent detected - routing to vision');
-          return 'vision';
+        // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
+        // Vision intent now routes to screen intelligence first, falls back to vision service if needed
+        if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
+          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - routing to screenIntelligence (vision fallback available)');
+          return 'screenIntelligence';
         }
         
         // Commands: system commands (works in both online and private mode)
@@ -195,16 +288,27 @@ class AgentOrchestrator {
           return 'answer'; // Skip memory retrieval for greetings
         }
         
-        // Context, memory_retrieve, and unknowns: standard path (retrieve from memory only)
+        // Memory_retrieve and unknowns: standard path (retrieve from memory only)
         return 'retrieveMemory';
       },
       
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
       
-      // Vision processing subgraph
+      // Screen intelligence subgraph (primary screen analysis)
+      screenIntelligence: (state) => {
+        // If screen intelligence failed, fallback to vision service
+        if (state.screenIntelligenceError) {
+          console.log('⚠️  [STATEGRAPH:FALLBACK] Screen intelligence failed, falling back to vision service');
+          return 'vision';
+        }
+        // Screen intelligence succeeded, proceed to answer
+        return 'answer';
+      },
+      
+      // Vision processing subgraph (fallback only)
       vision: (state) => {
-        // Vision node adds visual context to state
+        // Vision node adds visual context to state as fallback
         // Always proceed to answer node to interpret visual content
         return 'answer';
       },

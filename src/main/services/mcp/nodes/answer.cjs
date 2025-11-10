@@ -155,7 +155,24 @@ module.exports = async function answer(state) {
   let processedOutput = commandOutput; // Create mutable copy
   
   try {
-    // Build system instructions
+    // ═══════════════════════════════════════════════════════════
+    // Build INTENT-DRIVEN system instructions
+    // 
+    // DESIGN PRINCIPLE: Only include instructions relevant to the current intent
+    // This reduces token usage, improves model focus, and prevents instruction dilution
+    // 
+    // Structure:
+    // 1. Base instructions (always included)
+    // 2. Follow-up question handling (if conversation history exists)
+    // 3. Intent-specific instructions (only ONE of these):
+    //    - screen_intelligence: Screen reading and UI element extraction
+    //    - web_search: Using web search results
+    //    - memory_retrieve: Using stored memories
+    //    - question: Generic factual questions
+    // 4. Special cases (command interpretation, meta-questions)
+    // ═══════════════════════════════════════════════════════════
+    
+    // Base instructions (always included)
     let systemInstructions = `You are a helpful AI assistant. Answer concisely and directly.
 
 Guidelines:
@@ -164,35 +181,103 @@ Guidelines:
 - Pay special attention to the MOST RECENT messages (at the end of the history)
 - If the user provides clarification or answers your question, it will be in the LAST user message
 - Be brief and to the point
-- Don't repeat information already discussed
+- Don't repeat information already discussed`;
+
+    // Add follow-up question handling (only if there's conversation history)
+    if (filteredHistory && filteredHistory.length > 0) {
+      systemInstructions += `
 
 CRITICAL CONTEXT AWARENESS:
 - If the user asks a FOLLOW-UP QUESTION (e.g., "give me examples", "tell me more", "what else"), you MUST read the conversation history to understand what topic they're referring to
 - Look at the PREVIOUS messages to identify the subject being discussed
 - For example: If the conversation was about "MCP" and the user says "give me examples", they want examples of MCP, NOT examples of the phrase "give me"
-- ALWAYS interpret vague requests in the context of the ongoing conversation topic
+- ALWAYS interpret vague requests in the context of the ongoing conversation topic`;
+    }
 
-CRITICAL FACTUAL INFORMATION PROTOCOL:
-1. **IF WEB SEARCH RESULTS ARE PROVIDED BELOW, YOU MUST USE THEM TO ANSWER THE QUESTION.**
-   - DO NOT say "I don't have that information" if web results are provided
-   - DO NOT say "Let me look that up" if web results are provided
-   - Extract key facts from the web results and provide a direct, informative answer
-   - The web results contain the answer - use them!
+    // ═══════════════════════════════════════════════════════════
+    // INTENT-SPECIFIC INSTRUCTIONS
+    // ═══════════════════════════════════════════════════════════
+    
+    // Screen Intelligence Intent
+    if (state.intent?.type === 'screen_intelligence' && state.screenContext) {
+      systemInstructions += `
 
-2. If NO web results are provided AND the user asks about FACTUAL INFORMATION about the world (e.g., "who is X", "what is Y", "when was X created", "how old is Z", etc.):
-   - IMPORTANT: Web search was already attempted but returned no results (offline or no matches)
-   - Answer the question using your own knowledge from training data
-   - Be direct and factual - provide the best answer you can from what you know
-   - If you truly don't know, say "I don't have reliable information about that" (but try to answer first!)
-   - DO NOT say "I need to search online" - web search was already tried
+🚨 CRITICAL SCREEN INTELLIGENCE PROTOCOL 🚨
+YOU ARE ANALYZING THE USER'S SCREEN RIGHT NOW!
 
-3. If the user asks about THEIR OWN preferences or past statements (e.g., "what do I like", "what did I say about myself") and you DON'T have it in memories, respond:
-   "I don't have that information stored yet."
+The screen analysis below contains ACTUAL UI ELEMENTS extracted from the user's display.
+Each element shows: [Element Type]: [Label/Text] - [Price if applicable] [Screen Region]
 
-4. If the user explicitly asks you to search online (e.g., "can you look online", "search for it"), respond EXACTLY:
-   "I'll search online for that information now."
+MANDATORY RESPONSE RULES:
+1. When asked "what do you see in [location]", EXTRACT AND LIST the specific items shown in that location
+2. DO NOT give generic responses like "The user is referring to an item from a website"
+3. DO NOT say "I cannot see" or "I don't have the capability" - YOU ARE SEEING IT RIGHT NOW
+4. DO NOT ask for clarification when the screen data clearly shows the answer
+5. BE SPECIFIC - mention product names, prices, and discounts exactly as shown
 
-These exact phrases will trigger a web search to get the answer.`;
+EXAMPLE:
+User asks: "what do you see in the lower right"
+Screen shows: "link: Bestbee Women's Pajama Set - $11.99 (40% off) [lower right]"
+CORRECT response: "In the lower right, I see a Bestbee Women's Pajama Set for $11.99 (40% off)"
+WRONG response: "The user is referring to an item from a website"
+
+YOU MUST EXTRACT THE ACTUAL PRODUCT NAMES AND DETAILS FROM THE SCREEN DATA!
+
+CONTENT EXTRACTION:
+- If SELECTED TEXT is provided, it takes HIGHEST PRIORITY - the user highlighted this text and wants you to work with it
+- If the user asks "what do you see" or "what's on my screen", describe the MAIN CONTENT visible
+- If the user asks about an email, webpage, or document, extract the key information from the BROWSER CONTENT or PAGE CONTENT section
+- Focus on the ACTUAL TEXT and CONTENT shown, not on describing the interface itself
+- Be direct and factual - summarize what you see, don't analyze the platform
+
+ACTION-ORIENTED RESPONSES:
+- If asked to "respond to this email" or "draft a reply", compose a professional response based on the email content
+- If asked to "fix grammar" or "polish this", provide the corrected version of the text
+- If asked to "translate" or "what does this say", EXTRACT THE TEXT FROM THE SCREEN and provide the translation immediately
+- If asked to "summarize", provide a concise summary
+- BE HELPFUL - don't just describe, take action on what the user requests
+- NEVER give instructions on how to do something when you can do it directly`;
+    }
+    
+    // Web Search Intent
+    else if (contextDocs && contextDocs.length > 0) {
+      systemInstructions += `
+
+CRITICAL WEB SEARCH PROTOCOL:
+- Web search results are provided below - YOU MUST USE THEM to answer the question
+- DO NOT say "I don't have that information" when web results are provided
+- DO NOT say "Let me look that up" when web results are provided
+- Extract key facts from the web results and provide a direct, informative answer
+- The web results contain the answer - use them!`;
+    }
+    
+    // Memory Retrieval Intent
+    else if (filteredMemories && filteredMemories.length > 0) {
+      systemInstructions += `
+
+CRITICAL MEMORY PROTOCOL:
+- The "memories" section contains factual information from PREVIOUS conversations (possibly from days or weeks ago)
+- If the user asks about appointments, preferences, or past statements, USE THE MEMORIES to provide specific details
+- PRONOUN RESOLUTION: ALWAYS prioritize the MOST RECENT conversation history over old memories
+  * If the last few messages discuss a specific person, that person is the referent for pronouns
+  * Only use memories if there's NO relevant person mentioned in recent conversation history`;
+    }
+    
+    // Generic Question Intent (no special context)
+    else if (state.intent?.type === 'question') {
+      systemInstructions += `
+
+FACTUAL INFORMATION PROTOCOL:
+- If the user asks about FACTUAL INFORMATION about the world (e.g., "who is X", "what is Y", "when was X created"):
+  * Answer using your knowledge from training data
+  * Be direct and factual - provide the best answer you can from what you know
+  * If you truly don't know, say "I don't have reliable information about that"
+  * DO NOT say "I need to search online" - just answer from your knowledge
+- If the user asks about THEIR OWN preferences or past statements and you DON'T have it in memories:
+  * Respond: "I don't have that information stored yet."
+- If the user explicitly asks you to search online (e.g., "can you look online", "search for it"):
+  * Respond EXACTLY: "I'll search online for that information now." (this triggers a web search)`;
+    }
 
     // Add command output interpretation instructions
     if (needsInterpretation) {
@@ -221,9 +306,9 @@ SPECIFIC PATTERNS:
 The command output will be provided below. Interpret it confidently and directly.`;
     }
 
-    // Add meta-question handling
+    // Add meta-question handling (only if user is asking about their own previous messages)
     if (queryMessage.toLowerCase().includes('what did i')) {
-      systemInstructions += `\nCRITICAL INSTRUCTION: The user is asking what they previously said.
+      systemInstructions += `\n\nMETA-QUESTION PROTOCOL:\nThe user is asking what they previously said.
 The conversation history is in CHRONOLOGICAL ORDER (oldest → newest).
 STEP 1: Find the user message that has "[MOST RECENT USER MESSAGE]" at the very start.
 STEP 2: Extract ONLY the text AFTER "[MOST RECENT USER MESSAGE] " (note the space).
@@ -238,26 +323,6 @@ Example conversation history (chronological order):
 Correct response: "You asked: What do I like to eat"
 
 DO NOT extract from the last user message (that's the current question). ONLY extract from the marked user message.`;
-    }
-
-    // Add memory usage instructions
-    if (filteredMemories.length > 0) {
-      systemInstructions += `\nIMPORTANT: The "memories" section contains factual information from PREVIOUS conversations (possibly from days or weeks ago).
-
-APPOINTMENT QUERIES: If the user asks about appointments (e.g., "when do I have an appt", "when is my appointment"), USE THE MEMORIES to provide specific details (date, time, type).
-
-PRONOUN RESOLUTION: When resolving pronouns like "he", "she", "it", ALWAYS prioritize the MOST RECENT conversation history over old memories.
-- If the last few messages discuss a specific person, that person is the referent for pronouns.
-- Only use memories if there's NO relevant person mentioned in recent conversation history.
-Example: If recent messages discuss "Anthony Albanese" and user asks "how old is he", they mean Anthony Albanese, NOT someone from an old memory.`;
-      
-      // List memory topics
-      const memoryTopics = filteredMemories.map(m => {
-        const preview = m.text.substring(0, 50);
-        return `  ${preview}...`;
-      }).join('\n');
-      
-      systemInstructions += `\nThe user has mentioned these in PAST conversations (check memories for details):\n${memoryTopics}`;
     }
 
     // Add web search context instructions
@@ -310,11 +375,19 @@ Use these current web results to answer. Extract key facts and answer directly.`
     // conversation history, memories, or web results
     const isCommandWithInterpretedOutput = needsInterpretation && processedOutput;
     
-    // Prepare the query - add visual context directly to query for vision intents
+    // Prepare the query - add context directly to query for vision/screen intents
     let finalQuery = queryMessage;
     if (state.visualContext && state.intent?.type === 'vision') {
       finalQuery = `${queryMessage}\n\n${state.visualContext}`;
       console.log('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
+    } else if (state.screenContext && state.intent?.type === 'screen_intelligence') {
+      // Frame screen context as actual data the AI can see, not metadata
+      finalQuery = `I have analyzed your screen and here is what I can see:\n\n${state.screenContext}\n\nBased on this screen analysis, ${queryMessage}`;
+      console.log('🎯 [NODE:ANSWER] Added screen context BEFORE query for screen_intelligence intent');
+    } else if (state.context) {
+      // Generic context from other nodes
+      finalQuery = `${queryMessage}\n\n${state.context}`;
+      console.log('📋 [NODE:ANSWER] Added generic context to query');
     }
     
     const payload = {
@@ -400,7 +473,7 @@ Use these current web results to answer. Extract key facts and answer directly.`
           id: requestId,
           type: 'llm_request',
           payload: {
-            prompt: queryMessage,
+            prompt: payload.query,  // ✅ Use payload.query which includes screen context
             provider: 'openai',
             options: {
               temperature: 0.7,
