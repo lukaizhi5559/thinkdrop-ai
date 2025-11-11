@@ -39,21 +39,22 @@ export function Toast({ message, type, duration = 4000, onClose }: ToastProps) {
   return (
     <div
       className={`
-        flex items-center gap-3 px-4 py-3 rounded-lg border
-        backdrop-blur-sm shadow-lg
+        flex items-center gap-3 px-4 py-4 rounded-xl border
+        backdrop-blur-md shadow-2xl
         transition-all duration-300 ease-out
+        min-w-[300px] max-w-[600px]
         ${colors[type]}
-        ${isExiting ? 'opacity-0 translate-x-4' : 'opacity-100 translate-x-0'}
+        ${isExiting ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0'}
       `}
     >
       {icons[type]}
-      <span className="text-sm font-medium text-white/90">{message}</span>
+      <span className="text-sm font-medium text-white/90 flex-1 leading-relaxed">{message}</span>
       <button
         onClick={() => {
           setIsExiting(true);
           setTimeout(onClose, 300);
         }}
-        className="ml-2 text-white/50 hover:text-white/80 transition-colors"
+        className="text-white/50 hover:text-white/80 transition-colors text-2xl leading-none flex-shrink-0 ml-2"
         aria-label="Close notification"
       >
         ×
@@ -80,7 +81,7 @@ export function useToast() {
   };
 
   const ToastContainer = () => (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
+    <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 flex flex-col gap-2">
       {toasts.map((toast) => (
         <Toast
           key={toast.id}

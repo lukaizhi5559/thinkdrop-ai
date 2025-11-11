@@ -45,6 +45,22 @@ function registerScreenIntelligenceHandlers() {
     }
   });
 
+  // Highlight a single element (from Vision Panel)
+  ipcMain.on('screen-intelligence:highlight', (event, elementData) => {
+    try {
+      // Convert single element to array format for showHighlights
+      const elements = [{
+        bounds: elementData.bounds,
+        role: elementData.role,
+        label: elementData.label || elementData.value,
+        confidence: elementData.confidence || 1.0
+      }];
+      showHighlights(elements, 5000); // Show for 5 seconds
+    } catch (error) {
+      console.error('Failed to highlight element:', error);
+    }
+  });
+
   // Show discovery mode
   ipcMain.handle('screen-intelligence:show-discovery', async (event, data) => {
     try {
@@ -113,6 +129,21 @@ function registerScreenIntelligenceHandlers() {
       };
     } catch (error) {
       console.error('Failed to get overlay status:', error);
+      return { success: false, error: error.message };
+    }
+  });
+
+  // Refresh screen capture (clear cache and force new analysis)
+  ipcMain.handle('screen-intelligence:refresh', async () => {
+    try {
+      const vdom = global.virtualScreenDOM;
+      if (vdom && vdom.clearCache) {
+        vdom.clearCache();
+        console.log('🔄 [SCREEN_INTELLIGENCE] Cache cleared - next query will trigger fresh analysis');
+      }
+      return { success: true };
+    } catch (error) {
+      console.error('Failed to refresh screen intelligence:', error);
       return { success: false, error: error.message };
     }
   });

@@ -204,10 +204,11 @@ CRITICAL CONTEXT AWARENESS:
       systemInstructions += `
 
 🚨 SCREEN INTELLIGENCE: When you see "USER REQUEST:" + "SCREEN CONTEXT:":
-1. Read the user's request
-2. Find relevant info in "Full Screen Text (OCR):" section
-3. Perform the requested action (don't just describe)
-4. For "draft a response" - write the actual response immediately
+1. Read the user's request carefully
+2. If a 🎯 TARGET is specified, focus ONLY on that specific element/area
+3. Find relevant info in "Full Screen Text (OCR):" section
+4. Perform the requested action (don't just describe)
+5. For "draft a response" - write the actual response immediately
 
 🚨 CRITICAL SCREEN INTELLIGENCE PROTOCOL 🚨
 YOU ARE ANALYZING THE USER'S SCREEN RIGHT NOW!
@@ -215,12 +216,18 @@ YOU ARE ANALYZING THE USER'S SCREEN RIGHT NOW!
 The screen analysis below contains ACTUAL UI ELEMENTS extracted from the user's display.
 Each element shows: [Element Type]: [Label/Text] - [Price if applicable] [Screen Region]
 
+⚠️ PRIORITY: Screen context takes ABSOLUTE PRIORITY over web search results!
+- If screen context is provided, answer from the screen data FIRST
+- Only use web results if the screen doesn't contain the answer
+- DO NOT say "web search results don't provide information" when screen data is available
+
 MANDATORY RESPONSE RULES:
 1. When asked "what do you see in [location]", EXTRACT AND LIST the specific items shown in that location
 2. DO NOT give generic responses like "The user is referring to an item from a website"
 3. DO NOT say "I cannot see" or "I don't have the capability" - YOU ARE SEEING IT RIGHT NOW
 4. DO NOT ask for clarification when the screen data clearly shows the answer
 5. BE SPECIFIC - mention product names, prices, and discounts exactly as shown
+6. DO NOT prioritize web search results over screen data - the screen is what the user is looking at RIGHT NOW
 
 EXAMPLE:
 User asks: "what do you see in the lower right"
@@ -250,14 +257,20 @@ CODE EDITOR / TERMINAL RESPONSES:
 - If analyzing a CODE EDITOR (VS Code, Windsurf, Cursor), focus on the CODE CONTENT visible in the editor
 - Extract function names, class names, variable names, and code logic from the OCR text
 - If asked "what do you see", describe the code structure, not just "a code editor"
-- For TERMINAL windows, describe the commands and output visible, not just "terminal interface"
+- For TERMINAL/CONSOLE windows (Warp, iTerm, Terminal), describe the commands and output visible, not just "terminal interface"
 - Be specific about file names, line numbers, and code patterns you can identify
 
 EXAMPLE (Code Editor):
 Screen shows: "function createWindow() { const win = new BrowserWindow({ width: 800 }) }"
 User asks: "what do you see here"
 CORRECT: "I see a JavaScript function called createWindow() that creates a new BrowserWindow with a width of 800 pixels"
-WRONG: "I see a desktop interface with no visible desktop items. There are two accessibility elements in the browser content section - Electron's main.cjs file and no interactive elements."`;
+WRONG: "I see a desktop interface with no visible desktop items. There are two accessibility elements in the browser content section - Electron's main.cjs file and no interactive elements."
+
+EXAMPLE (Terminal/Console):
+User asks: "what's in the warp console"
+Screen shows OCR text with: "yarn dev", "MCP Request", "Response status: 200 OK", "MCP Success: conversation.message.list"
+CORRECT: "The Warp console shows a yarn dev command running. I can see MCP service requests and responses, including successful calls to conversation.message.list with 200 OK status codes."
+WRONG: "The web search results do not provide information about what is in the Warp Console."`;
     }
     
     // Web Search Intent
@@ -403,7 +416,13 @@ Use these current web results to answer. Extract key facts and answer directly.`
       console.log('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
     } else if (state.screenContext && state.intent?.type === 'screen_intelligence') {
       // Put user's request FIRST, then provide screen data as context
-      finalQuery = `USER REQUEST: ${queryMessage}\n\nSCREEN CONTEXT (use this to fulfill the user's request):\n${state.screenContext}`;
+      // If a target entity was extracted, highlight it in the request
+      let userRequest = queryMessage;
+      if (state.targetEntity) {
+        userRequest = `${queryMessage}\n\n🎯 TARGET: Focus on "${state.targetEntity}"`;
+        console.log(`🎯 [NODE:ANSWER] Target entity highlighted: "${state.targetEntity}"`);
+      }
+      finalQuery = `USER REQUEST: ${userRequest}\n\nSCREEN CONTEXT (use this to fulfill the user's request):\n${state.screenContext}`;
       console.log('🎯 [NODE:ANSWER] Added screen context AFTER query for screen_intelligence intent');
     } else if (state.context) {
       // Generic context from other nodes

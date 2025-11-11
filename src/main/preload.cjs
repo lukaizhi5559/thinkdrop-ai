@@ -21,7 +21,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Insight window controls
   showInsight: () => ipcRenderer.invoke('show-insight'),
   hideInsight: () => ipcRenderer.invoke('hide-insight'),
-  onInsightUpdate: (callback) => ipcRenderer.on('insight-update', callback),
+  onInsightUpdate: (callback) => ipcRenderer.on('insight:update', callback),
+  onInsightLoading: (callback) => ipcRenderer.on('insight:loading', callback),
+  onInsightError: (callback) => ipcRenderer.on('insight:error', callback),
+  refreshInsight: () => ipcRenderer.send('insight:refresh'),
+  refreshInsightWithQuery: (query) => ipcRenderer.send('insight:refresh-with-query', query),
+  requestHighlightInsight: (selectedText, context) => ipcRenderer.send('insight:highlight', selectedText, context),
+  
+  // Insight History
+  invoke: (channel, ...args) => ipcRenderer.invoke(channel, ...args),
   
   // Memory debugger window controls
   showMemoryDebugger: () => ipcRenderer.invoke('show-memory-debugger'),
@@ -30,6 +38,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Chat messaging system
   sendChatMessage: (message) => ipcRenderer.invoke('send-chat-message', message),
   onChatMessage: (callback) => ipcRenderer.on('chat-message', callback),
+  onPopulateChatInput: (callback) => ipcRenderer.on('populate-chat-input', callback),
   onThinkingIndicatorUpdate: (callback) => ipcRenderer.on('thinking-indicator-update', callback),
   adjustChatMessagesHeight: (height) => ipcRenderer.invoke('adjust-chat-messages-height', height),
   
@@ -90,11 +99,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onPrivateModeProgress: (callback) => ipcRenderer.on('private-mode:progress', callback),
   onPrivateModeEarlyResponse: (callback) => ipcRenderer.on('private-mode:early-response', callback),
   onPrivateModeStreamToken: (callback) => ipcRenderer.on('private-mode:stream-token', callback),
+  onPrivateModeSelectionDetected: (callback) => ipcRenderer.on('private-mode:selection-detected', callback),
   removePrivateModeListeners: () => {
     ipcRenderer.removeAllListeners('private-mode:progress');
     ipcRenderer.removeAllListeners('private-mode:early-response');
     ipcRenderer.removeAllListeners('private-mode:stream-token');
+    ipcRenderer.removeAllListeners('private-mode:selection-detected');
   },
+  
+  // Selection Detection
+  checkSelection: () => ipcRenderer.invoke('selection:check'),
+  onSelectionAvailable: (callback) => ipcRenderer.on('selection:available', callback),
+  removeSelectionListener: () => ipcRenderer.removeAllListeners('selection:available'),
   
   // MCP Service Communication
   mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),
@@ -190,6 +206,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   setOverlayClickable: (isClickable) => {
     ipcRenderer.send('overlay:set-clickable', isClickable);
+  },
+  highlightElement: (elementData) => {
+    ipcRenderer.send('screen-intelligence:highlight', elementData);
   },
   
   // System info

@@ -10,16 +10,18 @@ import {
   X,
   Droplet,
   ArrowLeft,
-  Plug
+  Plug,
+  Eye
 } from 'lucide-react';
 import { Button } from './ui/button';
 import ChatMessages from './ChatMessages';
-import InsightWindow from './InsightWindow';
+import InsightPanel from './InsightPanel';
 import MemoryDebugger from './MemoryDebugger';
 import SemanticSearchPanel from './SemanticSearchPanel';
 import AgentStatusPanel from './AgentStatusPanel';
 import OrchestrationDashboard from './OrchestrationDashboard';
 import MCPPanel from './MCPPanel';
+import VisionPanel from './VisionPanel';
 import { CommandConfirmation } from './CommandConfirmation';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { ViewType } from '@/types/view';
@@ -245,6 +247,15 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
             <span className="text-white/90 font-medium text-sm">MCPs</span>
           </>
         );
+      case 'vision':
+        return (
+          <>
+            <div className="w-6 h-6 bg-gradient-to-br from-purple-400 to-pink-500 rounded-lg flex items-center justify-center">
+              <Eye className="w-3 h-3 text-white" />
+            </div>
+            <span className="text-white/90 font-medium text-sm">Vision Panel</span>
+          </>
+        );
       default:
         return (
           <>
@@ -372,7 +383,7 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
       case 'chat':
         return <ChatMessages onPendingConfirmation={setPendingConfirmation} />;
       case 'insight':
-        return <InsightWindow />;
+        return <InsightPanel />;
       case 'memory':
         return <MemoryDebugger />;
       case 'search':
@@ -383,6 +394,8 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
         return <OrchestrationDashboard />;
       case 'mcp':
         return <MCPPanel isOpen={true} />;
+      case 'vision':
+        return <VisionPanel />;
       default:
         return <ChatMessages onPendingConfirmation={setPendingConfirmation} />;
     }
@@ -480,6 +493,14 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
               >
                 <Database className="w-4 h-4 mr-3" />
                 Memory Debugger
+              </Button>
+              <Button
+                variant="ghost"
+                className="w-full justify-start text-white/80 hover:text-white hover:bg-white/10"
+                onClick={() => handleViewChange('vision')}
+              >
+                <Eye className="w-4 h-4 mr-3" />
+                Vision Panel
               </Button>
               <hr className="border-white/10 my-2" />
               <Button

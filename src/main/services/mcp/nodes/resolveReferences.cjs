@@ -20,10 +20,17 @@ function stripHtmlTags(text) {
 }
 
 module.exports = async function resolveReferences(state) {
-  const { mcpClient, message, conversationHistory = [], context } = state;
+  const { mcpClient, message, conversationHistory = [], context, intentType } = state;
 
   console.log('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
   console.log(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
+  
+  // CRITICAL FIX: For screen_intelligence intents, don't use conversation history
+  // because references like "this guy" refer to screen content, not previous conversation
+  const isScreenIntent = intentType === 'screen_intelligence';
+  if (isScreenIntent) {
+    console.log('🖥️  [NODE:RESOLVE_REFERENCES] Screen intelligence intent - skipping conversation history to avoid incorrect resolutions');
+  }
 
   // NOTE: We always run coreference resolution here, but the answer node will use the
   // original message (not the resolved one) for screen_intelligence intent.
@@ -83,9 +90,12 @@ module.exports = async function resolveReferences(state) {
     }
     
     // Call coreference service with fresh history
+    // For screen_intelligence intents, pass empty history to avoid incorrect resolutions
+    const historyToUse = isScreenIntent ? [] : freshConversationHistory.slice(-5);
+    
     const result = await mcpClient.callService('coreference', 'resolve', {
       message,
-      conversationHistory: freshConversationHistory.slice(-5), // Last 5 messages for context
+      conversationHistory: historyToUse, // Empty for screen intents, last 5 for others
       options: {
         includeConfidence: true,
         method: 'auto' // auto, neuralcoref, or rule_based

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 import { ConversationProvider } from './contexts/ConversationContext';
+import { ToastProvider } from './contexts/ToastContext';
 import UnifiedInterface from './components/UnifiedInterface';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
@@ -123,11 +124,13 @@ function App() {
   );
 };
 
-// Wrap App with LocalLLMProvider for agent orchestration context
+// Wrap App with providers for agent orchestration context and global toast
 const AppWithProvider: React.FC = () => {
   return (
     <LocalLLMProvider>
-    <App />
+      <ToastProvider>
+        <App />
+      </ToastProvider>
     </LocalLLMProvider>
   );
 };

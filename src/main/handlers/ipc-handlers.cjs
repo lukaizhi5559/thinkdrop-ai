@@ -123,18 +123,9 @@ function initializeIPCHandlers({
   // ========================================
 
   ipcMain.handle('send-chat-message', async (event, message) => {
-    // Chat messaging now handled by unified overlay React components
-    console.log('Send chat message handled by unified interface');
-    
-    // Forward to unified overlay window instead
-    if (overlayWindow && !overlayWindow.isDestroyed()) {
-      overlayWindow.webContents.send('chat-message', {
-        id: Date.now().toString(),
-        text: message.text,
-        sender: 'user',
-        timestamp: message.timestamp
-      });
-    }
+    // This handler is deprecated - follow-up questions now regenerate insights
+    // instead of sending to chat
+    console.log('⚠️ [IPC] send-chat-message called but deprecated');
   });
 
   ipcMain.handle('adjust-chat-messages-height', (event, height) => {

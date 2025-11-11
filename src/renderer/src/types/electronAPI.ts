@@ -20,6 +20,11 @@ declare global {
       showInsight: () => Promise<void>;
       hideInsight: () => Promise<void>;
       onInsightUpdate: (callback: (event: any, data: any) => void) => void;
+      onInsightLoading: (callback: (event: any, isLoading: boolean) => void) => void;
+      onInsightError: (callback: (event: any, error: string) => void) => void;
+      refreshInsight?: () => void;
+      refreshInsightWithQuery?: (query: string) => void;
+      requestHighlightInsight?: (selectedText: string, context?: string) => void;
       
       // Memory debugger window methods
       showMemoryDebugger: () => Promise<void>;
@@ -59,6 +64,7 @@ declare global {
       onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
       onClarificationRequest: (callback: (event: any, data: any) => void) => void;
       onThinkingIndicatorUpdate: (callback: (event: any, data: any) => void) => void;
+      onPopulateChatInput?: (callback: (event: any, text: string) => void) => void;
       submitClarificationResponse: (stepId: string, response: string | boolean) => Promise<any>;
       startOrchestrationWorkflow: (userInput: string, context?: any) => Promise<any>;
       getOrchestrationStatus: (workflowId: string) => Promise<any>;

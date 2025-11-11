@@ -129,9 +129,16 @@ module.exports = async function parseIntent(state) {
       }
     }
     
+    // Check if highlighted text is present - if so, skip screen analysis pre-check
+    const hasHighlightedText = messageToClassify.includes('[Selected text') || 
+                              messageToClassify.includes('[selected text') ||
+                              messageToClassify.includes('Selected text from') ||
+                              messageToClassify.includes('selected text from') ||
+                              messageToClassify.match(/\[.*text.*from.*\]/i);
+    
     const isScreenAnalysisQuery = screenAnalysisPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpScreenQuery;
     
-    if (isScreenAnalysisQuery) {
+    if (isScreenAnalysisQuery && !hasHighlightedText) {
       console.log('🎯 [NODE:PARSE_INTENT] Pre-check: Detected screen analysis query, routing to screen_intelligence (vision fallback)');
       return {
         ...state,
@@ -142,6 +149,8 @@ module.exports = async function parseIntent(state) {
           requiresMemoryAccess: false
         }
       };
+    } else if (isScreenAnalysisQuery && hasHighlightedText) {
+      console.log('🎯 [NODE:PARSE_INTENT] Pre-check: Screen analysis query detected but highlighted text present, deferring to phi4 classification');
     }
     
     // Strong command indicators (open, close, launch, quit, exit, etc.)

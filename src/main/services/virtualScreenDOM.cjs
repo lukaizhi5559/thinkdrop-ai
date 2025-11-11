@@ -51,6 +51,18 @@ class VirtualScreenDOM {
         
         if (currentWindowId !== this.activeWindow && !this.isAnalyzing) {
           console.log(`🔄 Window focus changed: ${currentWindowId}`);
+          
+          // 📋 If switching TO Electron (Thinkdrop AI), trigger selection capture from previous window
+          if (currentWindowId.startsWith('Electron-') && global.selectionDetector) {
+            console.log('🎯 [FOCUS] Thinkdrop AI gained focus - triggering selection capture');
+            // Trigger immediate capture from the window we just left
+            setTimeout(() => {
+              if (global.selectionDetector) {
+                global.selectionDetector.captureFromPreviousWindow();
+              }
+            }, 100); // Small delay to ensure window transition is complete
+          }
+          
           this.activeWindow = currentWindowId;
           
           // Check if we need to analyze
@@ -200,6 +212,11 @@ class VirtualScreenDOM {
         const message = `✓ ${contextMessage} (${data.elements.length} elements, ${duration}s)`;
         console.log(`✅ ${message}`);
         this.showToast(contextMessage, 'success', 1500);
+        
+        // 🆕 Generate Page Insight automatically after successful analysis
+        this.generatePageInsight(data, windowId).catch(err => {
+          console.warn('⚠️ Failed to generate Page Insight:', err.message);
+        });
       } else {
         console.log('⚠️  No elements found');
         this.showToast('No elements found', 'warning', 2000);
@@ -430,6 +447,59 @@ class VirtualScreenDOM {
     }
 
     return stats;
+  }
+
+  /**
+   * Generate Page Insight from screen analysis data
+   * @param {Object} data - Screen analysis data
+   * @param {string} windowId - Window identifier
+   */
+  async generatePageInsight(data, windowId) {
+    try {
+      // Extract OCR text from elements
+      const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
+      const ocrText = fullTextElement?.value || '';
+      
+      if (!ocrText || ocrText.length < 50) {
+        console.log('⏭️ [VIRTUAL_DOM] Skipping Page Insight - insufficient OCR text');
+        return;
+      }
+      
+      console.log('💡 [VIRTUAL_DOM] Generating Page Insight...');
+      
+      // Get MCP client and insight handlers
+      const MCPClient = require('./mcp/MCPClient.cjs');
+      const MCPConfigManager = require('./mcp/MCPConfigManager.cjs');
+      const mcpClient = new MCPClient(MCPConfigManager);
+      const { sendInsightLoading, sendInsightUpdate, sendInsightError } = require('../handlers/ipc-handlers-insight.cjs');
+      const insightNode = require('./mcp/nodes/insight.cjs');
+      
+      // Send loading state
+      sendInsightLoading(true);
+      
+      // Extract window title
+      const windowTitle = data.windowsAnalyzed?.[0]?.title || windowId || 'Current Page';
+      
+      // Generate insight
+      const state = await insightNode({
+        mcpClient,
+        ocrText,
+        windowTitle,
+        insightType: 'page',
+        message: windowTitle
+      });
+      
+      if (state.insights) {
+        console.log(`✅ [VIRTUAL_DOM] Page Insight generated: ${state.insights.links.length} links`);
+        sendInsightUpdate(state.insights);
+      } else {
+        sendInsightError('No insights generated');
+      }
+    } catch (error) {
+      console.error('❌ [VIRTUAL_DOM] Page Insight generation failed:', error);
+      const { sendInsightError } = require('../handlers/ipc-handlers-insight.cjs');
+      sendInsightError(error.message);
+    }
   }
 
   /**

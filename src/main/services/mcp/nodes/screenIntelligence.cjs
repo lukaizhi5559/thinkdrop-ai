@@ -24,34 +24,162 @@ const ELEMENT_COLORS = {
   default: '#6b7280'      // Gray - Other elements
 };
 
+/**
+ * Calculate context relevance score to determine if conversation history is needed
+ * 
+ * Returns score 0.0-1.0:
+ * - 0.0-0.4: Self-contained query, no history needed
+ * - 0.5-0.7: Moderate context dependency
+ * - 0.8-1.0: High context dependency (follow-up questions)
+ * 
+ * @param {string} message - User query
+ * @returns {Object} { score: number, reason: string }
+ */
+function calculateContextRelevance(message) {
+  const lower = message.toLowerCase().trim();
+  let score = 0.0;
+  const reasons = [];
+  
+  // HIGH RELEVANCE SIGNALS (need conversation history)
+  
+  // 1. Vague pronouns/references (0.8)
+  if (/\b(this|that|these|those|it|them)\b/i.test(lower)) {
+    score += 0.8;
+    reasons.push('vague reference');
+  }
+  
+  // 2. Follow-up phrases (0.9)
+  if (/^(anything|something|what|more|tell me|show me|explain|details|info).*(else|more|other|additional)/i.test(lower)) {
+    score += 0.9;
+    reasons.push('follow-up phrase');
+  }
+  
+  // 3. Continuation words (0.7)
+  if (/^(also|additionally|furthermore|moreover|besides|and|plus)\b/i.test(lower)) {
+    score += 0.7;
+    reasons.push('continuation word');
+  }
+  
+  // 4. Short vague questions (0.6)
+  const wordCount = lower.split(/\s+/).length;
+  if (wordCount <= 3 && /^(what|how|why|when|where|who)\b/i.test(lower)) {
+    score += 0.6;
+    reasons.push('short vague question');
+  }
+  
+  // LOW RELEVANCE SIGNALS (self-contained queries)
+  
+  // 1. Specific screen queries (-0.5)
+  if (/\b(how many|count|list|show|find|get|read|extract|what'?s?|tell me about)\b.*\b(email|message|button|window|file|folder|tab|link|image|text|element|item|notification|alert)/i.test(lower)) {
+    score -= 0.5;
+    reasons.push('specific screen query');
+  }
+  
+  // 2. Complete questions with clear subjects (-0.4)
+  if (/\b(what|how|why|when|where|who)\b.*\b(is|are|does|do|can|should|will|would)\b/i.test(lower)) {
+    score -= 0.4;
+    reasons.push('complete question');
+  }
+  
+  // 3. Direct screen commands (-0.6)
+  if (/^(show|display|highlight|find|locate|click|open|close|read|extract)\b/i.test(lower)) {
+    score -= 0.6;
+    reasons.push('direct command');
+  }
+  
+  // Normalize score to 0.0-1.0 range
+  score = Math.max(0.0, Math.min(1.0, score));
+  
+  const reason = reasons.length > 0 ? reasons.join(', ') : 'neutral query';
+  
+  return { score, reason };
+}
+
+/**
+ * Extract target entity from screen intelligence query
+ * Examples:
+ * - "what's in the warp console" → "warp console"
+ * - "show me the chrome window" → "chrome window"
+ * - "what does the error message say" → "error message"
+ * 
+ * @param {string} message - User query
+ * @returns {string|null} - Extracted entity or null if none found
+ */
+function extractTargetEntity(message) {
+  const lower = message.toLowerCase().trim();
+  
+  // Pattern 1: "what's in/on the [entity]"
+  let match = lower.match(/what'?s?\s+(?:in|on)\s+(?:the\s+)?(.+?)(?:\s*\?)?$/i);
+  if (match) return match[1].trim();
+  
+  // Pattern 2: "show/tell me about/the [entity]"
+  match = lower.match(/(?:show|tell)\s+me\s+(?:about\s+)?(?:the\s+)?(.+?)(?:\s*\?)?$/i);
+  if (match) return match[1].trim();
+  
+  // Pattern 3: "what does the [entity] say/show"
+  match = lower.match(/what\s+does\s+(?:the\s+)?(.+?)\s+(?:say|show|display|contain)(?:\s*\?)?$/i);
+  if (match) return match[1].trim();
+  
+  // Pattern 4: "read the [entity]"
+  match = lower.match(/read\s+(?:the\s+)?(.+?)(?:\s*\?)?$/i);
+  if (match) return match[1].trim();
+  
+  // Pattern 5: "who/what is in/on the [entity]"
+  match = lower.match(/(?:who|what)\s+(?:is|are)\s+(?:in|on)\s+(?:the\s+)?(.+?)(?:\s*\?)?$/i);
+  if (match) return match[1].trim();
+  
+  // Pattern 6: "what's the [entity]" (for specific UI elements)
+  match = lower.match(/what'?s?\s+(?:the\s+)?(.+?)\s+(?:console|terminal|window|panel|tab|message|error|warning)(?:\s*\?)?$/i);
+  if (match) return match[1].trim() + ' ' + lower.match(/(console|terminal|window|panel|tab|message|error|warning)/i)[1];
+  
+  return null;
+}
+
 module.exports = async function screenIntelligence(state) {
   const { mcpClient, message, context } = state;
   
   console.log('🎯 [NODE:SCREEN_INTELLIGENCE] Analyzing screen context');
   
-  // Fetch conversation history for context (needed for follow-up questions)
-  try {
-    const messagesResult = await mcpClient.callService('conversation', 'message.list', {
-      sessionId: context.sessionId,
-      limit: 10,
-      direction: 'DESC'
-    });
-    
-    const messagesData = messagesResult.data || messagesResult;
-    const conversationHistory = (messagesData.messages || [])
-      .map(msg => ({
-        role: msg.sender === 'user' ? 'user' : 'assistant',
-        content: msg.text,
-        timestamp: msg.timestamp
-      }))
-      .reverse(); // Reverse to chronological order (oldest → newest)
-    
-    // Add conversation history to state for answer node
-    state.conversationHistory = conversationHistory;
-    console.log(`📚 [NODE:SCREEN_INTELLIGENCE] Loaded ${conversationHistory.length} messages for context`);
-  } catch (error) {
-    console.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to fetch conversation history:', error.message);
+  // Extract target entity from query
+  const targetEntity = extractTargetEntity(message);
+  if (targetEntity) {
+    console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Target entity: "${targetEntity}"`);
+    state.targetEntity = targetEntity; // Store for answer node
+  }
+  
+  // Calculate context relevance score to decide if conversation history is needed
+  const contextRelevance = calculateContextRelevance(message);
+  console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Context relevance score: ${contextRelevance.score.toFixed(2)} (${contextRelevance.reason})`);
+  
+  // Fetch conversation history ONLY if query needs contextual understanding
+  if (contextRelevance.score >= 0.5) {
+    try {
+      const messagesResult = await mcpClient.callService('conversation', 'message.list', {
+        sessionId: context.sessionId,
+        limit: 10,
+        direction: 'DESC'
+      });
+      
+      const messagesData = messagesResult.data || messagesResult;
+      const conversationHistory = (messagesData.messages || [])
+        .map(msg => ({
+          role: msg.sender === 'user' ? 'user' : 'assistant',
+          content: msg.text,
+          timestamp: msg.timestamp
+        }))
+        .reverse(); // Reverse to chronological order (oldest → newest)
+      
+      // Add conversation history to state for answer node
+      state.conversationHistory = conversationHistory;
+      console.log(`📚 [NODE:SCREEN_INTELLIGENCE] Loaded ${conversationHistory.length} messages for context (relevance: ${contextRelevance.score.toFixed(2)})`);
+    } catch (error) {
+      console.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to fetch conversation history:', error.message);
+      state.conversationHistory = [];
+    }
+  } else {
+    // Query is self-contained, no history needed
     state.conversationHistory = [];
+    console.log(`📚 [NODE:SCREEN_INTELLIGENCE] Skipping conversation history (query is self-contained, relevance: ${contextRelevance.score.toFixed(2)})`);
   }
   
   try {
@@ -154,6 +282,44 @@ module.exports = async function screenIntelligence(state) {
     console.log('📊 SCREEN CONTEXT BEING PASSED TO ANSWER NODE:');
     console.log(screenContext);
     console.log('=' .repeat(80));
+    
+    // 🆕 Generate Page Insight if we have OCR text
+    // Extract OCR text from elements
+    const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
+    const ocrText = fullTextElement?.value || '';
+    
+    if (ocrText && ocrText.length > 50) {
+      try {
+        console.log('💡 [NODE:SCREEN_INTELLIGENCE] Generating Page Insight...');
+        
+        // Send loading state to renderer
+        const { sendInsightLoading, sendInsightUpdate, sendInsightError } = require('../../../handlers/ipc-handlers-insight.cjs');
+        sendInsightLoading(true);
+        
+        const insightNode = require('./insight.cjs');
+        const insightState = await insightNode({
+          ...state,
+          ocrText: ocrText,
+          windowTitle: data.windowsAnalyzed?.[0]?.title || 'Current Page',
+          insightType: 'page'
+        });
+        
+        if (insightState.insights) {
+          state.insights = insightState.insights;
+          console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Page Insight generated: ${insightState.insights.links.length} links`);
+          
+          // Send insight to renderer
+          sendInsightUpdate(insightState.insights);
+        } else {
+          sendInsightError('No insights generated');
+        }
+      } catch (insightError) {
+        console.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to generate Page Insight:', insightError.message);
+        const { sendInsightError } = require('../../../handlers/ipc-handlers-insight.cjs');
+        sendInsightError(insightError.message);
+        // Don't fail the entire flow if insight generation fails
+      }
+    }
     
     return state;
     

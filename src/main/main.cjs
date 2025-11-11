@@ -59,6 +59,8 @@ const { setupMCPMemoryHandlers } = require('./handlers/ipc-handlers-mcp-memory.c
 const { setupGeminiOAuthHandlers } = require('./handlers/ipc-handlers-gemini-oauth.cjs');
 const { setupVisionOAuthHandlers } = require('./handlers/ipc-handlers-vision-oauth.cjs');
 const { registerScreenIntelligenceHandlers } = require('./handlers/ipc-handlers-screen-intelligence.cjs');
+const { registerInsightHandlers } = require('./handlers/ipc-handlers-insight.cjs');
+const { setupInsightHistoryHandlers } = require('./handlers/ipc-handlers-insight-history.cjs');
 
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
@@ -85,7 +87,7 @@ function createOverlayWindow() {
   
   // Create a unified window that can expand to show different content
   // Smaller width positioned to upper-right corner as requested
-  const windowWidth = Math.min(350, width * 0.3); // 30% of screen width, max 400px (half the previous size)
+  const windowWidth = Math.min(450, width * 0.3); // 30% of screen width, max 400px (half the previous size)
   const windowHeight = Math.min(500, height * 0.7); // 70% of screen height, max 600px
   const x = width - windowWidth - 20; // Position to upper-right corner with 20px margin
   const y = 20; // Position near top with 20px margin
@@ -238,17 +240,36 @@ app.whenReady().then(async () => {
   await global.virtualScreenDOM.start();
   console.log('✅ Virtual Screen DOM initialized');
   
+  // Initialize Selection Detector for context-aware queries
+  console.log('📋 Initializing Selection Detector...');
+  const { getSelectionDetector } = require('./services/selection-detector.cjs');
+  global.selectionDetector = getSelectionDetector();
+  global.selectionDetector.start();
+  console.log('✅ Selection Detector initialized');
+  
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
-  globalShortcut.register('CommandOrControl+Shift+Space', () => {
-    toggleOverlay();
-  });
-
-  globalShortcut.register('Control+Space', () => {
+  globalShortcut.register('Cmd+Option+Space', () => {
     toggleOverlay();
   });
   
+  // 🎯 Cmd+Option+A to capture selection and show "Ask" interface
+  globalShortcut.register('Cmd+Option+A', async () => {
+    console.log('🎯 [ASK] Cmd+Option+A triggered - capturing selection');
+    
+    // Capture selection from active window using nut.js
+    if (global.selectionDetector) {
+      await global.selectionDetector.captureSelectionWithNutJS();
+      
+      // Show Thinkdrop AI window
+      if (overlayWindow) {åååˆ     
+        overlayWindow.show();
+        overlayWindow.focus();
+      }
+    }
+  });
+  
   // Screen Intelligence shortcuts
-  globalShortcut.register('CommandOrControl+Shift+I', async () => {
+  globalShortcut.register('Cmd+Option+I', async () => {
     console.log('🔍 Screen Intelligence: Discovery Mode triggered');
     const { createScreenIntelligenceOverlay, showDiscoveryMode, showToast } = require('./windows/screen-intelligence-overlay.cjs');
     
@@ -322,7 +343,7 @@ app.whenReady().then(async () => {
   });
   
   // Clear screen intelligence overlays
-  globalShortcut.register('CommandOrControl+Shift+C', () => {
+  globalShortcut.register('Cmd+Option+C', () => {
     console.log('🧹 Screen Intelligence: Clearing overlays');
     const { clearOverlays, hideOverlay } = require('./windows/screen-intelligence-overlay.cjs');
     clearOverlays();
@@ -649,6 +670,16 @@ async function setupIPCHandlers() {
     console.log('🎯 Setting up Screen Intelligence handlers...');
     registerScreenIntelligenceHandlers();
     console.log('✅ Screen Intelligence handlers setup complete');
+    
+    // Initialize Insight handlers
+    console.log('💡 Setting up Insight handlers...');
+    registerInsightHandlers(mcpClient);
+    console.log('✅ Insight handlers setup complete');
+    
+    // Initialize Insight History handlers
+    console.log('📚 Setting up Insight History handlers...');
+    setupInsightHistoryHandlers();
+    console.log('✅ Insight History handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
     console.log('🔧 Setting up MCP Private Mode handlers...');

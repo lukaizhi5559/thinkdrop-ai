@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Droplet, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check } from 'lucide-react';
+import { Droplet, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check, Monitor } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Tooltip,
@@ -11,7 +11,7 @@ import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
 import MarkdownRenderer from './MarkdownRenderer';
 import { useConversationSignals } from '../hooks/useConversationSignals';
-import { useToast } from './Toast';
+import { useGlobalToast } from '../contexts/ToastContext';
 
 interface ChatMessage {
   id: string;
@@ -34,8 +34,8 @@ interface ChatMessagesProps {
 export default function ChatMessages({ 
   onPendingConfirmation
 }: ChatMessagesProps = {}) {
-  // Toast notifications
-  const { showToast, ToastContainer } = useToast();
+  // Toast notifications - using global toast context
+  const { showToast } = useGlobalToast();
   
   // Use signals for session management (eliminates race conditions)
   const {
@@ -101,6 +101,9 @@ export default function ChatMessages({
   const [processedMessageIds, setProcessedMessageIds] = useState<Set<string>>(new Set());
   const [processedOrchestrationMessages, setProcessedOrchestrationMessages] = useState<Set<string>>(new Set());
   
+  // Optimistic message state (for instant UI feedback)
+  const [optimisticMessage, setOptimisticMessage] = useState<ChatMessage | null>(null);
+  
   // Note: WebSocket conversation tracking removed - now handled by MCP pipeline
   
   // Refs
@@ -124,6 +127,17 @@ export default function ChatMessages({
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [totalMessageCount, setTotalMessageCount] = useState(0);
   const loadingMoreRef = useRef(false);
+  
+  // Screen refresh state
+  const [isRefreshingScreen, setIsRefreshingScreen] = useState(false);
+  
+  // Selection detection state
+  const [detectedSelection, setDetectedSelection] = useState<{
+    preview: string;
+    sourceApp: string;
+    windowTitle: string;
+    fullText: string;
+  } | null>(null);
 
   // Debug activeSessionId changes and track good state with localStorage persistence
   React.useEffect(() => {
@@ -315,8 +329,16 @@ export default function ChatMessages({
     // Ensure ascending chronological order regardless of fetch direction
     converted.sort((a: any, b: any) => a.timestamp.getTime() - b.timestamp.getTime());
     
+    // Add optimistic message if it exists and isn't already in the list
+    if (optimisticMessage && !converted.find(m => m.text === optimisticMessage.text && m.sender === 'user')) {
+      converted.push({
+        ...optimisticMessage,
+        isStreaming: optimisticMessage.isStreaming ?? false
+      });
+    }
+    
     return converted;
-  }, [activeSessionId, signals.activeMessages.value, totalMessageCount]);
+  }, [activeSessionId, signals.activeMessages.value, totalMessageCount, optimisticMessage]);
   
   // Note: handleWebSocketMessage removed - all streaming now handled by MCP pipeline
 
@@ -334,6 +356,35 @@ export default function ChatMessages({
       return;
     }
     
+    // Get the message text early
+    const messageText = messageToSend.trim();
+    
+    // ✨ OPTIMISTIC UI UPDATE: Clear input immediately for instant feedback
+    setCurrentMessage('');
+    setDisplayMessage('');
+    currentMessageRef.current = '';
+    
+    if (textareaRef.current) {
+      textareaRef.current.value = '';
+      textareaRef.current.style.height = 'auto';
+    }
+    
+    // 🚀 OPTIMISTIC UI: Add user message to display immediately
+    const tempMessage: ChatMessage = {
+      id: `temp-${Date.now()}`,
+      text: messageText,
+      sender: 'user',
+      timestamp: new Date(),
+      isStreaming: false
+    };
+    
+    setOptimisticMessage(tempMessage);
+    
+    // Scroll to show the new message immediately
+    setTimeout(() => {
+      scrollToBottom({ smooth: true, force: true });
+    }, 0);
+    
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
     logDebugState(); // Debug current signals state
     
@@ -348,25 +399,16 @@ export default function ChatMessages({
     // If no active session, create one using signals
     if (!currentSessionId) {
       try {
-        // Use signals sendMessage which handles session creation automatically
-        const messageText = messageToSend.trim();
-        
-        // Clear UI immediately
-        setCurrentMessage('');
-        setDisplayMessage('');
-        currentMessageRef.current = '';
-        
-        if (textareaRef.current) {
-          textareaRef.current.value = '';
-          textareaRef.current.style.height = 'auto';
-        }
-        
         // Use signals sendMessage - this handles session creation AND message sending
         currentSessionId = await signalsSendMessage(messageText);
+        
+        // Clear optimistic message once real message is added
+        setOptimisticMessage(null);
         
         // Continue with the rest of the flow...
       } catch (error) {
         console.error('❌ [SIGNALS] Failed to send message:', error);
+        setOptimisticMessage(null); // Clear on error too
         return;
       }
     } else {
@@ -374,36 +416,29 @@ export default function ChatMessages({
       if (signalsAddMessage) {
         try {
           await signalsAddMessage(currentSessionId, {
-            text: messageToSend.trim(),
+            text: messageText,
             sender: 'user',
             sessionId: currentSessionId,
             metadata: {}
           });
+          
+          // Clear optimistic message once real message is added
+          setOptimisticMessage(null);
         } catch (error) {
           console.error('❌ [SIGNALS] Failed to add user message:', error);
+          setOptimisticMessage(null); // Clear on error too
         }
       }
-    }
-    
-    const messageText = messageToSend.trim();
-    
-    // ✨ OPTIMISTIC UI UPDATE: Clear input and show "Thinking..." immediately
-    setCurrentMessage('');
-    setDisplayMessage('');
-    currentMessageRef.current = ''; // Keep ref in sync
-    
-    // Clear textarea and reset height for uncontrolled component
-    if (textareaRef.current) {
-      textareaRef.current.value = '';
-      textareaRef.current.style.height = 'auto';
-      // xlastHeightRef.current = 40;
     }
     
     setIsLoading(true);
     setLocalLLMError(null);
     setInitialThinkingMessage('Thinking'); // Reset to default at start of new message
     
-    // Clear any previous error states
+    // Clear any previous streaming and error states
+    setIsStreamingResponse(false);
+    setStreamedAnswer('');
+    streamedAnswerRef.current = '';
     setProcessedMessageIds(new Set());
     
     // Scroll to bottom immediately after user sends message to show "Thinking..." indicator
@@ -453,6 +488,18 @@ export default function ChatMessages({
         }
         if (window.electronAPI?.onPrivateModeProgress) {
           window.electronAPI.onPrivateModeProgress(handleProgress);
+        }
+        
+        // 📋 Listen for selection detection
+        const handleSelectionDetected = (_event: any, selection: any) => {
+          console.log('📋 [SELECTION] Detected in renderer:', selection);
+          setDetectedSelection(selection);
+          // Auto-clear after 5 seconds
+          setTimeout(() => setDetectedSelection(null), 5000);
+        };
+        
+        if ((window.electronAPI as any)?.onPrivateModeSelectionDetected) {
+          (window.electronAPI as any).onPrivateModeSelectionDetected(handleSelectionDetected);
         }
         
         // ⚡ Streaming via orchestrator (proper architecture)
@@ -555,22 +602,23 @@ export default function ChatMessages({
         
         console.log('ℹ️ [CONFIRMATION-CHECK] No confirmation required, proceeding normally');
         
-        if (result?.success) {
-            // Determine final answer: use streamed if available, otherwise use result.response
-            const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result.response;
-            
+        // Determine final answer: use streamed if available, otherwise use result.response
+        const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result?.response;
+        
+        if (finalAnswer) {
             // Add AI response to conversation (only if not already saved during streaming)
-            if (signalsAddMessage && currentSessionId && finalAnswer) {
+            if (signalsAddMessage && currentSessionId) {
               await signalsAddMessage(currentSessionId, {
                 text: finalAnswer,
                 sender: 'ai',
                 sessionId: currentSessionId,
                 metadata: { 
                   isFinal: true,
-                  action: result.action,
+                  action: result?.action,
                   mcpPrivateMode: true,
-                  elapsedMs: result.elapsedMs,
-                  streaming: isStreamingActive
+                  elapsedMs: result?.elapsedMs,
+                  streaming: isStreamingActive,
+                  success: result?.success
                 }
               });
             }
@@ -580,21 +628,29 @@ export default function ChatMessages({
             setIsLoading(false);
             setIsProcessingLocally(false);
             scrollToBottom({ smooth: true, force: true });
+            
+            // Log any errors but don't prevent displaying the response
+            if (!result?.success && result?.error) {
+              console.warn('⚠️ [MCP-PRIVATE] Partial success with errors:', result.error);
+            }
           } else {
-            console.error('❌ [MCP-PRIVATE] Orchestration failed:', result.error);
-            setLocalLLMError(`MCP Private Mode error: ${result.error}`);
+            console.error('❌ [MCP-PRIVATE] No response received:', result?.error || 'Unknown error');
+            setLocalLLMError(`MCP Private Mode error: ${result?.error || 'No response received'}`);
+            setIsStreamingResponse(false);
             setIsLoading(false);
             setIsProcessingLocally(false);
           }
       } catch (error: any) {
         console.error('❌ [MCP-UNIFIED] Exception:', error);
         setLocalLLMError(`MCP Unified Pipeline exception: ${error?.message || 'Unknown error'}`);
+        setIsStreamingResponse(false);
         setIsLoading(false);
         setIsProcessingLocally(false);
       }
       
     } catch (error) {
       console.error('❌ Failed to send message:', error);
+      setIsStreamingResponse(false);
       setIsLoading(false);
       setLocalLLMError('Failed to process message. Please try again.');
     }
@@ -631,6 +687,20 @@ export default function ChatMessages({
       }
     };
   }, []);
+
+  // Handle screen refresh
+  const handleRefreshScreen = useCallback(async () => {
+    try {
+      setIsRefreshingScreen(true);
+      await (window.electronAPI as any)?.invoke('screen-intelligence:refresh');
+      showToast('Screen capture refreshed! Next AI response will use updated screen content.', 'success');
+    } catch (error) {
+      console.error('❌ Error refreshing screen:', error);
+      showToast('Failed to refresh screen capture', 'error');
+    } finally {
+      setTimeout(() => setIsRefreshingScreen(false), 1000);
+    }
+  }, [showToast]);
 
   // // Handle WebSocket toggle for testing local LLM fallback
   const handleWebSocketToggle = useCallback(async (e?: React.MouseEvent) => {
@@ -843,18 +913,70 @@ export default function ChatMessages({
 
   useEffect(() => {
     // Connect WebSocket when component mounts
-    connectWebSocket().catch(error => {
-      console.error('❌ Failed to connect WebSocket on mount:', error);
-    });
+    // connectWebSocket().catch(error => {
+    //   console.error('❌ Failed to connect WebSocket on mount:', error);
+    // });
     
     // Auto-focus textarea
     focusTextarea();
     const timeoutId = setTimeout(focusTextarea, 100);
     
+    // 📋 Check for highlighted text when window opens
+    const checkForSelection = async () => {
+      console.log('🔍 [SELECTION] checkForSelection called');
+      try {
+        if (!(window.electronAPI as any)?.checkSelection) {
+          console.warn('⚠️  [SELECTION] electronAPI.checkSelection not available');
+          return;
+        }
+        
+        console.log('📞 [SELECTION] Calling checkSelection API...');
+        const selection = await (window.electronAPI as any).checkSelection();
+        console.log('📋 [SELECTION] API returned:', selection);
+        
+        if (selection) {
+          console.log('✅ [SELECTION] Selection detected, setting state:', selection);
+          setDetectedSelection(selection);
+          // Keep indicator visible longer on mount (10 seconds instead of 5)
+          setTimeout(() => setDetectedSelection(null), 10000);
+        } else {
+          console.log('⏭️  [SELECTION] No selection found');
+        }
+      } catch (error) {
+        console.error('❌ [SELECTION] Failed to check for selection:', error);
+      }
+    };
+    
+    // Check on mount
+    console.log('🚀 [CHATMESSAGES] Component mounted, checking for selection...');
+    checkForSelection();
+    
+    // Also check when window becomes visible (Electron-specific)
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        console.log('👁️  [VISIBILITY] Window became visible, checking for selection...');
+        checkForSelection();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    // Listen for selection available events from main process
+    const handleSelectionAvailable = (_: any, selectionData: any) => {
+      console.log('📢 [SELECTION] Received selection-available event:', selectionData);
+      setDetectedSelection(selectionData);
+      // Keep indicator visible for 10 seconds
+      setTimeout(() => setDetectedSelection(null), 10000);
+    };
+    
+    (window.electronAPI as any)?.onSelectionAvailable?.(handleSelectionAvailable);
+    
     // Cleanup: disconnect when component unmounts
     return () => {
       disconnectWebSocket();
       clearTimeout(timeoutId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      (window.electronAPI as any)?.removeSelectionListener?.();
     };
   }, []); // Remove dependencies to prevent re-mounting
 
@@ -1057,8 +1179,6 @@ export default function ChatMessages({
   // Always show the window, even when empty
 
   return (
-    <>
-    <ToastContainer />
     <TooltipProvider>
       <div 
         className="w-full h-full flex flex-col bg-transparent"
@@ -1362,7 +1482,25 @@ export default function ChatMessages({
                   {wsState.isConnected ? 'Live: Messages sent to the server.' : 'Private: conversation is local.'}
                 </p>
               </TooltipContent>
-            </Tooltip>   
+            </Tooltip>
+            
+            {/* Selection Indicator - positioned at bottom of textarea */}
+            {detectedSelection && (
+              <div className="absolute bottom-2 left-2 right-2 bg-blue-500/90 border border-blue-400 rounded-md px-2 py-1.5 backdrop-blur-sm z-10 shadow-lg">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-white">📋</span>
+                  <span className="text-white/90 font-medium">From {detectedSelection.sourceApp}:</span>
+                  <span className="text-white flex-1 truncate">{detectedSelection.preview}</span>
+                  <button
+                    onClick={() => setDetectedSelection(null)}
+                    className="text-white/70 hover:text-white transition-colors font-bold"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
+            
             <textarea
               ref={textareaRef}
               defaultValue=""
@@ -1382,15 +1520,29 @@ export default function ChatMessages({
               <Send className="w-3 h-3" />
             </Button>
           </div>
-          <div className="text-xs mt-2 text-white/60 text-center">
-            {wsState.isConnected ? 'Live Mode On' : 'Private Mode On'} | AI can make mistakes.
+          <div className="flex items-center justify-center mt-2 text-xs text-white/60 space-x-3">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  onClick={handleRefreshScreen}
+                  disabled={isRefreshingScreen}
+                  className="p-1.5 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <Monitor className={`w-4 h-4 ${isRefreshingScreen ? 'opacity-50' : ''}`} />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Refresh screen capture</p>
+                <p className="text-xs text-white/60">If AI not capturing screen properly</p>
+              </TooltipContent>
+            </Tooltip>
+            <div className="text-center">
+              {wsState.isConnected ? 'Live Mode On' : 'Private Mode On'} | AI can make mistakes.
+            </div>
           </div>
         </div>
       </div>
     </div>
     </TooltipProvider>
-    
-
-    </>
   );
 }

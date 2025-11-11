@@ -1,1 +1,1 @@
-export type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration' | 'mcp';
+export type ViewType = 'chat' | 'insight' | 'memory' | 'search' | 'agents' | 'orchestration' | 'mcp' | 'vision';

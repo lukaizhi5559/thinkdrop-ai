@@ -37,8 +37,12 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
   
   // Sidebar actions - use the closeSidebar from signals
   const closeSidebar = () => {
+    console.log('🔧 [ConversationSidebar] closeSidebar called, current state:', isSidebarOpen);
     if (isSidebarOpen) {
+      console.log('🔧 [ConversationSidebar] Calling toggleSidebar to close');
       toggleSidebar();
+    } else {
+      console.log('⚠️ [ConversationSidebar] Sidebar already closed, ignoring');
     }
   };
   
@@ -196,7 +200,12 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
             </button>
             
             <button
-              onClick={closeSidebar}
+              onClick={(e) => {
+                console.log('🖱️ [ConversationSidebar] Mobile close button clicked');
+                e.preventDefault();
+                e.stopPropagation();
+                closeSidebar();
+              }}
               className="p-2 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors md:hidden"
               title="Close Sidebar"
             >
@@ -204,7 +213,12 @@ export const ConversationSidebar: React.FC<ConversationSidebarProps> = ({ classN
             </button>
             
             <button
-              onClick={closeSidebar}
+              onClick={(e) => {
+                console.log('🖱️ [ConversationSidebar] Desktop close button clicked');
+                e.preventDefault();
+                e.stopPropagation();
+                closeSidebar();
+              }}
               className="p-2 rounded-lg hover:bg-gray-700/50 text-gray-400 hover:text-white transition-colors hidden md:block"
               title="Close Sidebar"
             >
