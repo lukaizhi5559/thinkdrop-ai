@@ -14,12 +14,14 @@ const COMMAND_SERVICE = {
   capabilities: {
     command_execution: true,
     command_interpretation: true,
+    desktop_automation: true,
     system_query: true,
     security_validation: true
   },
   actions: [
     'command.execute',
     'command.interpret',
+    'command.automate',
     'system.query',
     'health'
   ],

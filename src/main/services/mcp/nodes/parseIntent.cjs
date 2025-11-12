@@ -157,6 +157,22 @@ module.exports = async function parseIntent(state) {
     const isQuestion = /^(can|could|would|should|will|do|does|is|are|what|when|where|why|how|who)\s+/i.test(lowerMsg);
     const isStatement = /^(i want|i need|i'd like|i would like|i'm going to|let me)\s+/i.test(lowerMsg);
     
+    // CRITICAL: Catch "goto X and do a Y search" patterns BEFORE DistilBERT
+    // These contain "search" keywords that confuse the classifier
+    // Match: "goto", "go to", "go online", "navigate to", etc.
+    if (/^(goto|go\s+(to|online|on)|navigate to|visit|browse to|head to|open up)\s+/i.test(lowerMsg)) {
+      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command intent');
+      return {
+        ...state,
+        intent: {
+          type: 'command',
+          confidence: 0.95,
+          entities: [],
+          requiresMemoryAccess: false
+        }
+      };
+    }
+    
     if (!isQuestion && !isStatement && /^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
       console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command intent');
       return {
@@ -346,6 +362,52 @@ module.exports = async function parseIntent(state) {
 
         // ── BROWSER-SPECIFIC ───────────────────────────────────────────
         /open (new tab|new window|incognito|private window)/i,
+        
+        // ── GOTO and NAVIGATION (browser/app navigation) ─────────────────
+        /^(goto|go to|navigate to|visit|browse to|head to|open up)\s+(google|amazon|youtube|facebook|twitter|linkedin|instagram|reddit|github|gmail|outlook|netflix|spotify|the website|the site)/i,
+        /(goto|go to|navigate to|visit|browse to)\s+.+\s+and\s+(search|find|look|play|watch|check|browse|post|compose|create)/i,
+        
+        // ── SEARCH IN APP (app-specific searches) ────────────────────────
+        /search (in |my |at my )?(gmail|outlook|slack|discord|notion|spotify|youtube|drive|dropbox|photos|calendar|email|inbox).*(for|about)/i,
+        /(find|look for|search for).*(in|at) (gmail|outlook|slack|discord|notion|spotify|youtube|drive|dropbox|photos|calendar)/i,
+        /do a search (in|at|on) (my )?(gmail|outlook|slack|discord|email|inbox)/i,
+        
+        // ── CALENDAR and REMINDER commands ───────────────────────────────
+        /set (a )?reminder (in calendar |to |for )/i,
+        /create (a )?reminder (in calendar |to |for )/i,
+        /add (a )?reminder (in calendar |to |for )/i,
+        /set (a )?calendar reminder/i,
+        /create (a )?calendar event/i,
+        /add (to |an? )?event (to |in )?calendar/i,
+        /schedule (a )?(meeting|appointment|event) (in calendar |for )/i,
+        /set up (a )?calendar invite/i,
+        /add to calendar/i,
+        
+        // ── TERMINAL commands (check, see, run in terminal) ──────────────
+        /(see|check|look) (in |at )?the terminal (for |how much )/i,
+        /run .+ in terminal/i,
+        /execute .+ in terminal/i,
+        /open terminal and (run|execute|check)/i,
+        /launch terminal and (run|execute|check)/i,
+        
+        // ── DOCKER and CONTAINER commands ────────────────────────────────
+        /run (the )?(docker|dockerfile|docker-compose|container)/i,
+        /execute (the )?(docker|dockerfile|docker-compose)/i,
+        /start (the )?(docker|container)/i,
+        /docker (compose|run|build|ps|images|logs|stop|rm|restart|inspect)/i,
+        
+        // ── FILE execution and script running ────────────────────────────
+        /run (the )?(python|bash|shell|node|javascript|typescript|ruby|perl|go|rust|java) (script|file|program)/i,
+        /execute (the )?(python|bash|shell|node|javascript|typescript|ruby|perl|go|rust|java) (script|file|program)/i,
+        /run (the )?(script|file|program|executable|binary|application|jar|test suite|build script)/i,
+        /execute (the )?(script|file|program|executable|binary|application|jar|test suite|build script)/i,
+        
+        // ── APP + ACTION (open app and do something) ─────────────────────
+        /open (slack|discord|spotify|chrome|safari|vscode|terminal|finder|mail|calendar|notes|photos|messages|settings|system preferences) and (message|go to|join|check|play|search|run|create|compose|find|text|change|adjust)/i,
+        
+        // ── FIND/SEARCH commands (local file search) ─────────────────────
+        /find (all )?(pdfs?|text files?|images?|videos?|files?|folders?|documents?)/i,
+        /search for (pdfs?|text files?|images?|videos?|files?|folders?|documents?)/i,
         /go to (url|site|website) (.+)/i,
         /bookmark this/i,
         /clear (browser history|cache|cookies)/i,

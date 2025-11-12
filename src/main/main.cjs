@@ -263,7 +263,7 @@ app.whenReady().then(async () => {
   console.log('✅ Selection Overlay initialized');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
-  globalShortcut.register('Cmd+Option+Space', () => {
+  globalShortcut.register('Cmd+Shift+Space', () => {
     toggleOverlay();
   });
   

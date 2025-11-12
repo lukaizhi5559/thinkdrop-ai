@@ -22,7 +22,57 @@ module.exports = async function executeCommand(state) {
       console.log('📝 [NODE:EXECUTE_COMMAND] Using resolved message:', message, '→', resolvedMessage);
     }
     
-    // Use longer timeout for command execution (Ollama interpretation can be slow)
+    // Detect if this should use Nut.js automation instead of shell commands
+    const shouldUseAutomation = detectAutomationCommand(commandMessage);
+    
+    if (shouldUseAutomation) {
+      console.log('🤖 [NODE:EXECUTE_COMMAND] Detected automation command, using Nut.js API');
+      
+      // Use Nut.js automation for complex UI interactions
+      const result = await mcpClient.callService(
+        'command',
+        'command.automate',
+        {
+          command: commandMessage,
+          context: {
+            os: process.platform,
+            userId: context.userId,
+            sessionId: context.sessionId
+          }
+        },
+        { timeout: 60000 } // 60 seconds for code generation + execution
+      );
+      
+      if (!result.success) {
+        console.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation failed:', result.error);
+        
+        // Provide user-friendly error message
+        const userFriendlyMessage = `I wasn't able to complete that workflow command. This task might be too complex for me to automate right now.\n\n` +
+          `If you'd like help with this, please submit a ticket at **ticket.thinkdrop.ai** and our team will look into it.`;
+        
+        return {
+          ...state,
+          answer: userFriendlyMessage,
+          commandExecuted: false,
+          commandError: result.error, // Keep technical error for logging
+          automationAttempted: true
+        };
+      }
+      
+      console.log('✅ [NODE:EXECUTE_COMMAND] Automation completed successfully');
+      console.log('📊 [NODE:EXECUTE_COMMAND] Provider:', result.metadata?.provider);
+      console.log('⏱️ [NODE:EXECUTE_COMMAND] Total time:', result.metadata?.totalTime, 'ms');
+      
+      return {
+        ...state,
+        answer: result.result || 'Automation completed successfully',
+        commandExecuted: true,
+        automationUsed: true,
+        automationMetadata: result.metadata
+      };
+    }
+    
+    // Use standard shell command execution
     const result = await mcpClient.callService(
       'command',
       'command.execute',
@@ -234,11 +284,77 @@ module.exports = async function executeCommand(state) {
       };
     }
     
+    // Provide user-friendly error message for unexpected failures
+    const userFriendlyMessage = `I ran into an issue trying to complete that command. This might be a temporary problem or the task might be too complex for me right now.\n\n` +
+      `If this keeps happening, please submit a ticket at **ticket.thinkdrop.ai** so our team can help.`;
+    
     return {
       ...state,
-      answer: `Sorry, I encountered an error executing that command: ${error.message}`,
+      answer: userFriendlyMessage,
       commandExecuted: false,
-      error: error.message
+      error: error.message // Keep technical error for logging
     };
   }
 };
+
+/**
+ * Detect if a command should use Nut.js automation instead of shell commands
+ * @param {string} command - The command message
+ * @returns {boolean} - True if should use automation
+ */
+function detectAutomationCommand(command) {
+  const lowerCommand = command.toLowerCase();
+  
+  // Keywords that indicate UI automation is needed
+  const automationKeywords = [
+    // Calendar/reminder operations
+    'calendar', 'reminder', 'appointment', 'schedule', 'meeting',
+    // UI interactions
+    'click', 'type', 'navigate', 'browse', 'search for',
+    // Application workflows
+    'compose', 'email', 'message', 'post', 'tweet',
+    // Shopping/browsing
+    'find', 'shop', 'buy', 'purchase', 'amazon', 'ebay',
+    // Complex multi-step tasks
+    'set a', 'create a', 'make a', 'add a',
+    // Specific apps that need UI automation
+    'chrome', 'safari', 'firefox', 'slack', 'discord', 'spotify'
+  ];
+  
+  // Phrases that indicate complex automation
+  const automationPhrases = [
+    'set a calendar reminder',
+    'set a reminder',
+    'add to calendar',
+    'create calendar event',
+    'open and navigate',
+    'find on',
+    'search on',
+    'buy on',
+    'shop for',
+    'compose email',
+    'send message'
+  ];
+  
+  // Check for automation phrases first (more specific)
+  for (const phrase of automationPhrases) {
+    if (lowerCommand.includes(phrase)) {
+      return true;
+    }
+  }
+  
+  // Check for automation keywords
+  for (const keyword of automationKeywords) {
+    if (lowerCommand.includes(keyword)) {
+      // Additional context check - avoid false positives for simple commands
+      // e.g., "open calendar" is simple, but "set a calendar reminder" is complex
+      const simpleOpenPattern = /^(open|launch|start)\s+\w+$/i;
+      if (simpleOpenPattern.test(command)) {
+        return false; // Simple app opening, use shell command
+      }
+      return true;
+    }
+  }
+  
+  return false;
+}
