@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hotkey Toast</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    .toast-container {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 999999;
+    }
+
+    .toast {
+      background: rgba(50, 50, 50, 0.95);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      padding: 16px 24px;
+      color: white;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      animation: slideUp 0.3s ease-out;
+      max-width: 500px;
+    }
+
+    @keyframes slideUp {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .toast-icon {
+      width: 20px;
+      height: 20px;
+      flex-shrink: 0;
+    }
+
+    .toast-message {
+      flex: 1;
+    }
+
+    .toast-message strong {
+      color: #60a5fa;
+      font-weight: 600;
+    }
+
+    .toast-close {
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 20px;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 4px;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+
+    .toast-close:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: white;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    kbd {
+        display: inline-block;
+        padding: 2px 6px;
+        background: rgba(255, 255, 255, 0.15);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 4px;
+        font-size: 18px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        font-weight: 700;
+        color: white;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+    }
+    .hint-content {
+        margin: 5px;
+        text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="toast-container">
+    <div class="toast hidden" id="toast">
+        <span class="toast-message" id="toast-message"></span>
+        <button class="toast-close" id="toast-close">×</button>
+    </div>
+  </div>
+
+  <script>
+    console.log('🍞 [HOTKEY TOAST] HTML loaded');
+
+    const toast = document.getElementById('toast');
+    const toastMessage = document.getElementById('toast-message');
+    const toastClose = document.getElementById('toast-close');
+
+    // Check if already dismissed
+    const STORAGE_KEY = 'hotkey-toast-dismissed';
+    
+    function showToast(message) {
+      console.log('🍞 [HOTKEY TOAST] showToast called:', message);
+      
+      // Check if dismissed
+      if (localStorage.getItem(STORAGE_KEY) === 'true') {
+        console.log('🍞 [HOTKEY TOAST] Toast already dismissed, not showing');
+        return;
+      }
+
+      toastMessage.innerHTML = message;
+      toast.classList.remove('hidden');
+      console.log('🍞 [HOTKEY TOAST] Toast shown');
+    }
+
+    function hideToast() {
+      console.log('🍞 [HOTKEY TOAST] hideToast called');
+      toast.classList.add('hidden');
+      localStorage.setItem(STORAGE_KEY, 'true');
+      console.log('🍞 [HOTKEY TOAST] Toast hidden and dismissed flag set');
+    }
+
+    // Close button handler
+    toastClose.addEventListener('click', hideToast);
+
+    // Make toast area clickable (window is set to ignore mouse events by default)
+    const toastElement = document.getElementById('toast');
+    if (toastElement && window.electronAPI && window.electronAPI.send) {
+      toastElement.addEventListener('mouseenter', () => {
+        window.electronAPI.send('overlay:set-clickable', true);
+      });
+      
+      toastElement.addEventListener('mouseleave', () => {
+        window.electronAPI.send('overlay:set-clickable', false);
+      });
+    }
+
+    // Listen for IPC messages
+    if (window.electronAPI && window.electronAPI.receive) {
+      console.log('🍞 [HOTKEY TOAST] electronAPI available, setting up listener');
+      
+      // Use the receive method from preload
+      window.electronAPI.receive('show-hotkey-toast', (message) => {
+        console.log('🍞 [HOTKEY TOAST] Received show-hotkey-toast:', message);
+        showToast(message);
+      });
+      
+      console.log('🍞 [HOTKEY TOAST] Listener registered');
+    } else {
+      console.error('🍞 [HOTKEY TOAST] electronAPI.receive not available!');
+    }
+
+    console.log('🍞 [HOTKEY TOAST] Ready');
+  </script>
+</body>
+</html>

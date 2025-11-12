@@ -30,30 +30,27 @@ class StateGraph {
    * @returns {Object} Final state with trace
    */
   async execute(initialState, onProgress = null) {
-    // Generate cache key from message + sessionId
-    const cacheKey = this._generateCacheKey(initialState);
+    // CACHE DISABLED: Same query can have different contexts (e.g., different highlighted text)
+    // Caching causes issues where the same message with different context returns stale results
     
-    // Check cache for repeated queries
-    const cached = this.cache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-      this.cacheStats.hits++;
-      console.log(`✅ [STATEGRAPH:CACHE] Cache hit! (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
-      
-      // Send cached result immediately
-      if (onProgress && typeof onProgress === 'function') {
-        try {
-          await onProgress('cached', cached.result, 0, 'cached');
-        } catch (err) {
-          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
-        }
-      }
-      
-      return { ...cached.result, fromCache: true, cacheAge: Date.now() - cached.timestamp };
-    }
+    // const cacheKey = this._generateCacheKey(initialState);
+    // const cached = this.cache.get(cacheKey);
+    // if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
+    //   this.cacheStats.hits++;
+    //   console.log(`✅ [STATEGRAPH:CACHE] Cache hit! (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+    //   if (onProgress && typeof onProgress === 'function') {
+    //     try {
+    //       await onProgress('cached', cached.result, 0, 'cached');
+    //     } catch (err) {
+    //       console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+    //     }
+    //   }
+    //   return { ...cached.result, fromCache: true, cacheAge: Date.now() - cached.timestamp };
+    // }
     
     this.cacheStats.misses++;
     if (DEBUG) {
-      console.log(`⚠️ [STATEGRAPH:CACHE] Cache miss - executing workflow (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+      console.log(`⚠️ [STATEGRAPH:CACHE] Cache disabled - executing workflow (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
     }
     
     const state = {
@@ -199,20 +196,17 @@ class StateGraph {
       console.log(`🏁 [STATEGRAPH] Workflow completed in ${state.elapsedMs}ms (${iterations} iterations)`);
     }
 
-    // Cache successful results
-    if (state.success && state.answer) {
-      this.cache.set(cacheKey, {
-        result: state,
-        timestamp: Date.now()
-      });
-      
-      // Cleanup old cache entries
-      this._cleanupCache();
-      
-      if (DEBUG) {
-        console.log(`💾 [STATEGRAPH:CACHE] Result cached (${this.cache.size} entries)`);
-      }
-    }
+    // CACHE DISABLED: Don't store results
+    // if (state.success && state.answer) {
+    //   this.cache.set(cacheKey, {
+    //     result: state,
+    //     timestamp: Date.now()
+    //   });
+    //   this._cleanupCache();
+    //   if (DEBUG) {
+    //     console.log(`💾 [STATEGRAPH:CACHE] Result cached (${this.cache.size} entries)`);
+    //   }
+    // }
 
     return state;
   }

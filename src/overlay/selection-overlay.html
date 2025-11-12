@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ThinkDrop Selection Overlay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 80px;
+            height: 50px;
+            background: transparent;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            -webkit-app-region: no-drag;
+            cursor: pointer;
+        }
+
+        .selection-button {
+            position: relative;
+            width: 60px;
+            height: 40px;
+            margin: 5px 10px;
+            background: linear-gradient(135deg, #0ea5e9, #3b82f6);
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(59, 130, 246, 0.4);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .selection-button:hover {
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 8px 30px rgba(59, 130, 246, 0.6);
+            background: linear-gradient(135deg, #0284c7, #2563eb);
+        }
+
+        .selection-button:active {
+            transform: translateY(0) scale(0.95);
+        }
+
+        /* Pulse Animation */
+        .pulse-ring {
+            position: absolute;
+            width: 60px;
+            height: 40px;
+            border: 2px solid rgba(59, 130, 246, 0.6);
+            border-radius: 20px;
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+            }
+            50% {
+                transform: scale(1.1);
+                opacity: 0.7;
+            }
+            100% {
+                transform: scale(1.2);
+                opacity: 0;
+            }
+        }
+
+        /* Fade in animation */
+        .selection-button {
+            animation: fadeInUp 0.4s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+            backdrop-filter: blur(10px);
+        }
+
+        .selection-button:hover .tooltip {
+            opacity: 1;
+        }
+
+        /* Hotkey Hint Styles */
+        .hotkey-hint {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 999999;
+            opacity: 0;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+            pointer-events: none;
+        }
+
+        .hotkey-hint.visible {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        .hint-content {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0,0,0, 0.5);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 12px;
+            padding: 10px 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .hint-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 20px;
+            height: 20px;
+        }
+
+        .hint-icon svg {
+            width: 20px;
+            height: 20px;
+            stroke: white;
+            fill: none;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .hint-text {
+            color: white;
+            font-size: 13px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            white-space: nowrap;
+        }
+
+        kbd {
+            display: inline-block;
+            padding: 2px 6px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            font-size: 18px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-weight: 700;
+            color: white;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="hotkey-hint" id="hotkeyHint">
+        <div class="hint-content">
+            <span class="hint-text">Press <kbd>⌘</kbd> + <kbd>⌥</kbd> + <kbd>A</kbd> to append to your Drop</span>
+            <span class="hint-icon"></span>
+        </div>
+    </div>
+
+    <script>
+        let selectedText = '';
+        let fullText = '';
+
+        // Handle messages from main process
+        window.electronAPI.receive('selection-overlay:show', (data) => {
+            selectedText = data.selectedText;
+            fullText = data.fullText;
+            
+            // Show the hotkey hint
+            const hint = document.getElementById('hotkeyHint');
+            hint.classList.add('visible');
+            
+            console.log('Hotkey hint shown for text:', selectedText);
+            
+            // Auto-hide after 3 seconds
+            setTimeout(() => {
+                hint.classList.remove('visible');
+            }, 6000);
+        });
+
+        // Prevent context menu
+        document.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+
+        // Prevent text selection
+        document.addEventListener('selectstart', (e) => {
+            e.preventDefault();
+        });
+    </script>
+</body>
+</html>

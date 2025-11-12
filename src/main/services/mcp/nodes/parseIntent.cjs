@@ -16,6 +16,12 @@ module.exports = async function parseIntent(state) {
     console.log(`📝 [NODE:PARSE_INTENT] Coreference resolved: "${message}" → "${resolvedMessage}" (using original for intent)`);
   }
 
+  // Check if highlighted text is present (from metadata)
+  const hasHighlightedText = context?.metadata?.hasHighlightedText === true;
+  if (hasHighlightedText) {
+    console.log('📎 [NODE:PARSE_INTENT] Highlighted text detected - will skip screen_intelligence classification');
+  }
+
   // Fetch recent conversation messages for context-aware intent classification
   let recentMessages = [];
   try {
@@ -129,13 +135,8 @@ module.exports = async function parseIntent(state) {
       }
     }
     
-    // Check if highlighted text is present - if so, skip screen analysis pre-check
-    const hasHighlightedText = messageToClassify.includes('[Selected text') || 
-                              messageToClassify.includes('[selected text') ||
-                              messageToClassify.includes('Selected text from') ||
-                              messageToClassify.includes('selected text from') ||
-                              messageToClassify.match(/\[.*text.*from.*\]/i);
-    
+    // Pre-check for screen analysis queries (only if NO highlighted text)
+    // If highlighted text is present, we'll use the marker to let phi4 handle it
     const isScreenAnalysisQuery = screenAnalysisPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpScreenQuery;
     
     if (isScreenAnalysisQuery && !hasHighlightedText) {
@@ -149,8 +150,6 @@ module.exports = async function parseIntent(state) {
           requiresMemoryAccess: false
         }
       };
-    } else if (isScreenAnalysisQuery && hasHighlightedText) {
-      console.log('🎯 [NODE:PARSE_INTENT] Pre-check: Screen analysis query detected but highlighted text present, deferring to phi4 classification');
     }
     
     // Strong command indicators (open, close, launch, quit, exit, etc.)
@@ -189,8 +188,13 @@ module.exports = async function parseIntent(state) {
       }
     }
     
+    // Add marker to message if highlighted text is present
+    const messageWithMarker = hasHighlightedText 
+      ? `[HIGHLIGHTED_TEXT] ${enhancedMessage}`
+      : enhancedMessage;
+    
     const result = await mcpClient.callService('phi4', 'intent.parse', {
-      message: enhancedMessage,
+      message: messageWithMarker,
       context: {
         sessionId: context.sessionId,
         userId: context.userId,

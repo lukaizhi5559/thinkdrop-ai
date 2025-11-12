@@ -73,6 +73,9 @@ function createScreenIntelligenceOverlay() {
   const overlayPath = path.join(__dirname, '../../overlay/screen-intelligence.html');
   overlayWindow.loadFile(overlayPath);
 
+  // TEMPORARY: Open DevTools to debug toast
+  overlayWindow.webContents.openDevTools({ mode: 'detach' });
+
   // Hide by default
   overlayWindow.hide();
 
@@ -138,22 +141,52 @@ function showDiscoveryMode(elements) {
 /**
  * Show toast notification
  */
-function showToast(message, type = 'info', duration = 3000) {
+function showToast(message, type = 'info', duration = 3000, persistent = false) {
+  console.log('📢 [TOAST] Attempting to show toast:', message);
+  
   if (!overlayWindow) {
+    console.log('📢 [TOAST] Creating overlay window...');
     createScreenIntelligenceOverlay();
   }
 
-  overlayWindow.showInactive(); // Show without stealing focus
+  // Wait for window to be ready
+  if (overlayWindow.webContents.isLoading()) {
+    console.log('📢 [TOAST] Window still loading, waiting...');
+    overlayWindow.webContents.once('did-finish-load', () => {
+      console.log('📢 [TOAST] Window loaded, showing toast now');
+      showToastNow(message, type, duration, persistent);
+    });
+  } else {
+    showToastNow(message, type, duration, persistent);
+  }
+}
+
+function showToastNow(message, type, duration, persistent) {
+  console.log('📢 [TOAST] Showing toast now:', message);
+  
+  // Make sure window is shown and ready
+  if (!overlayWindow.isVisible()) {
+    overlayWindow.showInactive(); // Show without stealing focus
+    console.log('📢 [TOAST] Window was hidden, showing it now');
+  }
+  
+  // Send toast message to renderer
   overlayWindow.webContents.send('screen-intelligence:show-toast', {
     message,
     type,
-    duration
+    duration,
+    persistent
   });
 
-  // Auto-hide after duration
-  setTimeout(() => {
-    overlayWindow.webContents.send('screen-intelligence:hide-toast');
-  }, duration);
+  console.log('📢 [TOAST] Toast message sent to renderer');
+
+  // Auto-hide toast content (but keep window visible for other toasts)
+  if (duration > 0 && !persistent) {
+    setTimeout(() => {
+      overlayWindow.webContents.send('screen-intelligence:hide-toast');
+      // Don't hide the window - just hide the toast content
+    }, duration);
+  }
 }
 
 /**

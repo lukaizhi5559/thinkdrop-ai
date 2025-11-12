@@ -163,19 +163,46 @@
       bottom: 40px;
       left: 50%;
       transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.5);
       padding: 12px 24px;
-      border-radius: 8px;
+      padding-right: 40px;
+      border-radius: 12px;
       font-size: 14px;
       font-weight: 500;
       color: white;
       pointer-events: auto;
-      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
       animation: slideUp 0.3s ease;
       z-index: 1000;
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      position: relative;
+    }
+
+    .toast-close {
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 18px;
+      cursor: pointer;
+      padding: 4px 8px;
+      line-height: 1;
+      transition: color 0.2s;
+    }
+
+    .toast-close:hover {
+      color: white;
     }
 
     .toast.info {
-      background: #3b82f6;
+      background: rgba(0, 0, 0, 0.6);
     }
 
     .toast.success {
@@ -480,7 +507,25 @@
 
     // Show toast notification
     function showToast(data) {
-      const { message, type = 'info', duration = 3000 } = data;
+      console.log('📢 [TOAST HTML] Received toast data:', data);
+      
+      const { message, type = 'info', duration = 3000, persistent = false } = data;
+      
+      // TEMPORARY: Clear dismissed flag for testing
+      if (persistent && message.includes('⌘+⌥+A')) {
+        console.log('📢 [TOAST HTML] Clearing dismissed flag for testing');
+        localStorage.removeItem('toast-dismissed-' + message);
+      }
+      
+      // If persistent, check if user has dismissed it before
+      if (persistent) {
+        const dismissed = localStorage.getItem('toast-dismissed-' + message);
+        console.log('📢 [TOAST HTML] Checking if dismissed:', dismissed);
+        if (dismissed === 'true') {
+          console.log('📢 [TOAST HTML] Toast already dismissed by user:', message);
+          return;
+        }
+      }
       
       // Remove existing toast
       if (currentToast) {
@@ -489,13 +534,35 @@
       
       const toast = document.createElement('div');
       toast.className = `toast ${type}`;
-      toast.textContent = message;
+      
+      // Create message span
+      const messageSpan = document.createElement('span');
+      messageSpan.innerHTML = message; // Use innerHTML to support <strong> tags
+      toast.appendChild(messageSpan);
+      
+      // Add close button
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'toast-close';
+      closeBtn.innerHTML = '×';
+      closeBtn.onclick = () => {
+        toast.remove();
+        if (currentToast === toast) {
+          currentToast = null;
+        }
+        // If persistent, remember user dismissed it
+        if (persistent) {
+          localStorage.setItem('toast-dismissed-' + message, 'true');
+        }
+      };
+      toast.appendChild(closeBtn);
       
       document.getElementById('toast-container').appendChild(toast);
       currentToast = toast;
       
-      // Auto-remove
-      if (duration > 0) {
+      console.log('📢 [TOAST HTML] Toast added to DOM, persistent:', persistent, 'duration:', duration);
+      
+      // Auto-remove (unless persistent)
+      if (duration > 0 && !persistent) {
         setTimeout(() => {
           toast.remove();
           if (currentToast === toast) {
@@ -572,13 +639,20 @@
     }
 
     // Listen for IPC messages from main process
+    console.log('🔌 [OVERLAY HTML] Setting up IPC listeners...');
+    console.log('🔌 [OVERLAY HTML] window.electronAPI exists?', !!window.electronAPI);
+    
     if (window.electronAPI) {
+      console.log('🔌 [OVERLAY HTML] Registering show-toast listener...');
       window.electronAPI.onScreenIntelligence('show-highlights', showHighlights);
       window.electronAPI.onScreenIntelligence('show-discovery', showDiscoveryMode);
       window.electronAPI.onScreenIntelligence('show-toast', showToast);
       window.electronAPI.onScreenIntelligence('hide-toast', hideToast);
       window.electronAPI.onScreenIntelligence('show-guide', showActionGuide);
       window.electronAPI.onScreenIntelligence('clear-all', clearAll);
+      console.log('🔌 [OVERLAY HTML] All IPC listeners registered');
+    } else {
+      console.error('❌ [OVERLAY HTML] window.electronAPI not available!');
     }
 
     console.log('✅ Screen Intelligence overlay loaded');

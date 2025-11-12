@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Droplet, Send, Unplug, Copy, RotateCcw, Edit3, ThumbsUp, ThumbsDown, Check, Monitor } from 'lucide-react';
+import { Send, Loader2, Sparkles, Eye, EyeOff, RefreshCw, Trash2, Plus, MessageSquare, X, Minimize2, Maximize2, Zap, Droplet, Paperclip, Check, Copy, RotateCcw, ThumbsUp, ThumbsDown, Edit3, Unplug, Monitor } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Tooltip,
@@ -9,7 +9,7 @@ import {
 } from './ui/tooltip';
 import useWebSocket from '../hooks/useWebSocket';
 import { ThinkingIndicator } from './AnalyzingIndicator';
-import MarkdownRenderer from './MarkdownRenderer';
+import { RichContentRenderer } from './rich-content';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { useGlobalToast } from '../contexts/ToastContext';
 
@@ -133,6 +133,7 @@ export default function ChatMessages({
   
   // Selection detection state
   const [detectedSelection, setDetectedSelection] = useState<{
+    text?: string;
     preview: string;
     sourceApp: string;
     windowTitle: string;
@@ -396,6 +397,40 @@ export default function ChatMessages({
     // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
     let currentSessionId = signals.activeSessionId.value;
     
+    // Check for selection from localStorage (needed for metadata AND content)
+    let hasSelection = !!detectedSelection;
+    let highlightedTextContent: string | undefined = undefined;
+    
+    // Extract highlighted text from detectedSelection or localStorage
+    if (detectedSelection) {
+      highlightedTextContent = detectedSelection.text || detectedSelection.fullText || detectedSelection.preview;
+      console.log('🔍 [SEND] Using detectedSelection for highlighted text:', highlightedTextContent?.substring(0, 50) + '...');
+    } else {
+      // Check localStorage for persisted selection
+      try {
+        const storedSelection = localStorage.getItem('thinkdrop_captured_selection');
+        if (storedSelection) {
+          const selectionData = JSON.parse(storedSelection);
+          // Check if not expired (30 seconds)
+          const age = Date.now() - selectionData.timestamp;
+          if (age < 30000) {
+            hasSelection = true;
+            highlightedTextContent = selectionData.text || selectionData.fullText || selectionData.preview;
+            console.log('🔍 [SEND] Found selection in localStorage:', highlightedTextContent?.substring(0, 50) + '...');
+          } else {
+            console.log('⏰ [SEND] Selection in localStorage expired, clearing');
+            localStorage.removeItem('thinkdrop_captured_selection');
+          }
+        }
+      } catch (error) {
+        console.warn('⚠️ [SEND] Failed to check localStorage selection:', error);
+      }
+    }
+    
+    console.log('🔍 [SEND] detectedSelection:', detectedSelection);
+    console.log('🔍 [SEND] hasSelection:', hasSelection);
+    console.log('🔍 [SEND] highlightedTextContent:', highlightedTextContent ? `"${highlightedTextContent.substring(0, 50)}..."` : 'undefined');
+    
     // If no active session, create one using signals
     if (!currentSessionId) {
       try {
@@ -419,11 +454,21 @@ export default function ChatMessages({
             text: messageText,
             sender: 'user',
             sessionId: currentSessionId,
-            metadata: {}
+            metadata: {
+              hasHighlightedText: hasSelection
+            }
           });
           
           // Clear optimistic message once real message is added
           setOptimisticMessage(null);
+          
+          // Clear detected selection after message is sent
+          setDetectedSelection(null);
+          
+          // Clear persisted selection in main process
+          if ((window.electronAPI as any)?.clearPersistedSelection) {
+            (window.electronAPI as any).clearPersistedSelection();
+          }
         } catch (error) {
           console.error('❌ [SIGNALS] Failed to add user message:', error);
           setOptimisticMessage(null); // Clear on error too
@@ -536,6 +581,8 @@ export default function ChatMessages({
         
         // Call MCP unified orchestrator (with streaming support)
         // 🌐 Pass sessionId and online mode flag - StateGraph fetches context internally
+        console.log('📋 [CALLING-BACKEND] Passing highlightedText:', highlightedTextContent ? `"${highlightedTextContent.substring(0, 50)}..."` : 'undefined');
+        
         const result = await window.electronAPI?.privateModeProcess({
           message: messageText,
           context: {
@@ -543,7 +590,11 @@ export default function ChatMessages({
             userId: 'default_user',
             timestamp: new Date().toISOString(),
             conversationHistory: [], // StateGraph nodes fetch context via MCP
-            useOnlineMode: isOnlineMode
+            useOnlineMode: isOnlineMode,
+            highlightedText: highlightedTextContent, // Pass the extracted content
+            metadata: {
+              hasHighlightedText: hasSelection
+            }
           }
         });
         
@@ -1256,7 +1307,7 @@ export default function ChatMessages({
                   ) : (
                     /* Normal message display */
                     <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                      <MarkdownRenderer content={message.text} />
+                      <RichContentRenderer content={message.text} animated={true} />
                     </div>
                   )}
                 </div>
@@ -1488,9 +1539,30 @@ export default function ChatMessages({
             {detectedSelection && (
               <div className="absolute bottom-2 left-2 right-2 bg-blue-500/90 border border-blue-400 rounded-md px-2 py-1.5 backdrop-blur-sm z-10 shadow-lg">
                 <div className="flex items-center gap-2 text-xs">
-                  <span className="text-white">📋</span>
+                  <Paperclip className="w-4 h-4 text-white" />
                   <span className="text-white/90 font-medium">From {detectedSelection.sourceApp}:</span>
-                  <span className="text-white flex-1 truncate">{detectedSelection.preview}</span>
+                  <span className="text-white flex-1 truncate">{detectedSelection.text || detectedSelection.preview || detectedSelection.fullText}</span>
+                  
+                  {/* Droplet button to add selected text */}
+                  <button
+                    onClick={() => {
+                      if (textareaRef.current) {
+                        const currentValue = textareaRef.current.value;
+                        const selectionText = detectedSelection.text || detectedSelection.preview || detectedSelection.fullText;
+                        const newValue = currentValue + (currentValue ? '\n\n' : '') + selectionText;
+                        textareaRef.current.value = newValue;
+                        textareaRef.current.focus();
+                        // Trigger resize
+                        handleTextareaChange({ target: textareaRef.current } as any);
+                      }
+                      setDetectedSelection(null);
+                    }}
+                    className="p-1 text-white/70 hover:text-white hover:bg-white/20 rounded transition-colors"
+                    title="Add selected text to chat"
+                  >
+                    <Droplet className="w-4 h-4" />
+                  </button>
+                  
                   <button
                     onClick={() => setDetectedSelection(null)}
                     className="text-white/70 hover:text-white transition-colors font-bold"

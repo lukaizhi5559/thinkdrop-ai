@@ -233,12 +233,13 @@ app.whenReady().then(async () => {
   
   console.log('🎉 Initialization sequence complete!');
   
-  // Initialize Virtual Screen DOM for auto-caching
-  console.log('👁️  Initializing Virtual Screen DOM...');
-  const VirtualScreenDOM = require('./services/virtualScreenDOM.cjs');
-  global.virtualScreenDOM = new VirtualScreenDOM();
-  await global.virtualScreenDOM.start();
-  console.log('✅ Virtual Screen DOM initialized');
+  // TEMPORARILY DISABLED: Virtual Screen DOM causes typing lag
+  // TODO: Move to worker thread for better performance
+  console.log('⚠️  Virtual Screen DOM disabled (causes typing lag)');
+  // const VirtualScreenDOM = require('./services/virtualScreenDOM.cjs');
+  // global.virtualScreenDOM = new VirtualScreenDOM();
+  // await global.virtualScreenDOM.start();
+  // console.log('✅ Virtual Screen DOM initialized');
   
   // Initialize Selection Detector for context-aware queries
   console.log('📋 Initializing Selection Detector...');
@@ -246,6 +247,20 @@ app.whenReady().then(async () => {
   global.selectionDetector = getSelectionDetector();
   global.selectionDetector.start();
   console.log('✅ Selection Detector initialized');
+  
+  // Show hotkey hint once on startup (user can dismiss it)
+  setTimeout(() => {
+    if (global.selectionDetector) {
+      console.log('🔔 Showing hotkey hint toast...');
+      global.selectionDetector.showHotkeyHintOnce();
+    }
+  }, 3000); // Show after 3 seconds to ensure overlay is ready
+  
+  // Initialize Selection Overlay for floating ThinkDrop button
+  console.log('💧 Initializing Selection Overlay...');
+  const { createSelectionOverlay } = require('./windows/selection-overlay.cjs');
+  createSelectionOverlay();
+  console.log('✅ Selection Overlay initialized');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   globalShortcut.register('Cmd+Option+Space', () => {
@@ -261,10 +276,20 @@ app.whenReady().then(async () => {
       await global.selectionDetector.captureSelectionWithNutJS();
       
       // Show Thinkdrop AI window
-      if (overlayWindow) {åååˆ     
+      if (overlayWindow) {
         overlayWindow.show();
         overlayWindow.focus();
       }
+    }
+  });
+  
+  // 🧪 Cmd+Option+T to test floating button (for debugging)
+  globalShortcut.register('Cmd+Option+T', async () => {
+    console.log('🧪 [TEST] Cmd+Option+T triggered - testing floating button');
+    
+    if (global.selectionDetector) {
+      const testText = "This is a test selection for the floating ThinkDrop button!";
+      await global.selectionDetector.showFloatingButtonWithEstimatedPosition(testText);
     }
   });
   

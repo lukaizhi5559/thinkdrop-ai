@@ -25,6 +25,24 @@ module.exports = async function resolveReferences(state) {
   console.log('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
   console.log(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
   
+  // CRITICAL FIX: If highlighted text is present, use it as fresh context instead of conversation history
+  // When user highlights text, "this" refers to the highlighted content, not previous conversation
+  const hasHighlightedText = context?.metadata?.hasHighlightedText === true;
+  const highlightedText = state.detectedSelection?.text || context?.highlightedText;
+  
+  console.log('📋 [NODE:RESOLVE_REFERENCES] Checking for highlighted text:');
+  console.log('   - hasHighlightedText flag:', hasHighlightedText);
+  console.log('   - state.detectedSelection?.text:', state.detectedSelection?.text ? `"${state.detectedSelection.text.substring(0, 50)}..."` : 'undefined');
+  console.log('   - context?.highlightedText:', context?.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
+  console.log('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
+  
+  if (hasHighlightedText && highlightedText) {
+    console.log(`📎 [NODE:RESOLVE_REFERENCES] Highlighted text detected - using as fresh context for coreference resolution`);
+    console.log(`   Highlighted: "${highlightedText.substring(0, 100)}..."`);
+  } else if (hasHighlightedText && !highlightedText) {
+    console.warn('⚠️ [NODE:RESOLVE_REFERENCES] hasHighlightedText is true but no highlightedText content found!');
+  }
+  
   // CRITICAL FIX: For screen_intelligence intents, don't use conversation history
   // because references like "this guy" refer to screen content, not previous conversation
   const isScreenIntent = intentType === 'screen_intelligence';
@@ -89,13 +107,33 @@ module.exports = async function resolveReferences(state) {
       // Fall back to cached conversationHistory from state
     }
     
-    // Call coreference service with fresh history
-    // For screen_intelligence intents, pass empty history to avoid incorrect resolutions
-    const historyToUse = isScreenIntent ? [] : freshConversationHistory.slice(-5);
+    // Call coreference service with appropriate context:
+    // 1. If highlighted text present → Use highlighted text as fresh context (single message)
+    // 2. If screen intent → Use empty history (references point to screen)
+    // 3. Otherwise → Use conversation history (last 5 messages)
+    let historyToUse;
+    
+    if (hasHighlightedText && highlightedText) {
+      // Create a synthetic "assistant" message with the highlighted text as context
+      // CRITICAL: Wrap in a sentence to help spaCy NER recognize full entity names
+      // E.g., "Arfrix Dela Cruz" → "The highlighted text is: Arfrix Dela Cruz"
+      const wrappedContent = `The highlighted text is: ${highlightedText}`;
+      
+      historyToUse = [{
+        role: 'assistant',
+        content: wrappedContent,
+        timestamp: new Date().toISOString()
+      }];
+      console.log('📎 [NODE:RESOLVE_REFERENCES] Using highlighted text as coreference context (1 synthetic message)');
+    } else if (isScreenIntent) {
+      historyToUse = [];
+    } else {
+      historyToUse = freshConversationHistory.slice(-5);
+    }
     
     const result = await mcpClient.callService('coreference', 'resolve', {
       message,
-      conversationHistory: historyToUse, // Empty for screen intents, last 5 for others
+      conversationHistory: historyToUse,
       options: {
         includeConfidence: true,
         method: 'auto' // auto, neuralcoref, or rule_based

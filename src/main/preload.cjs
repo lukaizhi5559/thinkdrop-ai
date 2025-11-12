@@ -109,8 +109,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   
   // Selection Detection
   checkSelection: () => ipcRenderer.invoke('selection:check'),
+  clearPersistedSelection: () => ipcRenderer.send('selection:clear'),
   onSelectionAvailable: (callback) => ipcRenderer.on('selection:available', callback),
   removeSelectionListener: () => ipcRenderer.removeAllListeners('selection:available'),
+  
+  // Selection Overlay (for floating ThinkDrop button)
+  send: (channel, data) => ipcRenderer.send(channel, data),
+  receive: (channel, callback) => ipcRenderer.on(channel, (event, ...args) => callback(...args)),
   
   // MCP Service Communication
   mcpCall: (params) => ipcRenderer.invoke('mcp:service:call', params),

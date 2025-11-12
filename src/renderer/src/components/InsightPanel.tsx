@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { RefreshCw, ExternalLink, Tag, Lightbulb, Loader2, AlertCircle, MessageSquare, History, Trash2, Youtube } from 'lucide-react';
-import MarkdownRenderer from './Markdown';
+import { RichContentRenderer } from './rich-content';
 import ConfirmDialog from './ConfirmDialog';
 
 interface InsightLink {
@@ -292,7 +292,7 @@ export default function InsightPanel({ onRefresh }: InsightPanelProps) {
                 <span>Summary</span>
               </h3>
               <div className="text-sm text-white/70 leading-relaxed prose prose-invert prose-sm max-w-none">
-                <MarkdownRenderer content={insight.summary} />
+                <RichContentRenderer content={insight.summary} animated={true} />
               </div>
             </div>
 
@@ -347,7 +347,7 @@ export default function InsightPanel({ onRefresh }: InsightPanelProps) {
                               </div>
                               {link.snippet && (
                                 <div className="text-xs text-white/50 line-clamp-2 prose prose-invert prose-xs max-w-none">
-                                  <MarkdownRenderer content={link.snippet} />
+                                  <RichContentRenderer content={link.snippet} animated={false} />
                                 </div>
                               )}
                             </div>

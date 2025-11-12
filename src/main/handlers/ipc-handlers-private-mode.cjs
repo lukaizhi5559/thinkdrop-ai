@@ -118,6 +118,14 @@ function registerPrivateModeHandlers() {
       console.log(`🌐 [PRIVATE-MODE] Online mode: ${useOnlineMode ? 'ENABLED (will fallback to private)' : 'DISABLED'}`);
       
       // 🔄 Use StateGraph for all routing (intent-based subgraphs)
+      // Extract highlighted text from renderer context or selection detector
+      const highlightedText = context.highlightedText || selectionContext?.text;
+      
+      console.log('📋 [PRIVATE-MODE] Highlighted text sources:');
+      console.log('   - context.highlightedText:', context.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
+      console.log('   - selectionContext?.text:', selectionContext?.text ? `"${selectionContext.text.substring(0, 50)}..."` : 'undefined');
+      console.log('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
+      
       const result = await orch.processMessageWithGraph(augmentedMessage, {
         sessionId: context.sessionId,
         userId: context.userId || 'default_user',
@@ -126,6 +134,11 @@ function registerPrivateModeHandlers() {
         hasSelection: !!selectionContext, // 📋 Flag for selection-aware routing
         selectionContext: selectionContext, // 📋 Full selection context
         originalMessage: message, // 📋 Original message without selection
+        highlightedText: highlightedText, // 📋 Highlighted text for coreference
+        metadata: {
+          hasHighlightedText: context.metadata?.hasHighlightedText || !!highlightedText,
+          ...context.metadata
+        },
         ...context
       }, onProgress, onStreamToken);
 
@@ -314,6 +327,19 @@ function registerPrivateModeHandlers() {
     } catch (error) {
       console.error('❌ [SELECTION:CHECK] Failed:', error);
       return null;
+    }
+  });
+
+  /**
+   * Clear persisted selection (called after message is sent)
+   */
+  ipcMain.on('selection:clear', (event) => {
+    try {
+      if (global.selectionDetector) {
+        global.selectionDetector.clearPersistedSelection();
+      }
+    } catch (error) {
+      console.error('❌ [SELECTION:CLEAR] Failed:', error);
     }
   });
 
