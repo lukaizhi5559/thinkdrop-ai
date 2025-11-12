@@ -29,6 +29,7 @@ module.exports = async function executeCommand(state) {
       console.log('🤖 [NODE:EXECUTE_COMMAND] Detected automation command, using Nut.js API');
       
       // Use Nut.js automation for complex UI interactions
+      const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '300000');
       const result = await mcpClient.callService(
         'command',
         'command.automate',
@@ -40,7 +41,7 @@ module.exports = async function executeCommand(state) {
             sessionId: context.sessionId
           }
         },
-        { timeout: 60000 } // 60 seconds for code generation + execution
+        { timeout: commandTimeout } // 5 minutes for code generation + execution
       );
       
       if (!result.success) {
