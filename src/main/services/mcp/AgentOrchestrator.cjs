@@ -246,9 +246,10 @@ class AgentOrchestrator {
             return 'screenIntelligence';
           }
           
-          // Commands: system commands
-          if (intentType === 'command') {
-            console.log('⚡ [STATEGRAPH:ROUTER] Command intent detected - routing to executeCommand');
+          // Commands: system commands (all sub-types)
+          if (intentType === 'command' || intentType === 'command_execute' || 
+              intentType === 'command_automate' || intentType === 'command_guide') {
+            console.log(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
             return 'executeCommand';
           }
           
@@ -270,9 +271,10 @@ class AgentOrchestrator {
           return 'screenIntelligence';
         }
         
-        // Commands: system commands (works in both online and private mode)
-        if (intentType === 'command') {
-          console.log('⚡ [STATEGRAPH:ROUTER] Command intent detected - routing to executeCommand');
+        // Commands: system commands (all sub-types - works in both online and private mode)
+        if (intentType === 'command' || intentType === 'command_execute' || 
+            intentType === 'command_automate' || intentType === 'command_guide') {
+          console.log(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
           return 'executeCommand';
         }
         

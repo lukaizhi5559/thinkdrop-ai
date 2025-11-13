@@ -8,8 +8,9 @@
 module.exports = async function executeCommand(state) {
   const { message, resolvedMessage, intent, context, mcpClient } = state;
   
-  // Only handle command intent
-  if (intent?.type !== 'command') {
+  // Handle all command sub-types
+  const commandTypes = ['command_execute', 'command_automate', 'command_guide'];
+  if (!commandTypes.includes(intent?.type)) {
     return state;
   }
   
@@ -17,37 +18,83 @@ module.exports = async function executeCommand(state) {
   const commandMessage = resolvedMessage || message;
   
   try {
-    console.log('⚡ [NODE:EXECUTE_COMMAND] Executing command via MCP:', commandMessage);
+    console.log(`⚡ [NODE:EXECUTE_COMMAND] Executing ${intent.type} via MCP:`, commandMessage);
     if (resolvedMessage && resolvedMessage !== message) {
       console.log('📝 [NODE:EXECUTE_COMMAND] Using resolved message:', message, '→', resolvedMessage);
     }
     
-    // Detect if this should use Nut.js automation instead of shell commands
-    const shouldUseAutomation = detectAutomationCommand(commandMessage);
+    // Route based on ML-classified intent type
+    if (intent.type === 'command_guide') {
+      console.log('🎓 [NODE:EXECUTE_COMMAND] Educational guide mode detected');
+      return await executeGuide(state, mcpClient, commandMessage, context);
+    }
     
-    if (shouldUseAutomation) {
-      console.log('🤖 [NODE:EXECUTE_COMMAND] Detected automation command, using Nut.js API');
+    if (intent.type === 'command_automate') {
+      console.log('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected');
       
-      // Use Nut.js automation for complex UI interactions
-      const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '300000');
-      const result = await mcpClient.callService(
-        'command',
-        'command.automate',
-        {
-          command: commandMessage,
-          context: {
-            os: process.platform,
-            userId: context.userId,
-            sessionId: context.sessionId
+      // Hide ThinkDrop AI window during automation to prevent focus interference
+      try {
+        if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+          global.overlayWindow.hide();
+          console.log('🙈 [NODE:EXECUTE_COMMAND] Hidden overlay window for automation');
+        } else {
+          console.warn('⚠️ [NODE:EXECUTE_COMMAND] Overlay window not available');
+        }
+      } catch (hideError) {
+        console.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not hide window:', hideError.message);
+      }
+      
+      try {
+        // Use Nut.js automation for complex UI interactions
+        const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '300000');
+        const result = await mcpClient.callService(
+          'command',
+          'command.automate',
+          {
+            command: commandMessage,
+            context: {
+              os: process.platform,
+              userId: context.userId,
+              sessionId: context.sessionId
+            }
+          },
+          { timeout: commandTimeout } // 5 minutes for code generation + execution
+        );
+        
+        // Restore window after automation completes
+        try {
+          if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+            global.overlayWindow.show();
+            console.log('👁️ [NODE:EXECUTE_COMMAND] Restored overlay window after automation');
           }
-        },
-        { timeout: commandTimeout } // 5 minutes for code generation + execution
-      );
+        } catch (showError) {
+          console.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not restore window:', showError.message);
+        }
       
       if (!result.success) {
+        // Check if this is an uncertain result (task may have completed but couldn't verify)
+        if (result.uncertainResult) {
+          console.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation result uncertain:', result.warning || result.error);
+          
+          // Use the warning message from the backend, or provide a default
+          const uncertainMessage = result.warning || 
+            `I attempted to complete that task, but couldn't fully verify the result. **Please check if your task was completed successfully.**\n\n` +
+            `If it didn't work as expected, please submit a ticket at **ticket.thinkdrop.ai** and our team will help improve the automation.`;
+          
+          return {
+            ...state,
+            answer: uncertainMessage,
+            commandExecuted: true, // Task was attempted
+            automationUsed: true,
+            uncertainResult: true,
+            automationMetadata: result.metadata,
+            planFailure: result.planFailure // Include plan failure details if available
+          };
+        }
+        
+        // True failure - task didn't execute at all
         console.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation failed:', result.error);
         
-        // Provide user-friendly error message
         const userFriendlyMessage = `I wasn't able to complete that workflow command. This task might be too complex for me to automate right now.\n\n` +
           `If you'd like help with this, please submit a ticket at **ticket.thinkdrop.ai** and our team will look into it.`;
         
@@ -55,22 +102,36 @@ module.exports = async function executeCommand(state) {
           ...state,
           answer: userFriendlyMessage,
           commandExecuted: false,
-          commandError: result.error, // Keep technical error for logging
+          commandError: result.error,
           automationAttempted: true
         };
       }
       
-      console.log('✅ [NODE:EXECUTE_COMMAND] Automation completed successfully');
-      console.log('📊 [NODE:EXECUTE_COMMAND] Provider:', result.metadata?.provider);
-      console.log('⏱️ [NODE:EXECUTE_COMMAND] Total time:', result.metadata?.totalTime, 'ms');
-      
-      return {
-        ...state,
-        answer: result.result || 'Automation completed successfully',
-        commandExecuted: true,
-        automationUsed: true,
-        automationMetadata: result.metadata
-      };
+        console.log('✅ [NODE:EXECUTE_COMMAND] Automation completed successfully');
+        console.log('📊 [NODE:EXECUTE_COMMAND] Provider:', result.metadata?.provider);
+        console.log('⏱️ [NODE:EXECUTE_COMMAND] Total time:', result.metadata?.totalTime, 'ms');
+        
+        return {
+          ...state,
+          answer: result.result || 'Automation completed successfully',
+          commandExecuted: true,
+          automationUsed: true,
+          automationMetadata: result.metadata
+        };
+      } catch (automationError) {
+        // Ensure window is restored even if automation fails
+        try {
+          if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+            global.overlayWindow.show();
+            console.log('👁️ [NODE:EXECUTE_COMMAND] Restored overlay window after automation error');
+          }
+        } catch (showError) {
+          console.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not restore window after error:', showError.message);
+        }
+        
+        // Re-throw to be handled by outer catch
+        throw automationError;
+      }
     }
     
     // Use standard shell command execution
@@ -299,63 +360,138 @@ module.exports = async function executeCommand(state) {
 };
 
 /**
- * Detect if a command should use Nut.js automation instead of shell commands
- * @param {string} command - The command message
- * @returns {boolean} - True if should use automation
+ * Execute educational guide mode
+ * @param {object} state - Current state
+ * @param {object} mcpClient - MCP client
+ * @param {string} commandMessage - Command message
+ * @param {object} context - Context object
+ * @returns {object} - Updated state
  */
-function detectAutomationCommand(command) {
-  const lowerCommand = command.toLowerCase();
-  
-  // Keywords that indicate UI automation is needed
-  const automationKeywords = [
-    // Calendar/reminder operations
-    'calendar', 'reminder', 'appointment', 'schedule', 'meeting',
-    // UI interactions
-    'click', 'type', 'navigate', 'browse', 'search for',
-    // Application workflows
-    'compose', 'email', 'message', 'post', 'tweet',
-    // Shopping/browsing
-    'find', 'shop', 'buy', 'purchase', 'amazon', 'ebay',
-    // Complex multi-step tasks
-    'set a', 'create a', 'make a', 'add a',
-    // Specific apps that need UI automation
-    'chrome', 'safari', 'firefox', 'slack', 'discord', 'spotify'
-  ];
-  
-  // Phrases that indicate complex automation
-  const automationPhrases = [
-    'set a calendar reminder',
-    'set a reminder',
-    'add to calendar',
-    'create calendar event',
-    'open and navigate',
-    'find on',
-    'search on',
-    'buy on',
-    'shop for',
-    'compose email',
-    'send message'
-  ];
-  
-  // Check for automation phrases first (more specific)
-  for (const phrase of automationPhrases) {
-    if (lowerCommand.includes(phrase)) {
-      return true;
+async function executeGuide(state, mcpClient, commandMessage, context) {
+  try {
+    const result = await mcpClient.callService(
+      'command',
+      'command.guide',
+      {
+        command: commandMessage,
+        context: {
+          os: process.platform,
+          userId: context.userId,
+          sessionId: context.sessionId
+        }
+      },
+      { timeout: 300000 } // 5 minutes for guide generation
+    );
+    
+    if (!result.success) {
+      console.warn('⚠️ [NODE:EXECUTE_COMMAND] Guide generation failed:', result.error);
+      
+      const userFriendlyMessage = `I couldn't create a guide for that task. This might be too complex or outside my current capabilities.\n\n` +
+        `If you'd like help with this, please submit a ticket at **ticket.thinkdrop.ai**.`;
+      
+      return {
+        ...state,
+        answer: userFriendlyMessage,
+        commandExecuted: false,
+        commandError: result.error
+      };
     }
-  }
-  
-  // Check for automation keywords
-  for (const keyword of automationKeywords) {
-    if (lowerCommand.includes(keyword)) {
-      // Additional context check - avoid false positives for simple commands
-      // e.g., "open calendar" is simple, but "set a calendar reminder" is complex
-      const simpleOpenPattern = /^(open|launch|start)\s+\w+$/i;
-      if (simpleOpenPattern.test(command)) {
-        return false; // Simple app opening, use shell command
-      }
-      return true;
+    
+    console.log('✅ [NODE:EXECUTE_COMMAND] Guide generated successfully');
+    console.log('📦 [NODE:EXECUTE_COMMAND] Raw result keys:', Object.keys(result));
+    
+    // Extract guide data - handle MCP wrapper and backend response structure
+    // Backend returns: { success, guide: {...}, provider, latencyMs }
+    // MCP wraps it as: { success, guide: { success, guide: {...}, provider, latencyMs } }
+    let guideData;
+    
+    if (result.guide && result.guide.guide) {
+      // Double-nested (MCP wrapped the backend response)
+      console.log('📦 [NODE:EXECUTE_COMMAND] Detected double-nested structure');
+      guideData = result.guide.guide;
+    } else if (result.guide) {
+      // Single-nested (direct backend response)
+      console.log('📦 [NODE:EXECUTE_COMMAND] Detected single-nested structure');
+      guideData = result.guide;
+    } else {
+      // Flat structure
+      console.log('📦 [NODE:EXECUTE_COMMAND] Detected flat structure');
+      guideData = result;
     }
+    
+    console.log('📚 [NODE:EXECUTE_COMMAND] Total steps:', guideData.totalSteps);
+    console.log('📝 [NODE:EXECUTE_COMMAND] Guide intro:', guideData.intro?.substring(0, 100));
+    console.log('🔧 [NODE:EXECUTE_COMMAND] Provider:', result.guide?.provider || result.provider);
+    console.log('⏱️  [NODE:EXECUTE_COMMAND] Latency:', result.guide?.latencyMs || result.latencyMs, 'ms');
+    
+    // Format guide as markdown for display
+    let formattedGuide = '';
+    
+    if (guideData.intro) {
+      formattedGuide += `${guideData.intro}\n\n`;
+    }
+    
+    if (guideData.steps && Array.isArray(guideData.steps)) {
+      formattedGuide += '## Steps:\n\n';
+      guideData.steps.forEach((step, index) => {
+        formattedGuide += `### ${index + 1}. ${step.title || step.description}\n\n`;
+        if (step.description && step.title) {
+          formattedGuide += `${step.description}\n\n`;
+        }
+        if (step.code) {
+          formattedGuide += `\`\`\`bash\n${step.code}\n\`\`\`\n\n`;
+        }
+        if (step.explanation) {
+          formattedGuide += `${step.explanation}\n\n`;
+        }
+      });
+    }
+    
+    if (guideData.commonRecoveries && guideData.commonRecoveries.length > 0) {
+      formattedGuide += '\n## Troubleshooting:\n\n';
+      guideData.commonRecoveries.forEach((recovery, index) => {
+        // Handle different recovery object structures from backend
+        const title = recovery.title || recovery.issue || 'Common Issue';
+        const explanation = recovery.explanation || recovery.solution || recovery.manualInstructions || '';
+        
+        if (title && explanation) {
+          formattedGuide += `**${title}**\n\n${explanation}\n\n`;
+          
+          // Add help links if available
+          if (recovery.helpLinks && Array.isArray(recovery.helpLinks)) {
+            formattedGuide += 'Resources:\n';
+            recovery.helpLinks.forEach(link => {
+              formattedGuide += `- [${link.title}](${link.url})\n`;
+            });
+            formattedGuide += '\n';
+          }
+        }
+      });
+    }
+    
+    // Return guide data for frontend to display
+    return {
+      ...state,
+      answer: formattedGuide || guideData.intro || 'Guide generated successfully.',
+      guideMode: true,
+      guideSteps: guideData.steps,
+      guideTotalSteps: guideData.totalSteps,
+      guideCode: guideData.code,
+      guideRecoveries: guideData.commonRecoveries,
+      guideMetadata: guideData.metadata,
+      commandExecuted: true
+    };
+  } catch (error) {
+    console.error('❌ [NODE:EXECUTE_COMMAND] Guide execution error:', error.message);
+    
+    const userFriendlyMessage = `I ran into an issue creating a guide for that task.\n\n` +
+      `If this keeps happening, please submit a ticket at **ticket.thinkdrop.ai**.`;
+    
+    return {
+      ...state,
+      answer: userFriendlyMessage,
+      commandExecuted: false,
+      error: error.message
+    };
   }
-  
-  return false;
 }

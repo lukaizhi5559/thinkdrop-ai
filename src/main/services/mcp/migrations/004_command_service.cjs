@@ -15,6 +15,7 @@ const COMMAND_SERVICE = {
     command_execution: true,
     command_interpretation: true,
     desktop_automation: true,
+    educational_guide: true,
     system_query: true,
     security_validation: true
   },
@@ -22,6 +23,7 @@ const COMMAND_SERVICE = {
     'command.execute',
     'command.interpret',
     'command.automate',
+    'command.guide',
     'system.query',
     'health'
   ],

@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   hideOverlay: () => ipcRenderer.invoke('hide-overlay'),
   showOverlay: () => ipcRenderer.invoke('show-overlay'),
   
+  // Window visibility for automation (hide during command execution)
+  hideWindow: () => ipcRenderer.invoke('window-hide'),
+  showWindow: () => ipcRenderer.invoke('window-show'),
+  
   // Global visibility controls
   getGlobalVisibility: () => ipcRenderer.invoke('get-global-visibility'),
   

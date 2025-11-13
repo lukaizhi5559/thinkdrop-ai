@@ -127,6 +127,9 @@ function createOverlayWindow() {
 
   // Explicitly disable shadow using setShadow
   overlayWindow.setHasShadow(false);
+  
+  // Make overlay window globally accessible for automation
+  global.overlayWindow = overlayWindow;
 
   // CRITICAL: Configure panel window to appear over fullscreen apps
   // Panel windows (NSPanel) automatically have the right collection behavior on macOS
@@ -781,6 +784,25 @@ async function setupIPCHandlers() {
       // Stub for communications
       ipcMain.handle('llm-get-communications', async () => {
         return { success: true, communications: [] };
+      });
+      
+      // Window visibility control for automation
+      ipcMain.handle('window-hide', async () => {
+        if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+          global.overlayWindow.hide();
+          console.log('🙈 [WINDOW] Overlay hidden for automation');
+          return { success: true };
+        }
+        return { success: false, error: 'Window not available' };
+      });
+      
+      ipcMain.handle('window-show', async () => {
+        if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
+          global.overlayWindow.show();
+          console.log('👁️ [WINDOW] Overlay restored after automation');
+          return { success: true };
+        }
+        return { success: false, error: 'Window not available' };
       });
       
       console.log('✅ MCP mode stub handlers updated');
