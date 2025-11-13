@@ -44,6 +44,18 @@ process.on('uncaughtException', (err) => {
   }
 });
 
+// Handle unhandled promise rejections (e.g., from database corruption)
+process.on('unhandledRejection', (reason, promise) => {
+  // Check if it's a database corruption error
+  if (reason && reason.message && reason.message.includes('Corrupt database')) {
+    console.warn('⚠️  Unhandled database corruption error (non-fatal):', reason.message);
+    // Don't crash - database errors are logged but shouldn't kill the app
+    return;
+  }
+  console.error('Unhandled Promise Rejection:', reason);
+  // Log but don't crash for promise rejections
+});
+
 // Import modularized IPC handlers
 const { initializeIPCHandlers } = require('./handlers/ipc-handlers.cjs');
 // DEPRECATED - Only used in non-MCP mode (commented out to prevent import errors from deleted files)
@@ -244,13 +256,152 @@ app.whenReady().then(async () => {
   
   console.log('🎉 Initialization sequence complete!');
   
-  // TEMPORARILY DISABLED: Virtual Screen DOM causes typing lag
-  // TODO: Move to worker thread for better performance
-  console.log('⚠️  Virtual Screen DOM disabled (causes typing lag)');
-  // const VirtualScreenDOM = require('./services/virtualScreenDOM.cjs');
-  // global.virtualScreenDOM = new VirtualScreenDOM();
-  // await global.virtualScreenDOM.start();
-  // console.log('✅ Virtual Screen DOM initialized');
+  // Initialize Virtual Screen DOM in Worker Thread (prevents typing lag)
+  console.log('🔧 Initializing Virtual Screen DOM in worker thread...');
+  try {
+    const { Worker } = require('worker_threads');
+    const path = require('path');
+    
+    global.screenWorker = new Worker(
+      path.join(__dirname, 'workers/screen-intelligence-worker.cjs')
+    );
+    
+    global.screenWorkerReady = false;
+    global.screenWorkerCache = new Map();
+    
+    global.screenWorker.on('message', async (msg) => {
+      if (msg.type === 'ready') {
+        global.screenWorkerReady = true;
+        console.log('✅ Virtual Screen DOM worker ready');
+      } else if (msg.type === 'requestAnalysis') {
+        // Worker is requesting analysis for a window
+        const { windowInfo } = msg;
+        console.log(`📡 [MAIN] Worker requesting analysis for: ${windowInfo.app} - ${windowInfo.title}`);
+        if (windowInfo.url) {
+          console.log(`🌐 [MAIN] URL: ${windowInfo.url}`);
+        }
+        
+        try {
+          // Get MCP client from global (initialized in IPC handlers)
+          const mcpClient = global.mcpClient;
+          
+          if (!mcpClient) {
+            console.warn('⚠️  [MAIN] MCP client not available, cannot analyze');
+            return;
+          }
+          
+          // Call screen-intelligence service
+          const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
+            query: `analyze ${windowInfo.title}`,
+            includeScreenshot: false
+          }, { timeout: 60000 });
+          
+          console.log(`✅ [MAIN] Analysis complete for ${windowInfo.windowId}`);
+          
+          // Debug: Log full analysis data structure
+          const analysisData = result.data || result;
+          console.log('📊 [MAIN] Analysis data structure:', JSON.stringify({
+            hasData: !!analysisData,
+            dataKeys: analysisData ? Object.keys(analysisData) : [],
+            elementCount: analysisData?.elements?.length || 0,
+            windowCount: analysisData?.windows?.length || 0,
+            hasScreenshot: !!analysisData?.screenshot,
+            hasOCR: !!analysisData?.ocr,
+            hasAccessibility: !!analysisData?.accessibility
+          }, null, 2));
+          
+          // Send result back to worker
+          global.screenWorker.postMessage({
+            type: 'analysisResult',
+            windowInfo,
+            data: analysisData
+          });
+        } catch (error) {
+          console.error('❌ [MAIN] Analysis failed:', error);
+        }
+      } else if (msg.type === 'showToast') {
+        // Worker requesting toast display (debug mode only)
+        if (process.env.DEBUG_VIRTUAL_DOM_SCREEN === 'true') {
+          try {
+            const { showToast } = require('./windows/screen-intelligence-overlay.cjs');
+            showToast(msg.message, msg.toastType, msg.duration);
+            console.log(`🍞 [MAIN] Debug toast from worker: ${msg.message}`);
+          } catch (error) {
+            console.log(`🍞 [MAIN] Debug toast (no overlay): ${msg.message}`);
+          }
+        }
+      } else if (msg.type === 'cacheUpdate') {
+        // Worker has cached new data
+        global.screenWorkerCache.set(msg.windowId, {
+          data: msg.data,
+          timestamp: msg.timestamp
+        });
+        console.log(`✅ [MAIN] Cache updated for ${msg.windowId}`);
+        
+        // ⏸️  DISABLED: Predictive cache generation (phi4 performance issues)
+        // TODO: Re-enable when phi4 LLM is faster and returns valid JSON
+        // global.screenWorker.postMessage({
+        //   type: 'generatePredictiveCache',
+        //   windowId: msg.windowId,
+        //   data: msg.data
+        // });
+      } else if (msg.type === 'predictiveCacheRequest') {
+        // Worker requesting phi4 service call for predictive cache
+        (async () => {
+          try {
+            const mcpClient = global.mcpClient;
+            
+            if (!mcpClient) {
+              console.warn('⚠️  [MAIN] MCP client not available for predictive cache');
+              global.screenWorker.postMessage({
+                type: 'predictiveCacheResponse',
+                requestId: msg.requestId,
+                error: 'MCP client not available'
+              });
+              return;
+            }
+            
+            // Call phi4 service on behalf of worker
+            const result = await mcpClient.callService('phi4', msg.action, msg.payload);
+            
+            // Send result back to worker
+            global.screenWorker.postMessage({
+              type: 'predictiveCacheResponse',
+              requestId: msg.requestId,
+              result: result
+            });
+          } catch (error) {
+            console.error('❌ [MAIN] Predictive cache phi4 call failed:', error.message);
+            global.screenWorker.postMessage({
+              type: 'predictiveCacheResponse',
+              requestId: msg.requestId,
+              error: error.message
+            });
+          }
+        })();
+      } else if (msg.type === 'error') {
+        console.error('❌ Screen worker error:', msg.error);
+      }
+    });
+    
+    global.screenWorker.on('error', (error) => {
+      console.error('❌ Screen worker thread error:', error);
+      global.screenWorkerReady = false;
+    });
+    
+    global.screenWorker.on('exit', (code) => {
+      console.log(`⚠️  Screen worker exited with code ${code}`);
+      global.screenWorkerReady = false;
+    });
+    
+    // Initialize the worker
+    global.screenWorker.postMessage({ type: 'init' });
+    
+    console.log('✅ Virtual Screen DOM worker thread started');
+  } catch (error) {
+    console.error('❌ Failed to start Virtual Screen DOM worker:', error);
+    console.log('⚠️  Continuing without screen caching');
+  }
   
   // Initialize Selection Detector for context-aware queries
   console.log('📋 Initializing Selection Detector...');

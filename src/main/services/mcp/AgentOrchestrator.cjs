@@ -24,6 +24,7 @@ const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
 
 // Import node implementations
 const parseIntentNode = require('./nodes/parseIntent.cjs');
+const checkScreenCacheNode = require('./nodes/checkScreenCache.cjs'); // 🆕 NEW
 const retrieveMemoryNode = require('./nodes/retrieveMemory.cjs');
 const filterMemoryNode = require('./nodes/filterMemory.cjs');
 const resolveReferencesNode = require('./nodes/resolveReferences.cjs');
@@ -73,6 +74,9 @@ class AgentOrchestrator {
     const nodes = {
       // Early coreference resolution (before intent parsing)
       earlyResolveReferences: (state) => resolveReferencesNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // 🆕 Check screen cache with semantic search (before intent parsing)
+      checkScreenCache: (state) => checkScreenCacheNode({ ...state, mcpClient: this.mcpClient }),
       
       // Router node
       parseIntent: (state) => parseIntentNode({ ...state, mcpClient: this.mcpClient }),
@@ -222,7 +226,18 @@ class AgentOrchestrator {
     // Define edges with intent-based routing
     const edges = {
       start: 'earlyResolveReferences',
-      earlyResolveReferences: 'parseIntent',
+      earlyResolveReferences: 'checkScreenCache',
+      
+      // 🆕 Smart routing from cache check
+      checkScreenCache: (state) => {
+        // If cache hit with high semantic similarity, skip to answer
+        if (state.skipToAnswer && state.screenContext) {
+          console.log(`⚡ [STATEGRAPH:CACHE_HIT] Using cached screen data (similarity: ${state.cacheHitSimilarity?.toFixed(3)}), skipping to answer`);
+          return 'answer';
+        }
+        // Otherwise, proceed to intent parsing
+        return 'parseIntent';
+      },
       
       // Router: Route based on intent type
       parseIntent: (state) => {
@@ -305,6 +320,7 @@ class AgentOrchestrator {
           return 'vision';
         }
         // Screen intelligence succeeded, proceed to answer
+        // Note: Predictive cache is generated in background by main.cjs when screen data is cached
         return 'answer';
       },
       

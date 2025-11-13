@@ -7,6 +7,20 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 
+// AppleScript commands for getting browser URLs
+const BROWSER_URL_SCRIPTS = {
+  'Google Chrome': `tell application "Google Chrome" to get URL of active tab of front window as string`,
+  'Chrome': `tell application "Google Chrome" to get URL of active tab of front window as string`,
+  'Safari': `tell application "Safari" to return URL of front document as string`,
+  'Firefox': `tell application "Firefox" to return URL of front window`,
+  'Brave Browser': `tell application "Brave Browser" to get URL of active tab of front window as string`,
+  'Brave': `tell application "Brave Browser" to get URL of active tab of front window as string`,
+  'Microsoft Edge': `tell application "Microsoft Edge" to get URL of active tab of front window as string`,
+  'Edge': `tell application "Microsoft Edge" to get URL of active tab of front window as string`,
+  'Arc': `tell application "Arc" to get URL of active tab of front window as string`,
+  'Vivaldi': `tell application "Vivaldi" to return URL of active tab of front window`
+};
+
 // Cache configuration
 const CACHE_CONFIG = {
   ACTIVE_WINDOW_TTL: 5 * 60 * 1000,      // 5 minutes for active window
@@ -18,19 +32,44 @@ const CACHE_CONFIG = {
 };
 
 class VirtualScreenDOM {
-  constructor() {
+  constructor(requestAnalysisCallback = null) {
     this.cache = new Map(); // windowId -> screenData
     this.activeWindow = null;
     this.cleanupInterval = null;
-    this.focusWatchInterval = null;
+    this.windowListener = null;
     this.isAnalyzing = false;
+    this.requestAnalysisCallback = requestAnalysisCallback; // Callback to request analysis from main thread
+    this.debugMode = process.env.DEBUG_VIRTUAL_DOM_SCREEN === 'true'; // Debug flag for toasts
+    console.log(`[WORKER] 🐛 Debug mode: ${this.debugMode} (env: ${process.env.DEBUG_VIRTUAL_DOM_SCREEN})`);
+  }
+
+  /**
+   * Get browser URL using AppleScript (macOS only)
+   * @param {string} appName - Name of the browser application
+   * @returns {Promise<string|null>} URL or null if not a browser or error
+   */
+  async getBrowserURL(appName) {
+    const script = BROWSER_URL_SCRIPTS[appName];
+    if (!script) {
+      return null; // Not a supported browser
+    }
+    
+    try {
+      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const url = stdout.trim();
+      return url || null;
+    } catch (error) {
+      // Browser might not be running or AppleScript failed
+      console.log(`[WORKER] ⚠️  Could not get URL from ${appName}:`, error.message);
+      return null;
+    }
   }
 
   /**
    * Start the virtual DOM system
    */
   async start() {
-    console.log('👁️  Starting Virtual Screen DOM...');
+    console.log('[WORKER] 👁️  Starting Virtual Screen DOM...');
     
     // Start periodic cleanup
     this.startCleanup();
@@ -38,61 +77,132 @@ class VirtualScreenDOM {
     // Start watching for window focus changes
     this.startFocusWatcher();
     
-    console.log('✅ Virtual Screen DOM started');
+    console.log('[WORKER] ✅ Virtual Screen DOM started');
   }
 
   /**
-   * Watch for window focus changes and auto-analyze
+   * Watch for window focus changes using node-window-manager directly
    */
-  startFocusWatcher() {
-    this.focusWatchInterval = setInterval(async () => {
-      try {
-        const currentWindowId = await this.getCurrentWindowId();
-        
-        if (currentWindowId !== this.activeWindow && !this.isAnalyzing) {
-          console.log(`🔄 Window focus changed: ${currentWindowId}`);
-          
-          // 📋 If switching TO Electron (Thinkdrop AI), trigger selection capture from previous window
-          if (currentWindowId.startsWith('Electron-') && global.selectionDetector) {
-            console.log('🎯 [FOCUS] Thinkdrop AI gained focus - triggering selection capture');
-            // Trigger immediate capture from the window we just left
-            setTimeout(() => {
-              if (global.selectionDetector) {
-                global.selectionDetector.captureFromPreviousWindow();
-              }
-            }, 100); // Small delay to ensure window transition is complete
-          }
-          
-          this.activeWindow = currentWindowId;
-          
-          // Check if we need to analyze
-          const cached = this.cache.get(currentWindowId);
-          const now = Date.now();
-          
-          if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL) {
-            // 🎯 CRITICAL FIX: Wait for fullscreen transition animation to complete
-            // macOS shows desktop briefly during fullscreen app switching
-            console.log('⏳ Waiting 1.5s for fullscreen transition to complete...');
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            // Verify we're still on the same window after delay
-            const verifyWindowId = await this.getCurrentWindowId();
-            if (verifyWindowId !== currentWindowId) {
-              console.log('⚠️  Window changed during transition delay, skipping analysis');
-              return;
-            }
-            
-            // Analyze (toast will be shown by analyzeCurrentWindow)
-            await this.analyzeCurrentWindow(verifyWindowId);
-          } else {
-            const age = Math.round((now - cached.timestamp) / 1000);
-            console.log(`✅ Using cached data (${age}s old)`);
-          }
-        }
-      } catch (error) {
-        // Silently fail - don't spam console with errors
+  async startFocusWatcher() {
+    console.log('[WORKER] 🔍 Starting active window listener...');
+    
+    try {
+      // Dynamic import for ES module - get windowManager directly
+      const windowManagerModule = await import('node-window-manager');
+      const windowManager = windowManagerModule.windowManager || windowManagerModule.default?.windowManager;
+      
+      if (!windowManager) {
+        throw new Error('Could not load windowManager from node-window-manager');
       }
-    }, CACHE_CONFIG.FOCUS_CHECK_INTERVAL);
+      
+      console.log('[WORKER] 📦 Using node-window-manager directly for better control');
+      
+      // Poll for active window changes every 500ms
+      let lastWindowPath = null;
+      
+      const checkActiveWindow = async () => {
+        try {
+          // Force refresh window list to get current state
+          windowManager.requestAccessibility();
+          
+          // Get the active window directly (more reliable than iterating)
+          const activeWindow = windowManager.getActiveWindow();
+          
+          if (!activeWindow) {
+            console.log('[WORKER] ⚠️  No active window found');
+            return;
+          }
+          
+          console.log(`[WORKER] 👁️  Active window: ${activeWindow.getTitle ? activeWindow.getTitle() : 'Unknown'}`);
+          
+          const currentPath = activeWindow.path;
+          
+          // Only process if window changed
+          if (currentPath !== lastWindowPath) {
+            lastWindowPath = currentPath;
+            
+            console.log('[WORKER] 🔔 Window changed detected!');
+            
+            // Get window details
+            const title = activeWindow.getTitle ? activeWindow.getTitle() : (activeWindow.title || '');
+            const path = activeWindow.path || '';
+            
+            // Extract app name from path
+            const appMatch = path.match(/([^/\\]+)\.(app|exe)$/i);
+            const app = appMatch ? appMatch[1] : path.split(/[/\\]/).pop() || 'Unknown';
+            
+            // Create unique window ID
+            const windowId = `${app}-${title}`.substring(0, 100);
+            
+            if (windowId !== this.activeWindow && !this.isAnalyzing) {
+              console.log(`[WORKER] 🔄 Window focus changed: ${app} - ${title}`);
+              
+              // Show debug toast if enabled
+              this.showToast(`Window: ${app}${title ? ' - ' + title : ''}`, 'info', 2000);
+              
+              // Try to get URL for browsers using AppleScript
+              let url = null;
+              if (BROWSER_URL_SCRIPTS[app]) {
+                console.log(`[WORKER] 🔍 Fetching URL from ${app}...`);
+                url = await this.getBrowserURL(app);
+                if (url) {
+                  console.log(`[WORKER] 🌐 URL: ${url}`);
+                }
+              }
+              
+              // 📋 If switching TO Electron (Thinkdrop AI), trigger selection capture from previous window
+              if (app.toLowerCase().includes('electron') && global.selectionDetector) {
+                console.log('[WORKER] 🎯 Thinkdrop AI gained focus - triggering selection capture');
+                setTimeout(() => {
+                  if (global.selectionDetector) {
+                    global.selectionDetector.captureFromPreviousWindow();
+                  }
+                }, 100);
+              }
+              
+              this.activeWindow = windowId;
+              
+              // Check if we need to analyze
+              const cached = this.cache.get(windowId);
+              const now = Date.now();
+              
+              if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL) {
+                console.log(`[WORKER] 📊 Cache miss for ${windowId}, requesting analysis...`);
+                
+                // Request analysis from main thread via callback
+                if (this.requestAnalysisCallback) {
+                  this.requestAnalysisCallback({
+                    windowId,
+                    app,
+                    title,
+                    url,
+                    path
+                  });
+                } else {
+                  console.warn('[WORKER] ⚠️  No requestAnalysisCallback provided, cannot analyze');
+                }
+              } else {
+                const age = Math.round((now - cached.timestamp) / 1000);
+                console.log(`[WORKER] ✅ Using cached data (${age}s old)`);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('[WORKER] ❌ Error checking active window:', error);
+        }
+      };
+      
+      // Start polling
+      this.windowListener = setInterval(checkActiveWindow, 500);
+      
+      // Run immediately once
+      checkActiveWindow();
+      
+      console.log('[WORKER] ✅ Active window listener started (polling every 500ms)');
+    } catch (error) {
+      console.error('[WORKER] ❌ Failed to start window listener:', error);
+      throw error;
+    }
   }
 
   /**
@@ -233,14 +343,42 @@ class VirtualScreenDOM {
 
   /**
    * Show toast notification
+   * In worker thread: sends message to main thread if debug mode enabled
+   * In main thread: shows toast directly
    */
   showToast(message, type, duration) {
-    try {
-      const { showToast } = require('../windows/screen-intelligence-overlay.cjs');
-      showToast(message, type, duration);
-    } catch (error) {
-      // Silently fail if overlay not available
-      console.log(`📢 Toast: ${message}`);
+    // Check if we're in a worker thread
+    const isWorker = typeof process !== 'undefined' && process.env.WORKER_THREAD === 'true';
+    console.log(`[WORKER] 🐛 showToast called: isWorker=${isWorker}, debugMode=${this.debugMode}, message="${message}"`);
+    
+    if (isWorker) {
+      // Worker thread - send to main thread if debug mode
+      if (this.debugMode && this.requestAnalysisCallback) {
+        // Use the same callback mechanism to send toast requests
+        try {
+          const { parentPort } = require('worker_threads');
+          if (parentPort) {
+            parentPort.postMessage({
+              type: 'showToast',
+              message,
+              toastType: type,
+              duration
+            });
+          }
+        } catch (error) {
+          console.log(`[WORKER] 📢 Toast (debug): ${message}`);
+        }
+      } else if (this.debugMode) {
+        console.log(`[WORKER] 📢 Toast (debug): ${message}`);
+      }
+    } else {
+      // Main thread - show toast directly
+      try {
+        const { showToast } = require('../windows/screen-intelligence-overlay.cjs');
+        showToast(message, type, duration);
+      } catch (error) {
+        console.log(`📢 Toast: ${message}`);
+      }
     }
   }
 
@@ -503,17 +641,44 @@ class VirtualScreenDOM {
   }
 
   /**
+   * Cache analysis result from main thread
+   * @param {Object} analysisData - Screen analysis data from MCP service
+   */
+  cacheAnalysisResult(analysisData) {
+    if (!analysisData || !analysisData.windowId) {
+      console.warn('[WORKER] ⚠️  Cannot cache analysis: missing windowId');
+      return;
+    }
+    
+    const cacheEntry = {
+      ...analysisData,
+      timestamp: Date.now()
+    };
+    
+    this.cache.set(analysisData.windowId, cacheEntry);
+    console.log(`[WORKER] ✅ Cached analysis for ${analysisData.windowId}`);
+    
+    // Enforce max cache size
+    if (this.cache.size > CACHE_CONFIG.MAX_CACHED_WINDOWS) {
+      const oldestKey = this.cache.keys().next().value;
+      this.cache.delete(oldestKey);
+      console.log(`[WORKER] 🗑️  Removed oldest cache entry: ${oldestKey}`);
+    }
+  }
+
+  /**
    * Stop the virtual DOM system
    */
   stop() {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
     }
-    if (this.focusWatchInterval) {
-      clearInterval(this.focusWatchInterval);
+    if (this.windowListener) {
+      // Clear the polling interval
+      clearInterval(this.windowListener);
     }
     this.cache.clear();
-    console.log('🛑 Virtual Screen DOM stopped');
+    console.log('[WORKER] 🛑 Virtual Screen DOM stopped');
   }
 }
 

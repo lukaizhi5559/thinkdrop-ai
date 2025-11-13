@@ -19,8 +19,10 @@ module.exports = async function executeCommand(state) {
   
   try {
     console.log(`⚡ [NODE:EXECUTE_COMMAND] Executing ${intent.type} via MCP:`, commandMessage);
-    if (resolvedMessage && resolvedMessage !== message) {
+    if (resolvedMessage && resolvedMessage !== message && commandMessage === resolvedMessage) {
       console.log('📝 [NODE:EXECUTE_COMMAND] Using resolved message:', message, '→', resolvedMessage);
+    } else if (resolvedMessage && resolvedMessage !== message && commandMessage === message) {
+      console.log('📝 [NODE:EXECUTE_COMMAND] Rejected resolved message, using original:', resolvedMessage, '→', message);
     }
     
     // Route based on ML-classified intent type
@@ -239,6 +241,10 @@ module.exports = async function executeCommand(state) {
       const isDirectoryListing = result.category === 'file_read' && 
         /^(ls|ll|la)\s/.test(result.executedCommand || '');
       
+      // Check if this is a find/search command
+      const isSearchCommand = result.category === 'file_read' && 
+        /^(find|mdfind|locate|grep)\s/.test(result.executedCommand || '');
+      
       if (isSimpleNetworkCommand && result.rawOutput) {
         // For simple network commands, use raw output with nice formatting
         const formattedOutput = result.rawOutput.trim();
@@ -278,6 +284,47 @@ module.exports = async function executeCommand(state) {
         return {
           ...state,
           answer: `\`\`\`\n${formattedOutput}\n\`\`\``,
+          commandExecuted: true,
+          executedCommand: result.executedCommand,
+          commandCategory: result.category,
+          executionTime: result.executionTime,
+          needsInterpretation: false,
+          outputInterpretationSource: 'raw',
+          geminiWarning: result.geminiWarning
+        };
+      }
+      
+      if (isSearchCommand && result.rawOutput) {
+        // For find/search commands, format the paths nicely
+        const paths = result.rawOutput.trim().split('\n').filter(p => p.trim());
+        
+        if (paths.length === 0) {
+          return {
+            ...state,
+            answer: 'No files or folders found matching your search.',
+            commandExecuted: true,
+            executedCommand: result.executedCommand,
+            commandCategory: result.category,
+            executionTime: result.executionTime,
+            needsInterpretation: false,
+            outputInterpretationSource: 'raw',
+            geminiWarning: result.geminiWarning
+          };
+        }
+        
+        // Extract just the filename/folder name for non-technical users
+        const formattedResults = paths.map(fullPath => {
+          const fileName = fullPath.split('/').pop(); // Get last part of path
+          const dirPath = fullPath.substring(0, fullPath.lastIndexOf('/')); // Get directory
+          return `**${fileName}**\n   📁 \`${dirPath}\``;
+        }).join('\n\n');
+        
+        const count = paths.length;
+        const plural = count === 1 ? 'result' : 'results';
+        
+        return {
+          ...state,
+          answer: `Found **${count} ${plural}**:\n\n${formattedResults}`,
           commandExecuted: true,
           executedCommand: result.executedCommand,
           commandCategory: result.category,

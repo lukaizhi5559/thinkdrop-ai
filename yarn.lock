@@ -1701,7 +1701,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@mapbox/node-pre-gyp@npm:^1.0.0":
+"@mapbox/node-pre-gyp@npm:^1.0.0, @mapbox/node-pre-gyp@npm:^1.0.11":
   version: 1.0.11
   resolution: "@mapbox/node-pre-gyp@npm:1.0.11"
   dependencies:
@@ -1826,6 +1826,17 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@nerimity/active-window-listener@npm:^2.0.6":
+  version: 2.0.6
+  resolution: "@nerimity/active-window-listener@npm:2.0.6"
+  dependencies:
+    exiftool-vendored: ^14.6.2
+    get-windows: ^9.2.0
+    node-window-manager: ^2.2.4
+  checksum: 265c956587c23aa59f4faa276d25a830b1b697e23989da1eedcb49ffb42a590c455b81f941b6e607d0555a25c794d9b464435c01fd0ab549ebb4eebe80857cb0
+  languageName: node
+  linkType: hard
+
 "@nodelib/fs.scandir@npm:2.1.5":
   version: 2.1.5
   resolution: "@nodelib/fs.scandir@npm:2.1.5"
@@ -1853,6 +1864,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@npmcli/agent@npm:^2.0.0":
+  version: 2.2.2
+  resolution: "@npmcli/agent@npm:2.2.2"
+  dependencies:
+    agent-base: ^7.1.0
+    http-proxy-agent: ^7.0.0
+    https-proxy-agent: ^7.0.1
+    lru-cache: ^10.0.1
+    socks-proxy-agent: ^8.0.3
+  checksum: 67de7b88cc627a79743c88bab35e023e23daf13831a8aa4e15f998b92f5507b644d8ffc3788afc8e64423c612e0785a6a92b74782ce368f49a6746084b50d874
+  languageName: node
+  linkType: hard
+
 "@npmcli/agent@npm:^3.0.0":
   version: 3.0.0
   resolution: "@npmcli/agent@npm:3.0.0"
@@ -1873,6 +1897,15 @@ __metadata:
     "@gar/promisify": ^1.1.3
     semver: ^7.3.5
   checksum: 405074965e72d4c9d728931b64d2d38e6ea12066d4fad651ac253d175e413c06fe4350970c783db0d749181da8fe49c42d3880bd1cbc12cd68e3a7964d820225
+  languageName: node
+  linkType: hard
+
+"@npmcli/fs@npm:^3.1.0":
+  version: 3.1.1
+  resolution: "@npmcli/fs@npm:3.1.1"
+  dependencies:
+    semver: ^7.3.5
+  checksum: d960cab4b93adcb31ce223bfb75c5714edbd55747342efb67dcc2f25e023d930a7af6ece3e75f2f459b6f38fc14d031c766f116cd124fdc937fd33112579e820
   languageName: node
   linkType: hard
 
@@ -3756,6 +3789,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"abbrev@npm:^2.0.0":
+  version: 2.0.0
+  resolution: "abbrev@npm:2.0.0"
+  checksum: 0e994ad2aa6575f94670d8a2149afe94465de9cedaaaac364e7fb43a40c3691c980ff74899f682f4ca58fa96b4cbd7421a015d3a6defe43a442117d7821a2f36
+  languageName: node
+  linkType: hard
+
 "abbrev@npm:^3.0.0":
   version: 3.0.1
   resolution: "abbrev@npm:3.0.1"
@@ -4483,6 +4523,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"batch-cluster@npm:^6.2.1":
+  version: 6.2.1
+  resolution: "batch-cluster@npm:6.2.1"
+  checksum: e0489aedcf47c183b7e7b99235d6d7b7b147ae20cb609dd7aa2ecc5915a459af2326d689009ea2335e17a63422aaaba584558d790b0328a5341f996950550de7
+  languageName: node
+  linkType: hard
+
 "bignumber.js@npm:^9.0.0":
   version: 9.3.1
   resolution: "bignumber.js@npm:9.3.1"
@@ -4769,6 +4816,26 @@ __metadata:
     tar: ^6.1.11
     unique-filename: ^2.0.0
   checksum: d91409e6e57d7d9a3a25e5dcc589c84e75b178ae8ea7de05cbf6b783f77a5fae938f6e8fda6f5257ed70000be27a681e1e44829251bfffe4c10216002f8f14e6
+  languageName: node
+  linkType: hard
+
+"cacache@npm:^18.0.0":
+  version: 18.0.4
+  resolution: "cacache@npm:18.0.4"
+  dependencies:
+    "@npmcli/fs": ^3.1.0
+    fs-minipass: ^3.0.0
+    glob: ^10.2.2
+    lru-cache: ^10.0.1
+    minipass: ^7.0.3
+    minipass-collect: ^2.0.1
+    minipass-flush: ^1.0.5
+    minipass-pipeline: ^1.2.4
+    p-map: ^4.0.0
+    ssri: ^10.0.0
+    tar: ^6.1.11
+    unique-filename: ^3.0.0
+  checksum: b7422c113b4ec750f33beeca0f426a0024c28e3172f332218f48f963e5b970647fa1ac05679fe5bb448832c51efea9fda4456b9a95c3a1af1105fe6c1833cde2
   languageName: node
   linkType: hard
 
@@ -7193,6 +7260,39 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"exiftool-vendored.exe@npm:^12.28.0":
+  version: 12.99.0
+  resolution: "exiftool-vendored.exe@npm:12.99.0"
+  conditions: os=win32
+  languageName: node
+  linkType: hard
+
+"exiftool-vendored.pl@npm:^12.28.0":
+  version: 12.99.0
+  resolution: "exiftool-vendored.pl@npm:12.99.0"
+  conditions: "!os=win32"
+  languageName: node
+  linkType: hard
+
+"exiftool-vendored@npm:^14.6.2":
+  version: 14.6.2
+  resolution: "exiftool-vendored@npm:14.6.2"
+  dependencies:
+    batch-cluster: ^6.2.1
+    exiftool-vendored.exe: ^12.28.0
+    exiftool-vendored.pl: ^12.28.0
+    he: ^1.2.0
+    luxon: ^1.27.0
+    tz-lookup: ^6.1.25
+  dependenciesMeta:
+    exiftool-vendored.exe:
+      optional: true
+    exiftool-vendored.pl:
+      optional: true
+  checksum: ddf8aaa383aeab71b81bfaf03a308b31a34d4342eaffc19001968ab68ce2bcd5248773b1a5b21c235ee54ef3f6f3921b189d7efb4e2579898a8c355ee710ec38
+  languageName: node
+  linkType: hard
+
 "exit@npm:^0.1.2":
   version: 0.1.2
   resolution: "exit@npm:0.1.2"
@@ -7314,6 +7414,16 @@ duckdb@latest:
   version: 3.0.2
   resolution: "extend@npm:3.0.2"
   checksum: a50a8309ca65ea5d426382ff09f33586527882cf532931cb08ca786ea3146c0553310bda688710ff61d7668eba9f96b923fe1420cdf56a2c3eaf30fcab87b515
+  languageName: node
+  linkType: hard
+
+"extract-file-icon@npm:^0.3.2":
+  version: 0.3.2
+  resolution: "extract-file-icon@npm:0.3.2"
+  dependencies:
+    node-addon-api: 1.7.1
+    node-gyp: latest
+  checksum: 74a50a32863795425ccf8d72a4c290a1b3a54243c2d9a3f1883b298137298672f43e5b645891e1086b4226138d49b850ad6f3f0b0cc638b3261320dcd5cceb0c
   languageName: node
   linkType: hard
 
@@ -7984,6 +8094,29 @@ duckdb@latest:
   version: 6.0.1
   resolution: "get-stream@npm:6.0.1"
   checksum: e04ecece32c92eebf5b8c940f51468cd53554dcbb0ea725b2748be583c9523d00128137966afce410b9b051eb2ef16d657cd2b120ca8edafcf5a65e81af63cad
+  languageName: node
+  linkType: hard
+
+"get-windows@npm:^9.2.0":
+  version: 9.2.3
+  resolution: "get-windows@npm:9.2.3"
+  dependencies:
+    "@mapbox/node-pre-gyp": ^1.0.11
+    node-addon-api: ^8.1.0
+    node-gyp: ^10.2.0
+  peerDependencies:
+    node-gyp: ^10.1.0
+  dependenciesMeta:
+    "@mapbox/node-pre-gyp":
+      optional: true
+    node-addon-api:
+      optional: true
+    node-gyp:
+      optional: true
+  peerDependenciesMeta:
+    node-gyp:
+      optional: true
+  checksum: c3b4a4fac6964f712d9fdf36cde5216c51b2cf66c6a7d8dae0c718ce31d0dd0e4f94d61adc5bc9b1d8690233f9bc185b5eea93e038c35631b95895192e45a10d
   languageName: node
   linkType: hard
 
@@ -10137,6 +10270,13 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"luxon@npm:^1.27.0":
+  version: 1.28.1
+  resolution: "luxon@npm:1.28.1"
+  checksum: 2c62999adea79645fd1e931d685f61aeb33eda7f39fbf79b84261a233b62f9590f48336654ee9efd405848bd9e13dc7fe087c701b7126187201a88998dc68b04
+  languageName: node
+  linkType: hard
+
 "lzma-native@npm:^8.0.5":
   version: 8.0.6
   resolution: "lzma-native@npm:8.0.6"
@@ -10190,6 +10330,26 @@ duckdb@latest:
     socks-proxy-agent: ^7.0.0
     ssri: ^9.0.0
   checksum: 2332eb9a8ec96f1ffeeea56ccefabcb4193693597b132cd110734d50f2928842e22b84cfa1508e921b8385cdfd06dda9ad68645fed62b50fff629a580f5fb72c
+  languageName: node
+  linkType: hard
+
+"make-fetch-happen@npm:^13.0.0":
+  version: 13.0.1
+  resolution: "make-fetch-happen@npm:13.0.1"
+  dependencies:
+    "@npmcli/agent": ^2.0.0
+    cacache: ^18.0.0
+    http-cache-semantics: ^4.1.1
+    is-lambda: ^1.0.1
+    minipass: ^7.0.2
+    minipass-fetch: ^3.0.0
+    minipass-flush: ^1.0.5
+    minipass-pipeline: ^1.2.4
+    negotiator: ^0.6.3
+    proc-log: ^4.2.0
+    promise-retry: ^2.0.1
+    ssri: ^10.0.0
+  checksum: 5c9fad695579b79488fa100da05777213dd9365222f85e4757630f8dd2a21a79ddd3206c78cfd6f9b37346819681782b67900ac847a57cf04190f52dda5343fd
   languageName: node
   linkType: hard
 
@@ -10611,7 +10771,7 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
-"mermaid@npm:^10.6.0":
+"mermaid@npm:^10.6.1":
   version: 10.9.5
   resolution: "mermaid@npm:10.9.5"
   dependencies:
@@ -11523,6 +11683,21 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"minipass-fetch@npm:^3.0.0":
+  version: 3.0.5
+  resolution: "minipass-fetch@npm:3.0.5"
+  dependencies:
+    encoding: ^0.1.13
+    minipass: ^7.0.3
+    minipass-sized: ^1.0.3
+    minizlib: ^2.1.2
+  dependenciesMeta:
+    encoding:
+      optional: true
+  checksum: 8047d273236157aab27ab7cd8eab7ea79e6ecd63e8f80c3366ec076cb9a0fed550a6935bab51764369027c414647fd8256c2a20c5445fb250c483de43350de83
+  languageName: node
+  linkType: hard
+
 "minipass-fetch@npm:^4.0.0":
   version: 4.0.1
   resolution: "minipass-fetch@npm:4.0.1"
@@ -11840,6 +12015,24 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"node-addon-api@npm:1.7.1":
+  version: 1.7.1
+  resolution: "node-addon-api@npm:1.7.1"
+  dependencies:
+    node-gyp: latest
+  checksum: 312d176e97b7d8d803026f4a6f12de807d20f8bff54844e21f07cfee24b98f9fe63526d2a7a0ea6dd3350a0b5591a16603e49e8c6a9162c6c89db635260df1e9
+  languageName: node
+  linkType: hard
+
+"node-addon-api@npm:2.0.0":
+  version: 2.0.0
+  resolution: "node-addon-api@npm:2.0.0"
+  dependencies:
+    node-gyp: latest
+  checksum: bcbfb8de23e4aa666c2a33bfe7f3282848a1857b381cfa81fc7a19a07314d682faf9b6647e1b5a31eccd91f58f0e425426b8dbbeba21733aa77de7c0f76056a6
+  languageName: node
+  linkType: hard
+
 "node-addon-api@npm:5.0.0":
   version: 5.0.0
   resolution: "node-addon-api@npm:5.0.0"
@@ -11882,6 +12075,15 @@ duckdb@latest:
   dependencies:
     node-gyp: latest
   checksum: 46051999e3289f205799dfaf6bcb017055d7569090f0004811110312e2db94cb4f8654602c7eb77a60a1a05142cc2b96e1b5c56ca4622c41a5c6370787faaf30
+  languageName: node
+  linkType: hard
+
+"node-addon-api@npm:^8.1.0":
+  version: 8.5.0
+  resolution: "node-addon-api@npm:8.5.0"
+  dependencies:
+    node-gyp: latest
+  checksum: 4d05f2ec4f62234232fbb8e0318d796c1968833f115c9c566a4d80c19684d1a10c06cb5f185512284f7dda028a61dbf01eac38993d49259ba3f182ce63d89411
   languageName: node
   linkType: hard
 
@@ -11946,6 +12148,26 @@ duckdb@latest:
     node-gyp-build-optional: optional.js
     node-gyp-build-test: build-test.js
   checksum: 8b81ca8ffd5fa257ad8d067896d07908a36918bc84fb04647af09d92f58310def2d2b8614d8606d129d9cd9b48890a5d2bec18abe7fcff54818f72bedd3a7d74
+  languageName: node
+  linkType: hard
+
+"node-gyp@npm:^10.2.0":
+  version: 10.3.1
+  resolution: "node-gyp@npm:10.3.1"
+  dependencies:
+    env-paths: ^2.2.0
+    exponential-backoff: ^3.1.1
+    glob: ^10.3.10
+    graceful-fs: ^4.2.6
+    make-fetch-happen: ^13.0.0
+    nopt: ^7.0.0
+    proc-log: ^4.1.0
+    semver: ^7.3.5
+    tar: ^6.2.1
+    which: ^4.0.0
+  bin:
+    node-gyp: bin/node-gyp.js
+  checksum: 91b0690ab504fe051ad66863226dc5ecac72b8471f85e8428e4d5ca3217d3a2adfffae48cd555e8d009a4164689fff558b88d2bc9bfd246452a3336ab308cf99
   languageName: node
   linkType: hard
 
@@ -12102,6 +12324,18 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"node-window-manager@npm:^2.2.4":
+  version: 2.2.4
+  resolution: "node-window-manager@npm:2.2.4"
+  dependencies:
+    extract-file-icon: ^0.3.2
+    node-addon-api: 2.0.0
+    node-gyp: latest
+    node-gyp-build: ^4.2.1
+  checksum: 4f649ed0d86f602142df8c6cd6a69d79a5256ead91b0efcb9c6c66845bd9d0c37f9b4d0630c498ef73844d2a2f89fd163ca480df079c714b3ba6ccfc0a4d3b14
+  languageName: node
+  linkType: hard
+
 "nodemon@npm:^3.0.0":
   version: 3.1.10
   resolution: "nodemon@npm:3.1.10"
@@ -12148,6 +12382,17 @@ duckdb@latest:
   bin:
     nopt: bin/nopt.js
   checksum: 82149371f8be0c4b9ec2f863cc6509a7fd0fa729929c009f3a58e4eb0c9e4cae9920e8f1f8eb46e7d032fec8fb01bede7f0f41a67eb3553b7b8e14fa53de1dac
+  languageName: node
+  linkType: hard
+
+"nopt@npm:^7.0.0":
+  version: 7.2.1
+  resolution: "nopt@npm:7.2.1"
+  dependencies:
+    abbrev: ^2.0.0
+  bin:
+    nopt: bin/nopt.js
+  checksum: 6fa729cc77ce4162cfad8abbc9ba31d4a0ff6850c3af61d59b505653bef4781ec059f8890ecfe93ee8aa0c511093369cca88bfc998101616a2904e715bbbb7c9
   languageName: node
   linkType: hard
 
@@ -13132,6 +13377,13 @@ duckdb@latest:
   version: 1.30.0
   resolution: "prismjs@npm:1.30.0"
   checksum: a68eddd4c5f1c506badb5434b0b28a7cc2479ed1df91bc4218e6833c7971ef40c50ec481ea49749ac964256acb78d8b66a6bd11554938e8998e46c18b5f9a580
+  languageName: node
+  linkType: hard
+
+"proc-log@npm:^4.1.0, proc-log@npm:^4.2.0":
+  version: 4.2.0
+  resolution: "proc-log@npm:4.2.0"
+  checksum: 98f6cd012d54b5334144c5255ecb941ee171744f45fca8b43b58ae5a0c1af07352475f481cadd9848e7f0250376ee584f6aa0951a856ff8f021bdfbff4eb33fc
   languageName: node
   linkType: hard
 
@@ -14839,6 +15091,15 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"ssri@npm:^10.0.0":
+  version: 10.0.6
+  resolution: "ssri@npm:10.0.6"
+  dependencies:
+    minipass: ^7.0.3
+  checksum: 4603d53a05bcd44188747d38f1cc43833b9951b5a1ee43ba50535bdfc5fe4a0897472dbe69837570a5417c3c073377ef4f8c1a272683b401857f72738ee57299
+  languageName: node
+  linkType: hard
+
 "ssri@npm:^12.0.0":
   version: 12.0.0
   resolution: "ssri@npm:12.0.0"
@@ -15411,6 +15672,7 @@ duckdb@latest:
     "@mdx-js/mdx": ^3.0.0
     "@mdx-js/react": ^3.0.0
     "@mistralai/mistralai": ^0.1.0
+    "@nerimity/active-window-listener": ^2.0.6
     "@nut-tree-fork/nut-js": ^4.2.6
     "@pinecone-database/pinecone": ^1.1.0
     "@playwright/mcp": ^0.0.36
@@ -15456,7 +15718,7 @@ duckdb@latest:
     katex: ^0.16.22
     lucide-react: ^0.525.0
     marked: ^9.1.0
-    mermaid: ^10.6.0
+    mermaid: ^10.6.1
     natural: ^8.1.0
     node-cron: ^3.0.0
     node-record-lpcm16: ^1.0.1
@@ -15776,6 +16038,13 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"tz-lookup@npm:^6.1.25":
+  version: 6.1.25
+  resolution: "tz-lookup@npm:6.1.25"
+  checksum: 2c80920e95d2efe4d3b899f56dcd61b62853f73689263be5453ad5b668e277e64c2ce06423a769f091b000715b493cf8272feccd144533d4a131c64a2175d2f8
+  languageName: node
+  linkType: hard
+
 "undefsafe@npm:^2.0.5":
   version: 2.0.5
   resolution: "undefsafe@npm:2.0.5"
@@ -15844,6 +16113,15 @@ duckdb@latest:
   languageName: node
   linkType: hard
 
+"unique-filename@npm:^3.0.0":
+  version: 3.0.0
+  resolution: "unique-filename@npm:3.0.0"
+  dependencies:
+    unique-slug: ^4.0.0
+  checksum: 8e2f59b356cb2e54aab14ff98a51ac6c45781d15ceaab6d4f1c2228b780193dc70fae4463ce9e1df4479cb9d3304d7c2043a3fb905bdeca71cc7e8ce27e063df
+  languageName: node
+  linkType: hard
+
 "unique-filename@npm:^4.0.0":
   version: 4.0.0
   resolution: "unique-filename@npm:4.0.0"
@@ -15859,6 +16137,15 @@ duckdb@latest:
   dependencies:
     imurmurhash: ^0.1.4
   checksum: 49f8d915ba7f0101801b922062ee46b7953256c93ceca74303bd8e6413ae10aa7e8216556b54dc5382895e8221d04f1efaf75f945c2e4a515b4139f77aa6640c
+  languageName: node
+  linkType: hard
+
+"unique-slug@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "unique-slug@npm:4.0.0"
+  dependencies:
+    imurmurhash: ^0.1.4
+  checksum: 0884b58365af59f89739e6f71e3feacb5b1b41f2df2d842d0757933620e6de08eff347d27e9d499b43c40476cbaf7988638d3acb2ffbcb9d35fd035591adfd15
   languageName: node
   linkType: hard
 
@@ -16418,6 +16705,17 @@ duckdb@latest:
   bin:
     node-which: ./bin/node-which
   checksum: 1a5c563d3c1b52d5f893c8b61afe11abc3bab4afac492e8da5bde69d550de701cf9806235f20a47b5c8fa8a1d6a9135841de2596535e998027a54589000e66d1
+  languageName: node
+  linkType: hard
+
+"which@npm:^4.0.0":
+  version: 4.0.0
+  resolution: "which@npm:4.0.0"
+  dependencies:
+    isexe: ^3.1.1
+  bin:
+    node-which: bin/which.js
+  checksum: f17e84c042592c21e23c8195108cff18c64050b9efb8459589116999ea9da6dd1509e6a1bac3aeebefd137be00fabbb61b5c2bc0aa0f8526f32b58ee2f545651
   languageName: node
   linkType: hard
 

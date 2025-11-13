@@ -183,28 +183,38 @@ module.exports = async function screenIntelligence(state) {
   }
   
   try {
-    // 1️⃣ Check Virtual Screen DOM cache first
-    const virtualDOM = global.virtualScreenDOM;
-    const cached = virtualDOM?.queryCached(null, message);
-    
+    // 1️⃣ Check Worker Thread cache first (instant lookup)
     let data;
+    let fromCache = false;
+    let cachedUrl = null;
     
-    if (cached && Date.now() - cached.timestamp < 300000) {
-      // Cache hit - use cached data (within 5 minutes = 300 seconds)
-      const age = Math.round((Date.now() - cached.timestamp) / 1000);
-      console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using cached data (${age}s old)`);
+    if (global.screenWorkerReady && global.screenWorkerCache) {
+      // Check if we have cached data for any window
+      const cacheEntries = Array.from(global.screenWorkerCache.values());
+      const recentCache = cacheEntries.find(entry => 
+        Date.now() - entry.timestamp < 300000 // 5 minutes
+      );
       
-      // Build data structure from cache
-      data = {
-        strategy: 'cached',
-        windowsAnalyzed: [cached.windowInfo],
-        elements: cached.elements,
-        elementCount: cached.elementCount,
-        selectedText: null
-      };
-    } else {
-      // 2️⃣ Cache miss or stale - call screen-intelligence service
-      console.log('📊 [NODE:SCREEN_INTELLIGENCE] Calling screen/analyze...');
+      if (recentCache) {
+        const age = Math.round((Date.now() - recentCache.timestamp) / 1000);
+        console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache (${age}s old, instant lookup)`);
+        
+        data = recentCache.data;
+        fromCache = true;
+        
+        // Extract URL if available
+        if (data.url) {
+          cachedUrl = data.url;
+          console.log(`🌐 [NODE:SCREEN_INTELLIGENCE] Cached URL: ${cachedUrl}`);
+        }
+      }
+    }
+    
+    // 2️⃣ Cache miss - call screen-intelligence service
+    if (!fromCache) {
+      console.log('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling screen/analyze...');
+      const startTime = Date.now();
+      
       // Screen analysis can take 30-60s when analyzing multiple browser windows with Playwright
       // Use environment variable or default to 60 seconds
       const screenTimeout = parseInt(process.env.MCP_SCREEN_TIMEOUT || '60000');
@@ -213,14 +223,11 @@ module.exports = async function screenIntelligence(state) {
         includeScreenshot: false // We don't need screenshots for text queries
       }, { timeout: screenTimeout });
       
+      const analysisTime = Date.now() - startTime;
+      console.log(`📊 [NODE:SCREEN_INTELLIGENCE] Analysis complete (${analysisTime}ms)`);
+      
       // Extract data from response
       data = result.data || result;
-      
-      // 3️⃣ Cache the fresh results
-      if (virtualDOM && data.elements) {
-        await virtualDOM.cacheAnalysis(data);
-        console.log('✅ [NODE:SCREEN_INTELLIGENCE] Cached fresh analysis');
-      }
     }
     
     console.log('✅ [NODE:SCREEN_INTELLIGENCE] Screen analysis complete', {
@@ -229,6 +236,31 @@ module.exports = async function screenIntelligence(state) {
       elementCount: data.elementCount || 0,
       hasSelectedText: !!data.selectedText
     });
+    
+    // 🐛 DEBUG: Log full analysis data structure
+    console.log('=' .repeat(80));
+    console.log('🐛 [DEBUG] FULL ANALYSIS DATA STRUCTURE:');
+    console.log(JSON.stringify({
+      strategy: data.strategy,
+      elementCount: data.elementCount,
+      windowsAnalyzed: data.windowsAnalyzed?.map(w => ({
+        app: w.app,
+        title: w.title,
+        bounds: w.bounds
+      })),
+      elements: data.elements?.slice(0, 5).map(el => ({
+        type: el.type,
+        role: el.role,
+        label: el.label?.substring(0, 50),
+        value: el.value?.substring(0, 100),
+        bounds: el.bounds
+      })),
+      totalElements: data.elements?.length || 0,
+      hasOCR: !!data.elements?.find(el => el.role === 'full_text_content'),
+      hasAccessibility: !!data.elements?.find(el => el.type === 'accessibility'),
+      selectedText: data.selectedText ? data.selectedText.substring(0, 100) + '...' : null
+    }, null, 2));
+    console.log('=' .repeat(80));
     
     // Log selected text if found
     if (data.selectedText) {
