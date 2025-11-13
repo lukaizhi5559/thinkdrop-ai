@@ -35,6 +35,96 @@ function initializeIPCHandlers({
   ipcMain.handle('toggle-overlay', () => {
     toggleOverlay();
   });
+  
+  // FAB button toggle overlay handler
+  ipcMain.handle('fab:toggle-overlay', () => {
+    console.log('🎯 [FAB] Toggle overlay triggered from FAB button');
+    toggleOverlay();
+  });
+  
+  // Guide window handlers
+  const { getGuideWindow, showGuideWindow, hideGuideWindow } = require('../windows/guide-window.cjs');
+  
+  ipcMain.on('guide:show', (event, guideData) => {
+    console.log('📚 [GUIDE] Show guide window with data:', guideData);
+    const guideWindow = getGuideWindow();
+    if (guideWindow && !guideWindow.isDestroyed()) {
+      // Send guide data to React-based guide window
+      guideWindow.webContents.send('guide:show', guideData);
+      // Show the window
+      showGuideWindow();
+    }
+  });
+  
+  ipcMain.on('guide:execute', async (event, data) => {
+    console.log('🎯 [GUIDE] Execute guide requested:', data);
+    
+    // Execute guide via MCP command service
+    try {
+      const mcpClient = global.mcpClient;
+      if (!mcpClient) {
+        throw new Error('MCP client not available');
+      }
+      
+      const result = await mcpClient.callService(
+        'command',
+        'command.guide.execute',
+        {
+          guideId: data.guideId,
+          fromStep: data.fromStep
+        },
+        { timeout: 300000 } // 5 minutes for execution
+      );
+      
+      console.log('✅ [GUIDE] Execution result:', result);
+      
+      // Send result back to guide window
+      const guideWindow = getGuideWindow();
+      if (guideWindow && !guideWindow.isDestroyed()) {
+        guideWindow.webContents.send('guide:execution-result', result);
+      }
+    } catch (error) {
+      console.error('❌ [GUIDE] Execution error:', error);
+      const guideWindow = getGuideWindow();
+      if (guideWindow && !guideWindow.isDestroyed()) {
+        guideWindow.webContents.send('guide:execution-result', { 
+          success: false, 
+          error: error.message 
+        });
+      }
+    }
+  });
+  
+  ipcMain.on('guide:abort', async (event, data) => {
+    console.log('🛑 [GUIDE] Abort guide requested:', data);
+    
+    // Abort guide via MCP command service
+    try {
+      const mcpClient = global.mcpClient;
+      if (!mcpClient) {
+        throw new Error('MCP client not available');
+      }
+      
+      await mcpClient.callService(
+        'command',
+        'command.guide.execute',
+        {
+          guideId: data.guideId,
+          abort: true
+        },
+        { timeout: 10000 } // 10 seconds for abort
+      );
+      
+      console.log('✅ [GUIDE] Abort successful');
+    } catch (error) {
+      console.error('❌ [GUIDE] Abort error:', error);
+    }
+  });
+  
+  ipcMain.on('guide:close', () => {
+    console.log('❌ [GUIDE] Close guide window');
+    hideGuideWindow();
+  });
 
   ipcMain.handle('hide-overlay', () => {
     if (overlayWindow) {

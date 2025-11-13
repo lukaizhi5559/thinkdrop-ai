@@ -467,6 +467,14 @@ class AgentOrchestrator {
         requiresConfirmation: finalState.requiresConfirmation || false,
         confirmationDetails: finalState.confirmationDetails || null,
         geminiWarning: finalState.geminiWarning || null, // Include Gemini configuration warning
+        // Guide fields for GuideOverlay
+        guideMode: finalState.guideMode || false,
+        guideId: finalState.guideId,
+        guideSteps: finalState.guideSteps,
+        guideTotalSteps: finalState.guideTotalSteps,
+        guideCode: finalState.guideCode,
+        guideRecoveries: finalState.guideRecoveries,
+        guideMetadata: finalState.guideMetadata,
         elapsedMs: finalState.elapsedMs,
         trace: finalState.trace, // Full execution trace for debugging
         debug: {

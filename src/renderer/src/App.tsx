@@ -2,12 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { LocalLLMProvider } from './contexts/LocalLLMContext';
 import { ConversationProvider } from './contexts/ConversationContext';
 import { ToastProvider } from './contexts/ToastContext';
+import { GuideProvider } from './contexts/GuideContext';
 import UnifiedInterface from './components/UnifiedInterface';
 import ChatMessages from './components/ChatMessages';
 import InsightWindow from './components/InsightWindow';
 import MemoryDebugger from './components/MemoryDebugger';
 import { ConversationSidebar } from './components/ConversationSidebar';
 import { SidebarToggle } from './components/SidebarToggle';
+import { GuideWindowContent } from './components/GuideWindowContent';
 
 import { initializeConversationSignals } from './signals/init';
 import './types/electronAPI'; // Import Electron API types
@@ -35,12 +37,17 @@ function App() {
     return <MemoryDebugger />;
   }
   
+  // Guide mode - separate window for interactive guides
+  if (mode === 'guide') {
+    return <GuideWindowContent />;
+  }
+  
   // Main unified overlay interface state
   const [isListening, setIsListening] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGatheringInsight] = useState(false);
   const [showResponse, setShowResponse] = useState(false);
-  const [currentView, setCurrentView] = useState(mode)
+  const [currentView, setCurrentView] = useState(mode);
 
   const handleViewChange = (view: ViewType) => {
     setCurrentView(view);
@@ -129,7 +136,9 @@ const AppWithProvider: React.FC = () => {
   return (
     <LocalLLMProvider>
       <ToastProvider>
-        <App />
+        <GuideProvider>
+          <App />
+        </GuideProvider>
       </ToastProvider>
     </LocalLLMProvider>
   );

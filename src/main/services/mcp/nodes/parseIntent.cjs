@@ -157,6 +157,21 @@ module.exports = async function parseIntent(state) {
     const isQuestion = /^(can|could|would|should|will|do|does|is|are|what|when|where|why|how|who)\s+/i.test(lowerMsg);
     const isStatement = /^(i want|i need|i'd like|i would like|i'm going to|let me)\s+/i.test(lowerMsg);
     
+    // CRITICAL: Catch guide/tutorial requests BEFORE DistilBERT
+    // Phrases like "show me how to", "teach me how to", "walk me through" are guide requests
+    if (/^(show me how|teach me|walk me through|guide me|explain how|demonstrate how)\s+/i.test(lowerMsg)) {
+      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected guide/tutorial request, forcing command_guide intent');
+      return {
+        ...state,
+        intent: {
+          type: 'command_guide',
+          confidence: 0.95,
+          entities: [],
+          requiresMemoryAccess: false
+        }
+      };
+    }
+    
     // CRITICAL: Catch "goto X and do a Y search" patterns BEFORE DistilBERT
     // These contain "search" keywords that confuse the classifier
     // Match: "goto", "go to", "go online", "navigate to", etc.

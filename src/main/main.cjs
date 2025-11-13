@@ -151,6 +151,14 @@ function createOverlayWindow() {
   // Make overlay click-through when not in focus (like Cluely)
   overlayWindow.setIgnoreMouseEvents(false);
   
+  // Hide overlay by default - user will open it via FAB button
+  // overlayWindow.once('ready-to-show', () => {
+  //   overlayWindow.hide();
+  //   isOverlayVisible = false;
+  //   isGloballyVisible = false;
+  //   console.log('✅ Overlay window created (hidden by default - use FAB to open)');
+  // });
+  
   // Hide window instead of closing
   overlayWindow.on('close', (event) => {
     if (overlayWindow && !app.isQuiting) {
@@ -264,6 +272,21 @@ app.whenReady().then(async () => {
   const { createSelectionOverlay } = require('./windows/selection-overlay.cjs');
   createSelectionOverlay();
   console.log('✅ Selection Overlay initialized');
+  
+  // Initialize FAB Window (Floating Action Button)
+  // console.log('🎯 Initializing FAB Window...');
+  // const { createFABWindow, updateFABState } = require('./windows/fab-window.cjs');
+  // createFABWindow();
+  // global.updateFABState = updateFABState; // Make it globally accessible
+  // console.log('✅ FAB Window initialized');
+  
+  // Initialize Guide Window (Interactive Guides)
+  console.log('🎯 Initializing Guide Window...');
+  const { createGuideWindow, showGuideWindow, hideGuideWindow } = require('./windows/guide-window.cjs');
+  createGuideWindow();
+  global.showGuideWindow = showGuideWindow; // Make it globally accessible
+  global.hideGuideWindow = hideGuideWindow;
+  console.log('✅ Guide Window initialized');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   globalShortcut.register('Cmd+Shift+Space', () => {

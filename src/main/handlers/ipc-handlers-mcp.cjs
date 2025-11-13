@@ -31,6 +31,8 @@ function getFallbackAgents() {
 function getMCPClient() {
   if (!mcpClient) {
     mcpClient = new MCPClient(MCPConfigManager);
+    // Expose globally for other IPC handlers (e.g., guide execution)
+    global.mcpClient = mcpClient;
     console.log('✅ MCP Client initialized');
   }
   return mcpClient;

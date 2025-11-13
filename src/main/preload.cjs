@@ -220,6 +220,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.send('screen-intelligence:highlight', elementData);
   },
   
+  // Generic IPC methods for custom communication
+  send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+  on: (channel, callback) => ipcRenderer.on(channel, callback),
+  
   // System info
   platform: process.platform,
   version: process.versions.electron

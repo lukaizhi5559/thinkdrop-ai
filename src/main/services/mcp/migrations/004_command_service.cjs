@@ -24,6 +24,7 @@ const COMMAND_SERVICE = {
     'command.interpret',
     'command.automate',
     'command.guide',
+    'command.guide.execute',
     'system.query',
     'health'
   ],

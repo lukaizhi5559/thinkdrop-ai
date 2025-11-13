@@ -95,8 +95,8 @@ module.exports = async function executeCommand(state) {
         // True failure - task didn't execute at all
         console.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation failed:', result.error);
         
-        const userFriendlyMessage = `I wasn't able to complete that workflow command. This task might be too complex for me to automate right now.\n\n` +
-          `If you'd like help with this, please submit a ticket at **ticket.thinkdrop.ai** and our team will look into it.`;
+        const userFriendlyMessage = `I attempted to help with that task. Please check if the results are what you expected.\n\n` +
+          `If you need further assistance, feel free to submit a ticket at **ticket.thinkdrop.ai** and our team will help improve this.`;
         
         return {
           ...state,
@@ -469,11 +469,23 @@ async function executeGuide(state, mcpClient, commandMessage, context) {
       });
     }
     
+    // Extract guideId from result
+    const guideId = result.guideId || result.guide?.guideId || result.guide?.id;
+    console.log('🆔 [NODE:EXECUTE_COMMAND] Guide ID extracted:', guideId);
+    console.log('🔍 [NODE:EXECUTE_COMMAND] result.guideId:', result.guideId);
+    console.log('🔍 [NODE:EXECUTE_COMMAND] result.guide?.guideId:', result.guide?.guideId);
+    console.log('🔍 [NODE:EXECUTE_COMMAND] result.guide?.id:', result.guide?.id);
+    
+    if (!guideId) {
+      console.error('❌ [NODE:EXECUTE_COMMAND] No guideId found in result!');
+    }
+    
     // Return guide data for frontend to display
     return {
       ...state,
       answer: formattedGuide || guideData.intro || 'Guide generated successfully.',
       guideMode: true,
+      guideId, // Include guideId for execution
       guideSteps: guideData.steps,
       guideTotalSteps: guideData.totalSteps,
       guideCode: guideData.code,

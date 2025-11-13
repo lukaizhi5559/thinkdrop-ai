@@ -24,6 +24,7 @@ import MCPPanel from './MCPPanel';
 import VisionPanel from './VisionPanel';
 import { CommandConfirmation } from './CommandConfirmation';
 import { useConversationSignals } from '../hooks/useConversationSignals';
+import { useGuide } from '../contexts/GuideContext';
 import { ViewType } from '@/types/view';
 interface UnifiedInterfaceProps {
   isListening: boolean;

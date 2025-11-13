@@ -12,6 +12,7 @@ import { ThinkingIndicator } from './AnalyzingIndicator';
 import { RichContentRenderer } from './rich-content';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { useGlobalToast } from '../contexts/ToastContext';
+import { useGuide } from '../contexts/GuideContext';
 
 interface ChatMessage {
   id: string;
@@ -46,6 +47,9 @@ export default function ChatMessages({
     loadMessages: signalsLoadMessages,
     logDebugState
   } = useConversationSignals();
+  
+  // Guide context for showing guide overlay
+  const { showGuide } = useGuide();
 
 
 
@@ -657,8 +661,11 @@ export default function ChatMessages({
         const finalAnswer = isStreamingActive ? streamedAnswerRef.current : result?.response;
         
         if (finalAnswer) {
-            // Add AI response to conversation (only if not already saved during streaming)
-            if (signalsAddMessage && currentSessionId) {
+            // Check if this is a guide response first
+            const isGuideResponse = result?.guideMode && result?.guideId && result?.guideSteps;
+            
+            // Add AI response to conversation (only if not a guide and not already saved during streaming)
+            if (!isGuideResponse && signalsAddMessage && currentSessionId) {
               await signalsAddMessage(currentSessionId, {
                 text: finalAnswer,
                 sender: 'ai',
@@ -672,6 +679,30 @@ export default function ChatMessages({
                   success: result?.success
                 }
               });
+            }
+            
+            // Check if this is a guide response and show the guide overlay
+            console.log('🔍 [GUIDE-DEBUG] Checking for guide in result:', {
+              hasGuideMode: !!result?.guideMode,
+              hasGuideId: !!result?.guideId,
+              hasGuideSteps: !!result?.guideSteps,
+              action: result?.action,
+              resultKeys: result ? Object.keys(result) : []
+            });
+            
+            if (result?.guideMode && result?.guideId && result?.guideSteps) {
+              console.log('📚 [GUIDE] Detected guide response from MCP, showing overlay:', {
+                guideId: result.guideId,
+                totalSteps: result.guideTotalSteps
+              });
+              showGuide(
+                result.guideId,
+                finalAnswer, // Use response as intro text
+                result.guideSteps,
+                result.guideTotalSteps || result.guideSteps.length
+              );
+            } else {
+              console.warn('⚠️ [GUIDE] Guide detection failed - missing required fields');
             }
             
             // Stop loading and scroll
@@ -1148,7 +1179,7 @@ export default function ChatMessages({
             // Get current session ID from signals to avoid stale closure issues
             const currentSessionId = signals.activeSessionId.value;
             console.log('🔍 [ORCHESTRATION] Current session ID from signals:', currentSessionId);
-            
+                                                                                    
             if (currentSessionId && signalsAddMessage) {
               console.log('📝 [ORCHESTRATION] Adding AI response to conversation session:', currentSessionId);         
               await signalsAddMessage(currentSessionId, {

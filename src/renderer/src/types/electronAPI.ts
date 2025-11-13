@@ -109,6 +109,11 @@ declare global {
       visionOAuthRevoke: () => Promise<{ success: boolean; message?: string; error?: string }>;
       visionStatus: () => Promise<{ success: boolean; configured?: boolean; hasApiKey?: boolean; hasOAuth?: boolean; error?: string }>;
       
+      // Generic IPC methods for custom communication
+      invoke: (channel: string, ...args: any[]) => Promise<any>;
+      send: (channel: string, ...args: any[]) => void;
+      on: (channel: string, callback: (...args: any[]) => void) => void;
+      
       platform: string;
     };
   }
