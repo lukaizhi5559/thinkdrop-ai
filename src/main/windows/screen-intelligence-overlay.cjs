@@ -76,8 +76,12 @@ function createScreenIntelligenceOverlay() {
   // TEMPORARY: Open DevTools to debug toast
   overlayWindow.webContents.openDevTools({ mode: 'detach' });
 
-  // Hide by default
-  overlayWindow.hide();
+  // Wait for content to load before showing
+  overlayWindow.webContents.once('did-finish-load', () => {
+    console.log('📢 [OVERLAY] Content loaded, showing window');
+    overlayWindow.showInactive();
+    console.log('📢 [OVERLAY] Window shown, isVisible:', overlayWindow.isVisible());
+  });
 
   // Handle window close
   overlayWindow.on('closed', () => {
@@ -143,12 +147,22 @@ function showDiscoveryMode(elements) {
  */
 function showToast(message, type = 'info', duration = 3000, persistent = false) {
   console.log('📢 [TOAST] Attempting to show toast:', message);
+  console.log('📢 [TOAST] overlayWindow exists?', !!overlayWindow);
   
   if (!overlayWindow) {
     console.log('📢 [TOAST] Creating overlay window...');
-    createScreenIntelligenceOverlay();
+    try {
+      createScreenIntelligenceOverlay();
+      console.log('📢 [TOAST] Overlay window created successfully');
+    } catch (error) {
+      console.error('❌ [TOAST] Failed to create overlay window:', error);
+      return;
+    }
   }
 
+  console.log('📢 [TOAST] Window loading state:', overlayWindow.webContents.isLoading());
+  console.log('📢 [TOAST] Window visible state:', overlayWindow.isVisible());
+  
   // Wait for window to be ready
   if (overlayWindow.webContents.isLoading()) {
     console.log('📢 [TOAST] Window still loading, waiting...');
@@ -157,33 +171,53 @@ function showToast(message, type = 'info', duration = 3000, persistent = false) 
       showToastNow(message, type, duration, persistent);
     });
   } else {
+    console.log('📢 [TOAST] Window already loaded, showing immediately');
     showToastNow(message, type, duration, persistent);
   }
 }
 
 function showToastNow(message, type, duration, persistent) {
-  console.log('📢 [TOAST] Showing toast now:', message);
+  console.log('📢 [TOAST] showToastNow called with:', { message, type, duration, persistent });
+  console.log('📢 [TOAST] overlayWindow state:', {
+    exists: !!overlayWindow,
+    isVisible: overlayWindow?.isVisible(),
+    isDestroyed: overlayWindow?.isDestroyed(),
+    webContentsReady: !!overlayWindow?.webContents
+  });
   
-  // Make sure window is shown and ready
-  if (!overlayWindow.isVisible()) {
-    overlayWindow.showInactive(); // Show without stealing focus
-    console.log('📢 [TOAST] Window was hidden, showing it now');
+  if (!overlayWindow || overlayWindow.isDestroyed()) {
+    console.error('❌ [TOAST] Overlay window is null or destroyed!');
+    return;
   }
   
+  // Ensure window is visible (should already be shown after did-finish-load)
+  if (!overlayWindow.isVisible()) {
+    console.log('📢 [TOAST] Window not visible, showing it now');
+    overlayWindow.showInactive();
+  }
+  
+  console.log('📢 [TOAST] Window visibility:', overlayWindow.isVisible());
+  console.log('📢 [TOAST] Sending IPC message to renderer...');
+  
   // Send toast message to renderer
-  overlayWindow.webContents.send('screen-intelligence:show-toast', {
-    message,
-    type,
-    duration,
-    persistent
-  });
-
-  console.log('📢 [TOAST] Toast message sent to renderer');
+  try {
+    overlayWindow.webContents.send('screen-intelligence:show-toast', {
+      message,
+      type,
+      duration,
+      persistent
+    });
+    console.log('✅ [TOAST] Toast message sent to renderer successfully');
+  } catch (error) {
+    console.error('❌ [TOAST] Failed to send message to renderer:', error);
+  }
 
   // Auto-hide toast content (but keep window visible for other toasts)
   if (duration > 0 && !persistent) {
     setTimeout(() => {
-      overlayWindow.webContents.send('screen-intelligence:hide-toast');
+      if (overlayWindow && !overlayWindow.isDestroyed()) {
+        overlayWindow.webContents.send('screen-intelligence:hide-toast');
+      }
       // Don't hide the window - just hide the toast content
     }, duration);
   }

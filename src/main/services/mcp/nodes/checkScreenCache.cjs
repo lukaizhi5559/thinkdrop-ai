@@ -25,6 +25,89 @@ function chunkText(text, maxChars = 1000) {
 }
 
 /**
+ * Clean OCR text to improve semantic search quality
+ * Removes noise, UI chrome, and formatting artifacts while preserving meaningful content
+ * @param {string} text - Raw OCR text
+ * @returns {string} Cleaned text
+ */
+function cleanOCRText(text) {
+  if (!text) return '';
+  
+  let cleaned = text;
+  
+  // 1. Remove common UI chrome patterns
+  // Remove single-character lines (often OCR artifacts)
+  cleaned = cleaned.replace(/^[^a-zA-Z0-9\s]{1,2}$/gm, '');
+  
+  // Remove lines with only symbols/punctuation
+  cleaned = cleaned.replace(/^[^\w\s]+$/gm, '');
+  
+  // 2. Remove common browser UI elements
+  const uiPatterns = [
+    /\b(http[s]?:\/\/[^\s]+)/gi, // URLs (keep domain but remove full URLs)
+    /\b(chrome:\/\/[^\s]+)/gi, // Chrome internal URLs
+    /\b(file:\/\/[^\s]+)/gi, // File paths
+    /\b(Search mail|Compose|Primary|Promotions|Social|Updates|Forums)\b/gi, // Gmail UI
+    /\b(New Tab|Bookmarks|History|Downloads|Extensions)\b/gi, // Browser UI
+    /\b(Cmd\+[A-Z]|Ctrl\+[A-Z]|Alt\+[A-Z])\b/gi, // Keyboard shortcuts
+  ];
+  
+  uiPatterns.forEach(pattern => {
+    cleaned = cleaned.replace(pattern, '');
+  });
+  
+  // 3. Normalize whitespace
+  // Replace multiple spaces with single space
+  cleaned = cleaned.replace(/[ \t]+/g, ' ');
+  
+  // Replace multiple newlines with double newline (preserve paragraph breaks)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+  
+  // 4. Remove very short lines (< 3 chars) that are likely noise
+  // BUT preserve lines that are just numbers (important for counts)
+  cleaned = cleaned.split('\n')
+    .filter(line => {
+      const trimmed = line.trim();
+      // Keep if >= 3 chars OR if it's a number (even single digit)
+      return trimmed.length >= 3 || /^\d+$/.test(trimmed);
+    })
+    .join('\n');
+  
+  // 5. Remove duplicate lines (common in OCR)
+  // BUT preserve important numeric lines (like email counts)
+  const lines = cleaned.split('\n');
+  const seenLines = new Set();
+  const uniqueLines = [];
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    // Always keep lines with "Inbox" followed by numbers
+    if (/inbox\s*\d/i.test(trimmed) || !seenLines.has(trimmed)) {
+      uniqueLines.push(line);
+      seenLines.add(trimmed);
+    }
+  }
+  
+  cleaned = uniqueLines.join('\n');
+  
+  // 6. Fix common OCR mistakes
+  // Fix spacing around punctuation
+  cleaned = cleaned.replace(/\s+([.,!?;:])/g, '$1');
+  cleaned = cleaned.replace(/([.,!?;:])\s*([a-zA-Z])/g, '$1 $2');
+  
+  // Remove standalone punctuation
+  cleaned = cleaned.replace(/\s+[.,!?;:]\s+/g, ' ');
+  
+  // 7. Preserve important patterns (emails, numbers, dates)
+  // These are already in the text, just ensure they're not damaged
+  
+  // 8. Final cleanup
+  cleaned = cleaned.trim();
+  
+  return cleaned;
+}
+
+/**
  * Calculate cosine similarity between two vectors
  * @param {number[]} vecA - First vector
  * @param {number[]} vecB - Second vector
@@ -65,12 +148,19 @@ function buildScreenContext(data, query, selectedText = null) {
   parts.push(`Elements: ${data.elementCount || 0}`);
   parts.push('');
   
-  // Add OCR text
-  const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
-  if (fullTextElement?.value) {
-    parts.push('📝 FULL SCREEN TEXT (OCR):');
-    parts.push(fullTextElement.value.substring(0, 5000)); // Limit to 5000 chars
+  // Use vision text (pure vision approach)
+  if (data.visionText) {
+    parts.push('🔍 VISION ANALYSIS (GPT-4o):');
+    parts.push(data.visionText.substring(0, 5000));
     parts.push('');
+  } else {
+    // Fallback to elements if visionText not available (backward compatibility)
+    const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
+    if (fullTextElement?.value) {
+      parts.push('📝 SCREEN CONTENT:');
+      parts.push(fullTextElement.value.substring(0, 5000));
+      parts.push('');
+    }
   }
   
   return parts.join('\n');
@@ -80,6 +170,10 @@ module.exports = async function checkScreenCache(state) {
   const { message, mcpClient } = state;
   
   console.log('🔍 [NODE:CHECK_SCREEN_CACHE] Checking if cached screen data can answer query...');
+  console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Cache status: exists=${!!global.screenWorkerCache}, size=${global.screenWorkerCache?.size || 0}`);
+  if (global.screenWorkerCache && global.screenWorkerCache.size > 0) {
+    console.log(`📋 [NODE:CHECK_SCREEN_CACHE] Cached windows: ${Array.from(global.screenWorkerCache.keys()).join(', ')}`);
+  }
   
   // 1. Check if we have recent cached screen data
   if (!global.screenWorkerCache || global.screenWorkerCache.size === 0) {
@@ -87,31 +181,40 @@ module.exports = async function checkScreenCache(state) {
     return state;
   }
   
-  // 2. Get most recent cache entry
-  const cacheEntries = Array.from(global.screenWorkerCache.values());
-  const recentCache = cacheEntries.find(entry => 
-    Date.now() - entry.timestamp < 300000 // 5 minutes
-  );
+  // 2. Get cache for CURRENT ACTIVE WINDOW (not just any recent cache)
+  const activeWindowId = global.activeWindowId;
+  if (!activeWindowId) {
+    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No active window tracked, proceeding to parseIntent');
+    return state;
+  }
   
+  const recentCache = global.screenWorkerCache.get(activeWindowId);
   if (!recentCache) {
+    console.log(`⏭️  [NODE:CHECK_SCREEN_CACHE] No cache for active window (${activeWindowId}), proceeding to parseIntent`);
+    return state;
+  }
+  
+  // Check if cache is still fresh (5 minutes)
+  if (Date.now() - recentCache.timestamp > 300000) {
     console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] Cache expired, proceeding to parseIntent');
     return state;
   }
   
   const cacheAge = Math.round((Date.now() - recentCache.timestamp) / 1000);
-  console.log(`📦 [NODE:CHECK_SCREEN_CACHE] Found cached data (${cacheAge}s old)`);
+  console.log(`📦 [NODE:CHECK_SCREEN_CACHE] Found cached data for active window: ${activeWindowId} (${cacheAge}s old)`);
   
-  // 3. Extract OCR text from cached data
+  // 3. Extract vision text from cached data
   const data = recentCache.data;
+  const visionText = data.visionText || '';
   const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
-  const ocrText = fullTextElement?.value || '';
+  const screenText = visionText || fullTextElement?.value || '';
   
-  if (!ocrText || ocrText.length < 50) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No OCR text in cache, proceeding to parseIntent');
+  if (!screenText || screenText.length < 50) {
+    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No screen text in cache, proceeding to parseIntent');
     return state;
   }
   
-  console.log(`📝 [NODE:CHECK_SCREEN_CACHE] OCR text available (${ocrText.length} chars)`);
+  console.log(`📝 [NODE:CHECK_SCREEN_CACHE] Screen text available (${screenText.length} chars, source: ${visionText ? 'vision' : 'fallback'})`);
   
   // 4. Check if query is about screen content (quick keyword check)
   const queryLower = message.toLowerCase();
@@ -167,9 +270,13 @@ module.exports = async function checkScreenCache(state) {
   try {
     const startTime = Date.now();
     
+    // Use screen text directly (vision text is already clean)
+    const cleanedText = visionText ? screenText : screenText;
+    console.log(`🧹 [NODE:CHECK_SCREEN_CACHE] Using vision text: ${screenText.length} chars`);
+    
     // Generate embedding for query
     const queryEmbedResult = await mcpClient.callService('phi4', 'embedding.generate', {
-      text: message
+      text: cleanedText.substring(0, 2000) // Limit to 2000 chars for embedding
     });
     
     const queryEmbedding = queryEmbedResult.data?.embedding || queryEmbedResult.embedding;
@@ -179,8 +286,8 @@ module.exports = async function checkScreenCache(state) {
       return state;
     }
     
-    // Generate embedding for OCR text (chunked if too long)
-    const ocrChunks = chunkText(ocrText, 1000); // 1000 char chunks
+    // Generate embedding for cleaned OCR text (chunked if too long)
+    const ocrChunks = chunkText(cleanedOcrText, 1000); // 1000 char chunks
     console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Generating embeddings for ${ocrChunks.length} chunks...`);
     
     const chunkEmbeddings = await Promise.all(
@@ -219,7 +326,11 @@ module.exports = async function checkScreenCache(state) {
     // If query mentions "email" or "inbox" and OCR contains "Inbox" with a number, boost similarity
     const emailKeywords = ['email', 'inbox', 'unread', 'message'];
     const hasEmailKeyword = emailKeywords.some(kw => queryLower.includes(kw));
-    const inboxPattern = /inbox\s*\(?\s*(\d{1,3}(?:,\d{3})*|\d+)\s*\)?/i;
+    
+    // More flexible inbox pattern - handles various formats:
+    // "Inbox 2641", "Inbox (2,641)", "Inbox 2,641", "& Inbox 2641", etc.
+    // Match: optional "&", "inbox", optional parens/spaces, then ALL digits (with optional commas)
+    const inboxPattern = /(?:&\s+)?inbox\s*\(?\s*(\d+(?:[,\s]\d+)*)\s*\)?/i;
     const inboxMatch = ocrText.match(inboxPattern);
     
     let boostedSimilarity = topSimilarity;
@@ -233,9 +344,23 @@ module.exports = async function checkScreenCache(state) {
       console.log(`   Matched chunk: "${similarities[0].chunk.substring(0, 200)}..."`);
       
       // Build context from cached screen data
+      // Use CLEANED text and prioritize important information
+      let contextText = cleanedOcrText;
+      
+      // If email query, extract and highlight inbox count at the top
+      if (hasEmailKeyword && inboxMatch) {
+        const inboxInfo = inboxMatch[0]; // e.g., "Inbox 2641" or "& Inbox 2,641"
+        // Extract just the number for explicit display
+        const numberMatch = inboxInfo.match(/(\d[\d,\s]*\d|\d)/);
+        const emailCount = numberMatch ? numberMatch[0].replace(/[\s,]/g, '') : 'unknown';
+        
+        contextText = `📧 IMPORTANT: Total emails in inbox = ${emailCount}\n📧 Raw text: ${inboxInfo}\n\n${contextText}`;
+        console.log(`📧 [NODE:CHECK_SCREEN_CACHE] Prioritized inbox info: "${inboxInfo}" → count: ${emailCount}`);
+      }
+      
       const screenContext = `## Screen Content (from cache)
 
-${ocrText.substring(0, 2000)}${ocrText.length > 2000 ? '...' : ''}`;
+${contextText.substring(0, 2000)}${contextText.length > 2000 ? '...' : ''}`;
       
       state.screenContext = screenContext;
       state.fromScreenCache = true;

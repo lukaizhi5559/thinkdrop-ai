@@ -60,6 +60,9 @@ function createHotkeyToastOverlay() {
   const toastPath = path.join(__dirname, '../../overlay/hotkey-toast.html');
   toastWindow.loadFile(toastPath);
 
+  // TEMPORARY: Open DevTools to see console logs
+  toastWindow.webContents.openDevTools({ mode: 'detach' });
+
   // Show window (it's transparent, so only toast will be visible)
   toastWindow.once('ready-to-show', () => {
     toastWindow.showInactive();
@@ -78,25 +81,41 @@ function createHotkeyToastOverlay() {
 
 /**
  * Show hotkey hint toast
+ * @param {string|object} messageOrOptions - Message string or options object
+ * @param {object} options - Optional settings (if messageOrOptions is a string)
  */
-function showHotkeyToast(message) {
-  console.log('🍞 [HOTKEY TOAST] showHotkeyToast called:', message);
+function showHotkeyToast(messageOrOptions, options = {}) {
+  console.log('🍞 [HOTKEY TOAST] showHotkeyToast called:', messageOrOptions, options);
 
   if (!toastWindow) {
     console.log('🍞 [HOTKEY TOAST] Creating window first...');
     createHotkeyToastOverlay();
   }
 
+  // Normalize to data object
+  let data;
+  if (typeof messageOrOptions === 'string') {
+    data = {
+      message: messageOrOptions,
+      persistent: options.persistent !== false,
+      duration: options.duration || 3000
+    };
+  } else {
+    data = messageOrOptions;
+  }
+
+  console.log('🍞 [HOTKEY TOAST] Sending data:', data);
+
   // Wait for window to be ready
   if (toastWindow.webContents.isLoading()) {
     console.log('🍞 [HOTKEY TOAST] Window loading, waiting...');
     toastWindow.webContents.once('did-finish-load', () => {
       console.log('🍞 [HOTKEY TOAST] Window loaded, sending message');
-      toastWindow.webContents.send('show-hotkey-toast', message);
+      toastWindow.webContents.send('show-hotkey-toast', data);
     });
   } else {
     console.log('🍞 [HOTKEY TOAST] Window ready, sending message');
-    toastWindow.webContents.send('show-hotkey-toast', message);
+    toastWindow.webContents.send('show-hotkey-toast', data);
   }
 }
 

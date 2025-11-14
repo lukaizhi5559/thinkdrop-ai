@@ -51,16 +51,27 @@ class VirtualScreenDOM {
   async getBrowserURL(appName) {
     const script = BROWSER_URL_SCRIPTS[appName];
     if (!script) {
+      console.log(`[WORKER] ⚠️  No AppleScript for ${appName}`);
       return null; // Not a supported browser
     }
     
+    console.log(`[WORKER] 📜 Running AppleScript for ${appName}...`);
+    console.log(`[WORKER] 📜 Script: ${script}`);
+    
     try {
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
       const url = stdout.trim();
+      
+      if (stderr) {
+        console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
+      }
+      
+      console.log(`[WORKER] 📜 AppleScript stdout: "${url}"`);
       return url || null;
     } catch (error) {
       // Browser might not be running or AppleScript failed
-      console.log(`[WORKER] ⚠️  Could not get URL from ${appName}:`, error.message);
+      console.log(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
+      console.log(`[WORKER] ❌ Error code: ${error.code}`);
       return null;
     }
   }
@@ -99,6 +110,7 @@ class VirtualScreenDOM {
       
       // Poll for active window changes every 500ms
       let lastWindowPath = null;
+      let lastUrl = null; // Track URL for browsers
       
       const checkActiveWindow = async () => {
         try {
@@ -113,13 +125,28 @@ class VirtualScreenDOM {
             return;
           }
           
-          console.log(`[WORKER] 👁️  Active window: ${activeWindow.getTitle ? activeWindow.getTitle() : 'Unknown'}`);
+          const currentPath = activeWindow.path || '';
           
-          const currentPath = activeWindow.path;
+          // Extract app name to check if it's a browser
+          const appMatch = currentPath ? currentPath.match(/([^/\\]+)\.(app|exe)$/i) : null;
+          const app = appMatch ? appMatch[1] : (currentPath ? currentPath.split(/[/\\]/).pop() : 'Unknown') || 'Unknown';
           
-          // Only process if window changed
-          if (currentPath !== lastWindowPath) {
+          // For browsers, also check URL changes
+          let currentUrl = null;
+          if (BROWSER_URL_SCRIPTS[app]) {
+            currentUrl = await this.getBrowserURL(app);
+          }
+          
+          // Process if window changed OR if URL changed (for browsers)
+          const windowChanged = currentPath !== lastWindowPath;
+          const urlChanged = currentUrl && currentUrl !== lastUrl;
+          
+          if (windowChanged || urlChanged) {
             lastWindowPath = currentPath;
+            lastUrl = currentUrl;
+            
+            // Log only when window actually changes
+            console.log(`[WORKER] 👁️  Active window: ${activeWindow.getTitle ? activeWindow.getTitle() : 'Unknown'}`);
             
             console.log('[WORKER] 🔔 Window changed detected!');
             
@@ -131,24 +158,38 @@ class VirtualScreenDOM {
             const appMatch = path.match(/([^/\\]+)\.(app|exe)$/i);
             const app = appMatch ? appMatch[1] : path.split(/[/\\]/).pop() || 'Unknown';
             
-            // Create unique window ID
-            const windowId = `${app}-${title}`.substring(0, 100);
+            console.log(`[WORKER] 🔍 App detected: "${app}" (path: ${path})`);
+            console.log(`[WORKER] 🔍 Is browser? ${!!BROWSER_URL_SCRIPTS[app]}`);
+            
+            // Use the URL we already fetched (or fetch if not a browser)
+            let url = currentUrl;
+            if (url) {
+              console.log(`[WORKER] 🌐 URL: ${url}`);
+            }
+            
+            // Create unique window ID (include URL for browsers to detect tab changes)
+            const windowId = url 
+              ? `${app}-${url}`.substring(0, 150) // Use URL for browsers
+              : `${app}-${title}`.substring(0, 100); // Use title for other apps
+            
+            console.log(`[WORKER] 🆔 WindowId: ${windowId}`);
+            console.log(`[WORKER] 🆔 Previous activeWindow: ${this.activeWindow}`);
+            console.log(`[WORKER] 🆔 WindowId changed? ${windowId !== this.activeWindow}`);
             
             if (windowId !== this.activeWindow && !this.isAnalyzing) {
-              console.log(`[WORKER] 🔄 Window focus changed: ${app} - ${title}`);
+              console.log(`[WORKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
               
-              // Show debug toast if enabled
-              this.showToast(`Window: ${app}${title ? ' - ' + title : ''}`, 'info', 2000);
-              
-              // Try to get URL for browsers using AppleScript
-              let url = null;
-              if (BROWSER_URL_SCRIPTS[app]) {
-                console.log(`[WORKER] 🔍 Fetching URL from ${app}...`);
-                url = await this.getBrowserURL(app);
-                if (url) {
-                  console.log(`[WORKER] 🌐 URL: ${url}`);
+              // Show hotkey toast for window change (using simple toast overlay)
+              // For browsers, show URL domain; for others, show title
+              let displayText = title;
+              if (url) {
+                try {
+                  displayText = new URL(url).hostname;
+                } catch (e) {
+                  displayText = url.substring(0, 50); // Fallback to truncated URL
                 }
               }
+              this.showWindowChangeToast(app, displayText);
               
               // 📋 If switching TO Electron (Thinkdrop AI), trigger selection capture from previous window
               if (app.toLowerCase().includes('electron') && global.selectionDetector) {
@@ -161,6 +202,23 @@ class VirtualScreenDOM {
               }
               
               this.activeWindow = windowId;
+              
+              // 🆕 Notify main thread of active window change
+              try {
+                const { parentPort } = require('worker_threads');
+                if (parentPort) {
+                  parentPort.postMessage({
+                    type: 'activeWindowUpdate',
+                    windowId,
+                    app,
+                    title,
+                    url
+                  });
+                  console.log(`📤 [WORKER] Sent activeWindowUpdate: ${windowId}`);
+                }
+              } catch (error) {
+                console.warn(`⚠️  [WORKER] Failed to send activeWindowUpdate:`, error.message);
+              }
               
               // Check if we need to analyze
               const cached = this.cache.get(windowId);
@@ -342,7 +400,43 @@ class VirtualScreenDOM {
   }
 
   /**
-   * Show toast notification
+   * Show window change toast (simple hotkey-style toast)
+   */
+  showWindowChangeToast(app, title) {
+    const isWorker = typeof process !== 'undefined' && process.env.WORKER_THREAD === 'true';
+    
+    if (isWorker) {
+      // Worker thread - send to main thread
+      try {
+        const { parentPort } = require('worker_threads');
+        if (parentPort) {
+          parentPort.postMessage({
+            type: 'showWindowChangeToast',
+            app,
+            title
+          });
+          console.log(`📤 [WORKER] Sent showWindowChangeToast: ${app} - ${title}`);
+        }
+      } catch (error) {
+        console.log(`[WORKER] 📢 Window changed: ${app} - ${title}`);
+      }
+    } else {
+      // Main thread - show hotkey toast directly
+      try {
+        const { showHotkeyToast } = require('../windows/hotkey-toast-overlay.cjs');
+        const message = `<div style="text-align: center;">
+          <strong>${app}</strong>${title ? `<br><span style="opacity: 0.8;">${title}</span>` : ''}
+        </div>`;
+        showHotkeyToast(message, { persistent: false, duration: 2000 });
+        console.log(`🍞 [MAIN] Showing window change toast: ${app}`);
+      } catch (error) {
+        console.log(`📢 Window changed: ${app} - ${title}`);
+      }
+    }
+  }
+
+  /**
+   * Show toast notification (for screen intelligence overlay)
    * In worker thread: sends message to main thread if debug mode enabled
    * In main thread: shows toast directly
    */
@@ -442,6 +536,9 @@ class VirtualScreenDOM {
       elements: data.elements || [],
       windowInfo: data.windowsAnalyzed?.[0] || {},
       elementCount: data.elements?.length || 0,
+      visionText: data.visionText || '', // Include vision text for semantic cache
+      visionData: data.visionData || null, // Include full vision data
+      strategy: data.strategy || 'unknown',
       // Build region index for fast spatial queries
       regions: this.buildRegionIndex(data.elements || [])
     };
@@ -449,7 +546,24 @@ class VirtualScreenDOM {
     this.cache.set(windowId, screenData);
     this.activeWindow = windowId;
 
-    console.log(`✅ Cached ${screenData.elementCount} elements for ${windowId}`);
+    console.log(`✅ [WORKER] Cached ${screenData.elementCount} elements for ${windowId}`);
+    
+    // 🆕 Send cache update to main thread for semantic cache
+    try {
+      const { parentPort } = require('worker_threads');
+      if (parentPort) {
+        parentPort.postMessage({
+          type: 'cacheUpdate',
+          windowId,
+          data: screenData,
+          timestamp: screenData.timestamp
+        });
+        console.log(`📤 [WORKER] Sent cacheUpdate to main thread for ${windowId}`);
+      }
+    } catch (error) {
+      console.warn(`⚠️  [WORKER] Failed to send cacheUpdate:`, error.message);
+    }
+    
     return screenData;
   }
 
@@ -657,6 +771,22 @@ class VirtualScreenDOM {
     
     this.cache.set(analysisData.windowId, cacheEntry);
     console.log(`[WORKER] ✅ Cached analysis for ${analysisData.windowId}`);
+    
+    // 🆕 Send cache update to main thread for semantic cache
+    try {
+      const { parentPort } = require('worker_threads');
+      if (parentPort) {
+        parentPort.postMessage({
+          type: 'cacheUpdate',
+          windowId: analysisData.windowId,
+          data: cacheEntry,
+          timestamp: cacheEntry.timestamp
+        });
+        console.log(`📤 [WORKER] Sent cacheUpdate to main thread for ${analysisData.windowId}`);
+      }
+    } catch (error) {
+      console.warn(`⚠️  [WORKER] Failed to send cacheUpdate:`, error.message);
+    }
     
     // Enforce max cache size
     if (this.cache.size > CACHE_CONFIG.MAX_CACHED_WINDOWS) {

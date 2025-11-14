@@ -227,6 +227,43 @@ parentPort.on('message', async (msg) => {
         // Main thread has completed analysis, cache it
         if (isInitialized && virtualDOM) {
           console.log(`[WORKER] 📥 Received analysis result for ${msg.windowInfo.windowId}`);
+          
+          // Log the full analysis data structure for debugging
+          console.log('[WORKER] 📊 Full analysis data structure:', JSON.stringify({
+            windowInfo: msg.windowInfo,
+            dataKeys: msg.data ? Object.keys(msg.data) : [],
+            hasPlainText: !!msg.data?.plainText,
+            plainTextLength: msg.data?.plainText?.content?.length || 0,
+            hasStructuredData: !!msg.data?.structuredData,
+            elementCount: msg.data?.structuredData?.elements?.length || msg.data?.elements?.length || 0,
+            docType: msg.data?.plainText?.docType || msg.data?.docType,
+            confidence: msg.data?.structuredData?.confidence || msg.data?.confidence,
+            elapsed: msg.data?.elapsed,
+            timestamp: msg.data?.timestamp
+          }, null, 2));
+          
+          // Log a sample of the plain text content
+          if (msg.data?.plainText?.content) {
+            const sample = msg.data.plainText.content.substring(0, 500);
+            console.log('[WORKER] 📝 Plain text sample (first 500 chars):', sample);
+            if (msg.data.plainText.content.length > 500) {
+              console.log(`[WORKER] 📏 Full plain text length: ${msg.data.plainText.content.length} chars`);
+            }
+          }
+          
+          // Log structured data elements sample
+          const elements = msg.data?.structuredData?.elements || msg.data?.elements;
+          if (elements && elements.length > 0) {
+            console.log('[WORKER] 🏗️ Structured elements sample:', JSON.stringify(
+              elements.slice(0, 3).map(el => ({
+                type: el.type,
+                text: el.text?.substring(0, 100),
+                position: el.position,
+                confidence: el.confidence
+              })), null, 2));
+            console.log(`[WORKER] 📊 Total structured elements: ${elements.length}`);
+          }
+          
           virtualDOM.cacheAnalysisResult({
             windowId: msg.windowInfo.windowId,
             ...msg.data,
@@ -234,12 +271,19 @@ parentPort.on('message', async (msg) => {
           });
           
           // Notify main thread that cache was updated
+          const cacheData = {
+            windowId: msg.windowInfo.windowId,
+            ...msg.data,
+            url: msg.windowInfo.url
+          };
+          console.log(`📤 [WORKER] Sending cacheUpdate for ${msg.windowInfo.windowId}`);
           parentPort.postMessage({
             type: 'cacheUpdate',
             windowId: msg.windowInfo.windowId,
-            data: msg.data,
+            data: cacheData,
             timestamp: Date.now()
           });
+          console.log(`✅ [WORKER] cacheUpdate sent successfully`);
         }
         break;
         

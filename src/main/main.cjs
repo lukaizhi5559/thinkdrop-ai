@@ -268,6 +268,7 @@ app.whenReady().then(async () => {
     
     global.screenWorkerReady = false;
     global.screenWorkerCache = new Map();
+    global.activeWindowId = null; // Track current active window
     
     global.screenWorker.on('message', async (msg) => {
       if (msg.type === 'ready') {
@@ -291,12 +292,29 @@ app.whenReady().then(async () => {
           }
           
           // Call screen-intelligence service
+          // Pure vision approach - always enabled (no OCR fallback)
           const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
             query: `analyze ${windowInfo.title}`,
             includeScreenshot: false
           }, { timeout: 60000 });
           
           console.log(`✅ [MAIN] Analysis complete for ${windowInfo.windowId}`);
+          
+          // Save full MCP response to temp file for debugging
+          const fs = require('fs');
+          const path = require('path');
+          const os = require('os');
+          const tempDir = path.join(os.tmpdir(), 'thinkdrop-screen-capture');
+          
+          if (!fs.existsSync(tempDir)) {
+            fs.mkdirSync(tempDir, { recursive: true });
+          }
+          
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const appName = windowInfo.app.replace(/[^a-zA-Z0-9]/g, '_');
+          const fileName = `screen-analysis-${appName}-${timestamp}.json`;
+          const tempFile = path.join(tempDir, fileName);
+          
           
           // Debug: Log full analysis data structure
           const analysisData = result.data || result;
@@ -309,6 +327,13 @@ app.whenReady().then(async () => {
             hasOCR: !!analysisData?.ocr,
             hasAccessibility: !!analysisData?.accessibility
           }, null, 2));
+
+          try {
+            fs.writeFileSync(tempFile, JSON.stringify(analysisData, null, 2), 'utf-8');
+            console.log(`💾 [MAIN] Saved MCP response to: ${tempFile}`);
+          } catch (error) {
+            console.warn('⚠️  [MAIN] Failed to save analysis to temp file:', error.message);
+          }
           
           // Send result back to worker
           global.screenWorker.postMessage({
@@ -330,6 +355,22 @@ app.whenReady().then(async () => {
             console.log(`🍞 [MAIN] Debug toast (no overlay): ${msg.message}`);
           }
         }
+      } else if (msg.type === 'showWindowChangeToast') {
+        // Worker requesting window change toast
+        try {
+          const { showHotkeyToast } = require('./windows/hotkey-toast-overlay.cjs');
+          const message = `<div style="text-align: center;">
+            <strong>${msg.app}</strong>${msg.title ? `<br><span style="opacity: 0.8;">${msg.title}</span>` : ''}
+          </div>`;
+          showHotkeyToast(message, { persistent: false, duration: 2000 });
+          console.log(`🍞 [MAIN] Window change toast shown: ${msg.app}`);
+        } catch (error) {
+          console.error('❌ [MAIN] Failed to show window change toast:', error);
+        }
+      } else if (msg.type === 'activeWindowUpdate') {
+        // Worker notifying of active window change
+        global.activeWindowId = msg.windowId;
+        console.log(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
       } else if (msg.type === 'cacheUpdate') {
         // Worker has cached new data
         global.screenWorkerCache.set(msg.windowId, {
@@ -476,8 +517,9 @@ app.whenReady().then(async () => {
     const { createScreenIntelligenceOverlay, showDiscoveryMode, showToast } = require('./windows/screen-intelligence-overlay.cjs');
     
     try {
-      // Initialize overlay if needed
+      // Initialize overlay if needed (creates window on first call)
       createScreenIntelligenceOverlay();
+      
       
       // 1️⃣ Check cache first
       const virtualDOM = global.virtualScreenDOM;
@@ -492,7 +534,7 @@ app.whenReady().then(async () => {
         return;
       }
       
-      // 2️⃣ Cache miss - analyze screen
+      // 2️⃣ Cache miss - no duplicate toast needed (already shown above)
       showToast('Analyzing screen...', 'info', 4000);
       
       // Get screen-intelligence service info from MCP

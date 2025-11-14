@@ -131,30 +131,46 @@
 
     // Check if already dismissed
     const STORAGE_KEY = 'hotkey-toast-dismissed';
+    let autoHideTimer = null;
     
-    function showToast(message) {
-      console.log('🍞 [HOTKEY TOAST] showToast called:', message);
+    function showToast(message, options = {}) {
+      console.log('🍞 [HOTKEY TOAST] showToast called:', message, options);
       
-      // Check if dismissed
-      if (localStorage.getItem(STORAGE_KEY) === 'true') {
-        console.log('🍞 [HOTKEY TOAST] Toast already dismissed, not showing');
+      const { persistent = true, duration = 3000 } = options;
+      
+      // Only check dismissal for persistent toasts (hotkey hints)
+      if (persistent && localStorage.getItem(STORAGE_KEY) === 'true') {
+        console.log('🍞 [HOTKEY TOAST] Persistent toast already dismissed, not showing');
         return;
       }
 
       toastMessage.innerHTML = message;
       toast.classList.remove('hidden');
       console.log('🍞 [HOTKEY TOAST] Toast shown');
+      
+      // Auto-hide for non-persistent toasts (window changes)
+      if (!persistent && duration > 0) {
+        if (autoHideTimer) clearTimeout(autoHideTimer);
+        autoHideTimer = setTimeout(() => {
+          toast.classList.add('hidden');
+          console.log('🍞 [HOTKEY TOAST] Auto-hidden after', duration, 'ms');
+        }, duration);
+      }
     }
 
-    function hideToast() {
-      console.log('🍞 [HOTKEY TOAST] hideToast called');
+    function hideToast(permanent = true) {
+      console.log('🍞 [HOTKEY TOAST] hideToast called, permanent:', permanent);
       toast.classList.add('hidden');
-      localStorage.setItem(STORAGE_KEY, 'true');
-      console.log('🍞 [HOTKEY TOAST] Toast hidden and dismissed flag set');
+      if (permanent) {
+        localStorage.setItem(STORAGE_KEY, 'true');
+        console.log('🍞 [HOTKEY TOAST] Toast hidden and dismissed flag set');
+      }
     }
 
-    // Close button handler
-    toastClose.addEventListener('click', hideToast);
+    // Close button handler (only if button exists)
+    if (toastClose) {
+      toastClose.addEventListener('click', hideToast);
+    }
 
     // Make toast area clickable (window is set to ignore mouse events by default)
     const toastElement = document.getElementById('toast');
@@ -173,9 +189,18 @@
       console.log('🍞 [HOTKEY TOAST] electronAPI available, setting up listener');
       
       // Use the receive method from preload
-      window.electronAPI.receive('show-hotkey-toast', (message) => {
-        console.log('🍞 [HOTKEY TOAST] Received show-hotkey-toast:', message);
-        showToast(message);
+      window.electronAPI.receive('show-hotkey-toast', (data) => {
+        console.log('🍞 [HOTKEY TOAST] Received show-hotkey-toast:', data);
+        
+        // Support both string (legacy) and object (new) format
+        if (typeof data === 'string') {
+          showToast(data, { persistent: true });
+        } else {
+          showToast(data.message, { 
+            persistent: data.persistent !== false, 
+            duration: data.duration || 3000 
+          });
+        }
       });
       
       console.log('🍞 [HOTKEY TOAST] Listener registered');
