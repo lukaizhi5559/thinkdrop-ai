@@ -25,6 +25,7 @@ const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
 // Import node implementations
 const parseIntentNode = require('./nodes/parseIntent.cjs');
 const checkScreenCacheNode = require('./nodes/checkScreenCache.cjs'); // 🆕 NEW
+const checkCacheReadinessNode = require('./nodes/checkCacheReadiness.cjs'); // 🆕 Cache readiness check
 const retrieveMemoryNode = require('./nodes/retrieveMemory.cjs');
 const filterMemoryNode = require('./nodes/filterMemory.cjs');
 const resolveReferencesNode = require('./nodes/resolveReferences.cjs');
@@ -80,6 +81,9 @@ class AgentOrchestrator {
       
       // Router node
       parseIntent: (state) => parseIntentNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // 🆕 Check cache readiness for screen intelligence (after intent parsing)
+      checkCacheReadiness: (state) => checkCacheReadinessNode({ ...state, mcpClient: this.mcpClient }),
       
       // Memory store subgraph
       storeMemory: (state) => storeMemoryNode({ ...state, mcpClient: this.mcpClient }),
@@ -257,8 +261,8 @@ class AgentOrchestrator {
           // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
           // Vision intent now routes to screen intelligence first, falls back to vision service if needed
           if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - routing to screenIntelligence (vision fallback available)');
-            return 'screenIntelligence';
+            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - checking cache readiness first');
+            return 'checkCacheReadiness';
           }
           
           // Commands: system commands (all sub-types)
@@ -282,8 +286,8 @@ class AgentOrchestrator {
         // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
         // Vision intent now routes to screen intelligence first, falls back to vision service if needed
         if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - routing to screenIntelligence (vision fallback available)');
-          return 'screenIntelligence';
+          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - checking cache readiness first');
+          return 'checkCacheReadiness';
         }
         
         // Commands: system commands (all sub-types - works in both online and private mode)
@@ -311,6 +315,9 @@ class AgentOrchestrator {
       
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
+      
+      // Cache readiness check (before screen intelligence)
+      checkCacheReadiness: 'screenIntelligence', // Always proceed to screen intelligence after check
       
       // Screen intelligence subgraph (primary screen analysis)
       screenIntelligence: (state) => {

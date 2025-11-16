@@ -188,9 +188,22 @@ module.exports = async function checkScreenCache(state) {
     return state;
   }
   
+  console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Looking for cache for active window: ${activeWindowId}`);
+  
+  // 🔍 DEBUG: Show all cached windows with details
+  const allCachedWindows = Array.from(global.screenWorkerCache.keys());
+  console.log(`   Available cached windows (${allCachedWindows.length}):`);
+  allCachedWindows.forEach(windowId => {
+    const cache = global.screenWorkerCache.get(windowId);
+    const age = Math.round((Date.now() - cache.timestamp) / 1000);
+    const app = cache.data?.windowsAnalyzed?.[0]?.app || 'unknown';
+    console.log(`     - ${windowId.substring(0, 60)}... (${app}, ${age}s old)`);
+  });
+  
   const recentCache = global.screenWorkerCache.get(activeWindowId);
   if (!recentCache) {
     console.log(`⏭️  [NODE:CHECK_SCREEN_CACHE] No cache for active window (${activeWindowId}), proceeding to parseIntent`);
+    console.log(`   ⚠️  This might indicate a race condition - window changed but cache not ready yet`);
     return state;
   }
   
@@ -203,18 +216,32 @@ module.exports = async function checkScreenCache(state) {
   const cacheAge = Math.round((Date.now() - recentCache.timestamp) / 1000);
   console.log(`📦 [NODE:CHECK_SCREEN_CACHE] Found cached data for active window: ${activeWindowId} (${cacheAge}s old)`);
   
-  // 3. Extract vision text from cached data
+  // 3. Extract plain text from cached data (prefer normalized plainTextClean for LLM)
   const data = recentCache.data;
+  
+  // 🔍 DEBUG: Log what window this cache is actually for
+  console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Cache details:`);
+  console.log(`   Window ID: ${activeWindowId}`);
+  console.log(`   App: ${data.windowsAnalyzed?.[0]?.app || 'unknown'}`);
+  console.log(`   Title: ${data.windowsAnalyzed?.[0]?.title || 'unknown'}`);
+  console.log(`   URL: ${data.windowsAnalyzed?.[0]?.url || 'none'}`);
+  console.log(`   Method: ${data.method || 'unknown'}`);
+  console.log(`   Timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
+  
+  // Use plainTextClean if available (normalized for LLM), otherwise fallback to raw text
+  const plainTextClean = data.plainTextClean || '';
   const visionText = data.visionText || '';
   const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
-  const screenText = visionText || fullTextElement?.value || '';
+  const screenText = plainTextClean || visionText || fullTextElement?.value || '';
   
   if (!screenText || screenText.length < 50) {
     console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No screen text in cache, proceeding to parseIntent');
     return state;
   }
   
-  console.log(`📝 [NODE:CHECK_SCREEN_CACHE] Screen text available (${screenText.length} chars, source: ${visionText ? 'vision' : 'fallback'})`);
+  const textSource = plainTextClean ? 'plainTextClean (normalized for LLM)' : (visionText ? 'vision' : 'fallback');
+  console.log(`📝 [NODE:CHECK_SCREEN_CACHE] Screen text available (${screenText.length} chars, source: ${textSource})`);
+  console.log(`   Text preview (first 300 chars): "${screenText.substring(0, 300)}..."`);
   
   // 4. Check if query is about screen content (quick keyword check)
   const queryLower = message.toLowerCase();
@@ -270,13 +297,12 @@ module.exports = async function checkScreenCache(state) {
   try {
     const startTime = Date.now();
     
-    // Use screen text directly (vision text is already clean)
-    const cleanedText = visionText ? screenText : screenText;
-    console.log(`🧹 [NODE:CHECK_SCREEN_CACHE] Using vision text: ${screenText.length} chars`);
+    // Use screenText (already normalized via plainTextClean if available)
+    console.log(`🧹 [NODE:CHECK_SCREEN_CACHE] Using screen text for semantic search: ${screenText.length} chars`);
     
     // Generate embedding for query
     const queryEmbedResult = await mcpClient.callService('phi4', 'embedding.generate', {
-      text: cleanedText.substring(0, 2000) // Limit to 2000 chars for embedding
+      text: screenText.substring(0, 2000) // Limit to 2000 chars for embedding
     });
     
     const queryEmbedding = queryEmbedResult.data?.embedding || queryEmbedResult.embedding;
@@ -286,12 +312,12 @@ module.exports = async function checkScreenCache(state) {
       return state;
     }
     
-    // Generate embedding for cleaned OCR text (chunked if too long)
-    const ocrChunks = chunkText(cleanedOcrText, 1000); // 1000 char chunks
-    console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Generating embeddings for ${ocrChunks.length} chunks...`);
+    // Generate embedding for screen text (chunked if too long)
+    const textChunks = chunkText(screenText, 1000); // 1000 char chunks
+    console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Generating embeddings for ${textChunks.length} chunks...`);
     
     const chunkEmbeddings = await Promise.all(
-      ocrChunks.slice(0, 10).map(async (chunk) => { // Limit to 10 chunks for performance
+      textChunks.slice(0, 10).map(async (chunk) => { // Limit to 10 chunks for performance
         const result = await mcpClient.callService('phi4', 'embedding.generate', { text: chunk });
         return result.data?.embedding || result.embedding;
       })
@@ -299,7 +325,7 @@ module.exports = async function checkScreenCache(state) {
     
     // Calculate cosine similarity for each chunk
     const similarities = chunkEmbeddings.map((chunkEmb, idx) => ({
-      chunk: ocrChunks[idx],
+      chunk: textChunks[idx],
       similarity: cosineSimilarity(queryEmbedding, chunkEmb)
     }));
     
@@ -323,7 +349,7 @@ module.exports = async function checkScreenCache(state) {
     });
     
     // 🔧 KEYWORD BOOST: Check for specific email/inbox patterns
-    // If query mentions "email" or "inbox" and OCR contains "Inbox" with a number, boost similarity
+    // If query mentions "email" or "inbox" and screen text contains "Inbox" with a number, boost similarity
     const emailKeywords = ['email', 'inbox', 'unread', 'message'];
     const hasEmailKeyword = emailKeywords.some(kw => queryLower.includes(kw));
     
@@ -331,7 +357,7 @@ module.exports = async function checkScreenCache(state) {
     // "Inbox 2641", "Inbox (2,641)", "Inbox 2,641", "& Inbox 2641", etc.
     // Match: optional "&", "inbox", optional parens/spaces, then ALL digits (with optional commas)
     const inboxPattern = /(?:&\s+)?inbox\s*\(?\s*(\d+(?:[,\s]\d+)*)\s*\)?/i;
-    const inboxMatch = ocrText.match(inboxPattern);
+    const inboxMatch = screenText.match(inboxPattern);
     
     let boostedSimilarity = topSimilarity;
     if (hasEmailKeyword && inboxMatch) {
@@ -343,38 +369,79 @@ module.exports = async function checkScreenCache(state) {
       console.log(`🎯 [NODE:CHECK_SCREEN_CACHE] Cache HIT! (similarity: ${boostedSimilarity.toFixed(3)})`);
       console.log(`   Matched chunk: "${similarities[0].chunk.substring(0, 200)}..."`);
       
-      // Build context from cached screen data
-      // Use CLEANED text and prioritize important information
-      let contextText = cleanedOcrText;
+      // ✅ VALIDATE: The cache we retrieved MUST be from activeWindowId
+      // We already got it from global.screenWorkerCache.get(activeWindowId)
+      // So if we have data here, it's guaranteed to be from the active window
+      // The real validation is: does the cache exist AND is it fresh?
       
-      // If email query, extract and highlight inbox count at the top
-      if (hasEmailKeyword && inboxMatch) {
-        const inboxInfo = inboxMatch[0]; // e.g., "Inbox 2641" or "& Inbox 2,641"
-        // Extract just the number for explicit display
-        const numberMatch = inboxInfo.match(/(\d[\d,\s]*\d|\d)/);
-        const emailCount = numberMatch ? numberMatch[0].replace(/[\s,]/g, '') : 'unknown';
+      console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Validating cache freshness...`);
+      console.log(`   Active window: ${activeWindowId}`);
+      console.log(`   Cache age: ${cacheAge}s`);
+      console.log(`   Cache timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
+      
+      // Check if cache is stale (older than 5 minutes)
+      const isCacheStale = cacheAge > 300; // 5 minutes
+      
+      if (!isCacheStale) {
+        console.log(`✅ [NODE:CHECK_SCREEN_CACHE] Cache validated - belongs to active window!`);
         
-        contextText = `📧 IMPORTANT: Total emails in inbox = ${emailCount}\n📧 Raw text: ${inboxInfo}\n\n${contextText}`;
-        console.log(`📧 [NODE:CHECK_SCREEN_CACHE] Prioritized inbox info: "${inboxInfo}" → count: ${emailCount}`);
-      }
-      
-      const screenContext = `## Screen Content (from cache)
+        // Build context from cached screen data
+        let contextText = screenText;
+        
+        // If email query, extract and highlight inbox count at the top
+        if (hasEmailKeyword && inboxMatch) {
+          const inboxInfo = inboxMatch[0];
+          const numberMatch = inboxInfo.match(/(\d[\d,\s]*\d|\d)/);
+          const emailCount = numberMatch ? numberMatch[0].replace(/[\s,]/g, '') : 'unknown';
+          
+          contextText = `📧 IMPORTANT: Total emails in inbox = ${emailCount}\n📧 Raw text: ${inboxInfo}\n\n${contextText}`;
+          console.log(`📧 [NODE:CHECK_SCREEN_CACHE] Prioritized inbox info: "${inboxInfo}" → count: ${emailCount}`);
+        }
+        
+        const screenContext = `## Screen Content (from cache)
 
 ${contextText.substring(0, 2000)}${contextText.length > 2000 ? '...' : ''}`;
-      
-      state.screenContext = screenContext;
-      state.fromScreenCache = true;
-      state.skipToAnswer = true;
-      state.cacheSimilarity = boostedSimilarity;
-      
-      // Add intent for answer node
-      state.intent = {
-        type: 'screen_intelligence',
-        confidence: boostedSimilarity
-      };
-      
-      console.log('⚡ [NODE:CHECK_SCREEN_CACHE] Skipping to answer with cached screen data');
-      return state;
+        
+        state.screenContext = screenContext;
+        state.fromScreenCache = true;
+        state.skipToAnswer = true;
+        state.cacheSimilarity = boostedSimilarity;
+        
+        // Add intent for answer node
+        state.intent = {
+          type: 'screen_intelligence',
+          confidence: boostedSimilarity
+        };
+        
+        console.log('⚡ [NODE:CHECK_SCREEN_CACHE] Skipping to answer with validated cached screen data');
+        return state;
+      } else {
+        console.log(`⚠️  [NODE:CHECK_SCREEN_CACHE] Cache mismatch! Cache is from different window.`);
+        console.log(`   This indicates a race condition - window changed but cache not updated yet`);
+        console.log(`   Proceeding to parseIntent → checkCacheReadiness will wait for correct cache`);
+        
+        // 💭 Send thinking indicator to user immediately
+        try {
+          const { BrowserWindow } = require('electron');
+          const mainWindow = BrowserWindow.getAllWindows()[0];
+          
+          if (mainWindow) {
+            mainWindow.webContents.send('thinking-indicator-update', {
+              message: 'Scanning the page now...',
+              sessionId: state.context?.sessionId,
+              timestamp: Date.now()
+            });
+            console.log(`💭 [NODE:CHECK_SCREEN_CACHE] Sent thinking update: "Scanning the page now..."`);
+          }
+        } catch (error) {
+          console.warn('⚠️ [NODE:CHECK_SCREEN_CACHE] Failed to send thinking update:', error.message);
+        }
+        
+        // Don't skip - let checkCacheReadiness wait for the correct window's cache
+        state.cacheSimilarity = boostedSimilarity;
+        state.cacheWindowMismatch = true;
+        return state;
+      }
     } else {
       console.log(`⏭️  [NODE:CHECK_SCREEN_CACHE] Low similarity (${topSimilarity.toFixed(3)} < ${relevanceThreshold}), proceeding to parseIntent`);
       return state;

@@ -105,7 +105,7 @@ function App() {
   // Render the unified interface
   return (
     <ConversationProvider>
-      <div className="h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white overflow-hidden relative">
+      <div className="h-screen text-white overflow-hidden relative">
         {/* Conversation Sidebar */}
         <ConversationSidebar />
         

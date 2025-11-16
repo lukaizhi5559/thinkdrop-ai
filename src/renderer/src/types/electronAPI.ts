@@ -64,6 +64,7 @@ declare global {
       onInsightOrchestrationUpdate: (callback: (event: any, data: any) => void) => void;
       onClarificationRequest: (callback: (event: any, data: any) => void) => void;
       onThinkingIndicatorUpdate: (callback: (event: any, data: any) => void) => void;
+      onActiveWindowUpdate: (callback: (event: any, data: { windowName: string; app: string; url?: string; windowId: string }) => void) => void;
       onPopulateChatInput?: (callback: (event: any, text: string) => void) => void;
       submitClarificationResponse: (stepId: string, response: string | boolean) => Promise<any>;
       startOrchestrationWorkflow: (userInput: string, context?: any) => Promise<any>;

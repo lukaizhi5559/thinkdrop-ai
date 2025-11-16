@@ -9,16 +9,29 @@
     height: 100%;
     margin: 0;
     padding: 0;
-    background: transparent !important;
     overflow: hidden; /* Prevent body scroll in Electron windows */
+    background: transparent !important;
+  }
+
+  .toast {
+    position: fixed;
+    bottom: 15px;
+    background: rgba(0, 0, 0, 0.50);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 18px;
+    padding: auto;
+    color: white;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    animation: slideUp 0.3s ease-out;
+    max-width: 500px;
   }
   
-  #root {
-    height: 100vh;
-    width: 100vw;
-    display: flex;
-    flex-direction: column;
-  }
   :root {
     --background: 0 0% 100%;
     --foreground: 0 0% 3.9%;
@@ -126,6 +139,7 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    background: transparent !important;
+    @apply text-foreground;
   }
 }

@@ -1,0 +1,9 @@
+node_modules/
+*.duckdb
+*.log
+.git/
+dist/
+build/
+data/
+.yarn/
+.idea/

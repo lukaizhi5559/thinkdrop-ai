@@ -21,6 +21,20 @@ const BROWSER_URL_SCRIPTS = {
   'Vivaldi': `tell application "Vivaldi" to return URL of active tab of front window`
 };
 
+// AppleScript commands for getting browser tab titles
+const BROWSER_TITLE_SCRIPTS = {
+  'Google Chrome': `tell application "Google Chrome" to get title of active tab of front window as string`,
+  'Chrome': `tell application "Google Chrome" to get title of active tab of front window as string`,
+  'Safari': `tell application "Safari" to return name of front document as string`,
+  'Firefox': `tell application "Firefox" to return name of front window`,
+  'Brave Browser': `tell application "Brave Browser" to get title of active tab of front window as string`,
+  'Brave': `tell application "Brave Browser" to get title of active tab of front window as string`,
+  'Microsoft Edge': `tell application "Microsoft Edge" to get title of active tab of front window as string`,
+  'Edge': `tell application "Microsoft Edge" to get title of active tab of front window as string`,
+  'Arc': `tell application "Arc" to get title of active tab of front window as string`,
+  'Vivaldi': `tell application "Vivaldi" to return name of active tab of front window`
+};
+
 // Cache configuration
 const CACHE_CONFIG = {
   ACTIVE_WINDOW_TTL: 5 * 60 * 1000,      // 5 minutes for active window
@@ -31,6 +45,13 @@ const CACHE_CONFIG = {
   FOCUS_CHECK_INTERVAL: 500                // Check window focus every 500ms
 };
 
+// ⚙️  ANALYSIS METHOD CONFIGURATION
+// Set this to control which analysis method to use:
+//   'auto'  - Intelligent selection based on app type (RECOMMENDED)
+//   'nutjs' - Always use NutJS text capture (fast, text-selectable content only)
+//   'ocr'   - Always use OCR/Tesseract (slower, works with images/PDFs)
+const ANALYSIS_METHOD = process.env.SCREEN_ANALYSIS_METHOD || 'auto';
+
 class VirtualScreenDOM {
   constructor(requestAnalysisCallback = null) {
     this.cache = new Map(); // windowId -> screenData
@@ -40,7 +61,9 @@ class VirtualScreenDOM {
     this.isAnalyzing = false;
     this.requestAnalysisCallback = requestAnalysisCallback; // Callback to request analysis from main thread
     this.debugMode = process.env.DEBUG_VIRTUAL_DOM_SCREEN === 'true'; // Debug flag for toasts
+    this.analysisMethod = ANALYSIS_METHOD; // Analysis method preference
     console.log(`[WORKER] 🐛 Debug mode: ${this.debugMode} (env: ${process.env.DEBUG_VIRTUAL_DOM_SCREEN})`);
+    console.log(`[WORKER] 🤖 Analysis method: ${this.analysisMethod}`);
   }
 
   /**
@@ -72,6 +95,37 @@ class VirtualScreenDOM {
       // Browser might not be running or AppleScript failed
       console.log(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
       console.log(`[WORKER] ❌ Error code: ${error.code}`);
+      return null;
+    }
+  }
+
+  /**
+   * Get browser tab title using AppleScript (macOS only)
+   * @param {string} appName - Name of the browser application
+   * @returns {Promise<string|null>} Tab title or null if not a browser or error
+   */
+  async getBrowserTabTitle(appName) {
+    const script = BROWSER_TITLE_SCRIPTS[appName];
+    if (!script) {
+      console.log(`[WORKER] ⚠️  No tab title script for ${appName}`);
+      return null; // Not a supported browser
+    }
+    
+    console.log(`[WORKER] 📜 Getting tab title for ${appName}...`);
+    
+    try {
+      const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
+      const tabTitle = stdout.trim();
+      
+      if (stderr) {
+        console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
+      }
+      
+      console.log(`[WORKER] 📜 Tab title: "${tabTitle}"`);
+      return tabTitle || null;
+    } catch (error) {
+      // Browser might not be running or AppleScript failed
+      console.log(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
       return null;
     }
   }
@@ -151,7 +205,7 @@ class VirtualScreenDOM {
             console.log('[WORKER] 🔔 Window changed detected!');
             
             // Get window details
-            const title = activeWindow.getTitle ? activeWindow.getTitle() : (activeWindow.title || '');
+            let title = activeWindow.getTitle ? activeWindow.getTitle() : (activeWindow.title || '');
             const path = activeWindow.path || '';
             
             // Extract app name from path
@@ -160,6 +214,15 @@ class VirtualScreenDOM {
             
             console.log(`[WORKER] 🔍 App detected: "${app}" (path: ${path})`);
             console.log(`[WORKER] 🔍 Is browser? ${!!BROWSER_URL_SCRIPTS[app]}`);
+            
+            // For browsers, get the actual tab title via AppleScript
+            if (BROWSER_TITLE_SCRIPTS[app]) {
+              const tabTitle = await this.getBrowserTabTitle(app);
+              if (tabTitle) {
+                title = tabTitle;
+                console.log(`[WORKER] 📑 Using browser tab title: "${title}"`);
+              }
+            }
             
             // Use the URL we already fetched (or fetch if not a browser)
             let url = currentUrl;
@@ -227,6 +290,10 @@ class VirtualScreenDOM {
               if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL) {
                 console.log(`[WORKER] 📊 Cache miss for ${windowId}, requesting analysis...`);
                 
+                // Intelligently select analysis method based on content type
+                const analysisMethod = this.selectAnalysisMethod(app, url, title);
+                console.log(`[WORKER] 🤖 Selected method: ${analysisMethod}`);
+                
                 // Request analysis from main thread via callback
                 if (this.requestAnalysisCallback) {
                   this.requestAnalysisCallback({
@@ -234,7 +301,8 @@ class VirtualScreenDOM {
                     app,
                     title,
                     url,
-                    path
+                    path,
+                    method: analysisMethod // Pass method selection
                   });
                 } else {
                   console.warn('[WORKER] ⚠️  No requestAnalysisCallback provided, cannot analyze');
@@ -261,6 +329,64 @@ class VirtualScreenDOM {
       console.error('[WORKER] ❌ Failed to start window listener:', error);
       throw error;
     }
+  }
+
+  /**
+   * Intelligently select analysis method based on content type
+   * @param {string} app - Application name
+   * @param {string} url - URL (for browsers)
+   * @param {string} title - Window title
+   * @returns {string} 'auto', 'nutjs', or 'ocr'
+   */
+  selectAnalysisMethod(app, url, title) {
+    // 🎯 Check global configuration first
+    if (this.analysisMethod !== 'auto') {
+      console.log(`[WORKER] ⚙️  Using configured method: ${this.analysisMethod}`);
+      return this.analysisMethod;
+    }
+
+    // 🤖 Auto-selection based on content type
+    const appLower = app.toLowerCase();
+    const urlLower = (url || '').toLowerCase();
+    const titleLower = (title || '').toLowerCase();
+
+    // Use OCR for PDFs
+    if (urlLower.includes('.pdf') || titleLower.includes('.pdf')) {
+      console.log(`[WORKER] 📄 PDF detected → OCR`);
+      return 'ocr';
+    }
+
+    // Use OCR for image files
+    const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
+    if (imageExtensions.some(ext => urlLower.includes(ext) || titleLower.includes(ext))) {
+      console.log(`[WORKER] 🖼️  Image detected → OCR`);
+      return 'ocr';
+    }
+
+    // Use OCR for specific apps (non-text-selectable content)
+    const ocrApps = ['preview', 'acrobat', 'vlc', 'quicktime', 'photos', 'photoshop', 'figma', 'sketch', 'zoom', 'teams'];
+    if (ocrApps.some(ocrApp => appLower.includes(ocrApp))) {
+      console.log(`[WORKER] 📱 ${app} detected → OCR`);
+      return 'ocr';
+    }
+
+    // Use NutJS for web browsers (text-selectable)
+    const browsers = ['chrome', 'safari', 'firefox', 'edge', 'brave', 'arc', 'vivaldi'];
+    if (browsers.some(browser => appLower.includes(browser))) {
+      console.log(`[WORKER] 🌐 Browser detected → NutJS`);
+      return 'nutjs';
+    }
+
+    // Use NutJS for text editors and IDEs
+    const textApps = ['code', 'vscode', 'sublime', 'atom', 'notepad', 'textedit', 'terminal'];
+    if (textApps.some(textApp => appLower.includes(textApp))) {
+      console.log(`[WORKER] 📝 Text app detected → NutJS`);
+      return 'nutjs';
+    }
+
+    // Default to auto (let HybridAnalyzer decide)
+    console.log(`[WORKER] ⚡ Default → auto`);
+    return 'auto';
   }
 
   /**
@@ -548,21 +674,7 @@ class VirtualScreenDOM {
 
     console.log(`✅ [WORKER] Cached ${screenData.elementCount} elements for ${windowId}`);
     
-    // 🆕 Send cache update to main thread for semantic cache
-    try {
-      const { parentPort } = require('worker_threads');
-      if (parentPort) {
-        parentPort.postMessage({
-          type: 'cacheUpdate',
-          windowId,
-          data: screenData,
-          timestamp: screenData.timestamp
-        });
-        console.log(`📤 [WORKER] Sent cacheUpdate to main thread for ${windowId}`);
-      }
-    } catch (error) {
-      console.warn(`⚠️  [WORKER] Failed to send cacheUpdate:`, error.message);
-    }
+    // Note: cacheUpdate is sent by cacheAnalysisResult() to avoid duplication
     
     return screenData;
   }
@@ -755,6 +867,33 @@ class VirtualScreenDOM {
   }
 
   /**
+   * Normalize plain text for LLM consumption
+   * Converts to pipe-separated format for better queryability
+   * @param {string} text - Raw plain text
+   * @returns {string} Pipe-separated text optimized for LLM queries
+   */
+  normalizePlainText(text) {
+    if (!text) return '';
+    
+    // Split into lines and clean each
+    const lines = text
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      // Remove common UI noise patterns
+      .filter(line => !line.match(/^\[\d+\]\s*$/)) // Remove standalone [0] markers
+      .map(line => {
+        // Clean up [0] prefixes but keep the text
+        return line.replace(/^\[\d+\]\s*/, '');
+      })
+      .filter(line => line.length > 0);
+    
+    // Simple pipe-separated format: join all lines with pipes
+    // This makes it easy for LLM to parse and query
+    return lines.join(' | ');
+  }
+
+  /**
    * Cache analysis result from main thread
    * @param {Object} analysisData - Screen analysis data from MCP service
    */
@@ -764,13 +903,41 @@ class VirtualScreenDOM {
       return;
     }
     
+    // Extract and normalize plainText.content for LLM
+    let plainTextClean = '';
+    if (analysisData.plainText?.content) {
+      plainTextClean = this.normalizePlainText(analysisData.plainText.content);
+      console.log(`[WORKER] 🧹 Normalized plain text: ${plainTextClean.length} chars (from ${analysisData.plainText.content.length})`);
+    }
+    
+    // Extract app name and title for easy LLM access
+    const windowInfo = analysisData.windowInfo || {};
+    const appName = windowInfo.app || 'Unknown';
+    const windowTitle = windowInfo.title || windowInfo.url || '';
+    const isBrowser = !!(windowInfo.url);
+    
     const cacheEntry = {
       ...analysisData,
+      plainTextClean, // Add normalized text for LLM
+      // Add explicit app and title fields for LLM context
+      appName,
+      windowTitle,
+      isBrowser,
+      activeWindowContext: {
+        app: appName,
+        title: windowTitle,
+        url: windowInfo.url || null,
+        isBrowser,
+        displayName: isBrowser 
+          ? `${appName}: ${windowTitle}` 
+          : appName
+      },
       timestamp: Date.now()
     };
     
     this.cache.set(analysisData.windowId, cacheEntry);
     console.log(`[WORKER] ✅ Cached analysis for ${analysisData.windowId}`);
+    console.log(`[WORKER] 🪟 Active window context: ${cacheEntry.activeWindowContext.displayName}`);
     
     // 🆕 Send cache update to main thread for semantic cache
     try {

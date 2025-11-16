@@ -270,20 +270,8 @@ parentPort.on('message', async (msg) => {
             url: msg.windowInfo.url // Include URL from active-window-listener
           });
           
-          // Notify main thread that cache was updated
-          const cacheData = {
-            windowId: msg.windowInfo.windowId,
-            ...msg.data,
-            url: msg.windowInfo.url
-          };
-          console.log(`📤 [WORKER] Sending cacheUpdate for ${msg.windowInfo.windowId}`);
-          parentPort.postMessage({
-            type: 'cacheUpdate',
-            windowId: msg.windowInfo.windowId,
-            data: cacheData,
-            timestamp: Date.now()
-          });
-          console.log(`✅ [WORKER] cacheUpdate sent successfully`);
+          // Note: cacheUpdate is sent by virtualDOM.cacheAnalysisResult() to avoid duplication
+          console.log(`✅ [WORKER] Analysis cached successfully for ${msg.windowInfo.windowId}`);
         }
         break;
         
@@ -364,16 +352,8 @@ parentPort.on('message', async (msg) => {
   }
 });
 
-// Send cache updates to main thread when VirtualScreenDOM updates cache
-// This will be implemented once VirtualScreenDOM has event emitters
-// virtualDOM.on('cacheUpdated', (windowId, data) => {
-//   parentPort.postMessage({
-//     type: 'cacheUpdate',
-//     windowId,
-//     data,
-//     timestamp: Date.now()
-//   });
-// });
+// Cache updates are sent by VirtualScreenDOM.cacheAnalysisResult() directly
+// No need for event emitters - single source of truth
 
 // Handle worker errors
 process.on('uncaughtException', (error) => {
