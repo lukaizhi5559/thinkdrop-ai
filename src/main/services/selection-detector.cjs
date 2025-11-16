@@ -91,10 +91,18 @@ class SelectionDetector {
         end tell
       `;
       
-      const result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}' 2>/dev/null || echo ""`, { 
-        encoding: 'utf8',
-        timeout: 1000 
-      });
+      // SAFETY: Wrap in try-catch to prevent crashes
+      let result = '';
+      try {
+        result = execSync(`osascript -e '${script.replace(/'/g, "'\\''")}' 2>/dev/null || echo ""`, { 
+          encoding: 'utf8',
+          timeout: 500,  // Reduced timeout to fail fast
+          killSignal: 'SIGKILL'  // Force kill if timeout
+        });
+      } catch (execError) {
+        // Silent fail - AppleScript can crash if accessibility denied
+        return null;
+      }
       
       const selectedText = result.trim();
       
@@ -127,7 +135,16 @@ class SelectionDetector {
         end tell
       `;
       
-      execSync(`osascript -e '${script}'`, { timeout: 1000 });
+      // SAFETY: Wrap in try-catch to prevent crashes
+      try {
+        execSync(`osascript -e '${script}'`, { 
+          timeout: 500,
+          killSignal: 'SIGKILL'
+        });
+      } catch (execError) {
+        // Silent fail - AppleScript can crash
+        return null;
+      }
       
       // Wait briefly for clipboard to update
       await new Promise(resolve => setTimeout(resolve, 150));
@@ -271,9 +288,14 @@ class SelectionDetector {
     try {
       const result = execSync(`
         osascript -e "tell application \\"System Events\\" to get name of first application process whose frontmost is true"
-      `, { encoding: 'utf8', timeout: 1000 });
+      `, { 
+        encoding: 'utf8', 
+        timeout: 500,
+        killSignal: 'SIGKILL'
+      });
       return result.trim();
     } catch (error) {
+      // Silent fail - accessibility issues can cause crashes
       return 'Unknown App';
     }
   }
@@ -311,13 +333,21 @@ class SelectionDetector {
       // Return null here - the actual check happens in the renderer via localStorage
       console.log('⚠️  [SELECTION_DETECTOR] getSelectionWithContext called - should use localStorage in renderer');
       
-      // Fallback: try to get current selection
-      const selectedText = await this.getSelectedTextDirectly();
+      // SAFETY: Wrap in timeout to prevent hanging
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1000));
+      
+      // Fallback: try to get current selection with timeout protection
+      const selectionPromise = this.getSelectedTextDirectly().catch(() => null);
+      const selectedText = await Promise.race([selectionPromise, timeoutPromise]);
       
       if (selectedText && selectedText.length > 3) {
+        const appNamePromise = this.getActiveAppName().catch(() => 'Unknown App');
+        const appNameTimeout = new Promise((resolve) => setTimeout(() => resolve('Unknown App'), 500));
+        const sourceApp = await Promise.race([appNamePromise, appNameTimeout]);
+        
         return {
           text: selectedText,
-          sourceApp: await this.getActiveAppName(),
+          sourceApp: sourceApp,
           method: 'context_check'
         };
       }

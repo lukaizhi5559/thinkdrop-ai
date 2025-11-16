@@ -156,20 +156,29 @@ function createOverlayWindow() {
   
   overlayWindow.loadURL(
     process.env.NODE_ENV === 'development'
-      ? 'http://localhost:5173'
+      ? 'http://localhost:5173/src/renderer/index.html'
       : `file://${path.join(__dirname, '../../dist-renderer/index.html')}`
   );
 
   // Make overlay click-through when not in focus (like Cluely)
   overlayWindow.setIgnoreMouseEvents(false);
   
-  // Hide overlay by default - user will open it via FAB button
-  // overlayWindow.once('ready-to-show', () => {
-  //   overlayWindow.hide();
-  //   isOverlayVisible = false;
-  //   isGloballyVisible = false;
-  //   console.log('✅ Overlay window created (hidden by default - use FAB to open)');
-  // });
+  // Show overlay window when ready
+  overlayWindow.once('ready-to-show', () => {
+    overlayWindow.show();
+    isOverlayVisible = true;
+    isGloballyVisible = true;
+    console.log('✅ Main overlay window shown (index.html loaded)');
+  });
+  
+  // Handle load errors
+  overlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+    console.error('❌ [MAIN WINDOW] Failed to load:', errorDescription, 'URL:', validatedURL);
+  });
+
+  overlayWindow.webContents.on('did-finish-load', () => {
+    console.log('✅ [MAIN WINDOW] index.html loaded successfully');
+  });
   
   // Hide window instead of closing
   overlayWindow.on('close', (event) => {
@@ -227,6 +236,13 @@ app.whenReady().then(async () => {
 
     createOverlayWindow();
     // console.log('✅ Step 3: Overlay window created');
+    
+    // Create combined overlay (AI viewing indicator + hotkey toast)
+    console.log('👁️  Creating combined overlay...');
+    const { createAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
+    createAIViewingOverlay();
+    console.log('✅ Combined overlay created');
+    
   // Initialize core services including LocalLLMAgent
   let handlersSetup = false;
   initializeServices().then(() => {
@@ -277,7 +293,9 @@ app.whenReady().then(async () => {
       } else if (msg.type === 'requestAnalysis') {
         // Worker is requesting analysis for a window
         const { windowInfo } = msg;
+        const analysisMethod = windowInfo.method || 'auto';
         console.log(`📡 [MAIN] Worker requesting analysis for: ${windowInfo.app} - ${windowInfo.title}`);
+        console.log(`🤖 [MAIN] Analysis method: ${analysisMethod}`);
         if (windowInfo.url) {
           console.log(`🌐 [MAIN] URL: ${windowInfo.url}`);
         }
@@ -291,11 +309,11 @@ app.whenReady().then(async () => {
             return;
           }
           
-          // Call screen-intelligence service
-          // Pure vision approach - always enabled (no OCR fallback)
+          // Call screen-intelligence service with method selection
           const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
             query: `analyze ${windowInfo.title}`,
-            includeScreenshot: false
+            includeScreenshot: false,
+            method: analysisMethod // Pass method selection (auto/nutjs/ocr)
           }, { timeout: 60000 });
           
           console.log(`✅ [MAIN] Analysis complete for ${windowInfo.windowId}`);
@@ -358,19 +376,44 @@ app.whenReady().then(async () => {
       } else if (msg.type === 'showWindowChangeToast') {
         // Worker requesting window change toast
         try {
-          const { showHotkeyToast } = require('./windows/hotkey-toast-overlay.cjs');
+          const { showHotkeyToast } = require('./windows/ai-viewing-overlay.cjs');
           const message = `<div style="text-align: center;">
             <strong>${msg.app}</strong>${msg.title ? `<br><span style="opacity: 0.8;">${msg.title}</span>` : ''}
           </div>`;
-          showHotkeyToast(message, { persistent: false, duration: 2000 });
+          showHotkeyToast(message, { persistent: true, duration: 2000 });
           console.log(`🍞 [MAIN] Window change toast shown: ${msg.app}`);
         } catch (error) {
           console.error('❌ [MAIN] Failed to show window change toast:', error);
         }
       } else if (msg.type === 'activeWindowUpdate') {
         // Worker notifying of active window change
+        const previousWindowId = global.activeWindowId;
         global.activeWindowId = msg.windowId;
         console.log(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
+        console.log(`   Previous: ${previousWindowId || 'none'}`);
+        console.log(`   Current cache has: ${Array.from(global.screenWorkerCache.keys()).join(', ') || 'empty'}`);
+        
+        // Check if we have cache for this window
+        const hasCache = global.screenWorkerCache.has(msg.windowId);
+        console.log(`   Cache exists for new window: ${hasCache}`);
+        if (!hasCache) {
+          console.log(`   ⚠️  WARNING: Active window changed but no cache yet - analysis may be pending`);
+        }
+        
+        // 👁️  Send active window update to overlay for AI viewing indicator
+        try {
+          const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
+          
+          // Title is already cleaned by virtualScreenDOM (uses AppleScript for browsers)
+          sendActiveWindowUpdate({
+            windowName: msg.title || msg.app,
+            app: msg.app,
+            url: msg.url,
+            windowId: msg.windowId
+          });
+        } catch (error) {
+          console.warn('⚠️  [MAIN] Failed to send active-window-update:', error.message);
+        }
       } else if (msg.type === 'cacheUpdate') {
         // Worker has cached new data
         global.screenWorkerCache.set(msg.windowId, {
@@ -378,6 +421,17 @@ app.whenReady().then(async () => {
           timestamp: msg.timestamp
         });
         console.log(`✅ [MAIN] Cache updated for ${msg.windowId}`);
+        console.log(`   Is this the active window? ${global.activeWindowId === msg.windowId}`);
+        console.log(`   Active window ID: ${global.activeWindowId}`);
+        console.log(`   Total cached windows: ${global.screenWorkerCache.size}`);
+        
+        // Log normalized plain text for LLM consumption
+        if (msg.data?.plainTextClean) {
+          console.log(`🤖 [MAIN] Plain text ready for qwen2.5:3b LLM: ${msg.data.plainTextClean.length} chars`);
+          console.log(`📝 [MAIN] Plain text preview: "${msg.data.plainTextClean.substring(0, 200)}..."`);
+        } else if (msg.data?.plainText?.content) {
+          console.warn(`⚠️  [MAIN] plainText.content exists but plainTextClean missing - normalization may have failed`);
+        }
         
         // ⏸️  DISABLED: Predictive cache generation (phi4 performance issues)
         // TODO: Re-enable when phi4 LLM is faster and returns valid JSON

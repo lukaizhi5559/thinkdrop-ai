@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onChatMessage: (callback) => ipcRenderer.on('chat-message', callback),
   onPopulateChatInput: (callback) => ipcRenderer.on('populate-chat-input', callback),
   onThinkingIndicatorUpdate: (callback) => ipcRenderer.on('thinking-indicator-update', callback),
+  onActiveWindowUpdate: (callback) => ipcRenderer.on('active-window-update', callback),
   adjustChatMessagesHeight: (height) => ipcRenderer.invoke('adjust-chat-messages-height', height),
   
   // Focus management between chat windows
