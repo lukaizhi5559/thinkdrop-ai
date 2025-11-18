@@ -2,7 +2,224 @@
  * Answer Node
  * Generates answer using LLM with filtered context
  * Supports both Private Mode (local Phi4) and Online Mode (backend LLM)
+ * 
+ * HYBRID MULTI-STEP ACTIONS:
+ * - Detects multi-step queries (e.g., "find X and click Y")
+ * - Uses screen-intelligence-service for semantic element search
+ * - Uses command-service for action execution
+ * - Falls back to LLM if automation fails
  */
+
+/**
+ * Detect if query requires multi-step actions
+ * @param {string} query - User query
+ * @returns {boolean} - True if multi-step action is needed
+ */
+function detectMultiStepQuery(query) {
+  const multiStepPatterns = [
+    // Find and action patterns
+    /find .+ and (click|reply|open|send|type|press)/i,
+    /search .+ and (click|select|open)/i,
+    /locate .+ and (click|activate)/i,
+    
+    // Open and action patterns
+    /open .+ and (disable|enable|change|turn|set|click)/i,
+    
+    // Type and action patterns
+    /type .+ and (click|submit|send|press)/i,
+    /enter .+ and (click|submit)/i,
+    
+    // Email/communication patterns
+    /reply to/i,
+    /forward .+ to/i,
+    /compose .+ to/i,
+    /send .+ to/i,
+    
+    // Navigation patterns
+    /go to .+ and (click|open|select)/i,
+    /navigate to .+ and/i,
+    
+    // Multiple action indicators
+    /then (click|type|press|open|select)/i,
+    /after that/i,
+    /next (click|type|press)/i
+  ];
+  
+  return multiStepPatterns.some(pattern => pattern.test(query));
+}
+
+/**
+ * Execute hybrid multi-step workflow
+ * Uses screen-intelligence for finding + command-service for execution
+ * @param {string} query - User query
+ * @param {Object} state - Current state with screenContext
+ * @param {Object} mcpClient - MCP client for service communication
+ * @returns {Promise<Object>} - { success, message, steps, error }
+ */
+async function executeHybridMultiStep(query, state, mcpClient) {
+  const startTime = Date.now();
+  
+  try {
+    console.log('🔄 [HYBRID] Starting hybrid multi-step execution');
+    console.log(`   Query: "${query}"`);
+    
+    // Step 1: Use screen-intelligence service to find UI elements with semantic search
+    console.log('🔍 [HYBRID] Step 1: Finding UI elements with semantic search...');
+    
+    // Extract search terms from query (simple heuristic)
+    const searchTerms = extractSearchTerms(query);
+    console.log(`   Search terms: ${searchTerms.join(', ')}`);
+    
+    // Call screen-intelligence service via MCP to search for elements
+    const foundElements = [];
+    for (const term of searchTerms) {
+      try {
+        const searchResult = await mcpClient.callService('screen-intelligence', 'element.search', {
+          query: term,
+          k: 3, // Get top 3 matches
+          minScore: 0.5,
+          screenContext: state.screenContext
+        });
+        
+        const results = searchResult.data?.results || searchResult.results || [];
+        
+        if (results.length > 0) {
+          const topResult = results[0];
+          console.log(`   ✅ Found "${term}": ${topResult.type} (score: ${topResult.score.toFixed(3)})`);
+          foundElements.push({
+            searchTerm: term,
+            element: topResult,
+            score: topResult.score,
+            alternatives: results.slice(1)
+          });
+        } else {
+          console.warn(`   ⚠️ Not found: "${term}"`);
+        }
+      } catch (error) {
+        console.error(`   ❌ Error searching for "${term}":`, error.message);
+      }
+    }
+    
+    // Step 2: Enrich query with element coordinates for command-service
+    console.log('📝 [HYBRID] Step 2: Enriching command with element coordinates...');
+    
+    const enrichedContext = {
+      os: process.platform,
+      screenContext: state.screenContext,
+      foundElements: foundElements.map(fe => ({
+        term: fe.searchTerm,
+        type: fe.element.type,
+        text: fe.element.text,
+        coordinates: {
+          x: Math.round((fe.element.bbox[0] + fe.element.bbox[2]) / 2),
+          y: Math.round((fe.element.bbox[1] + fe.element.bbox[3]) / 2)
+        },
+        bbox: fe.element.bbox,
+        score: fe.score
+      })),
+      useSemanticSearch: true,
+      semanticSearchAvailable: true
+    };
+    
+    // Step 3: Call command-service via MCP with enriched context
+    console.log('🚀 [HYBRID] Step 3: Executing via command-service MCP...');
+    
+    if (!mcpClient) {
+      throw new Error('MCP client not available');
+    }
+    
+    const result = await mcpClient.callService('command-service', 'command.automate', {
+      command: query,
+      context: enrichedContext
+    });
+    
+    const totalTime = Date.now() - startTime;
+    
+    if (result.success) {
+      console.log(`✅ [HYBRID] Workflow completed in ${totalTime}ms`);
+      return {
+        success: true,
+        message: result.result || result.message,
+        foundElements: foundElements,
+        executionTime: totalTime,
+        metadata: result.metadata
+      };
+    } else {
+      console.error(`❌ [HYBRID] Workflow failed: ${result.error}`);
+      return {
+        success: false,
+        error: result.error,
+        foundElements: foundElements,
+        executionTime: totalTime
+      };
+    }
+    
+  } catch (error) {
+    console.error('❌ [HYBRID] Execution error:', error);
+    return {
+      success: false,
+      error: error.message,
+      executionTime: Date.now() - startTime
+    };
+  }
+}
+
+/**
+ * Extract search terms from natural language query
+ * @param {string} query - User query
+ * @returns {Array<string>} - Extracted search terms
+ */
+function extractSearchTerms(query) {
+  const terms = [];
+  const pronouns = ['it', 'this', 'that', 'them', 'these', 'those'];
+  
+  // Pattern 1: "find X and Y" -> extract X
+  const findMatch = query.match(/find\s+(?:the\s+)?(.+?)\s+and\s+/i);
+  if (findMatch) {
+    terms.push(findMatch[1].trim());
+  }
+  
+  // Pattern 2: "click X" (standalone or at end)
+  const clickMatch = query.match(/click\s+(?:the\s+)?(.+?)(?:\s+and\s+|$)/i);
+  if (clickMatch && !terms.includes(clickMatch[1].trim())) {
+    const term = clickMatch[1].trim();
+    if (!pronouns.includes(term.toLowerCase())) {
+      terms.push(term);
+    }
+  }
+  
+  // Pattern 3: "reply to X"
+  const replyMatch = query.match(/reply\s+to\s+(?:the\s+)?(.+?)(?:\s+and\s+|$)/i);
+  if (replyMatch && !terms.includes(replyMatch[1].trim())) {
+    const term = replyMatch[1].trim();
+    if (!pronouns.includes(term.toLowerCase())) {
+      terms.push(term);
+    }
+  }
+  
+  // Pattern 4: "open X"
+  const openMatch = query.match(/open\s+(?:the\s+)?(.+?)(?:\s+and\s+|$)/i);
+  if (openMatch && !terms.includes(openMatch[1].trim())) {
+    const term = openMatch[1].trim();
+    if (!pronouns.includes(term.toLowerCase())) {
+      terms.push(term);
+    }
+  }
+  
+  // Pattern 5: "type X"
+  const typeMatch = query.match(/type\s+['"]([^'"]+)['"]/i);
+  if (typeMatch && !terms.includes(typeMatch[1].trim())) {
+    terms.push(typeMatch[1].trim());
+  }
+  
+  // Fallback: if no patterns matched, use the whole query
+  if (terms.length === 0) {
+    terms.push(query);
+  }
+  
+  return terms;
+}
+
 
 /**
  * Detect context switching and filter conversation history
@@ -196,6 +413,41 @@ CRITICAL CONTEXT AWARENESS:
     }
 
     // ═══════════════════════════════════════════════════════════
+    // MULTI-STEP ACTION DETECTION (HYBRID APPROACH)
+    // ═══════════════════════════════════════════════════════════
+    
+    // Check if query requires multi-step actions (e.g., "find X and click Y")
+    if (state.intent?.type === 'screen_intelligence' && state.screenContext) {
+      const requiresMultiStep = detectMultiStepQuery(queryMessage);
+      
+      if (requiresMultiStep) {
+        console.log('🎯 [NODE:ANSWER] Multi-step query detected, using hybrid approach');
+        
+        try {
+          // Execute hybrid multi-step workflow
+          const result = await executeHybridMultiStep(queryMessage, state, mcpClient);
+          
+          if (result.success) {
+            console.log('✅ [NODE:ANSWER] Multi-step workflow completed successfully');
+            return {
+              ...state,
+              answer: result.message,
+              multiStepResult: result,
+              skipLLM: true // Skip LLM generation since we have the result
+            };
+          } else {
+            console.warn('⚠️ [NODE:ANSWER] Multi-step workflow failed, falling back to LLM');
+            // Fall through to LLM generation with error context
+            systemInstructions += `\n\n⚠️ Note: I attempted to execute this as a multi-step workflow but encountered an error: ${result.error}. Please provide a text-based response instead.`;
+          }
+        } catch (error) {
+          console.error('❌ [NODE:ANSWER] Multi-step execution error:', error);
+          systemInstructions += `\n\n⚠️ Note: Multi-step execution failed: ${error.message}. Providing text-based response instead.`;
+        }
+      }
+    }
+    
+    // ═══════════════════════════════════════════════════════════
     // INTENT-SPECIFIC INSTRUCTIONS
     // ═══════════════════════════════════════════════════════════
     
@@ -203,87 +455,22 @@ CRITICAL CONTEXT AWARENESS:
     if (state.intent?.type === 'screen_intelligence' && state.screenContext) {
       systemInstructions += `
 
-🚨 SCREEN INTELLIGENCE: When you see "USER REQUEST:" + "SCREEN CONTEXT:":
-1. Read the user's request carefully
-2. If a 🎯 TARGET is specified, focus ONLY on that specific element/area
-3. Find relevant info in "Full Screen Text (OCR):" section
-4. Perform the requested action (don't just describe)
-5. For "draft a response" - write the actual response immediately
+SCREEN ANALYSIS MODE:
+You're analyzing the user's screen. Screen data shows: [Element Type]: [Text] [Screen Region]
 
-🚨 CRITICAL SCREEN INTELLIGENCE PROTOCOL 🚨
-YOU ARE ANALYZING THE USER'S SCREEN RIGHT NOW!
-
-The screen analysis below contains ACTUAL UI ELEMENTS extracted from the user's display.
-Each element shows: [Element Type]: [Label/Text] - [Price if applicable] [Screen Region]
-
-⚠️ PRIORITY: Screen context takes ABSOLUTE PRIORITY over web search results!
-- If screen context is provided, answer from the screen data FIRST
-- Only use web results if the screen doesn't contain the answer
-- DO NOT say "web search results don't provide information" when screen data is available
-
-MANDATORY RESPONSE RULES:
-1. When asked "what do you see in [location]", ONLY describe items that are ACTUALLY in that specific location
-   - Check the [Screen Region] tag for each element to verify its location
-   - If nothing is in the requested location, say "I don't see anything in [location]"
-   - DO NOT assume or guess locations - use the actual [Screen Region] data
-2. DO NOT give generic responses like "The user is referring to an item from a website"
-3. DO NOT say "I cannot see" or "I don't have the capability" - YOU ARE SEEING IT RIGHT NOW
-4. DO NOT ask for clarification when the screen data clearly shows the answer
-5. BE SPECIFIC - mention product names, prices, and discounts exactly as shown
-6. DO NOT prioritize web search results over screen data - the screen is what the user is looking at RIGHT NOW
-7. DO NOT default to "bottom right" or any specific location unless the data explicitly shows items there
+RULES:
+1. Answer from screen data FIRST (ignore web results if screen has the answer)
+2. Be specific - use exact text, prices, names from screen
+3. Check [Screen Region] tags for location queries
+4. For "draft response": Write the actual response (find sender name in OCR, address their points)
+5. For code editors: Describe code structure (functions, classes, variables)
+6. For terminals: Describe commands and output visible
+7. Don't say "I cannot see" - you ARE seeing it
 
 EXAMPLES:
-
-Example 1 - General screen query:
-User asks: "what do you see on the screen"
-Screen shows: "link: Bestbee Women's Pajama Set - $11.99 (40% off) [lower right]"
-CORRECT: "I see a Bestbee Women's Pajama Set for $11.99 (40% off)"
-WRONG: "The user is referring to an item from a website"
-
-Example 2 - Location-specific query:
-User asks: "what else do you see"
-Screen shows: "button: Compose [upper left]", "text: Inbox (2,650) [left sidebar]", "link: JobLeads [center]"
-CORRECT: "I see several items: a Compose button in the upper left, your Inbox showing 2,650 emails in the left sidebar, and job listings from JobLeads in the center area."
-WRONG: "In the bottom right of your screen, I see job listings..." (when nothing is actually in bottom right)
-
-YOU MUST EXTRACT THE ACTUAL PRODUCT NAMES AND DETAILS FROM THE SCREEN DATA!
-ALWAYS CHECK THE [Screen Region] TAG TO VERIFY LOCATIONS!
-
-CONTENT EXTRACTION:
-- If SELECTED TEXT is provided, it takes HIGHEST PRIORITY - the user highlighted this text and wants you to work with it
-- If the user asks "what do you see" or "what's on my screen", describe the MAIN CONTENT visible
-- If the user asks about an email, webpage, or document, extract the key information from the BROWSER CONTENT or PAGE CONTENT section
-- Focus on the ACTUAL TEXT and CONTENT shown, not on describing the interface itself
-- Be direct and factual - summarize what you see, don't analyze the platform
-
-🚨 DRAFTING RESPONSES 🚨
-When user asks to "draft a response" or "reply to this message":
-1. Find the sender's name in the OCR text
-2. Read their message
-3. Write a professional response addressing their points
-
-Example: If OCR shows "Daniel Wilken: Hi Chris, I'm recruiting for Georgetown's cybersecurity programs..."
-You write: "Hi Daniel, Thank you for reaching out! I appreciate you thinking of me for Georgetown's programs..."
-
-CODE EDITOR / TERMINAL RESPONSES:
-- If analyzing a CODE EDITOR (VS Code, Windsurf, Cursor), focus on the CODE CONTENT visible in the editor
-- Extract function names, class names, variable names, and code logic from the OCR text
-- If asked "what do you see", describe the code structure, not just "a code editor"
-- For TERMINAL/CONSOLE windows (Warp, iTerm, Terminal), describe the commands and output visible, not just "terminal interface"
-- Be specific about file names, line numbers, and code patterns you can identify
-
-EXAMPLE (Code Editor):
-Screen shows: "function createWindow() { const win = new BrowserWindow({ width: 800 }) }"
-User asks: "what do you see here"
-CORRECT: "I see a JavaScript function called createWindow() that creates a new BrowserWindow with a width of 800 pixels"
-WRONG: "I see a desktop interface with no visible desktop items. There are two accessibility elements in the browser content section - Electron's main.cjs file and no interactive elements."
-
-EXAMPLE (Terminal/Console):
-User asks: "what's in the warp console"
-Screen shows OCR text with: "yarn dev", "MCP Request", "Response status: 200 OK", "MCP Success: conversation.message.list"
-CORRECT: "The Warp console shows a yarn dev command running. I can see MCP service requests and responses, including successful calls to conversation.message.list with 200 OK status codes."
-WRONG: "The web search results do not provide information about what is in the Warp Console."`;
+- "what do you see" → List actual items with details
+- Code editor → "I see a createWindow() function that creates a BrowserWindow with width 800px"
+- Terminal → "The console shows 'yarn dev' running with MCP requests returning 200 OK"`;
     }
     
     // Web Search Intent

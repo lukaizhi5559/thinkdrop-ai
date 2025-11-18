@@ -192,14 +192,22 @@
       window.electronAPI.receive('show-hotkey-toast', (data) => {
         console.log('🍞 [HOTKEY TOAST] Received show-hotkey-toast:', data);
         
+        // Safety check
+        if (!data) {
+          console.warn('🍞 [HOTKEY TOAST] Received undefined data, ignoring');
+          return;
+        }
+        
         // Support both string (legacy) and object (new) format
         if (typeof data === 'string') {
           showToast(data, { persistent: true });
-        } else {
+        } else if (data.message) {
           showToast(data.message, { 
             persistent: data.persistent !== false, 
             duration: data.duration || 3000 
           });
+        } else {
+          console.warn('🍞 [HOTKEY TOAST] Invalid data format:', data);
         }
       });
       

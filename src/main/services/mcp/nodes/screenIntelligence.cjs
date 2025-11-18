@@ -189,24 +189,32 @@ module.exports = async function screenIntelligence(state) {
     let cachedUrl = null;
     
     if (global.screenWorkerReady && global.screenWorkerCache) {
-      // Check if we have cached data for any window
-      const cacheEntries = Array.from(global.screenWorkerCache.values());
-      const recentCache = cacheEntries.find(entry => 
-        Date.now() - entry.timestamp < 300000 // 5 minutes
-      );
+      // CRITICAL: Check cache for ACTIVE WINDOW, not just any recent cache
+      const activeWindowId = global.activeWindowId;
       
-      if (recentCache) {
-        const age = Math.round((Date.now() - recentCache.timestamp) / 1000);
-        console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache (${age}s old, instant lookup)`);
+      if (activeWindowId && global.screenWorkerCache.has(activeWindowId)) {
+        const cacheEntry = global.screenWorkerCache.get(activeWindowId);
+        const age = Math.round((Date.now() - cacheEntry.timestamp) / 1000);
         
-        data = recentCache.data;
-        fromCache = true;
-        
-        // Extract URL if available
-        if (data.url) {
-          cachedUrl = data.url;
-          console.log(`🌐 [NODE:SCREEN_INTELLIGENCE] Cached URL: ${cachedUrl}`);
+        // Only use cache if it's reasonably fresh (< 5 minutes)
+        if (age < 300) {
+          console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache for active window (${age}s old, instant lookup)`);
+          console.log(`   Active window: ${activeWindowId}`);
+          
+          data = cacheEntry.data;
+          fromCache = true;
+          
+          // Extract URL if available
+          if (data.url) {
+            cachedUrl = data.url;
+            console.log(`🌐 [NODE:SCREEN_INTELLIGENCE] Cached URL: ${cachedUrl}`);
+          }
+        } else {
+          console.log(`⚠️  [NODE:SCREEN_INTELLIGENCE] Cache for active window is stale (${age}s old), will request fresh analysis`);
         }
+      } else {
+        console.log(`⚠️  [NODE:SCREEN_INTELLIGENCE] No cache for active window: ${activeWindowId}`);
+        console.log(`   Available caches: ${Array.from(global.screenWorkerCache.keys()).join(', ') || 'none'}`);
       }
     }
     
@@ -435,12 +443,14 @@ function buildScreenContext(data, query, selectedText = null) {
   if (queryIntent.type === 'ui_elements' || queryIntent.type === 'general') {
     // User asking about UI elements or buttons
     parts.push('🎯 INTERACTIVE ELEMENTS:');
-    // Include buttons, links, images, and textareas for comprehensive coverage
+    // Include buttons, links, images, textareas, modals, and menus for comprehensive coverage
     const interactiveElements = [
       ...elementsByType.buttons, 
       ...elementsByType.links,
       ...elementsByType.images,
-      ...elementsByType.textareas
+      ...elementsByType.textareas,
+      ...elementsByType.modals,
+      ...elementsByType.menus
     ];
     if (interactiveElements.length > 0) {
       // Pass query to enable smart region-based filtering
@@ -492,14 +502,17 @@ function categorizeElements(elements) {
     files: elements.filter(el => el.role === 'file'),
     pageContent: elements.filter(el => el.role === 'page_content' || el.role === 'full_text_content'),
     windows: elements.filter(el => el.role === 'window'),
-    buttons: elements.filter(el => el.role === 'button' && el.label),
+    buttons: elements.filter(el => (el.role === 'button' || el.role === 'ui_element') && el.label),
     links: elements.filter(el => el.role === 'link'),
     images: elements.filter(el => el.role === 'image' || el.role === 'img'),
-    textareas: elements.filter(el => el.role === 'textarea'),
+    textareas: elements.filter(el => el.role === 'textarea' || el.role === 'dropdown' || el.role === 'search'),
     // OCR text elements (from non-browser apps like code editors, terminals)
     textLines: elements.filter(el => el.role === 'text_line'),
     textWords: elements.filter(el => el.role === 'text'),
-    other: elements.filter(el => !['file', 'page_content', 'full_text_content', 'window', 'button', 'link', 'image', 'img', 'textarea', 'text_line', 'text'].includes(el.role))
+    // Add new categories for semantic UI elements
+    modals: elements.filter(el => el.role === 'modal' || el.role === 'panel'),
+    menus: elements.filter(el => el.role === 'menu' || el.role === 'tab'),
+    other: elements.filter(el => !['file', 'page_content', 'full_text_content', 'window', 'button', 'link', 'image', 'img', 'textarea', 'text_line', 'text', 'ui_element', 'dropdown', 'search', 'modal', 'panel', 'menu', 'tab'].includes(el.role))
   };
 }
 

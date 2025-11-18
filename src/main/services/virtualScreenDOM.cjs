@@ -78,8 +78,8 @@ class VirtualScreenDOM {
       return null; // Not a supported browser
     }
     
-    console.log(`[WORKER] 📜 Running AppleScript for ${appName}...`);
-    console.log(`[WORKER] 📜 Script: ${script}`);
+    // console.log(`[WORKER] 📜 Running AppleScript for ${appName}...`);
+    // console.log(`[WORKER] 📜 Script: ${script}`);
     
     try {
       const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
@@ -89,7 +89,7 @@ class VirtualScreenDOM {
         console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
       }
       
-      console.log(`[WORKER] 📜 AppleScript stdout: "${url}"`);
+      // console.log(`[WORKER] 📜 AppleScript stdout: "${url}"`);
       return url || null;
     } catch (error) {
       // Browser might not be running or AppleScript failed
@@ -111,7 +111,7 @@ class VirtualScreenDOM {
       return null; // Not a supported browser
     }
     
-    console.log(`[WORKER] 📜 Getting tab title for ${appName}...`);
+    // console.log(`[WORKER] 📜 Getting tab title for ${appName}...`);
     
     try {
       const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
@@ -121,7 +121,7 @@ class VirtualScreenDOM {
         console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
       }
       
-      console.log(`[WORKER] 📜 Tab title: "${tabTitle}"`);
+      // console.log(`[WORKER] 📜 Tab title: "${tabTitle}"`);
       return tabTitle || null;
     } catch (error) {
       // Browser might not be running or AppleScript failed
@@ -287,8 +287,15 @@ class VirtualScreenDOM {
               const cached = this.cache.get(windowId);
               const now = Date.now();
               
-              if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL) {
-                console.log(`[WORKER] 📊 Cache miss for ${windowId}, requesting analysis...`);
+              // Force fresh analysis if window just changed (even if we have old cache)
+              const windowJustChanged = windowId !== this.activeWindow;
+              
+              if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL || windowJustChanged) {
+                if (windowJustChanged) {
+                  console.log(`[WORKER] 🔄 Window changed, forcing fresh analysis for ${windowId}`);
+                } else {
+                  console.log(`[WORKER] 📊 Cache miss for ${windowId}, requesting analysis...`);
+                }
                 
                 // Intelligently select analysis method based on content type
                 const analysisMethod = this.selectAnalysisMethod(app, url, title);

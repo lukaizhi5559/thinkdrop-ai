@@ -129,10 +129,10 @@ async function checkCacheReadiness(state) {
   let lastProgress = 0;
   const cacheReady = await waitForCache(
     activeWindowId,
-    5000, // Wait up to 5 seconds
+    10000, // Wait up to 10 seconds (DETR+CLIP+OCR takes 2-5s)
     (progress, attempts) => {
-      // Send progress updates every 25%
-      if (progress >= lastProgress + 25) {
+      // Send progress updates every 20%
+      if (progress >= lastProgress + 20) {
         const dots = '.'.repeat(Math.floor(attempts / 5) % 4);
         sendThinkingUpdate(`Scanning the page now${dots}`, sessionId);
         lastProgress = progress;
@@ -162,7 +162,7 @@ async function checkCacheReadiness(state) {
     return {
       ...state,
       cacheWaitResult: 'timeout',
-      cacheWaitTime: 5000,
+      cacheWaitTime: 10000,
       forceFreshAnalysis: true // Signal to skip cache and force fresh analysis
     };
   }

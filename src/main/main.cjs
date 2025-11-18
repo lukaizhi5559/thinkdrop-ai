@@ -301,6 +301,21 @@ app.whenReady().then(async () => {
         }
         
         try {
+          // 🔍 Send scanning indicator to overlay
+          try {
+            const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
+            sendActiveWindowUpdate({
+              windowName: windowInfo.title || windowInfo.app,
+              app: windowInfo.app,
+              url: windowInfo.url,
+              windowId: windowInfo.windowId,
+              scanning: true // Indicate analysis in progress
+            });
+            console.log('🔍 [MAIN] Sent scanning indicator to overlay');
+          } catch (error) {
+            console.warn('⚠️  [MAIN] Failed to send scanning indicator:', error.message);
+          }
+          
           // Get MCP client from global (initialized in IPC handlers)
           const mcpClient = global.mcpClient;
           
@@ -310,6 +325,7 @@ app.whenReady().then(async () => {
           }
           
           // Call screen-intelligence service with method selection
+          // Use 'semantic' for DETR + CLIP + DuckDB indexing
           const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
             query: `analyze ${windowInfo.title}`,
             includeScreenshot: false,
@@ -317,6 +333,21 @@ app.whenReady().then(async () => {
           }, { timeout: 60000 });
           
           console.log(`✅ [MAIN] Analysis complete for ${windowInfo.windowId}`);
+          
+          // ✅ Send completion indicator to overlay
+          try {
+            const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
+            sendActiveWindowUpdate({
+              windowName: windowInfo.title || windowInfo.app,
+              app: windowInfo.app,
+              url: windowInfo.url,
+              windowId: windowInfo.windowId,
+              scanning: false // Analysis complete
+            });
+            console.log('✅ [MAIN] Sent completion indicator to overlay');
+          } catch (error) {
+            console.warn('⚠️  [MAIN] Failed to send completion indicator:', error.message);
+          }
           
           // Save full MCP response to temp file for debugging
           const fs = require('fs');

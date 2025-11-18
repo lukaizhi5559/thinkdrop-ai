@@ -19,6 +19,7 @@ export function OverlayToast() {
   const [activeWindow, setActiveWindow] = useState<string | null>(null);
   const [activeApp, setActiveApp] = useState<string | null>(null);
   const [indicatorVisible, setIndicatorVisible] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
   
   // Hotkey Toast state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -29,11 +30,13 @@ export function OverlayToast() {
     console.log('🔧 [OVERLAY] Component mounted, setting up listeners...');
     
     // Listen for active window updates (AI viewing indicator)
-    const handleActiveWindowUpdate = (_: any, data: { windowName: string; app: string }) => {
+    const handleActiveWindowUpdate = (_: any, data: { windowName: string; app: string; scanning?: boolean }) => {
       console.log('👁️  [AI VIEWING] Active window updated:', data);
       setActiveWindow(data.windowName);
-      setActiveApp(data.app)
+      setActiveApp(data.app);
+      setIsScanning(data.scanning === true);
       console.log('THE ACTIVE WINDOW:', data);
+      console.log('🔍 [AI VIEWING] Scanning state:', data.scanning);
       setIndicatorVisible(true);
     };
     
@@ -116,9 +119,17 @@ export function OverlayToast() {
             pointer-events-auto
           "
         >
-          <Eye className="w-4 h-4 text-teal-400 animate-pulse" />
+          <Eye className={`w-4 h-4 text-teal-400 ${isScanning ? 'animate-pulse' : ''}`} />
           <span className="text-xs font-medium text-white-400">
-            AI Viewing: <span className="text-white-400">{activeWindow}</span>
+            {isScanning ? (
+              <>
+                <span className="text-yellow-400 animate-pulse">⚡ Scanning:</span> <span className="text-white-400">{activeWindow}</span>
+              </>
+            ) : (
+              <>
+                AI Viewing: <span className="text-white-400">{activeWindow}</span>
+              </>
+            )}
           </span>
         </div>
       )}
