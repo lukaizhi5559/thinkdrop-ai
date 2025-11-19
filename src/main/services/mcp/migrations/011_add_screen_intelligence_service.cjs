@@ -41,7 +41,8 @@ module.exports = {
       'screen.guide',
       'screen.highlight',
       'screen.toast',
-      'screen.clearOverlay'
+      'screen.clearOverlay',
+      'element.search'
     ]);
     
     // Define capabilities
@@ -67,7 +68,8 @@ module.exports = {
       'screen.guide',
       'screen.highlight',
       'screen.toast',
-      'screen.clearOverlay'
+      'screen.clearOverlay',
+      'element.search'
     ]);
     
     // Insert screen-intelligence service

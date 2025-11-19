@@ -240,6 +240,18 @@ class VirtualScreenDOM {
             console.log(`[WORKER] 🆔 WindowId changed? ${windowId !== this.activeWindow}`);
             
             if (windowId !== this.activeWindow && !this.isAnalyzing) {
+              // CRITICAL: Skip ThinkDrop AI (Electron) - we never want to analyze it
+              const isThinkDropAI = app.toLowerCase().includes('electron') || 
+                                   app.toLowerCase().includes('thinkdrop') ||
+                                   title.toLowerCase().includes('thinkdrop');
+              
+              if (isThinkDropAI) {
+                console.log(`[WORKER] ⏭️  Skipping ThinkDrop AI window (${app})`);
+                // Still update activeWindow to track it, but don't analyze
+                this.activeWindow = windowId;
+                return;
+              }
+              
               console.log(`[WORKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
               
               // Show hotkey toast for window change (using simple toast overlay)
@@ -253,16 +265,6 @@ class VirtualScreenDOM {
                 }
               }
               this.showWindowChangeToast(app, displayText);
-              
-              // 📋 If switching TO Electron (Thinkdrop AI), trigger selection capture from previous window
-              if (app.toLowerCase().includes('electron') && global.selectionDetector) {
-                console.log('[WORKER] 🎯 Thinkdrop AI gained focus - triggering selection capture');
-                setTimeout(() => {
-                  if (global.selectionDetector) {
-                    global.selectionDetector.captureFromPreviousWindow();
-                  }
-                }, 100);
-              }
               
               this.activeWindow = windowId;
               
@@ -283,41 +285,14 @@ class VirtualScreenDOM {
                 console.warn(`⚠️  [WORKER] Failed to send activeWindowUpdate:`, error.message);
               }
               
-              // Check if we need to analyze
-              const cached = this.cache.get(windowId);
-              const now = Date.now();
-              
-              // Force fresh analysis if window just changed (even if we have old cache)
-              const windowJustChanged = windowId !== this.activeWindow;
-              
-              if (!cached || (now - cached.timestamp) > CACHE_CONFIG.ACTIVE_WINDOW_TTL || windowJustChanged) {
-                if (windowJustChanged) {
-                  console.log(`[WORKER] 🔄 Window changed, forcing fresh analysis for ${windowId}`);
-                } else {
-                  console.log(`[WORKER] 📊 Cache miss for ${windowId}, requesting analysis...`);
-                }
-                
-                // Intelligently select analysis method based on content type
-                const analysisMethod = this.selectAnalysisMethod(app, url, title);
-                console.log(`[WORKER] 🤖 Selected method: ${analysisMethod}`);
-                
-                // Request analysis from main thread via callback
-                if (this.requestAnalysisCallback) {
-                  this.requestAnalysisCallback({
-                    windowId,
-                    app,
-                    title,
-                    url,
-                    path,
-                    method: analysisMethod // Pass method selection
-                  });
-                } else {
-                  console.warn('[WORKER] ⚠️  No requestAnalysisCallback provided, cannot analyze');
-                }
-              } else {
-                const age = Math.round((now - cached.timestamp) / 1000);
-                console.log(`[WORKER] ✅ Using cached data (${age}s old)`);
-              }
+              // DISABLED: Pre-scanning causes too many issues
+              // - Race conditions (window switches before analysis completes)
+              // - Stale cache (content changes within same window)
+              // - Wasted resources (analyzing windows user doesn't ask about)
+              // 
+              // NEW APPROACH: Only analyze on-demand when user asks a question
+              // The screenIntelligence node will check cache and request fresh analysis if needed
+              console.log(`[WORKER] 📊 Window tracked, analysis will happen on-demand only`);
             }
           }
         } catch (error) {

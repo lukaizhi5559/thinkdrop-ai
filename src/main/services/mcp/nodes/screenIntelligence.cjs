@@ -13,6 +13,7 @@
  */
 
 const { showHighlights } = require('../../../windows/screen-intelligence-overlay.cjs');
+const { getGuideWindow } = require('../../../windows/guide-window.cjs');
 
 // Element color mapping by type
 const ELEMENT_COLORS = {
@@ -196,10 +197,14 @@ module.exports = async function screenIntelligence(state) {
         const cacheEntry = global.screenWorkerCache.get(activeWindowId);
         const age = Math.round((Date.now() - cacheEntry.timestamp) / 1000);
         
-        // Only use cache if it's reasonably fresh (< 5 minutes)
-        if (age < 300) {
+        // Only use cache if it's reasonably fresh (< 30 seconds)
+        // CRITICAL: Reduced from 5 minutes to 30 seconds to ensure fresh screen content
+        // The cache is keyed by windowId (e.g., "Google Chrome") but screen content
+        // changes frequently (LinkedIn → ChatGPT), so we need aggressive invalidation
+        if (age < 30) {
           console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache for active window (${age}s old, instant lookup)`);
           console.log(`   Active window: ${activeWindowId}`);
+          console.log(`   Cached screen ID: ${cacheEntry.data?.screenId || 'unknown'}`);
           
           data = cacheEntry.data;
           fromCache = true;
@@ -221,6 +226,19 @@ module.exports = async function screenIntelligence(state) {
     // 2️⃣ Cache miss - call screen-intelligence service
     if (!fromCache) {
       console.log('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling screen/analyze...');
+      
+      // CRITICAL: Hide ThinkDrop AI guide window before screenshot
+      // If ThinkDrop AI is the active window, we want to analyze the window BEHIND it
+      const guideWindow = getGuideWindow();
+      let wasGuideVisible = false;
+      if (guideWindow && guideWindow.isVisible()) {
+        console.log('👁️  [NODE:SCREEN_INTELLIGENCE] Hiding ThinkDrop AI panel before screenshot...');
+        guideWindow.hide();
+        wasGuideVisible = true;
+        // Wait 100ms for window to fully hide
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
       const startTime = Date.now();
       
       // Screen analysis can take 30-60s when analyzing multiple browser windows with Playwright
@@ -228,8 +246,15 @@ module.exports = async function screenIntelligence(state) {
       const screenTimeout = parseInt(process.env.MCP_SCREEN_TIMEOUT || '60000');
       const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
         query: message,
-        includeScreenshot: false // We don't need screenshots for text queries
+        includeScreenshot: false, // We don't need screenshots for text queries
+        method: 'semantic' // CRITICAL: Use semantic analysis (OCR + OWLv2), not NutJS text capture
       }, { timeout: screenTimeout });
+      
+      // Restore guide window if it was visible
+      if (wasGuideVisible && guideWindow) {
+        console.log('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
+        guideWindow.show();
+      }
       
       const analysisTime = Date.now() - startTime;
       console.log(`📊 [NODE:SCREEN_INTELLIGENCE] Analysis complete (${analysisTime}ms)`);
@@ -240,9 +265,11 @@ module.exports = async function screenIntelligence(state) {
     
     console.log('✅ [NODE:SCREEN_INTELLIGENCE] Screen analysis complete', {
       strategy: data.strategy,
+      screenId: data.screenId,
       windowsAnalyzed: data.windowsAnalyzed?.length || 0,
       elementCount: data.elementCount || 0,
-      hasSelectedText: !!data.selectedText
+      hasSelectedText: !!data.selectedText,
+      fromCache
     });
     
     // 🐛 DEBUG: Log full analysis data structure
@@ -250,6 +277,8 @@ module.exports = async function screenIntelligence(state) {
     console.log('🐛 [DEBUG] FULL ANALYSIS DATA STRUCTURE:');
     console.log(JSON.stringify({
       strategy: data.strategy,
+      screenId: data.screenId,
+      fromCache,
       elementCount: data.elementCount,
       windowsAnalyzed: data.windowsAnalyzed?.map(w => ({
         app: w.app,
@@ -278,8 +307,29 @@ module.exports = async function screenIntelligence(state) {
       });
     }
     
-    // Filter and format the payload intelligently based on query
-    const screenContext = buildScreenContext(data, message, data.selectedText);
+    // 🔍 Use semantic search to find relevant elements instead of passing all elements
+    console.log('🔍 [NODE:SCREEN_INTELLIGENCE] Performing semantic search on indexed elements...');
+    let semanticResults = [];
+    try {
+      // Filter by current screen ID to only get elements from the active screen
+      const filters = data.screenId ? { screenId: data.screenId } : {};
+      console.log(`🔍 [NODE:SCREEN_INTELLIGENCE] Filtering by screen ID: ${data.screenId || 'none (searching all screens)'}`);
+      
+      const searchResult = await mcpClient.callService('screen-intelligence', 'element.search', {
+        query: message,
+        k: 10, // Top 10 most relevant elements
+        minScore: 0.3, // Lower threshold to get more results
+        filters // Filter to current screen only
+      }, { timeout: 5000 });
+      
+      semanticResults = searchResult.data?.results || searchResult.results || [];
+      console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements via semantic search`);
+    } catch (searchError) {
+      console.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Semantic search failed, will use fallback:', searchError.message);
+    }
+    
+    // Build context from semantic search results
+    const screenContext = buildScreenContextFromSearch(semanticResults, message, data.selectedText, data);
     
     // TEMPORARILY DISABLED: Overlay causes focus stealing and desktop shifts
     // Even with type: 'panel', showing the overlay window activates the Electron app
@@ -375,8 +425,112 @@ module.exports = async function screenIntelligence(state) {
 };
 
 /**
- * Build intelligent screen context from analysis results
+ * Build screen context from semantic search results
+ * This is the NEW approach: LLM only sees top-k relevant elements from vector search
+ */
+function buildScreenContextFromSearch(searchResults, query, selectedText = null, fullData = null) {
+  const parts = [];
+  
+  // If selected text is provided, prioritize it at the top
+  if (selectedText) {
+    parts.push('=== SELECTED TEXT ===');
+    parts.push(selectedText.substring(0, 3000));
+    if (selectedText.length > 3000) {
+      parts.push('... (content truncated)');
+    }
+    parts.push('');
+  }
+  
+  parts.push('=== SCREEN ANALYSIS (Semantic Search Results) ===');
+  parts.push(`Query: "${query}"`);
+  parts.push(`Found: ${searchResults.length} relevant UI elements`);
+  parts.push('');
+  
+  if (searchResults.length === 0) {
+    parts.push('No relevant UI elements found for this query.');
+    parts.push('The screen may not contain elements matching your request.');
+  } else {
+    parts.push('🎯 RELEVANT UI ELEMENTS (ranked by relevance):');
+    parts.push('');
+    
+    searchResults.forEach((result, idx) => {
+      const { type, text, description, score, bbox } = result;
+      const relevancePercent = (score * 100).toFixed(1);
+      
+      // Format element with text as primary identifier
+      if (text && text.trim()) {
+        parts.push(`${idx + 1}. ${type.toUpperCase()}: "${text}" (${relevancePercent}% match)`);
+      } else {
+        parts.push(`${idx + 1}. ${type.toUpperCase()} (${relevancePercent}% match)`);
+        if (description && description !== type) {
+          parts.push(`   ${description}`);
+        }
+      }
+      
+      // Add human-readable location
+      if (bbox) {
+        const [x1, y1, x2, y2] = bbox;
+        const centerX = Math.round((x1 + x2) / 2);
+        const centerY = Math.round((y1 + y2) / 2);
+        const position = getScreenPosition(centerX, centerY);
+        parts.push(`   Location: ${position}`);
+      }
+      parts.push('');
+    });
+  }
+  
+  // Add window context if available
+  if (fullData?.windowsAnalyzed && fullData.windowsAnalyzed.length > 0) {
+    parts.push('🪟 ACTIVE WINDOWS:');
+    fullData.windowsAnalyzed.forEach((win, idx) => {
+      parts.push(`${idx + 1}. ${win.app} - "${win.title || 'Untitled'}"`);
+    });
+    parts.push('');
+  }
+  
+  parts.push('=== END SCREEN ANALYSIS ===');
+  parts.push('');
+  parts.push('Note: These are the most relevant elements based on semantic similarity to your query.');
+  parts.push('If you need different information, please rephrase your question.');
+  
+  return parts.join('\n');
+}
+
+/**
+ * Convert coordinates to human-readable screen position
+ * @param {number} x - X coordinate
+ * @param {number} y - Y coordinate
+ * @param {number} screenWidth - Screen width (default 1440)
+ * @param {number} screenHeight - Screen height (default 900)
+ * @returns {string} Human-readable position like "upper left", "center", "bottom right"
+ */
+function getScreenPosition(x, y, screenWidth = 1440, screenHeight = 900) {
+  const xThird = screenWidth / 3;
+  const yThird = screenHeight / 3;
+  
+  let vertical = '';
+  if (y < yThird) vertical = 'upper';
+  else if (y < yThird * 2) vertical = 'middle';
+  else vertical = 'lower';
+  
+  let horizontal = '';
+  if (x < xThird) horizontal = 'left';
+  else if (x < xThird * 2) horizontal = 'center';
+  else horizontal = 'right';
+  
+  // Special case for center-center
+  if (vertical === 'middle' && horizontal === 'center') {
+    return 'center of screen';
+  }
+  
+  return `${vertical} ${horizontal}`;
+}
+
+/**
+ * Build intelligent screen context from analysis results (OLD APPROACH - DEPRECATED)
  * Filters and formats based on query keywords
+ * 
+ * @deprecated Use buildScreenContextFromSearch instead for semantic search-based context
  */
 function buildScreenContext(data, query, selectedText = null) {
   const parts = [];
