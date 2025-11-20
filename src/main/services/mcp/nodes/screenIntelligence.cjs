@@ -224,8 +224,11 @@ module.exports = async function screenIntelligence(state) {
     }
     
     // 2️⃣ Cache miss - call screen-intelligence service
+    let semanticResults = [];
+    let screenContext = '';
+    
     if (!fromCache) {
-      console.log('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling screen/analyze...');
+      console.log('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling element.search...');
       
       // CRITICAL: Hide ThinkDrop AI guide window before screenshot
       // If ThinkDrop AI is the active window, we want to analyze the window BEHIND it
@@ -241,14 +244,13 @@ module.exports = async function screenIntelligence(state) {
       
       const startTime = Date.now();
       
-      // Screen analysis can take 30-60s when analyzing multiple browser windows with Playwright
-      // Use environment variable or default to 60 seconds
-      const screenTimeout = parseInt(process.env.MCP_SCREEN_TIMEOUT || '60000');
-      const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
+      // Use fast semantic search from indexed DuckDB data (26-127ms)
+      // The ScreenWatcher continuously indexes screen data in the background
+      const result = await mcpClient.callService('screen-intelligence', 'element.search', {
         query: message,
-        includeScreenshot: false, // We don't need screenshots for text queries
-        method: 'semantic' // CRITICAL: Use semantic analysis (OCR + OWLv2), not NutJS text capture
-      }, { timeout: screenTimeout });
+        k: 10, // Return top 10 most relevant elements
+        minScore: 0.3 // Minimum similarity score
+      }, { timeout: 30000 }); // Increased timeout to 30s due to indexing backlog
       
       // Restore guide window if it was visible
       if (wasGuideVisible && guideWindow) {
@@ -257,79 +259,23 @@ module.exports = async function screenIntelligence(state) {
       }
       
       const analysisTime = Date.now() - startTime;
-      console.log(`📊 [NODE:SCREEN_INTELLIGENCE] Analysis complete (${analysisTime}ms)`);
+      console.log(`📊 [NODE:SCREEN_INTELLIGENCE] Semantic search complete (${analysisTime}ms)`);
       
-      // Extract data from response
-      data = result.data || result;
-    }
-    
-    console.log('✅ [NODE:SCREEN_INTELLIGENCE] Screen analysis complete', {
-      strategy: data.strategy,
-      screenId: data.screenId,
-      windowsAnalyzed: data.windowsAnalyzed?.length || 0,
-      elementCount: data.elementCount || 0,
-      hasSelectedText: !!data.selectedText,
-      fromCache
-    });
-    
-    // 🐛 DEBUG: Log full analysis data structure
-    console.log('=' .repeat(80));
-    console.log('🐛 [DEBUG] FULL ANALYSIS DATA STRUCTURE:');
-    console.log(JSON.stringify({
-      strategy: data.strategy,
-      screenId: data.screenId,
-      fromCache,
-      elementCount: data.elementCount,
-      windowsAnalyzed: data.windowsAnalyzed?.map(w => ({
-        app: w.app,
-        title: w.title,
-        bounds: w.bounds
-      })),
-      elements: data.elements?.slice(0, 5).map(el => ({
-        type: el.type,
-        role: el.role,
-        label: el.label?.substring(0, 50),
-        value: el.value?.substring(0, 100),
-        bounds: el.bounds
-      })),
-      totalElements: data.elements?.length || 0,
-      hasOCR: !!data.elements?.find(el => el.role === 'full_text_content'),
-      hasAccessibility: !!data.elements?.find(el => el.type === 'accessibility'),
-      selectedText: data.selectedText ? data.selectedText.substring(0, 100) + '...' : null
-    }, null, 2));
-    console.log('=' .repeat(80));
-    
-    // Log selected text if found
-    if (data.selectedText) {
-      console.log('📝 [NODE:SCREEN_INTELLIGENCE] Found selected text:', {
-        length: data.selectedText.length,
-        preview: data.selectedText.substring(0, 100) + '...'
-      });
-    }
-    
-    // 🔍 Use semantic search to find relevant elements instead of passing all elements
-    console.log('🔍 [NODE:SCREEN_INTELLIGENCE] Performing semantic search on indexed elements...');
-    let semanticResults = [];
-    try {
-      // Filter by current screen ID to only get elements from the active screen
-      const filters = data.screenId ? { screenId: data.screenId } : {};
-      console.log(`🔍 [NODE:SCREEN_INTELLIGENCE] Filtering by screen ID: ${data.screenId || 'none (searching all screens)'}`);
+      // Extract semantic search results
+      semanticResults = result.data?.results || result.results || [];
+      console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
       
-      const searchResult = await mcpClient.callService('screen-intelligence', 'element.search', {
-        query: message,
-        k: 10, // Top 10 most relevant elements
-        minScore: 0.3, // Lower threshold to get more results
-        filters // Filter to current screen only
-      }, { timeout: 5000 });
+      // Create minimal data structure for compatibility
+      data = {
+        strategy: 'semantic-search',
+        elementCount: semanticResults.length,
+        fromCache: false,
+        searchTime: analysisTime
+      };
       
-      semanticResults = searchResult.data?.results || searchResult.results || [];
-      console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements via semantic search`);
-    } catch (searchError) {
-      console.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Semantic search failed, will use fallback:', searchError.message);
+      // Build context from semantic search results
+      screenContext = buildScreenContextFromSearch(semanticResults, message, null, data);
     }
-    
-    // Build context from semantic search results
-    const screenContext = buildScreenContextFromSearch(semanticResults, message, data.selectedText, data);
     
     // TEMPORARILY DISABLED: Overlay causes focus stealing and desktop shifts
     // Even with type: 'panel', showing the overlay window activates the Electron app
@@ -373,12 +319,14 @@ module.exports = async function screenIntelligence(state) {
     console.log(screenContext);
     console.log('=' .repeat(80));
     
-    // 🆕 Generate Page Insight if we have OCR text
-    // Extract OCR text from elements
-    const fullTextElement = data.elements?.find(el => el.role === 'full_text_content');
-    const ocrText = fullTextElement?.value || '';
+    // 🆕 Generate Page Insight if we have text content from semantic results
+    // Extract text from semantic search results
+    const allText = semanticResults
+      .map(r => r.text)
+      .filter(Boolean)
+      .join(' ');
     
-    if (ocrText && ocrText.length > 50) {
+    if (allText && allText.length > 50) {
       try {
         console.log('💡 [NODE:SCREEN_INTELLIGENCE] Generating Page Insight...');
         
@@ -389,8 +337,8 @@ module.exports = async function screenIntelligence(state) {
         const insightNode = require('./insight.cjs');
         const insightState = await insightNode({
           ...state,
-          ocrText: ocrText,
-          windowTitle: data.windowsAnalyzed?.[0]?.title || 'Current Page',
+          ocrText: allText,
+          windowTitle: 'Current Page',
           insightType: 'page'
         });
         
@@ -456,6 +404,16 @@ function buildScreenContextFromSearch(searchResults, query, selectedText = null,
     searchResults.forEach((result, idx) => {
       const { type, text, description, score, bbox } = result;
       const relevancePercent = (score * 100).toFixed(1);
+      
+      // Special handling for text elements (OCR content)
+      if (type === 'text' && text && text.trim()) {
+        parts.push(`${idx + 1}. 📝 SCREEN TEXT CONTENT (${relevancePercent}% match):`);
+        // Show first 500 chars of text content
+        const preview = text.length > 500 ? text.substring(0, 500) + '...' : text;
+        parts.push(`   ${preview}`);
+        parts.push('');
+        return;
+      }
       
       // Format element with text as primary identifier
       if (text && text.trim()) {

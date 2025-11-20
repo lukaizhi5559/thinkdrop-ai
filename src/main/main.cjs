@@ -272,138 +272,23 @@ app.whenReady().then(async () => {
   
   console.log('🎉 Initialization sequence complete!');
   
-  // Initialize Virtual Screen DOM in Worker Thread (prevents typing lag)
-  console.log('🔧 Initializing Virtual Screen DOM in worker thread...');
+  // Initialize Window Tracker in Worker Thread (lightweight window change detection)
+  console.log('🔧 Initializing Window Tracker in worker thread...');
   try {
     const { Worker } = require('worker_threads');
     const path = require('path');
     
-    global.screenWorker = new Worker(
-      path.join(__dirname, 'workers/screen-intelligence-worker.cjs')
+    global.windowTracker = new Worker(
+      path.join(__dirname, 'workers/window-tracker-worker.cjs')
     );
     
-    global.screenWorkerReady = false;
-    global.screenWorkerCache = new Map();
+    global.windowTrackerReady = false;
     global.activeWindowId = null; // Track current active window
     
-    global.screenWorker.on('message', async (msg) => {
+    global.windowTracker.on('message', async (msg) => {
       if (msg.type === 'ready') {
-        global.screenWorkerReady = true;
-        console.log('✅ Virtual Screen DOM worker ready');
-      } else if (msg.type === 'requestAnalysis') {
-        // Worker is requesting analysis for a window
-        const { windowInfo } = msg;
-        const analysisMethod = windowInfo.method || 'auto';
-        console.log(`📡 [MAIN] Worker requesting analysis for: ${windowInfo.app} - ${windowInfo.title}`);
-        console.log(`🤖 [MAIN] Analysis method: ${analysisMethod}`);
-        if (windowInfo.url) {
-          console.log(`🌐 [MAIN] URL: ${windowInfo.url}`);
-        }
-        
-        try {
-          // 🔍 Send scanning indicator to overlay
-          try {
-            const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
-            sendActiveWindowUpdate({
-              windowName: windowInfo.title || windowInfo.app,
-              app: windowInfo.app,
-              url: windowInfo.url,
-              windowId: windowInfo.windowId,
-              scanning: true // Indicate analysis in progress
-            });
-            console.log('🔍 [MAIN] Sent scanning indicator to overlay');
-          } catch (error) {
-            console.warn('⚠️  [MAIN] Failed to send scanning indicator:', error.message);
-          }
-          
-          // Get MCP client from global (initialized in IPC handlers)
-          const mcpClient = global.mcpClient;
-          
-          if (!mcpClient) {
-            console.warn('⚠️  [MAIN] MCP client not available, cannot analyze');
-            return;
-          }
-          
-          // Call screen-intelligence service with method selection
-          // Use 'semantic' for DETR + CLIP + DuckDB indexing
-          const result = await mcpClient.callService('screen-intelligence', 'screen.analyze', {
-            query: `analyze ${windowInfo.title}`,
-            includeScreenshot: false,
-            method: analysisMethod // Pass method selection (auto/nutjs/ocr)
-          }, { timeout: 60000 });
-          
-          console.log(`✅ [MAIN] Analysis complete for ${windowInfo.windowId}`);
-          
-          // ✅ Send completion indicator to overlay
-          try {
-            const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
-            sendActiveWindowUpdate({
-              windowName: windowInfo.title || windowInfo.app,
-              app: windowInfo.app,
-              url: windowInfo.url,
-              windowId: windowInfo.windowId,
-              scanning: false // Analysis complete
-            });
-            console.log('✅ [MAIN] Sent completion indicator to overlay');
-          } catch (error) {
-            console.warn('⚠️  [MAIN] Failed to send completion indicator:', error.message);
-          }
-          
-          // Save full MCP response to temp file for debugging
-          const fs = require('fs');
-          const path = require('path');
-          const os = require('os');
-          const tempDir = path.join(os.tmpdir(), 'thinkdrop-screen-capture');
-          
-          if (!fs.existsSync(tempDir)) {
-            fs.mkdirSync(tempDir, { recursive: true });
-          }
-          
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const appName = windowInfo.app.replace(/[^a-zA-Z0-9]/g, '_');
-          const fileName = `screen-analysis-${appName}-${timestamp}.json`;
-          const tempFile = path.join(tempDir, fileName);
-          
-          
-          // Debug: Log full analysis data structure
-          const analysisData = result.data || result;
-          console.log('📊 [MAIN] Analysis data structure:', JSON.stringify({
-            hasData: !!analysisData,
-            dataKeys: analysisData ? Object.keys(analysisData) : [],
-            elementCount: analysisData?.elements?.length || 0,
-            windowCount: analysisData?.windows?.length || 0,
-            hasScreenshot: !!analysisData?.screenshot,
-            hasOCR: !!analysisData?.ocr,
-            hasAccessibility: !!analysisData?.accessibility
-          }, null, 2));
-
-          try {
-            fs.writeFileSync(tempFile, JSON.stringify(analysisData, null, 2), 'utf-8');
-            console.log(`💾 [MAIN] Saved MCP response to: ${tempFile}`);
-          } catch (error) {
-            console.warn('⚠️  [MAIN] Failed to save analysis to temp file:', error.message);
-          }
-          
-          // Send result back to worker
-          global.screenWorker.postMessage({
-            type: 'analysisResult',
-            windowInfo,
-            data: analysisData
-          });
-        } catch (error) {
-          console.error('❌ [MAIN] Analysis failed:', error);
-        }
-      } else if (msg.type === 'showToast') {
-        // Worker requesting toast display (debug mode only)
-        if (process.env.DEBUG_VIRTUAL_DOM_SCREEN === 'true') {
-          try {
-            const { showToast } = require('./windows/screen-intelligence-overlay.cjs');
-            showToast(msg.message, msg.toastType, msg.duration);
-            console.log(`🍞 [MAIN] Debug toast from worker: ${msg.message}`);
-          } catch (error) {
-            console.log(`🍞 [MAIN] Debug toast (no overlay): ${msg.message}`);
-          }
-        }
+        global.windowTrackerReady = true;
+        console.log('✅ Window Tracker worker ready');
       } else if (msg.type === 'showWindowChangeToast') {
         // Worker requesting window change toast
         try {
@@ -422,14 +307,6 @@ app.whenReady().then(async () => {
         global.activeWindowId = msg.windowId;
         console.log(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
         console.log(`   Previous: ${previousWindowId || 'none'}`);
-        console.log(`   Current cache has: ${Array.from(global.screenWorkerCache.keys()).join(', ') || 'empty'}`);
-        
-        // Check if we have cache for this window
-        const hasCache = global.screenWorkerCache.has(msg.windowId);
-        console.log(`   Cache exists for new window: ${hasCache}`);
-        if (!hasCache) {
-          console.log(`   ⚠️  WARNING: Active window changed but no cache yet - analysis may be pending`);
-        }
         
         // 👁️  Send active window update to overlay for AI viewing indicator
         try {
@@ -445,88 +322,30 @@ app.whenReady().then(async () => {
         } catch (error) {
           console.warn('⚠️  [MAIN] Failed to send active-window-update:', error.message);
         }
-      } else if (msg.type === 'cacheUpdate') {
-        // Worker has cached new data
-        global.screenWorkerCache.set(msg.windowId, {
-          data: msg.data,
-          timestamp: msg.timestamp
-        });
-        console.log(`✅ [MAIN] Cache updated for ${msg.windowId}`);
-        console.log(`   Is this the active window? ${global.activeWindowId === msg.windowId}`);
-        console.log(`   Active window ID: ${global.activeWindowId}`);
-        console.log(`   Total cached windows: ${global.screenWorkerCache.size}`);
-        
-        // Log normalized plain text for LLM consumption
-        if (msg.data?.plainTextClean) {
-          console.log(`🤖 [MAIN] Plain text ready for qwen2.5:3b LLM: ${msg.data.plainTextClean.length} chars`);
-          console.log(`📝 [MAIN] Plain text preview: "${msg.data.plainTextClean.substring(0, 200)}..."`);
-        } else if (msg.data?.plainText?.content) {
-          console.warn(`⚠️  [MAIN] plainText.content exists but plainTextClean missing - normalization may have failed`);
-        }
-        
-        // ⏸️  DISABLED: Predictive cache generation (phi4 performance issues)
-        // TODO: Re-enable when phi4 LLM is faster and returns valid JSON
-        // global.screenWorker.postMessage({
-        //   type: 'generatePredictiveCache',
-        //   windowId: msg.windowId,
-        //   data: msg.data
-        // });
-      } else if (msg.type === 'predictiveCacheRequest') {
-        // Worker requesting phi4 service call for predictive cache
-        (async () => {
-          try {
-            const mcpClient = global.mcpClient;
-            
-            if (!mcpClient) {
-              console.warn('⚠️  [MAIN] MCP client not available for predictive cache');
-              global.screenWorker.postMessage({
-                type: 'predictiveCacheResponse',
-                requestId: msg.requestId,
-                error: 'MCP client not available'
-              });
-              return;
-            }
-            
-            // Call phi4 service on behalf of worker
-            const result = await mcpClient.callService('phi4', msg.action, msg.payload);
-            
-            // Send result back to worker
-            global.screenWorker.postMessage({
-              type: 'predictiveCacheResponse',
-              requestId: msg.requestId,
-              result: result
-            });
-          } catch (error) {
-            console.error('❌ [MAIN] Predictive cache phi4 call failed:', error.message);
-            global.screenWorker.postMessage({
-              type: 'predictiveCacheResponse',
-              requestId: msg.requestId,
-              error: error.message
-            });
-          }
-        })();
       } else if (msg.type === 'error') {
-        console.error('❌ Screen worker error:', msg.error);
+        console.error('❌ [MAIN] Window Tracker error:', msg.error);
+      } else {
+        console.warn('⚠️  [MAIN] Unknown message type from window tracker:', msg.type);
       }
     });
     
-    global.screenWorker.on('error', (error) => {
-      console.error('❌ Screen worker thread error:', error);
-      global.screenWorkerReady = false;
+    global.windowTracker.on('error', (error) => {
+      console.error('❌ Window Tracker thread error:', error);
+      global.windowTrackerReady = false;
     });
     
-    global.screenWorker.on('exit', (code) => {
-      console.log(`⚠️  Screen worker exited with code ${code}`);
-      global.screenWorkerReady = false;
+    global.windowTracker.on('exit', (code) => {
+      console.log(`⚠️  Window Tracker exited with code ${code}`);
+      global.windowTrackerReady = false;
     });
     
     // Initialize the worker
-    global.screenWorker.postMessage({ type: 'init' });
+    global.windowTracker.postMessage({ type: 'init' });
     
-    console.log('✅ Virtual Screen DOM worker thread started');
+    console.log('✅ Window Tracker worker thread started');
   } catch (error) {
-    console.error('❌ Failed to start Virtual Screen DOM worker:', error);
-    console.log('⚠️  Continuing without screen caching');
+    console.error('❌ Failed to start Window Tracker worker:', error);
+    console.log('⚠️  Continuing without window tracking');
   }
   
   // Initialize Selection Detector for context-aware queries

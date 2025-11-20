@@ -26,6 +26,7 @@ if [ ! -f "$PIDS_FILE" ]; then
     pkill -f "coreference-service.*server.py" || true
     pkill -f "vision-service.*server.py" || true
     pkill -f "command-service.*http-server" || true
+    pkill -f "paddleocr-service.*server.py" || true
     pkill -f "screen-intelligence-service" || true
     
     # Also kill by port to catch orphaned processes
@@ -37,6 +38,7 @@ if [ ! -f "$PIDS_FILE" ]; then
     lsof -ti:3006 | xargs kill -9 2>/dev/null || true
     lsof -ti:3007 | xargs kill -9 2>/dev/null || true
     lsof -ti:3008 | xargs kill -9 2>/dev/null || true
+    lsof -ti:3009 | xargs kill -9 2>/dev/null || true
     
     echo "✅ Done"
     exit 0
@@ -78,6 +80,7 @@ lsof -ti:3005 | xargs kill -9 2>/dev/null || true
 lsof -ti:3006 | xargs kill -9 2>/dev/null || true
 lsof -ti:3007 | xargs kill -9 2>/dev/null || true
 lsof -ti:3008 | xargs kill -9 2>/dev/null || true
+lsof -ti:3009 | xargs kill -9 2>/dev/null || true
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

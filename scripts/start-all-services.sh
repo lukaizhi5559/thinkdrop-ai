@@ -79,7 +79,18 @@ start_python_service() {
     
     # Activate virtual environment and start service
     source venv/bin/activate
-    python server.py > "$PROJECT_ROOT/logs/$service_name.log" 2>&1 &
+    
+    # Check for server.py or src/server.py
+    if [ -f "server.py" ]; then
+        python server.py > "$PROJECT_ROOT/logs/$service_name.log" 2>&1 &
+    elif [ -f "src/server.py" ]; then
+        python src/server.py > "$PROJECT_ROOT/logs/$service_name.log" 2>&1 &
+    else
+        echo "   ❌ No server.py found"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
     local pid=$!
     
     echo "   PID: $pid"
@@ -149,7 +160,11 @@ echo ""
 cd "$PROJECT_ROOT"
 sleep 2
 
-# 8. Screen Intelligence Service (lightweight - UI automation)
+# 8. PaddleOCR Service (Python - fast OCR with bounding boxes)
+start_python_service "paddleocr" "$PROJECT_ROOT/mcp-services/paddleocr-service"
+sleep 2
+
+# 9. Screen Intelligence Service (lightweight - UI automation)
 start_service "screen-intelligence" "$PROJECT_ROOT/mcp-services/screen-intelligence-service" 256
 sleep 2
 
@@ -165,6 +180,7 @@ echo "   • Coreference:         http://localhost:3005/health"
 echo "   • Vision:              http://localhost:3006/health"
 echo "   • Command:             http://localhost:3007/health"
 echo "   • Screen Intelligence: http://localhost:3008/service.health"
+echo "   • PaddleOCR:           http://localhost:3009/health"
 echo ""
 echo "🔌 Available API Endpoints:"
 echo ""
@@ -227,6 +243,11 @@ echo "      • POST /screen.action         - Perform action (click/type)"
 echo "      • POST /screen.overlay        - Show overlay (highlight/toast)"
 echo "      • GET  /service.health        - Health check"
 echo ""
+echo "   🐼 PaddleOCR (Port 3009):"
+echo "      • POST /ocr.analyze           - Extract text with bounding boxes"
+echo "      • POST /ocr.batch             - Batch OCR processing"
+echo "      • GET  /health                - Health check"
+echo ""
 echo "📝 Logs:"
 echo "   • View all:                 tail -f logs/*.log"
 echo "   • View user-memory:         tail -f logs/user-memory.log"
@@ -236,6 +257,7 @@ echo "   • View conversation:        tail -f logs/conversation.log"
 echo "   • View coreference:         tail -f logs/coreference.log"
 echo "   • View vision:              tail -f logs/vision.log"
 echo "   • View command:             tail -f logs/command.log"
+echo "   • View paddleocr:           tail -f logs/paddleocr.log"
 echo "   • View screen-intelligence: tail -f logs/screen-intelligence.log"
 echo ""
 echo "🛑 To stop all services:"

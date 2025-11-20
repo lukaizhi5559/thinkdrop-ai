@@ -24,8 +24,6 @@ const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
 
 // Import node implementations
 const parseIntentNode = require('./nodes/parseIntent.cjs');
-const checkScreenCacheNode = require('./nodes/checkScreenCache.cjs'); // 🆕 NEW
-const checkCacheReadinessNode = require('./nodes/checkCacheReadiness.cjs'); // 🆕 Cache readiness check
 const retrieveMemoryNode = require('./nodes/retrieveMemory.cjs');
 const filterMemoryNode = require('./nodes/filterMemory.cjs');
 const resolveReferencesNode = require('./nodes/resolveReferences.cjs');
@@ -76,14 +74,8 @@ class AgentOrchestrator {
       // Early coreference resolution (before intent parsing)
       earlyResolveReferences: (state) => resolveReferencesNode({ ...state, mcpClient: this.mcpClient }),
       
-      // 🆕 Check screen cache with semantic search (before intent parsing)
-      checkScreenCache: (state) => checkScreenCacheNode({ ...state, mcpClient: this.mcpClient }),
-      
       // Router node
       parseIntent: (state) => parseIntentNode({ ...state, mcpClient: this.mcpClient }),
-      
-      // 🆕 Check cache readiness for screen intelligence (after intent parsing)
-      checkCacheReadiness: (state) => checkCacheReadinessNode({ ...state, mcpClient: this.mcpClient }),
       
       // Memory store subgraph
       storeMemory: (state) => storeMemoryNode({ ...state, mcpClient: this.mcpClient }),
@@ -230,18 +222,7 @@ class AgentOrchestrator {
     // Define edges with intent-based routing
     const edges = {
       start: 'earlyResolveReferences',
-      earlyResolveReferences: 'checkScreenCache',
-      
-      // 🆕 Smart routing from cache check
-      checkScreenCache: (state) => {
-        // If cache hit with high semantic similarity, skip to answer
-        if (state.skipToAnswer && state.screenContext) {
-          console.log(`⚡ [STATEGRAPH:CACHE_HIT] Using cached screen data (similarity: ${state.cacheHitSimilarity?.toFixed(3)}), skipping to answer`);
-          return 'answer';
-        }
-        // Otherwise, proceed to intent parsing
-        return 'parseIntent';
-      },
+      earlyResolveReferences: 'parseIntent',
       
       // Router: Route based on intent type
       parseIntent: (state) => {
@@ -261,8 +242,8 @@ class AgentOrchestrator {
           // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
           // Vision intent now routes to screen intelligence first, falls back to vision service if needed
           if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - checking cache readiness first');
-            return 'checkCacheReadiness';
+            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
+            return 'screenIntelligence';
           }
           
           // Commands: system commands (all sub-types)
@@ -286,8 +267,8 @@ class AgentOrchestrator {
         // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
         // Vision intent now routes to screen intelligence first, falls back to vision service if needed
         if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - checking cache readiness first');
-          return 'checkCacheReadiness';
+          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
+          return 'screenIntelligence';
         }
         
         // Commands: system commands (all sub-types - works in both online and private mode)
@@ -316,10 +297,7 @@ class AgentOrchestrator {
       // Memory store subgraph (direct to end, already has answer)
       storeMemory: 'end',
       
-      // Cache readiness check (before screen intelligence)
-      checkCacheReadiness: 'screenIntelligence', // Always proceed to screen intelligence after check
-      
-      // Screen intelligence subgraph (primary screen analysis)
+      // Screen intelligence subgraph (primary screen analysis - now uses fast DuckDB queries)
       screenIntelligence: (state) => {
         // If screen intelligence failed, fallback to vision service
         if (state.screenIntelligenceError) {
