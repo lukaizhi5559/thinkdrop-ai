@@ -87,16 +87,76 @@ class PromptedAnywhereService {
       // Get all sources (windows and screens)
       const sources = await desktopCapturer.getSources({
         types: ['window', 'screen'],
-        thumbnailSize: { width, height }
+        thumbnailSize: { width, height },
+        fetchWindowIcons: false // Faster capture
       });
 
       if (!sources || sources.length === 0) {
         throw new Error('No screen sources available');
       }
 
-      // Use the primary screen (first source)
-      const source = sources[0];
-      const screenshot = source.thumbnail;
+      // Debug: Log all available sources
+      console.log(`📸 [Prompted Anywhere] Available sources (${sources.length}):`);
+      sources.slice(0, 5).forEach((s, i) => {
+        console.log(`   ${i + 1}. ${s.name} (${s.id})`);
+      });
+
+      // Try to get the active window from window tracker
+      let targetSource = null;
+      
+      // Check if we have window tracker data
+      if (global.activeWindowData) {
+        const activeWindow = global.activeWindowData;
+        console.log(`📸 [Prompted Anywhere] Active window from tracker: ${activeWindow.app} - ${activeWindow.title || 'unknown'}`);
+        
+        // Try to find matching source by app name or title
+        if (activeWindow.app || activeWindow.title) {
+          targetSource = sources.find(s => {
+            const sourceName = s.name.toLowerCase();
+            const appName = (activeWindow.app || '').toLowerCase();
+            const title = (activeWindow.title || '').toLowerCase();
+            
+            // Match by app name (e.g., "Google Chrome")
+            if (appName && sourceName.includes(appName)) {
+              return true;
+            }
+            
+            // Match by title (e.g., "LinkedIn")
+            if (title && (sourceName.includes(title) || title.includes(sourceName))) {
+              return true;
+            }
+            
+            return false;
+          });
+          
+          if (targetSource) {
+            console.log(`📸 [Prompted Anywhere] Matched window: ${targetSource.name}`);
+          } else {
+            console.log(`📸 [Prompted Anywhere] No match found for: ${activeWindow.app} - ${activeWindow.title}`);
+          }
+        }
+      } else {
+        console.log(`📸 [Prompted Anywhere] No active window data available`);
+      }
+      
+      // Fallback: Filter out Electron windows and use first non-ThinkDrop window
+      if (!targetSource) {
+        const activeWindows = sources.filter(s => 
+          s.name !== 'Electron' && 
+          !s.name.includes('ThinkDrop') &&
+          s.id.startsWith('window:')
+        );
+        targetSource = activeWindows[0];
+      }
+      
+      // Final fallback: Use entire screen
+      if (!targetSource) {
+        targetSource = sources.find(s => s.id.startsWith('screen:')) || sources[0];
+      }
+      
+      console.log(`📸 [Prompted Anywhere] Capturing: ${targetSource.name} (${targetSource.id})`);
+      
+      const screenshot = targetSource.thumbnail;
 
       // Resize to reduce payload size (max 800px width)
       const targetWidth = 800;

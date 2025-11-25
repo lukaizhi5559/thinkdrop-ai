@@ -284,6 +284,7 @@ app.whenReady().then(async () => {
     
     global.windowTrackerReady = false;
     global.activeWindowId = null; // Track current active window
+    global.activeWindowData = null; // Track current active window data (title, app, url)
     
     global.windowTracker.on('message', async (msg) => {
       if (msg.type === 'ready') {
@@ -305,6 +306,12 @@ app.whenReady().then(async () => {
         // Worker notifying of active window change
         const previousWindowId = global.activeWindowId;
         global.activeWindowId = msg.windowId;
+        global.activeWindowData = {
+          title: msg.title,
+          app: msg.app,
+          url: msg.url,
+          windowId: msg.windowId
+        };
         console.log(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
         console.log(`   Previous: ${previousWindowId || 'none'}`);
         
@@ -435,9 +442,9 @@ app.whenReady().then(async () => {
     }
   });
   
-  // 🛑 Shift+Cmd+J to cancel running automation
-  globalShortcut.register('Shift+Cmd+J', async () => {
-    console.log('🛑 [Cancel Automation] Shift+Cmd+J triggered!');
+  // 🛑 Cancel running automation function (shared by multiple shortcuts)
+  const cancelAutomation = async (triggerKey) => {
+    console.log(`🛑 [Cancel Automation] ${triggerKey} triggered!`);
     
     try {
       const response = await mcpClient.callService(
@@ -455,7 +462,13 @@ app.whenReady().then(async () => {
     } catch (error) {
       console.error('❌ [Cancel Automation] Failed:', error.message);
     }
-  });
+  };
+    
+  // 🛑 Shift+Cmd+J to cancel running automation
+  globalShortcut.register('Shift+Cmd+J', () => cancelAutomation('Shift+Cmd+J'));
+  
+  // 🛑 ESC to cancel running automation (intuitive!)
+  globalShortcut.register('Escape', () => cancelAutomation('ESC'));
   
   // Screen Intelligence shortcuts
   globalShortcut.register('Cmd+Option+I', async () => {
