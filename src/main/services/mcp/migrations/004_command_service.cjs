@@ -24,6 +24,7 @@ const COMMAND_SERVICE = {
     'command.interpret',
     'command.automate',
     'command.prompt-anywhere',
+    'command.cancel-automation', // Cancel running automation
     'command.guide',
     'command.guide.execute',
     'system.query',

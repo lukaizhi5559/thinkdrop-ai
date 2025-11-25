@@ -44,7 +44,14 @@ function createAIViewingOverlay() {
       preload: path.join(__dirname, '../preload.cjs'),
       backgroundThrottling: false
     }
-  });
+  }); 
+
+  overlayWindow = null;
+
+  if (!overlayWindow) {
+    console.log('👁️  [OVERLAY] Window creation failed');
+    return null;
+  }
 
   // Make window click-through (overlay has pointer-events: none)
   overlayWindow.setIgnoreMouseEvents(true, { forward: true });
@@ -105,7 +112,7 @@ function getAIViewingOverlay() {
  */
 function showAIViewingOverlay() {
   if (!overlayWindow) {
-    createAIViewingOverlay();
+    // createAIViewingOverlay();
   } else if (!overlayWindow.isDestroyed()) {
     // Send message to renderer to show all UI elements
     overlayWindow.webContents.send('show-overlay-ui');
@@ -145,7 +152,7 @@ function showHotkeyToast(messageOrOptions, options = {}) {
 
   if (!overlayWindow) {
     console.log('🍞 [OVERLAY] Creating window first...');
-    createAIViewingOverlay();
+    // createAIViewingOverlay();
   }
 
   // Normalize to data object
@@ -161,12 +168,12 @@ function showHotkeyToast(messageOrOptions, options = {}) {
   }
 
   // Wait for window to be ready
-  if (overlayWindow.webContents.isLoading()) {
+  if (overlayWindow && overlayWindow.webContents.isLoading()) {
     overlayWindow.webContents.once('did-finish-load', () => {
       overlayWindow.webContents.send('show-hotkey-toast', data);
       console.log('🍞 [OVERLAY] Sent show-hotkey-toast (after load):', data);
     });
-  } else {
+  } else if (overlayWindow) {
     overlayWindow.webContents.send('show-hotkey-toast', data);
     console.log('🍞 [OVERLAY] Sent show-hotkey-toast:', data);
   }

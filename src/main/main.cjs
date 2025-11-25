@@ -234,13 +234,13 @@ app.whenReady().then(async () => {
     // Step 2: Setup IPC handlers AFTER services are ready
     console.log('🔧 Step 2: Setting up IPC handlers...');
 
-    createOverlayWindow();
+    // createOverlayWindow();
     // console.log('✅ Step 3: Overlay window created');
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
     console.log('👁️  Creating combined overlay...');
-    const { createAIViewingOverlay, hideAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
-    createAIViewingOverlay();
+    // const { createAIViewingOverlay, hideAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
+    // createAIViewingOverlay();
     console.log('✅ Combined overlay created');
     
   // Initialize core services including LocalLLMAgent
@@ -391,7 +391,7 @@ app.whenReady().then(async () => {
   if (ENABLE_OVERLAY) {
     globalShortcut.register('Cmd+Shift+Space', () => {
       toggleOverlay();
-      hideAIViewingOverlay();
+      // hideAIViewingOverlay();
     });
     console.log('✅ Overlay shortcut (Cmd+Shift+Space) registered');
   } else {
@@ -432,6 +432,28 @@ app.whenReady().then(async () => {
       await global.promptedAnywhereService.handlePromptAnywhere();
     } else {
       console.error('❌ [Prompted Anywhere] Service not initialized');
+    }
+  });
+  
+  // 🛑 Shift+Cmd+J to cancel running automation
+  globalShortcut.register('Shift+Cmd+J', async () => {
+    console.log('🛑 [Cancel Automation] Shift+Cmd+J triggered!');
+    
+    try {
+      const response = await mcpClient.callService(
+        'command',
+        'command.cancel-automation',
+        {},
+        { timeout: 5000 }
+      );
+      
+      if (response.success && response.cancelled) {
+        console.log('✅ [Cancel Automation] Automation cancelled successfully');
+      } else {
+        console.log('ℹ️  [Cancel Automation] No automation was running');
+      }
+    } catch (error) {
+      console.error('❌ [Cancel Automation] Failed:', error.message);
     }
   });
   
@@ -526,7 +548,7 @@ app.whenReady().then(async () => {
   
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createOverlayWindow();
+      // createOverlayWindow();
     } else if (overlayWindow) {
       overlayWindow.show();
       isOverlayVisible = true;
