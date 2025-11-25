@@ -23,6 +23,7 @@ const COMMAND_SERVICE = {
     'command.execute',
     'command.interpret',
     'command.automate',
+    'command.prompt-anywhere',
     'command.guide',
     'command.guide.execute',
     'system.query',

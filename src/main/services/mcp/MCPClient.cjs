@@ -79,7 +79,7 @@ class MCPClient {
         payload: payload
       };
 
-      console.log(`📦 MCP Request:`, JSON.stringify(mcpRequest, null, 2));
+      console.log(`📦 MCP Request:`, JSON.stringify(mcpRequest, null, 2).substring(0, 100));
 
       // 7. Make HTTP request with IPv4/IPv6 fallback
       let response;

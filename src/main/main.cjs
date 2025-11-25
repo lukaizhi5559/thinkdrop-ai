@@ -239,7 +239,7 @@ app.whenReady().then(async () => {
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
     console.log('👁️  Creating combined overlay...');
-    const { createAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
+    const { createAIViewingOverlay, hideAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
     createAIViewingOverlay();
     console.log('✅ Combined overlay created');
     
@@ -385,9 +385,18 @@ app.whenReady().then(async () => {
   console.log('✅ Guide Window initialized');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
-  globalShortcut.register('Cmd+Shift+Space', () => {
-    toggleOverlay();
-  });
+  // DISABLED: Overlay temporarily disabled in favor of "Prompted Anywhere" feature
+  // To re-enable: set ENABLE_OVERLAY=true in environment or uncomment below
+  const ENABLE_OVERLAY = process.env.ENABLE_OVERLAY === 'true';
+  if (ENABLE_OVERLAY) {
+    globalShortcut.register('Cmd+Shift+Space', () => {
+      toggleOverlay();
+      hideAIViewingOverlay();
+    });
+    console.log('✅ Overlay shortcut (Cmd+Shift+Space) registered');
+  } else {
+    console.log('⏭️  Overlay shortcut disabled (use ENABLE_OVERLAY=true to re-enable)');
+  }
   
   // 🎯 Cmd+Option+A to capture selection and show "Ask" interface
   globalShortcut.register('Cmd+Option+A', async () => {
@@ -412,6 +421,17 @@ app.whenReady().then(async () => {
     if (global.selectionDetector) {
       const testText = "This is a test selection for the floating ThinkDrop button!";
       await global.selectionDetector.showFloatingButtonWithEstimatedPosition(testText);
+    }
+  });
+  
+  // 🚀 Shift+Cmd+L for "Prompted Anywhere" - AI assistance in any app
+  globalShortcut.register('Shift+Cmd+L', async () => {
+    console.log('🚀 [Prompted Anywhere] Shift+Cmd+L triggered!');
+    
+    if (global.promptedAnywhereService) {
+      await global.promptedAnywhereService.handlePromptAnywhere();
+    } else {
+      console.error('❌ [Prompted Anywhere] Service not initialized');
     }
   });
   
@@ -808,6 +828,12 @@ async function setupIPCHandlers() {
     const MCPClient = require('./services/mcp/MCPClient.cjs');
     const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
     const mcpClient = new MCPClient(MCPConfigManager);
+    
+    // Initialize Prompted Anywhere service
+    console.log('🚀 Initializing Prompted Anywhere service...');
+    const { PromptedAnywhereService } = require('./services/promptedAnywhere.cjs');
+    global.promptedAnywhereService = new PromptedAnywhereService(mcpClient);
+    console.log('✅ Prompted Anywhere service initialized');
     
     // Initialize MCP handlers (microservices)
     console.log('🔧 Setting up MCP handlers...');

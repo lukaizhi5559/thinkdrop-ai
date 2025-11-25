@@ -25,6 +25,9 @@ export function OverlayToast() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
   const [toastPersistent, setToastPersistent] = useState(true);
+                                                                               
+  // Overlay visibility control (for screen capture)
+  const [overlayHidden, setOverlayHidden] = useState(false);
 
   useEffect(() => {
     console.log('🔧 [OVERLAY] Component mounted, setting up listeners...');
@@ -88,6 +91,19 @@ export function OverlayToast() {
     if (window.electronAPI?.receive) {
       window.electronAPI.receive('show-hotkey-toast', handleHotkeyToast);
       console.log('✅ [OVERLAY] Toast listener registered');
+      
+      // Listen for hide/show overlay UI commands (for screen capture)
+      window.electronAPI.receive('hide-overlay-ui', () => {
+        console.log('👻 [OVERLAY] Hiding UI for screen capture');
+        setOverlayHidden(true);
+      });
+      
+      window.electronAPI.receive('show-overlay-ui', () => {
+        console.log('👁️  [OVERLAY] Showing UI after screen capture');
+        setOverlayHidden(false);
+      });
+      
+      console.log('✅ [OVERLAY] Hide/show listeners registered');
     } else {
       console.error('❌ [OVERLAY] electronAPI.receive not available!');
     }
@@ -108,9 +124,16 @@ export function OverlayToast() {
   };
 
   return (
-    <div className="fixed toast bottom-5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col-reverse gap-3 items-center" style={{ pointerEvents: 'none' }}>
+    <div 
+      className="fixed toast bottom-5 left-1/2 -translate-x-1/2 z-[9999] flex flex-col-reverse gap-3 items-center transition-opacity duration-200" 
+      style={{ 
+        pointerEvents: 'none',
+        opacity: overlayHidden ? 0 : 1,
+        visibility: overlayHidden ? 'hidden' : 'visible'
+      }}
+    >
       {/* AI Viewing Indicator (persistent, at bottom) */}
-      {indicatorVisible && activeWindow && (
+      {!overlayHidden && indicatorVisible && activeWindow && (
         <div
           className="
             flex items-center gap-2 px-4 py-2 rounded-full
@@ -135,7 +158,7 @@ export function OverlayToast() {
       )}
       
       {/* Hotkey Toast (above indicator) */}
-      {toastVisible && toastMessage && (
+      {!overlayHidden && toastVisible && toastMessage && (
         <div
           className="
             flex items-center gap-3 px-6 py-4 rounded-xl border

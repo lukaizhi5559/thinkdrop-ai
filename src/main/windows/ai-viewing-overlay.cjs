@@ -106,8 +106,10 @@ function getAIViewingOverlay() {
 function showAIViewingOverlay() {
   if (!overlayWindow) {
     createAIViewingOverlay();
-  } else if (!overlayWindow.isVisible()) {
-    overlayWindow.showInactive();
+  } else if (!overlayWindow.isDestroyed()) {
+    // Send message to renderer to show all UI elements
+    overlayWindow.webContents.send('show-overlay-ui');
+    console.log('👁️  [OVERLAY] Sent show-overlay-ui to renderer');
   }
 }
 
@@ -115,8 +117,10 @@ function showAIViewingOverlay() {
  * Hide combined overlay
  */
 function hideAIViewingOverlay() {
-  if (overlayWindow && overlayWindow.isVisible()) {
-    overlayWindow.hide();
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    // Send message to renderer to hide all UI elements
+    overlayWindow.webContents.send('hide-overlay-ui');
+    console.log('👻 [OVERLAY] Sent hide-overlay-ui to renderer');
   }
 }
 

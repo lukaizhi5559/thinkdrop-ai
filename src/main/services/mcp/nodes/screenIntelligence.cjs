@@ -14,6 +14,7 @@
 
 const { showHighlights } = require('../../../windows/screen-intelligence-overlay.cjs');
 const { getGuideWindow } = require('../../../windows/guide-window.cjs');
+const { getAIViewingOverlay, hideAIViewingOverlay, showAIViewingOverlay } = require('../../../windows/ai-viewing-overlay.cjs');
 
 // Element color mapping by type
 const ELEMENT_COLORS = {
@@ -24,6 +25,46 @@ const ELEMENT_COLORS = {
   textarea: '#f59e0b',    // Orange - Text inputs
   default: '#6b7280'      // Gray - Other elements
 };
+
+/**
+ * Temporarily hide overlay during screen capture to avoid capturing overlay UI
+ * @param {Function} captureFunction - Async function that performs the capture
+ * @returns {Promise<any>} Result from captureFunction
+ */
+async function captureWithoutOverlay(captureFunction) {
+  const overlay = getAIViewingOverlay();
+  console.log('👻 [SCREEN_CAPTURE] Overlay check:', {
+    exists: !!overlay,
+    isVisible: overlay ? overlay.isVisible() : false,
+    isDestroyed: overlay ? overlay.isDestroyed() : false
+  });
+  
+  const wasVisible = overlay && !overlay.isDestroyed() && overlay.isVisible();
+  
+  try {
+    // Hide overlay if visible
+    if (wasVisible) {
+      console.log('👻 [SCREEN_CAPTURE] Hiding overlay for clean capture...');
+      hideAIViewingOverlay();
+      // Wait for overlay to fully hide (animation + render)
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log('👻 [SCREEN_CAPTURE] Overlay should be hidden now');
+    } else {
+      console.log('👻 [SCREEN_CAPTURE] Overlay not visible, proceeding with capture');
+    }
+    
+    // Perform capture
+    const result = await captureFunction();
+    
+    return result;
+  } finally {
+    // Always restore overlay if it was visible
+    if (wasVisible) {
+      console.log('👁️  [SCREEN_CAPTURE] Restoring overlay...');
+      showAIViewingOverlay();
+    }
+  }
+}
 
 /**
  * Calculate context relevance score to determine if conversation history is needed
@@ -244,12 +285,72 @@ module.exports = async function screenIntelligence(state) {
       
       const startTime = Date.now();
       
-      // Use fast semantic search from indexed DuckDB data (26-127ms)
-      // The ScreenWatcher continuously indexes screen data in the background
+      // Get current active window context
+      let currentApp = null;
+      let currentWindowTitle = null;
+      try {
+        const contextResult = await mcpClient.callService('screen-intelligence', 'screen.context', {}, { timeout: 2000 });
+        if (contextResult.data?.windows?.[0]) {
+          currentApp = contextResult.data.windows[0].appName;
+          currentWindowTitle = contextResult.data.windows[0].title;
+          console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Current context: ${currentApp} - ${currentWindowTitle?.substring(0, 50)}`);
+        }
+      } catch (contextError) {
+        console.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Could not get current context:', contextError.message);
+      }
+      
+      // FRESH CAPTURE: Trigger on-demand screen analysis for accurate results
+      console.log('📸 [NODE:SCREEN_INTELLIGENCE] Triggering fresh screen capture...');
+      
+      // Send progress update to user
+      if (state.onProgress) {
+        await state.onProgress('screenCapture', {
+          ...state,
+          progressMessage: '📸 Analyzing your screen...'
+        }, 0, 'in_progress');
+      }
+      
+      const captureStart = Date.now();
+      try {
+        console.log('🎬 [NODE:SCREEN_INTELLIGENCE] About to call captureWithoutOverlay...');
+        // Wrap capture in overlay hide/show logic
+        const captureResult = await captureWithoutOverlay(async () => {
+          return await mcpClient.callService('screen-intelligence', 'screen.analyze', {
+            query: message, // Required by /screen.analyze endpoint
+            method: 'semantic',
+            showOverlay: false,
+            includeScreenshot: false,
+            windowInfo: currentApp ? {
+              appName: currentApp,
+              title: currentWindowTitle
+            } : undefined
+          }, { timeout: 30000 });
+        });
+        
+        const captureTime = Date.now() - captureStart;
+        console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Fresh capture complete (${captureTime}ms)`);
+        
+        // Send completion update
+        if (state.onProgress) {
+          await state.onProgress('screenCapture', {
+            ...state,
+            progressMessage: `✅ Screen analyzed (${captureTime}ms)`
+          }, captureTime, 'completed');
+        }
+      } catch (captureError) {
+        console.error('❌ [NODE:SCREEN_INTELLIGENCE] Fresh capture failed:', captureError.message);
+        // Continue anyway - might have recent data in DB
+      }
+      
+      // Now search the freshly indexed data
       const result = await mcpClient.callService('screen-intelligence', 'element.search', {
         query: message,
-        k: 10, // Return top 10 most relevant elements
-        minScore: 0.3 // Minimum similarity score
+        k: 20, // Get more results to filter by app/window
+        minScore: 0.1, // LOWERED: Generic queries like "what do you see" need lower threshold
+        filters: {
+          app: currentApp, // Only return results from current app
+          recentOnly: true // Only search last 30 seconds of captures
+        }
       }, { timeout: 30000 }); // Increased timeout to 30s due to indexing backlog
       
       // Restore guide window if it was visible
@@ -264,6 +365,16 @@ module.exports = async function screenIntelligence(state) {
       // Extract semantic search results
       semanticResults = result.data?.results || result.results || [];
       console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
+      
+      // Log first 10 results with full details
+      console.log('\n🔍 [NODE:SCREEN_INTELLIGENCE] TOP 10 SEARCH RESULTS:');
+      semanticResults.slice(0, 10).forEach((r, i) => {
+        console.log(`\n${i + 1}. Score: ${r.score?.toFixed(3)} | App: ${r.app || 'N/A'} | Type: ${r.type}`);
+        console.log(`   Window: ${r.windowTitle?.substring(0, 60) || 'N/A'}`);
+        console.log(`   Timestamp: ${r.timestamp ? new Date(r.timestamp).toISOString() : 'N/A'}`);
+        console.log(`   Text: ${r.text?.substring(0, 100) || r.description?.substring(0, 100) || 'N/A'}...`);
+      });
+      console.log('\n');
       
       // Create minimal data structure for compatibility
       data = {

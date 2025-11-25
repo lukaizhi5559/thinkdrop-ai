@@ -42,6 +42,7 @@ module.exports = {
       'screen.highlight',
       'screen.toast',
       'screen.clearOverlay',
+      'screen.context',
       'element.search'
     ]);
     
@@ -69,6 +70,7 @@ module.exports = {
       'screen.highlight',
       'screen.toast',
       'screen.clearOverlay',
+      'screen.context',
       'element.search'
     ]);
     

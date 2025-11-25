@@ -128,7 +128,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
       throw new Error('MCP client not available');
     }
     
-    const result = await mcpClient.callService('command-service', 'command.automate', {
+    const result = await mcpClient.callService('command', 'command.automate', {
       command: query,
       context: enrichedContext
     });
@@ -390,27 +390,42 @@ module.exports = async function answer(state) {
     // 4. Special cases (command interpretation, meta-questions)
     // ═══════════════════════════════════════════════════════════
     
-    // Base instructions (always included)
-    let systemInstructions = `You are a helpful AI assistant. Answer concisely and directly.
+    // 🚀 ULTRA-LIGHTWEIGHT SYSTEM INSTRUCTIONS
+    // The LLM's ONLY job is to format the provided context into a natural response
+    // All the heavy lifting (semantic search, filtering, ranking) is done by other services
+    
+    let systemInstructions = `Format the provided information into a natural, helpful response.
 
-Guidelines:
-- The conversation history is in CHRONOLOGICAL ORDER (oldest messages first, newest messages last)
-- Read the ENTIRE conversation history carefully to understand the full context
-- Pay special attention to the MOST RECENT messages (at the end of the history)
-- If the user provides clarification or answers your question, it will be in the LAST user message
-- Be brief and to the point
-- Don't repeat information already discussed`;
-
-    // Add follow-up question handling (only if there's conversation history)
-    if (filteredHistory && filteredHistory.length > 0) {
-      systemInstructions += `
-
-CRITICAL CONTEXT AWARENESS:
-- If the user asks a FOLLOW-UP QUESTION (e.g., "give me examples", "tell me more", "what else"), you MUST read the conversation history to understand what topic they're referring to
-- Look at the PREVIOUS messages to identify the subject being discussed
-- For example: If the conversation was about "MCP" and the user says "give me examples", they want examples of MCP, NOT examples of the phrase "give me"
-- ALWAYS interpret vague requests in the context of the ongoing conversation topic`;
+Context provided:`;
+    
+    // List what context is available
+    const contextSources = [];
+    if (filteredMemories && filteredMemories.length > 0) {
+      contextSources.push(`- ${filteredMemories.length} user memories from past conversations`);
     }
+    if (contextDocs && contextDocs.length > 0) {
+      contextSources.push(`- ${contextDocs.length} web search results`);
+    }
+    if (state.screenContext) {
+      contextSources.push('- Screen content analysis');
+    }
+    if (filteredHistory && filteredHistory.length > 0) {
+      contextSources.push(`- ${filteredHistory.length} conversation messages`);
+    }
+    
+    if (contextSources.length > 0) {
+      systemInstructions += '\n' + contextSources.join('\n');
+    } else {
+      systemInstructions += '\n- No additional context';
+    }
+    
+    systemInstructions += `
+
+Rules:
+1. Describe what you see in the provided screen context
+2. Be specific and detailed about visible UI elements, text, and content
+3. For screen intelligence queries, ALWAYS provide a description even if similarity scores are low
+4. For follow-up questions, check conversation history for topic`;
 
     // ═══════════════════════════════════════════════════════════
     // MULTI-STEP ACTION DETECTION (HYBRID APPROACH)
@@ -448,129 +463,12 @@ CRITICAL CONTEXT AWARENESS:
     }
     
     // ═══════════════════════════════════════════════════════════
-    // INTENT-SPECIFIC INSTRUCTIONS
+    // SPECIAL CASES ONLY (keep minimal)
     // ═══════════════════════════════════════════════════════════
     
-    // Screen Intelligence Intent
-    if (state.intent?.type === 'screen_intelligence' && state.screenContext) {
-      systemInstructions += `
-
-SCREEN ANALYSIS MODE:
-You're analyzing the user's screen. Screen data shows: [Element Type]: [Text] [Screen Region]
-
-RULES:
-1. Answer from screen data FIRST (ignore web results if screen has the answer)
-2. Be specific - use exact text, prices, names from screen
-3. Check [Screen Region] tags for location queries
-4. For "draft response": Write the actual response (find sender name in OCR, address their points)
-5. For code editors: Describe code structure (functions, classes, variables)
-6. For terminals: Describe commands and output visible
-7. Don't say "I cannot see" - you ARE seeing it
-
-EXAMPLES:
-- "what do you see" → List actual items with details
-- Code editor → "I see a createWindow() function that creates a BrowserWindow with width 800px"
-- Terminal → "The console shows 'yarn dev' running with MCP requests returning 200 OK"`;
-    }
-    
-    // Web Search Intent
-    else if (contextDocs && contextDocs.length > 0) {
-      systemInstructions += `
-
-CRITICAL WEB SEARCH PROTOCOL:
-- Web search results are provided below - YOU MUST USE THEM to answer the question
-- DO NOT say "I don't have that information" when web results are provided
-- DO NOT say "Let me look that up" when web results are provided
-- Extract key facts from the web results and provide a direct, informative answer
-- The web results contain the answer - use them!`;
-    }
-    
-    // Memory Retrieval Intent
-    else if (filteredMemories && filteredMemories.length > 0) {
-      systemInstructions += `
-
-CRITICAL MEMORY PROTOCOL:
-- The "memories" section contains factual information from PREVIOUS conversations (possibly from days or weeks ago)
-- If the user asks about appointments, preferences, or past statements, USE THE MEMORIES to provide specific details
-- PRONOUN RESOLUTION: ALWAYS prioritize the MOST RECENT conversation history over old memories
-  * If the last few messages discuss a specific person, that person is the referent for pronouns
-  * Only use memories if there's NO relevant person mentioned in recent conversation history`;
-    }
-    
-    // Generic Question Intent (no special context)
-    else if (state.intent?.type === 'question') {
-      systemInstructions += `
-
-FACTUAL INFORMATION PROTOCOL:
-- If the user asks about FACTUAL INFORMATION about the world (e.g., "who is X", "what is Y", "when was X created"):
-  * Answer using your knowledge from training data
-  * Be direct and factual - provide the best answer you can from what you know
-  * If you truly don't know, say "I don't have reliable information about that"
-  * DO NOT say "I need to search online" - just answer from your knowledge
-- If the user asks about THEIR OWN preferences or past statements and you DON'T have it in memories:
-  * Respond: "I don't have that information stored yet."
-- If the user explicitly asks you to search online (e.g., "can you look online", "search for it"):
-  * Respond EXACTLY: "I'll search online for that information now." (this triggers a web search)`;
-    }
-
-    // Add command output interpretation instructions
+    // Command output interpretation (keep this - it's useful)
     if (needsInterpretation) {
-      systemInstructions += `\n\nCOMMAND OUTPUT INTERPRETATION:
-The user asked: "${queryMessage}"
-A shell command was executed: ${executedCommand}
-
-Your task is to provide a concise, confident, human-friendly answer based on the command output.
-
-CRITICAL RULES:
-- Answer in 1 sentence maximum
-- Be direct and confident - state the result clearly
-- DO NOT hedge with phrases like "likely", "probably", "seems to", "appears to", "not specific enough"
-- DO NOT explain what command was run or how it works
-- DO NOT describe the technical details
-- DO NOT ask clarifying questions - the command has already been executed
-- ONLY provide the direct answer to the user's question
-
-SPECIFIC PATTERNS:
-- For "how many apps open": If output is a number, respond: "You have [number] apps currently running."
-- For "what apps are open": List the application names clearly (one per line or comma-separated)
-- For system info (storage, memory, etc.): State the numbers in readable format (e.g., "You have 250 GB free")
-- For file operations: Confirm what was done (e.g., "File created successfully")
-- For empty output: Confirm the action completed successfully
-
-The command output will be provided below. Interpret it confidently and directly.`;
-    }
-
-    // Add meta-question handling (only if user is asking about their own previous messages)
-    if (queryMessage.toLowerCase().includes('what did i')) {
-      systemInstructions += `\n\nMETA-QUESTION PROTOCOL:\nThe user is asking what they previously said.
-The conversation history is in CHRONOLOGICAL ORDER (oldest → newest).
-STEP 1: Find the user message that has "[MOST RECENT USER MESSAGE]" at the very start.
-STEP 2: Extract ONLY the text AFTER "[MOST RECENT USER MESSAGE] " (note the space).
-STEP 3: Respond with EXACTLY: "You asked: [extracted text]"
-
-Example conversation history (chronological order):
-[
-  {"role": "user", "content": "[MOST RECENT USER MESSAGE] What do I like to eat"},  ← EXTRACT FROM THIS
-  {"role": "assistant", "content": "..."},
-  {"role": "user", "content": "what did I just say"}  ← CURRENT QUESTION (at the end)
-]
-Correct response: "You asked: What do I like to eat"
-
-DO NOT extract from the last user message (that's the current question). ONLY extract from the marked user message.`;
-    }
-
-    // Add web search context instructions
-    if (contextDocs.length > 0) {
-      systemInstructions += `\n\nWEB SEARCH RESULTS (${contextDocs.length} found):
-Use these current web results to answer. Extract key facts and answer directly.`;
-      
-      // List web result topics
-      const webTopics = contextDocs.slice(0, 3).map((doc, idx) => {
-        const preview = doc.text.substring(0, 80).replace(/\n/g, ' ');
-        return `${idx + 1}. ${preview}...`;
-      }).join('\n');
-      
-      systemInstructions += `\n${webTopics}`;
+      systemInstructions += `\n\nCommand output interpretation: Answer in 1 sentence based on the command output below.`;
     }
 
     // Mark most recent user message for meta-questions
@@ -630,6 +528,18 @@ Use these current web results to answer. Extract key facts and answer directly.`
       console.log('📋 [NODE:ANSWER] Added generic context to query');
     }
     
+    // 🚀 Determine if we should use fast mode
+    // Use fast mode for simple queries without much context
+    const hasMinimalContext = (filteredMemories?.length || 0) === 0 && 
+                               (contextDocs?.length || 0) === 0 && 
+                               (processedHistory?.length || 0) <= 2;
+    const isSimpleQuery = queryMessage.length < 100 && !needsInterpretation;
+    const useFastMode = hasMinimalContext && isSimpleQuery;
+    
+    if (useFastMode) {
+      console.log('⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query');
+    }
+    
     const payload = {
       query: needsInterpretation && processedOutput && processedOutput.trim().length > 0
         ? `Interpret this command output:\n\n${processedOutput.substring(0, 5000)}` // Truncate very long output
@@ -655,6 +565,13 @@ Use these current web results to answer. Extract key facts and answer directly.`
             outputLength: processedOutput?.length || 0
           }
         })
+      },
+      // 🚀 Add performance options
+      options: {
+        fastMode: useFastMode,           // Skip heavy system prompts in Phi4
+        maxTokens: useFastMode ? 30 : 100,  // Shorter for simple queries
+        temperature: 0.1,                // Deterministic
+        contextLength: 512               // Minimal context window
       }
     };
 
