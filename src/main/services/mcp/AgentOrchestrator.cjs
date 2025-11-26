@@ -230,7 +230,7 @@ class AgentOrchestrator {
         const intentType = state.intent?.type || 'general_query';
         const useOnlineMode = state.useOnlineMode || false;
         logger.debug(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
-        
+        console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
         // Memory store: save information
         if (intentType === 'memory_store' || intentType === 'store_memory' || intentType === 'remember') {
           return 'storeMemory';

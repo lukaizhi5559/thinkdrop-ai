@@ -368,6 +368,10 @@ module.exports = async function answer(state) {
   const llmMode = useOnlineMode ? 'ONLINE' : 'PRIVATE';
   logger.debug(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
   logger.debug(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
+  console.log(`📊 [NODE:ANSWER] History: ${conversationHistory} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
+  if (contextDocs && contextDocs.length > 0) {
+    console.log(`🌐 [NODE:ANSWER] Web search results:`, JSON.stringify(contextDocs.slice(0, 3), null, 2));
+  }
   
   // 🔧 Check if we need to interpret command output
   // Let phi4 handle all interpretation - no pre-processing needed
@@ -422,11 +426,30 @@ Context provided:`;
     
     systemInstructions += `
 
-Rules:
+Rules:`;
+    
+    // Intent-specific rules
+    if (intent?.type === 'web_search' || intent?.type === 'search' || intent?.type === 'lookup') {
+      systemInstructions += `
+1. Use the web search results provided to answer the question
+2. Cite specific information from the search results
+3. If multiple sources agree, mention that
+4. Be direct and factual`;
+    } else if (intent?.type === 'screen_intelligence' || intent?.type === 'vision') {
+      systemInstructions += `
 1. Describe what you see in the provided screen context
 2. Be specific and detailed about visible UI elements, text, and content
-3. For screen intelligence queries, ALWAYS provide a description even if similarity scores are low
+3. ALWAYS provide a description even if similarity scores are low
 4. For follow-up questions, check conversation history for topic`;
+    } else {
+      systemInstructions += `
+1. Use all provided context (memories, web results, conversation history)
+2. Be helpful and accurate
+3. If you don't have enough information, say so
+4. For follow-up questions, check conversation history for topic`;
+    }
+
+    console.log(`📋 [NODE:ANSWER] System instructions for intent '${intent?.type}':`, systemInstructions);
 
     // ═══════════════════════════════════════════════════════════
     // MULTI-STEP ACTION DETECTION (HYBRID APPROACH)
