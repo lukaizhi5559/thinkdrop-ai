@@ -7,7 +7,7 @@
   "homepage": "./",
   "scripts": {
     "dev": "./scripts/clean-wal.sh && concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
-    "dev:main": "nodemon --exec electron src/main/main.cjs",
+    "dev:main": "nodemon --exec \"electron --js-flags='--expose-gc' src/main/main.cjs\"",
     "dev:renderer": "vite",
     "demo": "node demo.js",
     "test-system": "node test-system.js",

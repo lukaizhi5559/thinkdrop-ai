@@ -23,6 +23,32 @@ class PromptedAnywhereService {
   constructor(mcpClient) {
     this.mcpClient = mcpClient;
     this.isProcessing = false;
+    this.lastTriggerTime = 0;
+    this.debounceMs = 500; // Prevent triggers within 500ms
+    this.captureCount = 0;
+    this.maxCapturesBeforeGC = 10; // Force GC every 10 captures
+    
+    // Memory monitoring
+    this.startMemoryMonitoring();
+  }
+
+  /**
+   * Monitor memory usage and log warnings
+   */
+  startMemoryMonitoring() {
+    setInterval(() => {
+      if (global.gc && this.captureCount > 0) {
+        const usage = process.memoryUsage();
+        const heapUsedMB = (usage.heapUsed / 1024 / 1024).toFixed(2);
+        const heapTotalMB = (usage.heapTotal / 1024 / 1024).toFixed(2);
+        
+        if (usage.heapUsed / usage.heapTotal > 0.9) {
+          console.warn(`⚠️  [Prompted Anywhere] High memory usage: ${heapUsedMB}MB / ${heapTotalMB}MB`);
+          console.log('🧹 [Prompted Anywhere] Forcing garbage collection...');
+          global.gc();
+        }
+      }
+    }, 30000); // Check every 30 seconds
   }
 
   /**
@@ -30,6 +56,14 @@ class PromptedAnywhereService {
    * Called when user presses Shift+Cmd+L
    */
   async handlePromptAnywhere() {
+    // Debounce: Prevent triggers too close together
+    const now = Date.now();
+    if (now - this.lastTriggerTime < this.debounceMs) {
+      console.log('⚠️  [Prompted Anywhere] Debounced - too soon after last trigger');
+      return;
+    }
+    this.lastTriggerTime = now;
+
     // Prevent multiple simultaneous triggers
     if (this.isProcessing) {
       console.log('⚠️  [Prompted Anywhere] Already processing, ignoring trigger');
@@ -37,13 +71,15 @@ class PromptedAnywhereService {
     }
 
     this.isProcessing = true;
+    let screenshot = null;
 
     try {
       console.log('🔥 [Prompted Anywhere] Triggered!');
 
       // Step 1: Capture screenshot
       console.log('📸 [Prompted Anywhere] Capturing screenshot...');
-      const screenshot = await this.captureScreen();
+      screenshot = await this.captureScreen();
+      this.captureCount++;
 
       // Step 2: Capture highlighted text
       console.log('📋 [Prompted Anywhere] Capturing highlighted text...');
@@ -59,6 +95,9 @@ class PromptedAnywhereService {
       console.log('🚀 [Prompted Anywhere] Sending to MCP service...');
       const result = await this.sendToMCPService(highlightedText, screenshot);
 
+      // Clear screenshot from memory immediately after sending
+      screenshot = null;
+
       if (result.success) {
         console.log('✅ [Prompted Anywhere] Completed successfully!');
         console.log(`   Provider: ${result.metadata?.provider}`);
@@ -68,10 +107,23 @@ class PromptedAnywhereService {
         console.error('❌ [Prompted Anywhere] Failed:', result.error);
       }
 
+      // Periodic garbage collection
+      if (this.captureCount >= this.maxCapturesBeforeGC) {
+        console.log('🧹 [Prompted Anywhere] Triggering garbage collection...');
+        this.captureCount = 0;
+        if (global.gc) {
+          global.gc();
+        }
+      }
+
     } catch (error) {
       console.error('❌ [Prompted Anywhere] Error:', error.message);
+      // Ensure screenshot is cleared on error
+      screenshot = null;
     } finally {
       this.isProcessing = false;
+      // Force cleanup
+      screenshot = null;
     }
   }
 
@@ -80,14 +132,25 @@ class PromptedAnywhereService {
    * @returns {Promise<string>} Base64 encoded PNG
    */
   async captureScreen() {
+    let sources = null;
+    let targetSource = null;
+    let screenshot = null;
+    let resized = null;
+    
     try {
       const primaryDisplay = screen.getPrimaryDisplay();
       const { width, height } = primaryDisplay.workAreaSize;
 
+      // Optimize: Use smaller thumbnail size to reduce memory allocation
+      // We'll resize to 800px anyway, so no need for full resolution
+      const maxThumbnailSize = 1200; // Reduced from full display size
+      const thumbnailWidth = Math.min(width, maxThumbnailSize);
+      const thumbnailHeight = Math.min(height, maxThumbnailSize);
+
       // Get all sources (windows and screens)
-      const sources = await desktopCapturer.getSources({
+      sources = await desktopCapturer.getSources({
         types: ['window', 'screen'],
-        thumbnailSize: { width, height },
+        thumbnailSize: { width: thumbnailWidth, height: thumbnailHeight },
         fetchWindowIcons: false // Faster capture
       });
 
@@ -102,7 +165,6 @@ class PromptedAnywhereService {
       });
 
       // Try to get the active window from window tracker
-      let targetSource = null;
       
       // Check if we have window tracker data
       if (global.activeWindowData) {
@@ -156,14 +218,15 @@ class PromptedAnywhereService {
       
       console.log(`📸 [Prompted Anywhere] Capturing: ${targetSource.name} (${targetSource.id})`);
       
-      const screenshot = targetSource.thumbnail;
+      screenshot = targetSource.thumbnail;
 
       // Resize to reduce payload size (max 800px width)
       const targetWidth = 800;
-      const scaleFactor = targetWidth / screenshot.getSize().width;
-      const targetHeight = Math.round(screenshot.getSize().height * scaleFactor);
+      const screenshotSize = screenshot.getSize();
+      const scaleFactor = targetWidth / screenshotSize.width;
+      const targetHeight = Math.round(screenshotSize.height * scaleFactor);
 
-      const resized = screenshot.resize({
+      resized = screenshot.resize({
         width: targetWidth,
         height: targetHeight
       });
@@ -173,10 +236,23 @@ class PromptedAnywhereService {
 
       console.log(`📸 [Prompted Anywhere] Screenshot captured: ${(base64.length / 1024).toFixed(2)} KB`);
 
+      // Explicit cleanup: Clear references to native image objects
+      screenshot = null;
+      resized = null;
+      sources = null;
+      targetSource = null;
+
       return base64;
 
     } catch (error) {
       console.error('❌ [Prompted Anywhere] Screenshot capture failed:', error);
+      
+      // Cleanup on error
+      screenshot = null;
+      resized = null;
+      sources = null;
+      targetSource = null;
+      
       throw error;
     }
   }

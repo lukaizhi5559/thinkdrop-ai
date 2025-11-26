@@ -234,8 +234,8 @@ app.whenReady().then(async () => {
     // Step 2: Setup IPC handlers AFTER services are ready
     console.log('🔧 Step 2: Setting up IPC handlers...');
 
-    // createOverlayWindow();
-    // console.log('✅ Step 3: Overlay window created');
+    createOverlayWindow();
+    console.log('✅ Step 3: Overlay window created');
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
     console.log('👁️  Creating combined overlay...');
@@ -561,7 +561,7 @@ app.whenReady().then(async () => {
   
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      // createOverlayWindow();
+      createOverlayWindow();
     } else if (overlayWindow) {
       overlayWindow.show();
       isOverlayVisible = true;
