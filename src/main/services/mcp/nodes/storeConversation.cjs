@@ -3,13 +3,14 @@
  * Stores the conversation exchange in memory for future context
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function storeConversation(state) {
   const { mcpClient, message, resolvedMessage, answer, context, intent } = state;
   
   // Use resolved message if available (after coreference resolution), otherwise original
   const userMessage = resolvedMessage || message;
 
-  console.log('💾 [NODE:STORE_CONVERSATION] Storing conversation exchange...');
+  logger.debug('💾 [NODE:STORE_CONVERSATION] Storing conversation exchange...');
 
   try {
     // Build storage text
@@ -17,7 +18,7 @@ module.exports = async function storeConversation(state) {
 
     // Start with entities from user's message (extracted during intent parsing)
     const userEntities = intent.entities || [];
-    console.log(`📋 [NODE:STORE_CONVERSATION] User message entities: ${userEntities.length}`, userEntities);
+    logger.debug(`📋 [NODE:STORE_CONVERSATION] User message entities: ${userEntities.length}`, userEntities);
 
     // Extract entities from AI response (contains rich information like names, dates, places)
     let responseEntities = [];
@@ -26,9 +27,9 @@ module.exports = async function storeConversation(state) {
         text: answer
       });
       responseEntities = extractResult.data?.entities || extractResult.entities || [];
-      console.log(`📋 [NODE:STORE_CONVERSATION] AI response entities: ${responseEntities.length}`, responseEntities);
+      logger.debug(`📋 [NODE:STORE_CONVERSATION] AI response entities: ${responseEntities.length}`, responseEntities);
     } catch (error) {
-      console.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to extract entities from response:', error.message);
+      logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to extract entities from response:', error.message);
     }
 
     // Combine entities from both user message and AI response
@@ -41,7 +42,7 @@ module.exports = async function storeConversation(state) {
       return true;
     });
     
-    console.log(`📋 [NODE:STORE_CONVERSATION] Total unique entities: ${entities.length}`, entities);
+    logger.debug(`📋 [NODE:STORE_CONVERSATION] Total unique entities: ${entities.length}`, entities);
 
     // Store in user-memory
     await mcpClient.callService('user-memory', 'memory.store', {
@@ -62,14 +63,14 @@ module.exports = async function storeConversation(state) {
       timestamp: new Date().toISOString()
     });
 
-    console.log('✅ [NODE:STORE_CONVERSATION] Conversation stored for future context');
+    logger.debug('✅ [NODE:STORE_CONVERSATION] Conversation stored for future context');
 
     return {
       ...state,
       conversationStored: true
     };
   } catch (error) {
-    console.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to store conversation:', error.message);
+    logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to store conversation:', error.message);
     // Don't fail the entire workflow if storage fails
     return {
       ...state,

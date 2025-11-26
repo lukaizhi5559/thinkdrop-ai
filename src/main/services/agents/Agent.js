@@ -3,6 +3,7 @@
  * Provides bootstrap, lifecycle management, and standardized execution interface
  */
 
+const logger = require('./../../logger.cjs');
 export class Agent {
   constructor(name, config = {}) {
     this.name = name;
@@ -23,7 +24,7 @@ export class Agent {
    */
   async bootstrap(globalConfig = {}, context = {}) {
     try {
-      console.log(`🚀 Bootstrapping agent: ${this.name}`);
+      logger.debug(`🚀 Bootstrapping agent: ${this.name}`);
       const startTime = Date.now();
       
       // Merge global config with agent-specific config
@@ -40,11 +41,11 @@ export class Agent {
       this.bootstrapTime = Date.now() - startTime;
       this.lastError = null;
       
-      console.log(`✅ Agent ${this.name} bootstrapped successfully in ${this.bootstrapTime}ms`);
+      logger.debug(`✅ Agent ${this.name} bootstrapped successfully in ${this.bootstrapTime}ms`);
       return true;
       
     } catch (error) {
-      console.error(`❌ Failed to bootstrap agent ${this.name}:`, error);
+      logger.error(`❌ Failed to bootstrap agent ${this.name}:`, error);
       this.lastError = error;
       this.available = false;
       return false;
@@ -72,7 +73,7 @@ export class Agent {
       }
 
       const { action } = params;
-      console.log(`🎯 Agent ${this.name} executing action: ${action}`);
+      logger.debug(`🎯 Agent ${this.name} executing action: ${action}`);
       
       // Delegate to action handler (implemented in subclasses)
       const result = await this.handleAction(params, context);
@@ -86,7 +87,7 @@ export class Agent {
       };
       
     } catch (error) {
-      console.error(`❌ Agent ${this.name} execution failed:`, error);
+      logger.error(`❌ Agent ${this.name} execution failed:`, error);
       return {
         success: false,
         agent: this.name,
@@ -123,7 +124,7 @@ export class Agent {
    */
   async initializeDependencies(config, context) {
     if (this.dependencies && this.dependencies.length > 0) {
-      console.log(`📦 Loading dependencies for ${this.name}:`, this.dependencies);
+      logger.debug(`📦 Loading dependencies for ${this.name}:`, this.dependencies);
       
       for (const dep of this.dependencies) {
         try {
@@ -136,7 +137,7 @@ export class Agent {
             require(dep);
           }
         } catch (error) {
-          console.warn(`⚠️ Failed to load dependency ${dep} for ${this.name}:`, error.message);
+          logger.warn(`⚠️ Failed to load dependency ${dep} for ${this.name}:`, error.message);
         }
       }
     }
@@ -175,7 +176,7 @@ export class Agent {
    * Cleanup agent resources
    */
   async cleanup() {
-    console.log(`🧹 Cleaning up agent: ${this.name}`);
+    logger.debug(`🧹 Cleaning up agent: ${this.name}`);
     this.initialized = false;
     this.available = false;
   }
@@ -187,7 +188,7 @@ export class Agent {
    * @returns {Promise<boolean>} - Success status
    */
   async retry(globalConfig, context) {
-    console.log(`🔄 Retrying bootstrap for agent: ${this.name}`);
+    logger.debug(`🔄 Retrying bootstrap for agent: ${this.name}`);
     this.lastError = null;
     return this.bootstrap(globalConfig, context);
   }

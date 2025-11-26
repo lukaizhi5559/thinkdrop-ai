@@ -16,13 +16,14 @@ const migration010 = require('./migrations/010_add_user_settings.cjs');
 const migration011 = require('./migrations/011_add_screen_intelligence_service.cjs');
 const migration012 = require('./migrations/012_add_insight_history.cjs');
 
+const logger = require('./../../logger.cjs');
 /**
  * Initialize MCP system
  * @param {object} database - DuckDB database connection
  * @returns {Promise<void>}
  */
 async function initializeMCP(database) {
-  console.log('🚀 Initializing MCP system...');
+  logger.debug('🚀 Initializing MCP system...');
 
   try {
     // 1. Initialize MCPConfigManager (creates tables)
@@ -36,20 +37,20 @@ async function initializeMCP(database) {
 
     // 4. Validate services
     const services = MCPConfigManager.getAllServices();
-    console.log(`✅ MCP initialized with ${services.length} services`);
+    logger.debug(`✅ MCP initialized with ${services.length} services`);
 
     // 4. Log service status
     services.forEach(service => {
-      console.log(`  📦 ${service.displayName} (${service.name})`);
-      console.log(`     Endpoint: ${service.endpoint}`);
-      console.log(`     Status: ${service.enabled ? '✅ Enabled' : '❌ Disabled'}`);
-      console.log(`     Trusted: ${service.trusted ? '✅ Yes' : '⚠️  No'}`);
-      console.log(`     Actions: ${service.actions.length}`);
+      logger.debug(`  📦 ${service.displayName} (${service.name})`);
+      logger.debug(`     Endpoint: ${service.endpoint}`);
+      logger.debug(`     Status: ${service.enabled ? '✅ Enabled' : '❌ Disabled'}`);
+      logger.debug(`     Trusted: ${service.trusted ? '✅ Yes' : '⚠️  No'}`);
+      logger.debug(`     Actions: ${service.actions.length}`);
     });
 
     return MCPConfigManager;
   } catch (error) {
-    console.error('❌ Failed to initialize MCP:', error);
+    logger.error('❌ Failed to initialize MCP:', error);
     throw error;
   }
 }
@@ -59,7 +60,7 @@ async function initializeMCP(database) {
  * @param {object} database - DuckDB database connection
  */
 async function runMigrations(database) {
-  console.log('🔄 Running database migrations...');
+  logger.debug('🔄 Running database migrations...');
 
   const migrations = [
     { name: '001_initial_services', module: migration001 },
@@ -77,15 +78,15 @@ async function runMigrations(database) {
 
   for (const migration of migrations) {
     try {
-      console.log(`  Running migration: ${migration.name}`);
+      logger.debug(`  Running migration: ${migration.name}`);
       await migration.module.migrate(database);
     } catch (error) {
-      console.error(`  ❌ Migration failed: ${migration.name}`, error);
+      logger.error(`  ❌ Migration failed: ${migration.name}`, error);
       throw error;
     }
   }
 
-  console.log('✅ All migrations completed');
+  logger.debug('✅ All migrations completed');
 }
 
 /**
@@ -93,7 +94,7 @@ async function runMigrations(database) {
  * @param {object} database - DuckDB database connection
  */
 async function rollbackMigrations(database) {
-  console.log('🔄 Rolling back migrations...');
+  logger.debug('🔄 Rolling back migrations...');
 
   const migrations = [
     { name: '001_initial_services', module: migration001 },
@@ -106,15 +107,15 @@ async function rollbackMigrations(database) {
   // Rollback in reverse order
   for (const migration of migrations.reverse()) {
     try {
-      console.log(`  Rolling back: ${migration.name}`);
+      logger.debug(`  Rolling back: ${migration.name}`);
       await migration.module.rollback(database);
     } catch (error) {
-      console.error(`  ❌ Rollback failed: ${migration.name}`, error);
+      logger.error(`  ❌ Rollback failed: ${migration.name}`, error);
       throw error;
     }
   }
 
-  console.log('✅ All migrations rolled back');
+  logger.debug('✅ All migrations rolled back');
 }
 
 module.exports = {

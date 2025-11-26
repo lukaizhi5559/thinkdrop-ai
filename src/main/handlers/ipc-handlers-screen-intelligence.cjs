@@ -5,6 +5,7 @@
  */
 
 const { ipcMain } = require('electron');
+const logger = require('./../logger.cjs');
 const {
   createScreenIntelligenceOverlay,
   showHighlights,
@@ -20,7 +21,7 @@ const {
  * Register all screen intelligence IPC handlers
  */
 function registerScreenIntelligenceHandlers() {
-  console.log('📡 Registering Screen Intelligence IPC handlers...');
+  logger.debug('📡 Registering Screen Intelligence IPC handlers...');
 
   // Initialize overlay window
   ipcMain.handle('screen-intelligence:init', async () => {
@@ -28,7 +29,7 @@ function registerScreenIntelligenceHandlers() {
       createScreenIntelligenceOverlay();
       return { success: true };
     } catch (error) {
-      console.error('Failed to initialize screen intelligence overlay:', error);
+      logger.error('Failed to initialize screen intelligence overlay:', error);
       return { success: false, error: error.message };
     }
   });
@@ -40,7 +41,7 @@ function registerScreenIntelligenceHandlers() {
       showHighlights(elements, duration);
       return { success: true };
     } catch (error) {
-      console.error('Failed to show highlights:', error);
+      logger.error('Failed to show highlights:', error);
       return { success: false, error: error.message };
     }
   });
@@ -57,7 +58,7 @@ function registerScreenIntelligenceHandlers() {
       }];
       showHighlights(elements, 5000); // Show for 5 seconds
     } catch (error) {
-      console.error('Failed to highlight element:', error);
+      logger.error('Failed to highlight element:', error);
     }
   });
 
@@ -68,7 +69,7 @@ function registerScreenIntelligenceHandlers() {
       showDiscoveryMode(elements);
       return { success: true };
     } catch (error) {
-      console.error('Failed to show discovery mode:', error);
+      logger.error('Failed to show discovery mode:', error);
       return { success: false, error: error.message };
     }
   });
@@ -80,7 +81,7 @@ function registerScreenIntelligenceHandlers() {
       showToast(message, type, duration);
       return { success: true };
     } catch (error) {
-      console.error('Failed to show toast:', error);
+      logger.error('Failed to show toast:', error);
       return { success: false, error: error.message };
     }
   });
@@ -91,7 +92,7 @@ function registerScreenIntelligenceHandlers() {
       showActionGuide(data);
       return { success: true };
     } catch (error) {
-      console.error('Failed to show action guide:', error);
+      logger.error('Failed to show action guide:', error);
       return { success: false, error: error.message };
     }
   });
@@ -102,7 +103,7 @@ function registerScreenIntelligenceHandlers() {
       clearOverlays();
       return { success: true };
     } catch (error) {
-      console.error('Failed to clear overlays:', error);
+      logger.error('Failed to clear overlays:', error);
       return { success: false, error: error.message };
     }
   });
@@ -113,7 +114,7 @@ function registerScreenIntelligenceHandlers() {
       hideOverlay();
       return { success: true };
     } catch (error) {
-      console.error('Failed to hide overlay:', error);
+      logger.error('Failed to hide overlay:', error);
       return { success: false, error: error.message };
     }
   });
@@ -128,7 +129,7 @@ function registerScreenIntelligenceHandlers() {
         isInitialized: window !== null
       };
     } catch (error) {
-      console.error('Failed to get overlay status:', error);
+      logger.error('Failed to get overlay status:', error);
       return { success: false, error: error.message };
     }
   });
@@ -139,16 +140,16 @@ function registerScreenIntelligenceHandlers() {
       const vdom = global.virtualScreenDOM;
       if (vdom && vdom.clearCache) {
         vdom.clearCache();
-        console.log('🔄 [SCREEN_INTELLIGENCE] Cache cleared - next query will trigger fresh analysis');
+        logger.debug('🔄 [SCREEN_INTELLIGENCE] Cache cleared - next query will trigger fresh analysis');
       }
       return { success: true };
     } catch (error) {
-      console.error('Failed to refresh screen intelligence:', error);
+      logger.error('Failed to refresh screen intelligence:', error);
       return { success: false, error: error.message };
     }
   });
 
-  console.log('✅ Screen Intelligence IPC handlers registered');
+  logger.debug('✅ Screen Intelligence IPC handlers registered');
 }
 
 module.exports = {

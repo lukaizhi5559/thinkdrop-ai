@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 
+const logger = require('./../../../logger.cjs');
 // Core services configuration (from original config.cjs)
 const CORE_SERVICES = [
   {
@@ -125,13 +126,13 @@ const CORE_SERVICES = [
  * Run migration
  */
 async function migrate(db) {
-  console.log('🔄 Running migration: 001_initial_services');
+  logger.debug('🔄 Running migration: 001_initial_services');
 
   // Check if services already exist
   const existingServices = await db.query('SELECT COUNT(*) as count FROM mcp_services');
   
   if (existingServices[0].count > 0) {
-    console.log('⚠️  Services already exist, updating API keys and actions from .env...');
+    logger.debug('⚠️  Services already exist, updating API keys and actions from .env...');
     
     // Update API keys and actions from environment variables
     for (const service of CORE_SERVICES) {
@@ -140,15 +141,15 @@ async function migrate(db) {
           `UPDATE mcp_services SET api_key = ?, actions = ? WHERE name = ?`,
           [service.apiKey, JSON.stringify(service.actions), service.name]
         );
-        console.log(`  ✅ Updated ${service.name}:`);
-        console.log(`     API key: ${service.apiKey.substring(0, 10)}...`);
-        console.log(`     Actions: ${service.actions.join(', ')}`);
+        logger.debug(`  ✅ Updated ${service.name}:`);
+        logger.debug(`     API key: ${service.apiKey.substring(0, 10)}...`);
+        logger.debug(`     Actions: ${service.actions.join(', ')}`);
       } catch (error) {
-        console.error(`  ❌ Failed to update ${service.name}:`, error.message);
+        logger.error(`  ❌ Failed to update ${service.name}:`, error.message);
       }
     }
     
-    console.log('✅ API keys and actions updated from .env');
+    logger.debug('✅ API keys and actions updated from .env');
     return;
   }
 
@@ -183,19 +184,19 @@ async function migrate(db) {
       'system' // created_by
     ];
     
-    console.log(`  Inserting ${service.name} with ${params.length} parameters`);
-    console.log(`  SQL placeholders: ${(sql.match(/\?/g) || []).length}`);
+    logger.debug(`  Inserting ${service.name} with ${params.length} parameters`);
+    logger.debug(`  SQL placeholders: ${(sql.match(/\?/g) || []).length}`);
     
     try {
       await db.run(sql, params);
     } catch (error) {
-      console.error(`  Failed to insert ${service.name}:`, error.message);
-      console.error(`  SQL:`, sql);
-      console.error(`  Params:`, params);
+      logger.error(`  Failed to insert ${service.name}:`, error.message);
+      logger.error(`  SQL:`, sql);
+      logger.error(`  Params:`, params);
       throw error;
     }
 
-    console.log(`  ✅ Inserted service: ${service.name}`);
+    logger.debug(`  ✅ Inserted service: ${service.name}`);
   }
 
   // Set up default service-to-service permissions
@@ -221,15 +222,15 @@ async function migrate(db) {
     }
   }
 
-  console.log('  ✅ Set up core service permissions');
-  console.log('✅ Migration complete: 001_initial_services');
+  logger.debug('  ✅ Set up core service permissions');
+  logger.debug('✅ Migration complete: 001_initial_services');
 }
 
 /**
  * Rollback migration
  */
 async function rollback(db) {
-  console.log('🔄 Rolling back migration: 001_initial_services');
+  logger.debug('🔄 Rolling back migration: 001_initial_services');
 
   // Delete core services
   await db.run(`DELETE FROM mcp_services WHERE created_by = 'system'`);
@@ -237,7 +238,7 @@ async function rollback(db) {
   // Delete permissions
   await db.run(`DELETE FROM service_permissions`);
 
-  console.log('✅ Rollback complete: 001_initial_services');
+  logger.debug('✅ Rollback complete: 001_initial_services');
 }
 
 /**

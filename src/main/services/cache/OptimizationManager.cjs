@@ -6,6 +6,7 @@
 const { modelCache } = require('./ModelCache.cjs');
 const { queryCache } = require('./QueryCache.cjs');
 
+const logger = require('./../../logger.cjs');
 class OptimizationManager {
   constructor() {
     this.initialized = false;
@@ -24,16 +25,16 @@ class OptimizationManager {
    */
   async initialize() {
     if (this.initialized) {
-      console.log('[OPT-MGR] Already initialized');
+      logger.debug('[OPT-MGR] Already initialized');
       return;
     }
 
-    console.log('🚀 [OPT-MGR] Initializing performance optimizations...');
+    logger.debug('🚀 [OPT-MGR] Initializing performance optimizations...');
     const startTime = Date.now();
 
     try {
       // Warm up critical models in background
-      console.log('[OPT-MGR] Starting model warmup...');
+      logger.debug('[OPT-MGR] Starting model warmup...');
       await this.warmupModels();
 
       // Initialize performance monitoring
@@ -43,10 +44,10 @@ class OptimizationManager {
       const initTime = Date.now() - startTime;
       this.performanceMetrics.modelInitTime = initTime;
       
-      console.log(`✅ [OPT-MGR] Optimization systems ready in ${initTime}ms`);
+      logger.debug(`✅ [OPT-MGR] Optimization systems ready in ${initTime}ms`);
       
     } catch (error) {
-      console.error('[OPT-MGR] Initialization failed:', error);
+      logger.error('[OPT-MGR] Initialization failed:', error);
       throw error;
     }
   }
@@ -58,13 +59,13 @@ class OptimizationManager {
     try {
       // Start warmup in background - don't block initialization
       modelCache.warmUpModels().catch(error => {
-        console.warn('[OPT-MGR] Model warmup failed (non-critical):', error.message);
+        logger.warn('[OPT-MGR] Model warmup failed (non-critical):', error.message);
       });
       
-      console.log('[OPT-MGR] Model warmup started in background');
+      logger.debug('[OPT-MGR] Model warmup started in background');
       
     } catch (error) {
-      console.warn('[OPT-MGR] Model warmup error (non-critical):', error.message);
+      logger.warn('[OPT-MGR] Model warmup error (non-critical):', error.message);
     }
   }
 
@@ -77,7 +78,7 @@ class OptimizationManager {
       this.logPerformanceMetrics();
     }, 30000);
 
-    console.log('[OPT-MGR] Performance monitoring started');
+    logger.debug('[OPT-MGR] Performance monitoring started');
   }
 
   /**
@@ -88,7 +89,7 @@ class OptimizationManager {
       const modelStats = modelCache.getStats();
       const cacheStats = queryCache.getStats();
       
-      console.log('📊 [PERFORMANCE-METRICS]', {
+      logger.debug('📊 [PERFORMANCE-METRICS]', {
         uptime: `${Math.round((Date.now() - this.startTime) / 1000)}s`,
         modelCache: {
           hitRate: `${(modelStats.hitRate * 100).toFixed(1)}%`,
@@ -101,7 +102,7 @@ class OptimizationManager {
       });
       
     } catch (error) {
-      console.warn('[OPT-MGR] Metrics logging error:', error.message);
+      logger.warn('[OPT-MGR] Metrics logging error:', error.message);
     }
   }
 
@@ -155,20 +156,20 @@ class OptimizationManager {
    * Clear all caches (for testing/debugging)
    */
   clearAllCaches() {
-    console.log('[OPT-MGR] Clearing all caches...');
+    logger.debug('[OPT-MGR] Clearing all caches...');
     modelCache.clearCache();
     queryCache.clearAll();
-    console.log('[OPT-MGR] All caches cleared');
+    logger.debug('[OPT-MGR] All caches cleared');
   }
 
   /**
    * Shutdown optimization systems
    */
   shutdown() {
-    console.log('[OPT-MGR] Shutting down optimization systems...');
+    logger.debug('[OPT-MGR] Shutting down optimization systems...');
     queryCache.destroy();
     this.initialized = false;
-    console.log('[OPT-MGR] Shutdown complete');
+    logger.debug('[OPT-MGR] Shutdown complete');
   }
 }
 

@@ -4,6 +4,7 @@
  */
 
 // Set environment variables to disable ONNX runtime
+const logger = require('./../../logger.cjs');
 process.env.ONNXJS_LOG_LEVEL = 'error';
 process.env.TRANSFORMERS_CACHE = './models';
 process.env.HF_HUB_DISABLE_TELEMETRY = '1';
@@ -34,10 +35,10 @@ async function configureTransformers() {
     transformers.env.allowRemoteModels = true;
     transformers.env.allowLocalModels = false;
     
-    console.log('✅ Transformers configured for WASM-only execution');
+    logger.debug('✅ Transformers configured for WASM-only execution');
     return transformers;
   } catch (error) {
-    console.error('❌ Failed to configure transformers:', error);
+    logger.error('❌ Failed to configure transformers:', error);
     throw error;
   }
 }

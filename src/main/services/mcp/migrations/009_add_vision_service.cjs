@@ -3,17 +3,18 @@
  * Adds the Python-based vision service with dual-mode support (Google Vision API + Qwen2-VL)
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '009_add_vision_service',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 009_add_vision_service');
+    logger.debug('🔄 Running migration: 009_add_vision_service');
     
     // Check if vision service already exists
     const existing = await db.query(`SELECT id FROM mcp_services WHERE name = 'vision'`);
     
     if (existing.length > 0) {
-      console.log('⚠️  Vision service already exists, updating API key and endpoint...');
+      logger.debug('⚠️  Vision service already exists, updating API key and endpoint...');
       
       // Update API key and endpoint from environment variables
       const apiKey = process.env.MCP_VISION_API_KEY || '';
@@ -24,10 +25,10 @@ module.exports = {
         [apiKey, endpoint, 'vision']
       );
       
-      console.log(`  ✅ Updated vision service:`);
-      console.log(`     Endpoint: ${endpoint}`);
-      console.log(`     API key: ${apiKey ? apiKey.substring(0, 10) + '...' : 'EMPTY'}`);
-      console.log('✅ Vision service updated');
+      logger.debug(`  ✅ Updated vision service:`);
+      logger.debug(`     Endpoint: ${endpoint}`);
+      logger.debug(`     API key: ${apiKey ? apiKey.substring(0, 10) + '...' : 'EMPTY'}`);
+      logger.debug('✅ Vision service updated');
       return;
     }
     
@@ -91,8 +92,8 @@ module.exports = {
       ]
     );
     
-    console.log('✅ Vision service added to database');
-    console.log('💡 Note: Set MCP_VISION_API_KEY in .env for API authentication');
-    console.log('💡 Privacy mode (local Qwen2-VL) works without Google API key');
+    logger.debug('✅ Vision service added to database');
+    logger.debug('💡 Note: Set MCP_VISION_API_KEY in .env for API authentication');
+    logger.debug('💡 Privacy mode (local Qwen2-VL) works without Google API key');
   }
 };

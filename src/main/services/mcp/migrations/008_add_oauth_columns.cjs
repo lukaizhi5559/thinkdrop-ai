@@ -7,11 +7,12 @@
  * - Auto-generated API keys
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '008_add_oauth_columns',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 008_add_oauth_columns');
+    logger.debug('🔄 Running migration: 008_add_oauth_columns');
     
     try {
       // Add OAuth token columns
@@ -53,19 +54,19 @@ module.exports = {
         ADD COLUMN IF NOT EXISTS api_key_service TEXT
       `);
       
-      console.log('✅ OAuth columns added successfully');
+      logger.debug('✅ OAuth columns added successfully');
       
     } catch (error) {
-      console.error('❌ Migration failed:', error);
+      logger.error('❌ Migration failed:', error);
       throw error;
     }
   },
   
   async down(db) {
-    console.log('🔄 Rolling back migration: 008_add_oauth_columns');
+    logger.debug('🔄 Rolling back migration: 008_add_oauth_columns');
     
     // Note: DuckDB doesn't support DROP COLUMN, so we'd need to recreate the table
     // For now, just log that rollback is not supported
-    console.log('⚠️  Rollback not supported for column additions in DuckDB');
+    logger.debug('⚠️  Rollback not supported for column additions in DuckDB');
   }
 };

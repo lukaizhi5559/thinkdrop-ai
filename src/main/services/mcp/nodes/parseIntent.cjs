@@ -3,6 +3,7 @@
  * Extracts intent and entities from user message via phi4 service
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function parseIntent(state) {
   const { mcpClient, message, resolvedMessage, context, conversationMessages } = state;
 
@@ -11,15 +12,15 @@ module.exports = async function parseIntent(state) {
   // Example: "summarize this bible chapter" → "summarize AI bible chapter" (wrong!)
   const messageToClassify = message;
   
-  console.log(' [NODE:PARSE_INTENT] Parsing intent...');
+  logger.debug(' [NODE:PARSE_INTENT] Parsing intent...');
   if (resolvedMessage && resolvedMessage !== message) {
-    console.log(`📝 [NODE:PARSE_INTENT] Coreference resolved: "${message}" → "${resolvedMessage}" (using original for intent)`);
+    logger.debug(`📝 [NODE:PARSE_INTENT] Coreference resolved: "${message}" → "${resolvedMessage}" (using original for intent)`);
   }
 
   // Check if highlighted text is present (from metadata)
   const hasHighlightedText = context?.metadata?.hasHighlightedText === true;
   if (hasHighlightedText) {
-    console.log('📎 [NODE:PARSE_INTENT] Highlighted text detected - will skip screen_intelligence classification');
+    logger.debug('📎 [NODE:PARSE_INTENT] Highlighted text detected - will skip screen_intelligence classification');
   }
 
   // Fetch recent conversation messages for context-aware intent classification
@@ -41,9 +42,9 @@ module.exports = async function parseIntent(state) {
       timestamp: msg.created_at || msg.timestamp
     }));
     
-    console.log(`📚 [NODE:PARSE_INTENT] Including ${recentMessages.length} recent messages for context`);
+    logger.debug(`📚 [NODE:PARSE_INTENT] Including ${recentMessages.length} recent messages for context`);
   } catch (error) {
-    console.warn('⚠️ [NODE:PARSE_INTENT] Failed to fetch conversation history:', error.message);
+    logger.warn('⚠️ [NODE:PARSE_INTENT] Failed to fetch conversation history:', error.message);
     // Continue without conversation history
   }
 
@@ -115,7 +116,7 @@ module.exports = async function parseIntent(state) {
             // Phrases like "anything else about this", "more about that", "details on this"
             const isFollowUpPhrase = /^(anything|something|what|more|tell me|show me|explain|details|info|information).*(about|on|for|regarding|concerning).*(this|that|the|it)/i.test(lowerMsg);
             if (isFollowUpPhrase) {
-              console.log(`🔗 [NODE:PARSE_INTENT] Detected follow-up with "this/that" reference after screen query: "${lowerMsg}"`);
+              logger.debug(`🔗 [NODE:PARSE_INTENT] Detected follow-up with "this/that" reference after screen query: "${lowerMsg}"`);
               isFollowUpScreenQuery = true;
             }
           }
@@ -127,7 +128,7 @@ module.exports = async function parseIntent(state) {
             const isMemoryRequest = /remember|memory|recall|stored|saved/i.test(lowerMsg);
             
             if (wordCount <= 10 && !isWebSearchRequest && !isMemoryRequest) {
-              console.log(`🔗 [NODE:PARSE_INTENT] Detected vague follow-up after screen query: "${lowerMsg}" (${wordCount} words)`);
+              logger.debug(`🔗 [NODE:PARSE_INTENT] Detected vague follow-up after screen query: "${lowerMsg}" (${wordCount} words)`);
               isFollowUpScreenQuery = true;
             }
           }
@@ -140,7 +141,7 @@ module.exports = async function parseIntent(state) {
     const isScreenAnalysisQuery = screenAnalysisPatterns.some(pattern => pattern.test(lowerMsg)) || isFollowUpScreenQuery;
     
     if (isScreenAnalysisQuery && !hasHighlightedText) {
-      console.log('🎯 [NODE:PARSE_INTENT] Pre-check: Detected screen analysis query, routing to screen_intelligence (vision fallback)');
+      logger.debug('🎯 [NODE:PARSE_INTENT] Pre-check: Detected screen analysis query, routing to screen_intelligence (vision fallback)');
       return {
         ...state,
         intent: {
@@ -160,7 +161,7 @@ module.exports = async function parseIntent(state) {
     // CRITICAL: Catch guide/tutorial requests BEFORE DistilBERT
     // Phrases like "show me how to", "teach me how to", "walk me through" are guide requests
     if (/^(show me how|teach me|walk me through|guide me|explain how|demonstrate how)\s+/i.test(lowerMsg)) {
-      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected guide/tutorial request, forcing command_guide intent');
+      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected guide/tutorial request, forcing command_guide intent');
       return {
         ...state,
         intent: {
@@ -176,7 +177,7 @@ module.exports = async function parseIntent(state) {
     // These contain "search" keywords that confuse the classifier
     // Match: "goto", "go to", "go online", "navigate to", etc.
     if (/^(goto|go\s+(to|online|on)|navigate to|visit|browse to|head to|open up)\s+/i.test(lowerMsg)) {
-      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command intent');
+      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command intent');
       return {
         ...state,
         intent: {
@@ -189,7 +190,7 @@ module.exports = async function parseIntent(state) {
     }
     
     if (!isQuestion && !isStatement && /^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
-      console.log('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command intent');
+      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command intent');
       return {
         ...state,
         intent: {
@@ -215,7 +216,7 @@ module.exports = async function parseIntent(state) {
       const wordCount = messageToClassify.split(/\s+/).length;
       if (wordCount <= 3 && lastUserMsg && lastAiMsg) {
         enhancedMessage = `[Previous question: "${lastUserMsg.content}"] [AI response: "${lastAiMsg.content.substring(0, 100)}..."] [Current: "${messageToClassify}"]`;
-        console.log(`🔗 [NODE:PARSE_INTENT] Enhanced short message (${wordCount} words) with context for better classification`);
+        logger.debug(`🔗 [NODE:PARSE_INTENT] Enhanced short message (${wordCount} words) with context for better classification`);
       }
     }
     
@@ -441,7 +442,7 @@ module.exports = async function parseIntent(state) {
       const isLikelyCommand = commandPatterns.some(pattern => pattern.test(lowerMessage));
       
       if (isLikelyCommand) {
-        console.log(`🔄 [NODE:PARSE_INTENT] Smart fallback: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "command" (system query detected)`);
+        logger.debug(`🔄 [NODE:PARSE_INTENT] Smart fallback: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "command" (system query detected)`);
         finalIntent = 'command';
         finalConfidence = 0.75; // Boost confidence for command
       }
@@ -482,8 +483,8 @@ module.exports = async function parseIntent(state) {
         
         // If less than 30% of query words match recent conversation, likely referring to screen
         if (matchRatio < 0.3 && queryWords.length >= 2) {
-          console.log(`🎯 [NODE:PARSE_INTENT] Semantic mismatch detected: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "screen_intelligence"`);
-          console.log(`   📊 Query words: [${queryWords.join(', ')}] | Match ratio: ${(matchRatio * 100).toFixed(0)}% | Recent context: [${recentUserMessages.join(' | ')}]`);
+          logger.debug(`🎯 [NODE:PARSE_INTENT] Semantic mismatch detected: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "screen_intelligence"`);
+          logger.debug(`   📊 Query words: [${queryWords.join(', ')}] | Match ratio: ${(matchRatio * 100).toFixed(0)}% | Recent context: [${recentUserMessages.join(' | ')}]`);
           finalIntent = 'screen_intelligence';
           finalConfidence = 0.85;
         }
@@ -501,7 +502,7 @@ module.exports = async function parseIntent(state) {
       }
     };
   } catch (error) {
-    console.error(' [NODE:PARSE_INTENT] Failed:', error.message);
+    logger.error(' [NODE:PARSE_INTENT] Failed:', error.message);
     throw error;
   }
 };

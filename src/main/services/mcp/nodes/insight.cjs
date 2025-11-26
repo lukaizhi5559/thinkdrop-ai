@@ -7,10 +7,11 @@
  * 2. Highlight Insight - Focused insights for user-selected text
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function insight(state) {
   const { mcpClient, message, ocrText, windowTitle, selectedText, insightType = 'page' } = state;
 
-  console.log(`💡 [NODE:INSIGHT] Generating ${insightType} insight...`);
+  logger.debug(`💡 [NODE:INSIGHT] Generating ${insightType} insight...`);
 
   try {
     // Check cache first
@@ -23,7 +24,7 @@ module.exports = async function insight(state) {
     
     if (cached && Date.now() - cached.timestamp < cacheTTL) {
       const age = Math.round((Date.now() - cached.timestamp) / 1000);
-      console.log(`⚡ [NODE:INSIGHT] Using cached insight (${age}s old)`);
+      logger.debug(`⚡ [NODE:INSIGHT] Using cached insight (${age}s old)`);
       return {
         ...state,
         insights: cached.data
@@ -44,7 +45,7 @@ module.exports = async function insight(state) {
       searchQuery = constructPageQuery(windowTitle, [], contextText);
     }
 
-    console.log(`🔍 [NODE:INSIGHT] Search query: "${searchQuery}"`);
+    logger.debug(`🔍 [NODE:INSIGHT] Search query: "${searchQuery}"`);
 
     // Perform web search and YouTube search in parallel with graceful failure handling
     let searchResults = [];
@@ -62,25 +63,25 @@ module.exports = async function insight(state) {
       if (webResult.status === 'fulfilled') {
         const searchData = webResult.value.data || webResult.value;
         searchResults = searchData.results || [];
-        console.log(`✅ [NODE:INSIGHT] Found ${searchResults.length} web results`);
+        logger.debug(`✅ [NODE:INSIGHT] Found ${searchResults.length} web results`);
       } else {
-        console.warn(`⚠️  [NODE:INSIGHT] Web search failed: ${webResult.reason?.message || webResult.reason}`);
+        logger.warn(`⚠️  [NODE:INSIGHT] Web search failed: ${webResult.reason?.message || webResult.reason}`);
       }
       
       if (videoResult.status === 'fulfilled') {
         videoLinks = videoResult.value || [];
-        console.log(`✅ [NODE:INSIGHT] Found ${videoLinks.length} video results`);
+        logger.debug(`✅ [NODE:INSIGHT] Found ${videoLinks.length} video results`);
       } else {
-        console.warn(`⚠️  [NODE:INSIGHT] YouTube search failed: ${videoResult.reason?.message || videoResult.reason}`);
+        logger.warn(`⚠️  [NODE:INSIGHT] YouTube search failed: ${videoResult.reason?.message || videoResult.reason}`);
       }
     } catch (error) {
-      console.warn(`⚠️  [NODE:INSIGHT] Search failed: ${error.message}`);
-      console.log(`⏭️  [NODE:INSIGHT] Continuing without search results (graceful degradation)`);
+      logger.warn(`⚠️  [NODE:INSIGHT] Search failed: ${error.message}`);
+      logger.debug(`⏭️  [NODE:INSIGHT] Continuing without search results (graceful degradation)`);
     }
 
     // If no search results, return null insights (graceful degradation)
     if (searchResults.length === 0) {
-      console.log(`⏭️  [NODE:INSIGHT] No search results available, returning null insights`);
+      logger.debug(`⏭️  [NODE:INSIGHT] No search results available, returning null insights`);
       return {
         ...state,
         insights: null
@@ -124,7 +125,7 @@ module.exports = async function insight(state) {
     try {
       await saveInsightToDatabase(state, insights);
     } catch (dbError) {
-      console.warn(`⚠️  [NODE:INSIGHT] Failed to save to database: ${dbError.message}`);
+      logger.warn(`⚠️  [NODE:INSIGHT] Failed to save to database: ${dbError.message}`);
     }
 
     return {
@@ -133,7 +134,7 @@ module.exports = async function insight(state) {
     };
 
   } catch (error) {
-    console.error('❌ [NODE:INSIGHT] Error:', error.message);
+    logger.error('❌ [NODE:INSIGHT] Error:', error.message);
     return {
       ...state,
       insights: null,
@@ -163,11 +164,11 @@ async function extractKeyEntities(mcpClient, text, windowTitle) {
       .map(e => e.text)
       .slice(0, 5); // Top 5 entities
 
-    console.log(`🏷️ [NODE:INSIGHT] Extracted entities: ${keyEntities.join(', ')}`);
+    logger.debug(`🏷️ [NODE:INSIGHT] Extracted entities: ${keyEntities.join(', ')}`);
     
     return keyEntities;
   } catch (error) {
-    console.warn('⚠️ [NODE:INSIGHT] Entity extraction failed:', error.message);
+    logger.warn('⚠️ [NODE:INSIGHT] Entity extraction failed:', error.message);
     // Fallback: extract capitalized words from window title
     return windowTitle
       .split(/\s+/)
@@ -196,7 +197,7 @@ async function extractConcepts(mcpClient, text) {
 function constructPageQuery(windowTitle, entities, ocrText = '') {
   // Check if there's a custom query from a follow-up question
   if (global.insightCustomQuery) {
-    console.log(`🎯 [NODE:INSIGHT] Using custom query: ${global.insightCustomQuery}`);
+    logger.debug(`🎯 [NODE:INSIGHT] Using custom query: ${global.insightCustomQuery}`);
     // Combine custom query with OCR context for better results
     const contextWords = ocrText
       .substring(0, 500)
@@ -238,7 +239,7 @@ function constructPageQuery(windowTitle, entities, ocrText = '') {
     // Build query from meaningful words
     const query = meaningfulWords.join(' ').substring(0, 400);
     
-    console.log(`🧹 [NODE:INSIGHT] Cleaned ${words.length} words → ${meaningfulWords.length} meaningful words`);
+    logger.debug(`🧹 [NODE:INSIGHT] Cleaned ${words.length} words → ${meaningfulWords.length} meaningful words`);
     
     // If we have enough meaningful content, use it
     if (query.length >= 30 && meaningfulWords.length >= 5) {
@@ -331,7 +332,7 @@ function extractKeywordsFromText(text) {
     .filter((k, i, arr) => arr.indexOf(k) === i) // Remove duplicates
     .slice(0, 7);
   
-  console.log(`🔑 [NODE:INSIGHT] Extracted keywords: ${keywords.join(', ')}`);
+  logger.debug(`🔑 [NODE:INSIGHT] Extracted keywords: ${keywords.join(', ')}`);
   
   return keywords;
 }
@@ -388,7 +389,7 @@ function generateSummary(searchResults, contextText) {
  */
 async function searchYouTubeVideos(query) {
   try {
-    console.log(`🔍 [YOUTUBE] Searching for: "${query}"`);
+    logger.debug(`🔍 [YOUTUBE] Searching for: "${query}"`);
     
     // Call backend YouTube API
     const response = await fetch(`${getBackendApiUrl()}/api/youtube?${new URLSearchParams({
@@ -411,7 +412,7 @@ async function searchYouTubeVideos(query) {
     const data = await response.json();
     const videos = data.videos || [];
     
-    console.log(`✅ [YOUTUBE] Found ${videos.length} videos`);
+    logger.debug(`✅ [YOUTUBE] Found ${videos.length} videos`);
     
     // Transform API response to expected format
     return videos.map(video => ({
@@ -426,7 +427,7 @@ async function searchYouTubeVideos(query) {
     }));
     
   } catch (error) {
-    console.warn(`⚠️  [YOUTUBE] Search failed: ${error.message}`);
+    logger.warn(`⚠️  [YOUTUBE] Search failed: ${error.message}`);
     
     // Fallback to YouTube search URL
     const searchQuery = encodeURIComponent(query);
@@ -509,7 +510,7 @@ async function saveInsightToDatabase(state, insights) {
     });
   });
   
-  console.log(`💾 [NODE:INSIGHT] Saved insight to database: ${id}`);
+  logger.debug(`💾 [NODE:INSIGHT] Saved insight to database: ${id}`);
 }
 
 /**

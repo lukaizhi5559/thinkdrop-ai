@@ -3,10 +3,11 @@
  * Checks for hallucinations and other quality issues
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function validateAnswer(state) {
   const { answer, filteredMemories = [], conversationHistory = [], intent } = state;
 
-  console.log('🔍 [NODE:VALIDATE_ANSWER] Validating answer quality...');
+  logger.debug('🔍 [NODE:VALIDATE_ANSWER] Validating answer quality...');
 
   const issues = [];
 
@@ -35,7 +36,7 @@ module.exports = async function validateAnswer(state) {
         message: `Answer contains unsupported negative statements: ${unsupportedNegatives.join(', ')}`,
         suggestion: 'Regenerate without making negative inferences'
       });
-      console.warn(`⚠️ [NODE:VALIDATE_ANSWER] Unsupported negatives detected: ${unsupportedNegatives.join(', ')}`);
+      logger.warn(`⚠️ [NODE:VALIDATE_ANSWER] Unsupported negatives detected: ${unsupportedNegatives.join(', ')}`);
     }
   }
 
@@ -47,7 +48,7 @@ module.exports = async function validateAnswer(state) {
       message: 'Answer is empty or too short',
       suggestion: 'Regenerate with more context'
     });
-    console.warn('⚠️ [NODE:VALIDATE_ANSWER] Answer is too short');
+    logger.warn('⚠️ [NODE:VALIDATE_ANSWER] Answer is too short');
   }
 
   // Check 3: Web search request detection
@@ -69,7 +70,7 @@ module.exports = async function validateAnswer(state) {
       message: 'LLM requested web search for factual information',
       suggestion: 'Perform web search and retry with results'
     });
-    console.log('🔍 [NODE:VALIDATE_ANSWER] LLM requested web search, will trigger webSearch node');
+    logger.debug('🔍 [NODE:VALIDATE_ANSWER] LLM requested web search, will trigger webSearch node');
   }
 
   // Check 4: Generic fallback responses (might indicate confusion)
@@ -87,7 +88,7 @@ module.exports = async function validateAnswer(state) {
       message: 'Answer is generic despite having relevant memories',
       suggestion: 'Consider using more specific context'
     });
-    console.warn('⚠️ [NODE:VALIDATE_ANSWER] Generic response despite available context');
+    logger.warn('⚠️ [NODE:VALIDATE_ANSWER] Generic response despite available context');
   }
 
   // Check 5: Fallback for general_knowledge intents with "I don't have that information"
@@ -97,7 +98,7 @@ module.exports = async function validateAnswer(state) {
   const noWebResults = !state.contextDocs || state.contextDocs.length === 0;
   
   if (isFactualQuery && saysNoInfo && noWebResults) {
-    console.log('🔍 [NODE:VALIDATE_ANSWER] Detected "I don\'t have that information" for general_knowledge query - triggering web search');
+    logger.debug('🔍 [NODE:VALIDATE_ANSWER] Detected "I don\'t have that information" for general_knowledge query - triggering web search');
     issues.push({
       type: 'needs_web_search',
       severity: 'high',
@@ -111,12 +112,12 @@ module.exports = async function validateAnswer(state) {
   const shouldPerformWebSearch = (needsWebSearch || (isFactualQuery && saysNoInfo)) && noWebResults;
 
   if (issues.length > 0) {
-    console.log(`⚠️ [NODE:VALIDATE_ANSWER] Found ${issues.length} issues (retry: ${needsRetry})`);
+    logger.debug(`⚠️ [NODE:VALIDATE_ANSWER] Found ${issues.length} issues (retry: ${needsRetry})`);
     issues.forEach(issue => {
-      console.log(`   - [${issue.severity.toUpperCase()}] ${issue.message}`);
+      logger.debug(`   - [${issue.severity.toUpperCase()}] ${issue.message}`);
     });
   } else {
-    console.log('✅ [NODE:VALIDATE_ANSWER] Answer quality looks good');
+    logger.debug('✅ [NODE:VALIDATE_ANSWER] Answer quality looks good');
   }
 
   // Increment retry count if we're going to retry OR perform web search

@@ -7,6 +7,7 @@
 
 const fetch = require('node-fetch');
 
+const logger = require('./../../logger.cjs');
 class MCPClient {
   constructor(configManager) {
     this.configManager = configManager;
@@ -26,7 +27,7 @@ class MCPClient {
     try {
       // 0. Wait for config manager to be initialized
       if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
-        console.log(`⏳ [MCP] Waiting for config manager initialization...`);
+        logger.debug(`⏳ [MCP] Waiting for config manager initialization...`);
         // Wait up to 5 seconds for initialization
         const maxWait = 5000;
         const checkInterval = 100;
@@ -40,7 +41,7 @@ class MCPClient {
         if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
           throw new Error(`Config manager not initialized after ${maxWait}ms`);
         }
-        console.log(`✅ [MCP] Config manager ready after ${waited}ms`);
+        logger.debug(`✅ [MCP] Config manager ready after ${waited}ms`);
       }
       
       // 1. Get service from registry
@@ -66,8 +67,8 @@ class MCPClient {
       // Keep dots in action name: memory.store -> /memory.store
       let url = `${service.endpoint}/${action}`;
 
-      console.log(`📡 MCP Call: ${serviceName}.${action} -> ${url}`);
-      console.log(`🔑 API Key: ${service.apiKey ? service.apiKey.substring(0, 10) + '...' : 'MISSING'}`);
+      logger.debug(`📡 MCP Call: ${serviceName}.${action} -> ${url}`);
+      logger.debug(`🔑 API Key: ${service.apiKey ? service.apiKey.substring(0, 10) + '...' : 'MISSING'}`);
 
       // 6. Build MCP protocol request
       const requestId = this.generateRequestId();
@@ -79,7 +80,7 @@ class MCPClient {
         payload: payload
       };
 
-      console.log(`📦 MCP Request:`, JSON.stringify(mcpRequest, null, 2).substring(0, 100));
+      logger.debug(`📦 MCP Request:`, JSON.stringify(mcpRequest, null, 2).substring(0, 100));
 
       // 7. Make HTTP request with IPv4/IPv6 fallback
       let response;
@@ -99,15 +100,15 @@ class MCPClient {
           body: JSON.stringify(mcpRequest),
           timeout: timeout
         });
-        console.log(`📥 Response status: ${response.status} ${response.statusText}`);
+        logger.debug(`📥 Response status: ${response.status} ${response.statusText}`);
       } catch (error) {
         lastError = error;
-        console.log(`⚠️ First attempt failed: ${error.message}`);
+        logger.debug(`⚠️ First attempt failed: ${error.message}`);
         
         // If it's a connection error and URL uses localhost, try IPv4 explicitly
         if (error.message.includes('ECONNREFUSED') && url.includes('localhost')) {
           const ipv4Url = url.replace('localhost', '127.0.0.1');
-          console.log(`🔄 Retrying with IPv4: ${ipv4Url}`);
+          logger.debug(`🔄 Retrying with IPv4: ${ipv4Url}`);
           
           try {
             response = await fetch(ipv4Url, {
@@ -121,13 +122,13 @@ class MCPClient {
               body: JSON.stringify(mcpRequest),
               timeout: timeout
             });
-            console.log(`✅ IPv4 retry succeeded: ${response.status} ${response.statusText}`);
+            logger.debug(`✅ IPv4 retry succeeded: ${response.status} ${response.statusText}`);
             
             // Update service endpoint to use IPv4 for future calls
             service.endpoint = service.endpoint.replace('localhost', '127.0.0.1');
-            console.log(`💾 Updated service endpoint to: ${service.endpoint}`);
+            logger.debug(`💾 Updated service endpoint to: ${service.endpoint}`);
           } catch (ipv4Error) {
-            console.log(`❌ IPv4 retry also failed: ${ipv4Error.message}`);
+            logger.debug(`❌ IPv4 retry also failed: ${ipv4Error.message}`);
             throw lastError; // Throw original error
           }
         } else {
@@ -148,7 +149,7 @@ class MCPClient {
       // 8. Log successful call
       await this.logServiceCall(serviceName, action, payload, true, duration, null);
 
-      console.log(`✅ MCP Success: ${serviceName}.${action} (${duration}ms)`);
+      logger.debug(`✅ MCP Success: ${serviceName}.${action} (${duration}ms)`);
 
       return result;
 
@@ -158,7 +159,7 @@ class MCPClient {
       // Log failed call
       await this.logServiceCall(serviceName, action, payload, false, duration, error.message);
 
-      console.error(`❌ MCP Error: ${serviceName}.${action} - ${error.message}`);
+      logger.error(`❌ MCP Error: ${serviceName}.${action} - ${error.message}`);
       
       throw error;
     }
@@ -225,7 +226,7 @@ class MCPClient {
         audit.trace_id
       ]);
     } catch (error) {
-      console.error('Failed to log service call:', error);
+      logger.error('Failed to log service call:', error);
       // Don't throw - logging failure shouldn't break the main flow
     }
   }
@@ -581,7 +582,7 @@ class MCPClient {
     try {
       // Wait for config manager initialization
       if (!this.configManager.isInitialized || !this.configManager.isInitialized()) {
-        console.log(`⏳ [MCP:STREAM] Waiting for config manager initialization...`);
+        logger.debug(`⏳ [MCP:STREAM] Waiting for config manager initialization...`);
         const maxWait = 5000;
         const checkInterval = 100;
         let waited = 0;
@@ -608,7 +609,7 @@ class MCPClient {
 
       // Build request URL
       let url = `${service.endpoint}/${action}`;
-      console.log(`🌊 [MCP:STREAM] Starting stream: ${serviceName}.${action} -> ${url}`);
+      logger.debug(`🌊 [MCP:STREAM] Starting stream: ${serviceName}.${action} -> ${url}`);
 
       // Build MCP protocol request
       const requestId = this.generateRequestId();
@@ -636,7 +637,7 @@ class MCPClient {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
-      console.log(`✅ [MCP:STREAM] Stream connected`);
+      logger.debug(`✅ [MCP:STREAM] Stream connected`);
 
       // Process SSE stream
       let fullAnswer = '';
@@ -657,7 +658,7 @@ class MCPClient {
                 const data = JSON.parse(line.slice(6));
                 
                 if (data.type === 'start') {
-                  console.log(`🌊 [MCP:STREAM] Stream started`);
+                  logger.debug(`🌊 [MCP:STREAM] Stream started`);
                   if (onProgress) onProgress({ type: 'start', timestamp: data.timestamp });
                 }
                 
@@ -669,7 +670,7 @@ class MCPClient {
                 }
                 
                 else if (data.type === 'done') {
-                  console.log(`✅ [MCP:STREAM] Stream complete (${tokenCount} tokens, ${Date.now() - startTime}ms)`);
+                  logger.debug(`✅ [MCP:STREAM] Stream complete (${tokenCount} tokens, ${Date.now() - startTime}ms)`);
                   if (onProgress) onProgress({ type: 'done', tokenCount, metrics: data.metrics });
                   
                   resolve({
@@ -686,11 +687,11 @@ class MCPClient {
                 }
                 
                 else if (data.type === 'error') {
-                  console.error(`❌ [MCP:STREAM] Stream error:`, data.error);
+                  logger.error(`❌ [MCP:STREAM] Stream error:`, data.error);
                   reject(new Error(data.error));
                 }
               } catch (err) {
-                console.warn(`⚠️ [MCP:STREAM] Failed to parse SSE line:`, line);
+                logger.warn(`⚠️ [MCP:STREAM] Failed to parse SSE line:`, line);
               }
             }
           }
@@ -699,7 +700,7 @@ class MCPClient {
         response.body.on('end', () => {
           // If we haven't received a 'done' event, resolve with what we have
           if (fullAnswer && tokenCount > 0) {
-            console.log(`⚠️ [MCP:STREAM] Stream ended without 'done' event, returning partial response`);
+            logger.debug(`⚠️ [MCP:STREAM] Stream ended without 'done' event, returning partial response`);
             resolve({
               success: true,
               data: {
@@ -712,13 +713,13 @@ class MCPClient {
         });
 
         response.body.on('error', (err) => {
-          console.error(`❌ [MCP:STREAM] Stream error:`, err);
+          logger.error(`❌ [MCP:STREAM] Stream error:`, err);
           reject(err);
         });
       });
 
     } catch (error) {
-      console.error(`❌ [MCP:STREAM] Failed:`, error.message);
+      logger.error(`❌ [MCP:STREAM] Failed:`, error.message);
       throw error;
     }
   }
@@ -779,13 +780,13 @@ class MCPClient {
         
         if (result.length > 0 && result[0].setting_value) {
           options.api_key = result[0].setting_value;
-          console.log('🔑 [MCP:VISION] Using Google Cloud API key from user settings');
+          logger.debug('🔑 [MCP:VISION] Using Google Cloud API key from user settings');
         } else {
-          console.log('⚠️  [MCP:VISION] No Google Cloud API key found - vision service will use .env settings');
-          console.log('ℹ️  [MCP:VISION] To set up: See mcp-services/vision-service/GOOGLE_CLOUD_SETUP.md');
+          logger.debug('⚠️  [MCP:VISION] No Google Cloud API key found - vision service will use .env settings');
+          logger.debug('ℹ️  [MCP:VISION] To set up: See mcp-services/vision-service/GOOGLE_CLOUD_SETUP.md');
         }
       } catch (error) {
-        console.error('❌ [MCP:VISION] Failed to retrieve Google Cloud API key:', error);
+        logger.error('❌ [MCP:VISION] Failed to retrieve Google Cloud API key:', error);
       }
     }
     

@@ -19,6 +19,7 @@ const { parentPort } = require('worker_threads');
 const VirtualScreenDOM = require('../services/virtualScreenDOM.cjs');
 const crypto = require('crypto');
 
+const logger = require('./../logger.cjs');
 // Initialize virtual DOM in worker thread
 let virtualDOM = null;
 let isInitialized = false;
@@ -29,7 +30,7 @@ let requestIdCounter = 0;
 
 // Callback to request analysis from main thread
 function requestAnalysis(windowInfo) {
-  console.log(`[WORKER] 📡 Requesting analysis for: ${windowInfo.app} - ${windowInfo.title}`);
+  logger.debug(`[WORKER] 📡 Requesting analysis for: ${windowInfo.app} - ${windowInfo.title}`);
   parentPort.postMessage({
     type: 'requestAnalysis',
     windowInfo
@@ -64,18 +65,18 @@ async function callPhi4Service(action, payload) {
 // Generate predictive cache in worker thread
 async function generatePredictiveCacheInWorker(screenData) {
   try {
-    console.log('[WORKER] 🔮 Starting predictive Q&A generation...');
+    logger.debug('[WORKER] 🔮 Starting predictive Q&A generation...');
     
     // Extract OCR text
     const fullTextElement = screenData.elements?.find(el => el.role === 'full_text_content');
     const ocrText = fullTextElement?.value || '';
     
     if (!ocrText || ocrText.length < 100) {
-      console.log('[WORKER] ⏭️  Insufficient text for prediction (need 100+ chars)');
+      logger.debug('[WORKER] ⏭️  Insufficient text for prediction (need 100+ chars)');
       return;
     }
     
-    console.log(`[WORKER] 📝 OCR text available: ${ocrText.length} chars`);
+    logger.debug(`[WORKER] 📝 OCR text available: ${ocrText.length} chars`);
     
     // Check if we already have predictions for this screen content
     const screenHash = crypto.createHash('md5').update(ocrText).digest('hex');
@@ -83,14 +84,14 @@ async function generatePredictiveCacheInWorker(screenData) {
     // Initialize global cache if needed
     if (!global.predictiveCache) {
       global.predictiveCache = new Map();
-      console.log('[WORKER] 🆕 Initialized global predictive cache');
+      logger.debug('[WORKER] 🆕 Initialized global predictive cache');
     }
     
     // Check for existing cache
     const existingCache = global.predictiveCache.get(screenHash);
     if (existingCache && Date.now() - existingCache.timestamp < 300000) {
       const age = Math.round((Date.now() - existingCache.timestamp) / 1000);
-      console.log(`[WORKER] ✅ Using existing predictions (${age}s old)`);
+      logger.debug(`[WORKER] ✅ Using existing predictions (${age}s old)`);
       return;
     }
     
@@ -125,7 +126,7 @@ Format:
   ]
 }`;
 
-    console.log('[WORKER] 🤖 Calling phi4 for prediction generation...');
+    logger.debug('[WORKER] 🤖 Calling phi4 for prediction generation...');
     
     // Call phi4 via main thread using general.answer
     const result = await callPhi4Service('general.answer', {
@@ -138,12 +139,12 @@ Format:
     });
     
     const generationTime = Date.now() - startTime;
-    console.log(`[WORKER] ⏱️  LLM generation complete (${generationTime}ms)`);
+    logger.debug(`[WORKER] ⏱️  LLM generation complete (${generationTime}ms)`);
     
     // Extract response from general.answer format
     const responseText = result.data?.answer || result.answer || '';
     
-    console.log('[WORKER] 📄 Raw LLM response length:', responseText.length);
+    logger.debug('[WORKER] 📄 Raw LLM response length:', responseText.length);
     
     // Parse JSON response
     let predictions;
@@ -154,15 +155,15 @@ Format:
         .trim();
       
       predictions = JSON.parse(cleanedResponse);
-      console.log('[WORKER] ✅ Successfully parsed predictions');
+      logger.debug('[WORKER] ✅ Successfully parsed predictions');
     } catch (parseError) {
-      console.error('[WORKER] ❌ Failed to parse JSON:', parseError.message);
+      logger.error('[WORKER] ❌ Failed to parse JSON:', parseError.message);
       return;
     }
     
     // Validate structure
     if (!predictions.predictedQuestions || !Array.isArray(predictions.predictedQuestions)) {
-      console.warn('[WORKER] ⚠️  Invalid predictions structure');
+      logger.warn('[WORKER] ⚠️  Invalid predictions structure');
       return;
     }
     
@@ -174,17 +175,17 @@ Format:
       ocrTextLength: ocrText.length
     });
     
-    console.log('[WORKER] ✅ Predictions cached successfully');
-    console.log(`[WORKER]    Main topic: "${predictions.mainTopic}"`);
-    console.log(`[WORKER]    Generated ${predictions.predictedQuestions.length} predicted Q&A pairs:`);
+    logger.debug('[WORKER] ✅ Predictions cached successfully');
+    logger.debug(`[WORKER]    Main topic: "${predictions.mainTopic}"`);
+    logger.debug(`[WORKER]    Generated ${predictions.predictedQuestions.length} predicted Q&A pairs:`);
     
     predictions.predictedQuestions.forEach((pred, idx) => {
-      console.log(`[WORKER]    ${idx + 1}. [${pred.category}] "${pred.question}"`);
-      console.log(`[WORKER]       Confidence: ${pred.confidence}, Related: ${pred.relatedToScreen}`);
+      logger.debug(`[WORKER]    ${idx + 1}. [${pred.category}] "${pred.question}"`);
+      logger.debug(`[WORKER]       Confidence: ${pred.confidence}, Related: ${pred.relatedToScreen}`);
     });
     
   } catch (error) {
-    console.error('[WORKER] ❌ Failed to generate predictions:', error.message);
+    logger.error('[WORKER] ❌ Failed to generate predictions:', error.message);
   }
 }
 
@@ -192,7 +193,7 @@ async function initialize() {
   if (isInitialized) return;
   
   try {
-    console.log('[WORKER] Initializing VirtualScreenDOM...');
+    logger.debug('[WORKER] Initializing VirtualScreenDOM...');
     
     // Pass callback to VirtualScreenDOM
     virtualDOM = new VirtualScreenDOM(requestAnalysis);
@@ -205,9 +206,9 @@ async function initialize() {
       timestamp: Date.now()
     });
     
-    console.log('[WORKER] VirtualScreenDOM initialized successfully');
+    logger.debug('[WORKER] VirtualScreenDOM initialized successfully');
   } catch (error) {
-    console.error('[WORKER] Failed to initialize VirtualScreenDOM:', error);
+    logger.error('[WORKER] Failed to initialize VirtualScreenDOM:', error);
     parentPort.postMessage({
       type: 'error',
       error: error.message
@@ -226,10 +227,10 @@ parentPort.on('message', async (msg) => {
       case 'analysisResult':
         // Main thread has completed analysis, cache it
         if (isInitialized && virtualDOM) {
-          console.log(`[WORKER] 📥 Received analysis result for ${msg.windowInfo.windowId}`);
+          logger.debug(`[WORKER] 📥 Received analysis result for ${msg.windowInfo.windowId}`);
           
           // Log the full analysis data structure for debugging
-          console.log('[WORKER] 📊 Full analysis data structure:', JSON.stringify({
+          logger.debug('[WORKER] 📊 Full analysis data structure:', JSON.stringify({
             windowInfo: msg.windowInfo,
             dataKeys: msg.data ? Object.keys(msg.data) : [],
             hasPlainText: !!msg.data?.plainText,
@@ -245,23 +246,23 @@ parentPort.on('message', async (msg) => {
           // Log a sample of the plain text content
           if (msg.data?.plainText?.content) {
             const sample = msg.data.plainText.content.substring(0, 500);
-            console.log('[WORKER] 📝 Plain text sample (first 500 chars):', sample);
+            logger.debug('[WORKER] 📝 Plain text sample (first 500 chars):', sample);
             if (msg.data.plainText.content.length > 500) {
-              console.log(`[WORKER] 📏 Full plain text length: ${msg.data.plainText.content.length} chars`);
+              logger.debug(`[WORKER] 📏 Full plain text length: ${msg.data.plainText.content.length} chars`);
             }
           }
           
           // Log structured data elements sample
           const elements = msg.data?.structuredData?.elements || msg.data?.elements;
           if (elements && elements.length > 0) {
-            console.log('[WORKER] 🏗️ Structured elements sample:', JSON.stringify(
+            logger.debug('[WORKER] 🏗️ Structured elements sample:', JSON.stringify(
               elements.slice(0, 3).map(el => ({
                 type: el.type,
                 text: el.text?.substring(0, 100),
                 position: el.position,
                 confidence: el.confidence
               })), null, 2));
-            console.log(`[WORKER] 📊 Total structured elements: ${elements.length}`);
+            logger.debug(`[WORKER] 📊 Total structured elements: ${elements.length}`);
           }
           
           virtualDOM.cacheAnalysisResult({
@@ -271,7 +272,7 @@ parentPort.on('message', async (msg) => {
           });
           
           // Note: cacheUpdate is sent by virtualDOM.cacheAnalysisResult() to avoid duplication
-          console.log(`✅ [WORKER] Analysis cached successfully for ${msg.windowInfo.windowId}`);
+          logger.debug(`✅ [WORKER] Analysis cached successfully for ${msg.windowInfo.windowId}`);
         }
         break;
         
@@ -312,7 +313,7 @@ parentPort.on('message', async (msg) => {
       case 'generatePredictiveCache':
         // Generate predictive cache for analyzed screen data
         if (isInitialized) {
-          console.log(`[WORKER] 🔮 Generating predictive cache for ${msg.windowId}...`);
+          logger.debug(`[WORKER] 🔮 Generating predictive cache for ${msg.windowId}...`);
           await generatePredictiveCacheInWorker(msg.data);
         }
         break;
@@ -340,10 +341,10 @@ parentPort.on('message', async (msg) => {
         break;
         
       default:
-        console.warn('[WORKER] Unknown message type:', msg.type);
+        logger.warn('[WORKER] Unknown message type:', msg.type);
     }
   } catch (error) {
-    console.error('[WORKER] Error handling message:', error);
+    logger.error('[WORKER] Error handling message:', error);
     parentPort.postMessage({
       type: 'error',
       requestId: msg.requestId,
@@ -357,7 +358,7 @@ parentPort.on('message', async (msg) => {
 
 // Handle worker errors
 process.on('uncaughtException', (error) => {
-  console.error('[WORKER] Uncaught exception:', error);
+  logger.error('[WORKER] Uncaught exception:', error);
   parentPort.postMessage({
     type: 'error',
     error: error.message
@@ -365,11 +366,11 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (error) => {
-  console.error('[WORKER] Unhandled rejection:', error);
+  logger.error('[WORKER] Unhandled rejection:', error);
   parentPort.postMessage({
     type: 'error',
     error: error.message
   });
 });
 
-console.log('[WORKER] Screen Intelligence Worker started');
+logger.debug('[WORKER] Screen Intelligence Worker started');

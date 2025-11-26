@@ -3,10 +3,11 @@
  * Fetches conversation history, session context, and long-term memories in parallel
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function retrieveMemory(state) {
   const { mcpClient, message, context, intent } = state;
 
-  console.log('🔍 [NODE:RETRIEVE_MEMORY] Fetching context (parallel)...');
+  logger.debug('🔍 [NODE:RETRIEVE_MEMORY] Fetching context (parallel)...');
 
   try {
     // Parallel fetch: conversation history, session context, and memories
@@ -19,7 +20,7 @@ module.exports = async function retrieveMemory(state) {
         minSimilarity: 0.3,
         includeRecent: 3 // Always include 3 most recent messages
       }).catch(err => {
-        console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Semantic search failed, falling back to chronological:', err.message);
+        logger.warn('⚠️ [NODE:RETRIEVE_MEMORY] Semantic search failed, falling back to chronological:', err.message);
         // Fallback to chronological if semantic search fails
         return mcpClient.callService('conversation', 'message.list', {
           sessionId: context.sessionId,
@@ -32,7 +33,7 @@ module.exports = async function retrieveMemory(state) {
       mcpClient.callService('conversation', 'context.get', {
         sessionId: context.sessionId
       }).catch(err => {
-        console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Session context fetch failed:', err.message);
+        logger.warn('⚠️ [NODE:RETRIEVE_MEMORY] Session context fetch failed:', err.message);
         return { facts: [], entities: [] };
       }),
 
@@ -45,7 +46,7 @@ module.exports = async function retrieveMemory(state) {
             userId: context.userId,
             minSimilarity: 0.35 // Lowered to capture appointment queries (38% similarity)
           }).catch(err => {
-            console.warn('⚠️ [NODE:RETRIEVE_MEMORY] Memory search failed:', err.message);
+            logger.warn('⚠️ [NODE:RETRIEVE_MEMORY] Memory search failed:', err.message);
             return { results: [] };
           })
         : Promise.resolve({ results: [] })
@@ -77,7 +78,7 @@ module.exports = async function retrieveMemory(state) {
       created_at: mem.created_at
     }));
 
-    console.log(`✅ [NODE:RETRIEVE_MEMORY] Loaded ${conversationHistory.length} messages, ${memories.length} memories`);
+    logger.debug(`✅ [NODE:RETRIEVE_MEMORY] Loaded ${conversationHistory.length} messages, ${memories.length} memories`);
 
     return {
       ...state,
@@ -88,7 +89,7 @@ module.exports = async function retrieveMemory(state) {
       rawMemoriesCount: memories.length
     };
   } catch (error) {
-    console.error('❌ [NODE:RETRIEVE_MEMORY] Failed:', error.message);
+    logger.error('❌ [NODE:RETRIEVE_MEMORY] Failed:', error.message);
     throw error;
   }
 };

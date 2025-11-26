@@ -1,6 +1,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 
+const logger = require('./../logger.cjs');
 let toastWindow = null;
 
 /**
@@ -8,11 +9,11 @@ let toastWindow = null;
  */
 function createHotkeyToastOverlay() {
   if (toastWindow) {
-    console.log('🍞 [HOTKEY TOAST] Window already exists');
+    logger.debug('🍞 [HOTKEY TOAST] Window already exists');
     return toastWindow;
   }
 
-  console.log('🍞 [HOTKEY TOAST] Creating overlay window...');
+  logger.debug('🍞 [HOTKEY TOAST] Creating overlay window...');
 
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
@@ -52,7 +53,7 @@ function createHotkeyToastOverlay() {
   toastWindow.webContents.on('ipc-message', (event, channel, isClickable) => {
     if (channel === 'overlay:set-clickable') {
       toastWindow.setIgnoreMouseEvents(!isClickable, { forward: true });
-      console.log('🍞 [HOTKEY TOAST] Clickable:', isClickable);
+      logger.debug('🍞 [HOTKEY TOAST] Clickable:', isClickable);
     }
   });
 
@@ -66,16 +67,16 @@ function createHotkeyToastOverlay() {
   // Show window (it's transparent, so only toast will be visible)
   toastWindow.once('ready-to-show', () => {
     toastWindow.showInactive();
-    console.log('🍞 [HOTKEY TOAST] Window ready and shown');
+    logger.debug('🍞 [HOTKEY TOAST] Window ready and shown');
   });
 
   // Handle window close
   toastWindow.on('closed', () => {
     toastWindow = null;
-    console.log('🍞 [HOTKEY TOAST] Window closed');
+    logger.debug('🍞 [HOTKEY TOAST] Window closed');
   });
 
-  console.log('🍞 [HOTKEY TOAST] Window created');
+  logger.debug('🍞 [HOTKEY TOAST] Window created');
   return toastWindow;
 }
 
@@ -85,10 +86,10 @@ function createHotkeyToastOverlay() {
  * @param {object} options - Optional settings (if messageOrOptions is a string)
  */
 function showHotkeyToast(messageOrOptions, options = {}) {
-  console.log('🍞 [HOTKEY TOAST] showHotkeyToast called:', messageOrOptions, options);
+  logger.debug('🍞 [HOTKEY TOAST] showHotkeyToast called:', messageOrOptions, options);
 
   if (!toastWindow) {
-    console.log('🍞 [HOTKEY TOAST] Creating window first...');
+    logger.debug('🍞 [HOTKEY TOAST] Creating window first...');
     createHotkeyToastOverlay();
   }
 
@@ -104,17 +105,17 @@ function showHotkeyToast(messageOrOptions, options = {}) {
     data = messageOrOptions;
   }
 
-  console.log('🍞 [HOTKEY TOAST] Sending data:', data);
+  logger.debug('🍞 [HOTKEY TOAST] Sending data:', data);
 
   // Wait for window to be ready
   if (toastWindow.webContents.isLoading()) {
-    console.log('🍞 [HOTKEY TOAST] Window loading, waiting...');
+    logger.debug('🍞 [HOTKEY TOAST] Window loading, waiting...');
     toastWindow.webContents.once('did-finish-load', () => {
-      console.log('🍞 [HOTKEY TOAST] Window loaded, sending message');
+      logger.debug('🍞 [HOTKEY TOAST] Window loaded, sending message');
       toastWindow.webContents.send('show-hotkey-toast', data);
     });
   } else {
-    console.log('🍞 [HOTKEY TOAST] Window ready, sending message');
+    logger.debug('🍞 [HOTKEY TOAST] Window ready, sending message');
     toastWindow.webContents.send('show-hotkey-toast', data);
   }
 }
@@ -126,7 +127,7 @@ function destroyHotkeyToast() {
   if (toastWindow) {
     toastWindow.destroy();
     toastWindow = null;
-    console.log('🍞 [HOTKEY TOAST] Window destroyed');
+    logger.debug('🍞 [HOTKEY TOAST] Window destroyed');
   }
 }
 

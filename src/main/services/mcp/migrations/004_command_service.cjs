@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 
+const logger = require('./../../../logger.cjs');
 const COMMAND_SERVICE = {
   name: 'command',
   displayName: 'Command Service',
@@ -41,13 +42,13 @@ const COMMAND_SERVICE = {
  * Run migration
  */
 async function migrate(db) {
-  console.log('🔄 Running migration: 004_command_service');
+  logger.debug('🔄 Running migration: 004_command_service');
 
   // Check if service already exists
   const existing = await db.query('SELECT COUNT(*) as count FROM mcp_services WHERE name = ?', ['command']);
   
   if (existing[0].count > 0) {
-    console.log('⚠️  Command service already exists, updating...');
+    logger.debug('⚠️  Command service already exists, updating...');
     
     try {
       await db.run(
@@ -65,15 +66,15 @@ async function migrate(db) {
           'command'
         ]
       );
-      console.log(`  ✅ Updated command service:`);
-      console.log(`     Endpoint: ${COMMAND_SERVICE.endpoint}`);
-      console.log(`     API key: ${COMMAND_SERVICE.apiKey.substring(0, 10)}...`);
-      console.log(`     Actions: ${COMMAND_SERVICE.actions.join(', ')}`);
+      logger.debug(`  ✅ Updated command service:`);
+      logger.debug(`     Endpoint: ${COMMAND_SERVICE.endpoint}`);
+      logger.debug(`     API key: ${COMMAND_SERVICE.apiKey.substring(0, 10)}...`);
+      logger.debug(`     Actions: ${COMMAND_SERVICE.actions.join(', ')}`);
     } catch (error) {
-      console.error(`  ❌ Failed to update command service:`, error.message);
+      logger.error(`  ❌ Failed to update command service:`, error.message);
     }
     
-    console.log('✅ Command service updated');
+    logger.debug('✅ Command service updated');
     return;
   }
 
@@ -107,18 +108,18 @@ async function migrate(db) {
     'system' // created_by
   ];
   
-  console.log(`  Inserting command service with ${params.length} parameters`);
+  logger.debug(`  Inserting command service with ${params.length} parameters`);
   
   try {
     await db.run(sql, params);
   } catch (error) {
-    console.error(`  Failed to insert command service:`, error.message);
-    console.error(`  SQL:`, sql);
-    console.error(`  Params:`, params);
+    logger.error(`  Failed to insert command service:`, error.message);
+    logger.error(`  SQL:`, sql);
+    logger.error(`  Params:`, params);
     throw error;
   }
 
-  console.log(`  ✅ Inserted service: command`);
+  logger.debug(`  ✅ Inserted service: command`);
 
   // Set up permissions for command service to call other services if needed
   const coreServices = ['user-memory', 'phi4', 'conversation'];
@@ -145,15 +146,15 @@ async function migrate(db) {
     }
   }
 
-  console.log('  ✅ Set up command service permissions');
-  console.log('✅ Migration complete: 004_command_service');
+  logger.debug('  ✅ Set up command service permissions');
+  logger.debug('✅ Migration complete: 004_command_service');
 }
 
 /**
  * Rollback migration
  */
 async function rollback(db) {
-  console.log('🔄 Rolling back migration: 004_command_service');
+  logger.debug('🔄 Rolling back migration: 004_command_service');
 
   // Delete command service
   await db.run(`DELETE FROM mcp_services WHERE name = 'command'`);
@@ -161,7 +162,7 @@ async function rollback(db) {
   // Delete permissions
   await db.run(`DELETE FROM service_permissions WHERE from_service = 'command' OR to_service = 'command'`);
 
-  console.log('✅ Rollback complete: 004_command_service');
+  logger.debug('✅ Rollback complete: 004_command_service');
 }
 
 /**

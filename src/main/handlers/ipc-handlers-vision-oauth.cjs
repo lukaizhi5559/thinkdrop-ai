@@ -5,20 +5,21 @@
 
 const { ipcMain } = require('electron');
 
+const logger = require('./../logger.cjs');
 /**
  * Setup Google Vision OAuth IPC handlers
  * @param {Object} db - DuckDB connection for storing OAuth data
  * @param {Object} mcpConfigManager - MCP Config Manager instance to reload services
  */
 function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
-  console.log('🔧 Setting up Vision OAuth handlers...');
+  logger.debug('🔧 Setting up Vision OAuth handlers...');
 
   /**
    * Start Google Vision OAuth flow
    * Uses the same OAuth client as Gemini since both are Google APIs
    */
   ipcMain.handle('vision:oauth:start', async () => {
-    console.log('🔐 Starting Google Vision OAuth flow...');
+    logger.debug('🔐 Starting Google Vision OAuth flow...');
     
     try {
       // Call the command service OAuth endpoint (reuses Gemini OAuth)
@@ -40,14 +41,14 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
 
       const data = await response.json();
       
-      console.log('🔍 OAuth response data:', JSON.stringify(data, null, 2));
+      logger.debug('🔍 OAuth response data:', JSON.stringify(data, null, 2));
       
       if (data.success) {
-        console.log('✅ Google Vision OAuth completed successfully');
+        logger.debug('✅ Google Vision OAuth completed successfully');
         
         // Store Google API key and OAuth tokens in user_settings
         if (data.apiKey && db) {
-          console.log('🔑 Storing Google API key:', data.apiKey.substring(0, 20) + '...');
+          logger.debug('🔑 Storing Google API key:', data.apiKey.substring(0, 20) + '...');
           try {
             // Store Google Cloud API key
             await db.run(`
@@ -60,7 +61,7 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
               data.apiKey,
               true
             ]);
-            console.log('✅ Google Cloud API key stored in user_settings');
+            logger.debug('✅ Google Cloud API key stored in user_settings');
             
             // Store OAuth tokens in user_settings
             if (data.tokens) {
@@ -118,10 +119,10 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
                 ]);
               }
               
-              console.log('✅ OAuth tokens stored in user_settings');
+              logger.debug('✅ OAuth tokens stored in user_settings');
             }
           } catch (dbError) {
-            console.error('❌ Failed to store Google OAuth data:', dbError);
+            logger.error('❌ Failed to store Google OAuth data:', dbError);
           }
         }
         
@@ -131,14 +132,14 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
           status: data.status
         };
       } else {
-        console.error('❌ Google Vision OAuth failed:', data.error);
+        logger.error('❌ Google Vision OAuth failed:', data.error);
         return {
           success: false,
           error: data.error
         };
       }
     } catch (error) {
-      console.error('❌ Google Vision OAuth error:', error);
+      logger.error('❌ Google Vision OAuth error:', error);
       return {
         success: false,
         error: error.message
@@ -188,7 +189,7 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
         hasOAuth: false
       };
     } catch (error) {
-      console.error('❌ Failed to get Vision status:', error);
+      logger.error('❌ Failed to get Vision status:', error);
       return {
         success: false,
         error: error.message
@@ -214,7 +215,7 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
               'google_oauth_scope'
             )
         `);
-        console.log('✅ Google OAuth data cleared from user_settings');
+        logger.debug('✅ Google OAuth data cleared from user_settings');
       }
       
       return {
@@ -222,7 +223,7 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
         message: 'Google Vision OAuth revoked successfully'
       };
     } catch (error) {
-      console.error('❌ Failed to revoke Vision OAuth:', error);
+      logger.error('❌ Failed to revoke Vision OAuth:', error);
       return {
         success: false,
         error: error.message
@@ -230,7 +231,7 @@ function setupVisionOAuthHandlers(db, mcpConfigManager = null) {
     }
   });
 
-  console.log('✅ Vision OAuth handlers setup complete');
+  logger.debug('✅ Vision OAuth handlers setup complete');
 }
 
 module.exports = { setupVisionOAuthHandlers };

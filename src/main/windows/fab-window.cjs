@@ -8,6 +8,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 
+const logger = require('./../logger.cjs');
 let fabWindow = null;
 
 /**
@@ -88,17 +89,17 @@ function createFABWindow() {
 
   // Debug: Log when page finishes loading
   fabWindow.webContents.on('did-finish-load', () => {
-    console.log('✅ [FAB] Page loaded successfully');
+    logger.debug('✅ [FAB] Page loaded successfully');
   });
 
   // Debug: Log console messages from FAB window
   fabWindow.webContents.on('console-message', (event, level, message) => {
-    console.log(`[FAB Console] ${message}`);
+    logger.debug(`[FAB Console] ${message}`);
   });
 
   // Debug logging
   if (process.env.NODE_ENV === 'development') {
-    console.log('✅ FAB Window created at:', {
+    logger.debug('✅ FAB Window created at:', {
       x: screenWidth - fabSize - margin,
       y: screenHeight - fabSize - margin,
       size: fabSize,

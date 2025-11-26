@@ -5,6 +5,7 @@
 
 const { ipcMain } = require('electron');
 
+const logger = require('./../logger.cjs');
 let DatabaseManager = null;
 
 /**
@@ -12,7 +13,7 @@ let DatabaseManager = null;
  * @returns {Promise<void>}
  */
 async function setupDatabaseNotificationHandlers() {
-  console.log('🔔 Setting up database notification IPC handlers...');
+  logger.debug('🔔 Setting up database notification IPC handlers...');
   
   // Dynamic import of ES module
   if (!DatabaseManager) {
@@ -40,7 +41,7 @@ async function setupDatabaseNotificationHandlers() {
         metrics
       };
     } catch (error) {
-      console.error('❌ Failed to get database metrics:', error);
+      logger.error('❌ Failed to get database metrics:', error);
       return {
         success: false,
         error: error.message
@@ -57,7 +58,7 @@ async function setupDatabaseNotificationHandlers() {
         ...result
       };
     } catch (error) {
-      console.error('❌ Failed to create database backup:', error);
+      logger.error('❌ Failed to create database backup:', error);
       return {
         success: false,
         error: error.message
@@ -74,7 +75,7 @@ async function setupDatabaseNotificationHandlers() {
         health
       };
     } catch (error) {
-      console.error('❌ Failed to get database health:', error);
+      logger.error('❌ Failed to get database health:', error);
       return {
         success: false,
         error: error.message
@@ -91,7 +92,7 @@ async function setupDatabaseNotificationHandlers() {
         ...result
       };
     } catch (error) {
-      console.error('❌ Failed to force WAL checkpoint:', error);
+      logger.error('❌ Failed to force WAL checkpoint:', error);
       return {
         success: false,
         error: error.message
@@ -99,7 +100,7 @@ async function setupDatabaseNotificationHandlers() {
     }
   });
 
-  console.log('✅ Database notification IPC handlers setup complete');
+  logger.debug('✅ Database notification IPC handlers setup complete');
 }
 
 module.exports = {

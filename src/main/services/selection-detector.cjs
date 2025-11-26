@@ -1,6 +1,7 @@
 const { clipboard, globalShortcut, screen } = require('electron');
 const { execSync } = require('child_process');
 
+const logger = require('./../logger.cjs');
 /**
  * Hybrid AppleScript + nut.js selection detector
  * Uses AppleScript for reliable text selection detection
@@ -18,27 +19,27 @@ class SelectionDetector {
    * Start selection monitoring using AppleScript
    */
   startSelectionMonitoring() {
-    console.log('👀 [SELECTION_DETECTOR] Selection monitoring ready');
+    logger.debug('👀 [SELECTION_DETECTOR] Selection monitoring ready');
     // DISABLED: AppleScript polling causes typing lag
     // this.startAppleScriptSelectionDetection();
-    console.log('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
-    console.log('⚠️  [SELECTION_DETECTOR] AppleScript polling disabled to prevent typing lag');
+    logger.debug('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
+    logger.debug('⚠️  [SELECTION_DETECTOR] AppleScript polling disabled to prevent typing lag');
   }
 
   /**
    * Start method expected by main.cjs
    */
   start() {
-    console.log('📋 [SELECTION_DETECTOR] Ready for Cmd+A capture');
+    logger.debug('📋 [SELECTION_DETECTOR] Ready for Cmd+A capture');
     this.startSelectionMonitoring();
-    console.log('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
+    logger.debug('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
   }
 
   /**
    * AppleScript-based selection detection (checks for highlighted text)
    */
   startAppleScriptSelectionDetection() {
-    console.log('🍎 [SELECTION_DETECTOR] Starting AppleScript selection detection');
+    logger.debug('🍎 [SELECTION_DETECTOR] Starting AppleScript selection detection');
     
     // Check for selections every 2 seconds using AppleScript
     this.selectionCheckInterval = setInterval(async () => {
@@ -56,8 +57,8 @@ class SelectionDetector {
           const timeSinceLastShow = now - this.lastButtonShowTime;
           
           if (timeSinceLastShow > 2000) {
-            console.log('🍎 [SELECTION_DETECTOR] New text selection detected');
-            console.log(`📝 [SELECTION_DETECTOR] Text: "${selectedText.substring(0, 50)}..."`);
+            logger.debug('🍎 [SELECTION_DETECTOR] New text selection detected');
+            logger.debug(`📝 [SELECTION_DETECTOR] Text: "${selectedText.substring(0, 50)}..."`);
             
             this.lastDetectedSelection = selectedText;
             this.lastButtonShowTime = now;
@@ -114,7 +115,7 @@ class SelectionDetector {
       return selectedText;
       
     } catch (error) {
-      console.log('🔄 [SELECTION_DETECTOR] Direct AppleScript failed, trying clipboard method');
+      logger.debug('🔄 [SELECTION_DETECTOR] Direct AppleScript failed, trying clipboard method');
       // If direct AppleScript fails, fall back to clipboard method
       return await this.getSelectedTextViaClipboard();
     }
@@ -163,7 +164,7 @@ class SelectionDetector {
       return null;
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Clipboard fallback failed:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Clipboard fallback failed:', error);
       return null;
     }
   }
@@ -173,11 +174,11 @@ class SelectionDetector {
    */
   showHotkeyHintOnce() {
     try {
-      console.log('🔔 [SELECTION_DETECTOR] showHotkeyHintOnce called');
+      logger.debug('🔔 [SELECTION_DETECTOR] showHotkeyHintOnce called');
       
       const { showHotkeyToast } = require('../windows/hotkey-toast-overlay.cjs');
       
-      console.log('🔔 [SELECTION_DETECTOR] Showing hotkey toast...');
+      logger.debug('🔔 [SELECTION_DETECTOR] Showing hotkey toast...');
       showHotkeyToast(`<div class="hotkey-hint" id="hotkeyHint">
         <div class="hint-content">
           <span class="hint-icon"></span>
@@ -189,11 +190,11 @@ class SelectionDetector {
         </div>
     </div>`);
       
-      console.log('✅ [SELECTION_DETECTOR] Hotkey hint toast shown');
+      logger.debug('✅ [SELECTION_DETECTOR] Hotkey hint toast shown');
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to show hotkey hint:', error);
-      console.error('Error details:', error.stack);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to show hotkey hint:', error);
+      logger.error('Error details:', error.stack);
     }
   }
 
@@ -209,7 +210,7 @@ class SelectionDetector {
    * Manual capture for Cmd+Option+A shortcut
    */
   async captureSelectionWithNutJS() {
-    console.log('📋 [SELECTION_DETECTOR] Manual capture triggered (Cmd+Option+A)');
+    logger.debug('📋 [SELECTION_DETECTOR] Manual capture triggered (Cmd+Option+A)');
     
     try {
       let selectedText = null;
@@ -227,7 +228,7 @@ class SelectionDetector {
         // If we got text, break out
         if (selectedText && selectedText.length > 3) {
           if (attempt > 1) {
-            console.log(`✅ [SELECTION_DETECTOR] Captured on attempt ${attempt}`);
+            logger.debug(`✅ [SELECTION_DETECTOR] Captured on attempt ${attempt}`);
           }
           break;
         }
@@ -239,7 +240,7 @@ class SelectionDetector {
       }
       
       if (selectedText && selectedText.length > 3) {
-        console.log(`✅ [SELECTION_DETECTOR] Captured text: "${selectedText.substring(0, 50)}..."`);
+        logger.debug(`✅ [SELECTION_DETECTOR] Captured text: "${selectedText.substring(0, 50)}..."`);
         
         // Persist to all renderer windows via localStorage
         const sourceApp = await this.getActiveAppName();
@@ -261,7 +262,7 @@ class SelectionDetector {
             );
           }
         });
-        console.log('💾 [SELECTION_DETECTOR] Selection persisted to localStorage');
+        logger.debug('💾 [SELECTION_DETECTOR] Selection persisted to localStorage');
         
         // Show floating button
         await this.showFloatingButtonWithPreciseCoordinates(selectedText);
@@ -271,12 +272,12 @@ class SelectionDetector {
         
         return selectedText;
       } else {
-        console.log('⚠️  [SELECTION_DETECTOR] No text selection found after 3 attempts');
+        logger.debug('⚠️  [SELECTION_DETECTOR] No text selection found after 3 attempts');
         return null;
       }
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Manual capture failed:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Manual capture failed:', error);
       return null;
     }
   }
@@ -318,9 +319,9 @@ class SelectionDetector {
    * Show floating button for testing (Cmd+Option+T)
    */
   async showFloatingButtonWithEstimatedPosition(testText) {
-    console.log('🧪 [SELECTION_DETECTOR] Showing test floating button');
+    logger.debug('🧪 [SELECTION_DETECTOR] Showing test floating button');
     await this.showFloatingButtonWithPreciseCoordinates(testText);
-    console.log('✅ [SELECTION_DETECTOR] Test button shown');
+    logger.debug('✅ [SELECTION_DETECTOR] Test button shown');
   }
 
   /**
@@ -331,7 +332,7 @@ class SelectionDetector {
     try {
       // This will be called from IPC handler which has access to the event
       // Return null here - the actual check happens in the renderer via localStorage
-      console.log('⚠️  [SELECTION_DETECTOR] getSelectionWithContext called - should use localStorage in renderer');
+      logger.debug('⚠️  [SELECTION_DETECTOR] getSelectionWithContext called - should use localStorage in renderer');
       
       // SAFETY: Wrap in timeout to prevent hanging
       const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1000));
@@ -354,7 +355,7 @@ class SelectionDetector {
       
       return null;
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to get selection with context:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to get selection with context:', error);
       return null;
     }
   }
@@ -363,7 +364,7 @@ class SelectionDetector {
    * Clear the persisted selection from localStorage (called after message is sent)
    */
   clearPersistedSelection() {
-    console.log('🗑️  [SELECTION_DETECTOR] Clearing persisted selection from localStorage');
+    logger.debug('🗑️  [SELECTION_DETECTOR] Clearing persisted selection from localStorage');
     const { BrowserWindow } = require('electron');
     const windows = BrowserWindow.getAllWindows();
     windows.forEach(window => {
@@ -379,7 +380,7 @@ class SelectionDetector {
    * Capture from previous window (expected by virtualScreenDOM.cjs)
    */
   async captureFromPreviousWindow() {
-    console.log('🎯 [SELECTION_DETECTOR] Capturing from previous window');
+    logger.debug('🎯 [SELECTION_DETECTOR] Capturing from previous window');
     return await this.captureSelectionWithNutJS();
   }
 
@@ -387,7 +388,7 @@ class SelectionDetector {
    * Stop all monitoring
    */
   stop() {
-    console.log('🛑 [SELECTION_DETECTOR] Stopping selection monitoring');
+    logger.debug('🛑 [SELECTION_DETECTOR] Stopping selection monitoring');
     
     if (this.selectionCheckInterval) {
       clearInterval(this.selectionCheckInterval);
@@ -395,7 +396,7 @@ class SelectionDetector {
     }
     
     this.isActive = false;
-    console.log('✅ [SELECTION_DETECTOR] Selection monitoring stopped');
+    logger.debug('✅ [SELECTION_DETECTOR] Selection monitoring stopped');
   }
 }
 

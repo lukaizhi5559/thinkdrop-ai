@@ -5,6 +5,7 @@
 
 const { ipcMain, BrowserWindow } = require('electron');
 
+const logger = require('./../logger.cjs');
 /**
  * Send insight update to renderer
  * @param {Object} insightData - Insight data to send
@@ -49,11 +50,11 @@ function sendInsightError(error) {
  * @param {Object} mcpClient - MCP client instance
  */
 function registerInsightHandlers(mcpClient) {
-  console.log('📝 [IPC:INSIGHT] Registering insight IPC handlers');
+  logger.debug('📝 [IPC:INSIGHT] Registering insight IPC handlers');
 
   // Handle insight refresh request
   ipcMain.on('insight:refresh', async (event) => {
-    console.log('🔄 [IPC:INSIGHT] Refresh requested');
+    logger.debug('🔄 [IPC:INSIGHT] Refresh requested');
     try {
       sendInsightLoading(true);
       
@@ -71,17 +72,17 @@ function registerInsightHandlers(mcpClient) {
       // Trigger new analysis which will generate insights
       await vdom.analyzeCurrentWindow(currentWindowId);
       
-      console.log('✅ [IPC:INSIGHT] Refresh completed');
+      logger.debug('✅ [IPC:INSIGHT] Refresh completed');
       
     } catch (error) {
-      console.error('❌ [IPC:INSIGHT] Refresh failed:', error);
+      logger.error('❌ [IPC:INSIGHT] Refresh failed:', error);
       sendInsightError(error.message);
     }
   });
 
   // Handle insight refresh with custom query (for follow-up questions)
   ipcMain.on('insight:refresh-with-query', async (event, customQuery) => {
-    console.log('🔄 [IPC:INSIGHT] Refresh with custom query:', customQuery);
+    logger.debug('🔄 [IPC:INSIGHT] Refresh with custom query:', customQuery);
     try {
       sendInsightLoading(true);
       
@@ -105,10 +106,10 @@ function registerInsightHandlers(mcpClient) {
       // Clear the custom query after use
       delete global.insightCustomQuery;
       
-      console.log('✅ [IPC:INSIGHT] Refresh with query completed');
+      logger.debug('✅ [IPC:INSIGHT] Refresh with query completed');
       
     } catch (error) {
-      console.error('❌ [IPC:INSIGHT] Refresh with query failed:', error);
+      logger.error('❌ [IPC:INSIGHT] Refresh with query failed:', error);
       sendInsightError(error.message);
       delete global.insightCustomQuery;
     }
@@ -116,7 +117,7 @@ function registerInsightHandlers(mcpClient) {
 
   // Handle highlight insight request
   ipcMain.on('insight:highlight', async (event, selectedText, context) => {
-    console.log('✨ [IPC:INSIGHT] Highlight insight requested:', selectedText?.substring(0, 50));
+    logger.debug('✨ [IPC:INSIGHT] Highlight insight requested:', selectedText?.substring(0, 50));
     try {
       if (!mcpClient) {
         throw new Error('MCP client not available');
@@ -140,12 +141,12 @@ function registerInsightHandlers(mcpClient) {
       }
       
     } catch (error) {
-      console.error('❌ [IPC:INSIGHT] Highlight insight failed:', error);
+      logger.error('❌ [IPC:INSIGHT] Highlight insight failed:', error);
       sendInsightError(error.message);
     }
   });
 
-  console.log('✅ [IPC:INSIGHT] Insight IPC handlers registered');
+  logger.debug('✅ [IPC:INSIGHT] Insight IPC handlers registered');
 }
 
 module.exports = {

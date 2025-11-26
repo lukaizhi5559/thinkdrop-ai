@@ -3,10 +3,11 @@
  * Stores user memory directly (for memory_store intent)
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function storeMemory(state) {
   const { mcpClient, message, intent, context } = state;
 
-  console.log('💾 [NODE:STORE_MEMORY] Storing memory...');
+  logger.debug('💾 [NODE:STORE_MEMORY] Storing memory...');
 
   try {
     // Extract entities if available
@@ -40,7 +41,7 @@ module.exports = async function storeMemory(state) {
     // MCP protocol wraps response in 'data' field
     const memoryData = result.data || result;
 
-    console.log('✅ [NODE:STORE_MEMORY] Memory stored successfully');
+    logger.debug('✅ [NODE:STORE_MEMORY] Memory stored successfully');
 
     // Use the suggestedResponse from intent parser, or fallback
     const response = intent.suggestedResponse || "Got it! I'll remember that.";
@@ -52,7 +53,7 @@ module.exports = async function storeMemory(state) {
       answer: response
     };
   } catch (error) {
-    console.error('❌ [NODE:STORE_MEMORY] Error:', error.message);
+    logger.error('❌ [NODE:STORE_MEMORY] Error:', error.message);
     return {
       ...state,
       memoryStored: false,

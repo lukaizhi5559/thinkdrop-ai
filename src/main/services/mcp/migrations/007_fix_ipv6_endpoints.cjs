@@ -3,9 +3,10 @@
  * Changes localhost to 127.0.0.1 for IPv4 compatibility
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   async migrate(db) {
-    console.log('🔄 Running migration: 007_fix_ipv6_endpoints');
+    logger.debug('🔄 Running migration: 007_fix_ipv6_endpoints');
     
     try {
       // Update phi4 endpoint from localhost to 127.0.0.1
@@ -15,7 +16,7 @@ module.exports = {
         WHERE name = 'phi4'
       `);
       
-      console.log('✅ Updated phi4 endpoint to use 127.0.0.1 (IPv4)');
+      logger.debug('✅ Updated phi4 endpoint to use 127.0.0.1 (IPv4)');
       
       // Optional: Update other services too for consistency
       await db.run(`
@@ -54,10 +55,10 @@ module.exports = {
         WHERE name = 'command'
       `);
       
-      console.log('✅ All service endpoints updated to use 127.0.0.1 (IPv4)');
+      logger.debug('✅ All service endpoints updated to use 127.0.0.1 (IPv4)');
       
     } catch (error) {
-      console.error('❌ Migration 007_fix_ipv6_endpoints failed:', error);
+      logger.error('❌ Migration 007_fix_ipv6_endpoints failed:', error);
       throw error;
     }
   }

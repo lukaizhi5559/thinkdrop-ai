@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+const logger = require('./../../../logger.cjs');
 /**
  * Generate a secure API key
  * @param {number} length - Key length (default: 32)
@@ -135,7 +136,7 @@ function initializeApiKeys(force = false) {
   const env = readEnvFile();
 
   if (!force && apiKeysExist()) {
-    console.log('✅ MCP API keys already exist in .env');
+    logger.debug('✅ MCP API keys already exist in .env');
     return {
       MCP_USER_MEMORY_API_KEY: env.MCP_USER_MEMORY_API_KEY,
       MCP_WEB_SEARCH_API_KEY: env.MCP_WEB_SEARCH_API_KEY,
@@ -143,15 +144,15 @@ function initializeApiKeys(force = false) {
     };
   }
 
-  console.log('🔑 Generating MCP API keys...');
+  logger.debug('🔑 Generating MCP API keys...');
   const apiKeys = generateAllApiKeys();
 
   // Merge with existing env
   const updatedEnv = { ...env, ...apiKeys };
   writeEnvFile(updatedEnv);
 
-  console.log('✅ MCP API keys generated and saved to .env');
-  console.log('⚠️  IMPORTANT: Keep these keys secure and do not commit to version control');
+  logger.debug('✅ MCP API keys generated and saved to .env');
+  logger.debug('⚠️  IMPORTANT: Keep these keys secure and do not commit to version control');
 
   return apiKeys;
 }
@@ -179,8 +180,8 @@ function rotateApiKey(serviceName) {
 
   writeEnvFile(env);
 
-  console.log(`✅ API key rotated for ${serviceName}`);
-  console.log(`   New key: ${newKey.substring(0, 8)}...`);
+  logger.debug(`✅ API key rotated for ${serviceName}`);
+  logger.debug(`   New key: ${newKey.substring(0, 8)}...`);
 
   return newKey;
 }

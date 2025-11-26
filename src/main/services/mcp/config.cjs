@@ -8,11 +8,12 @@
 const path = require('path');
 const fs = require('fs');
 
+const logger = require('./../../logger.cjs');
 // Load .env file if exists
 try {
   require('dotenv').config();
 } catch (e) {
-  console.warn('⚠️ dotenv not available, using process.env directly');
+  logger.warn('⚠️ dotenv not available, using process.env directly');
 }
 
 /**
@@ -228,7 +229,7 @@ function logConfig() {
     }
   });
 
-  console.log('📋 MCP Configuration:', JSON.stringify(maskedConfig, null, 2));
+  logger.debug('📋 MCP Configuration:', JSON.stringify(maskedConfig, null, 2));
 }
 
 module.exports = {

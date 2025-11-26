@@ -6,18 +6,19 @@
 const { ipcMain } = require('electron');
 const http = require('http');
 
+const logger = require('./../logger.cjs');
 /**
  * Setup Gemini OAuth IPC handlers
  * @param {Object} db - DuckDB connection for storing OAuth data
  */
 function setupGeminiOAuthHandlers(db) {
-  console.log('🔧 Setting up Gemini OAuth handlers...');
+  logger.debug('🔧 Setting up Gemini OAuth handlers...');
 
   /**
    * Start Gemini OAuth flow
    */
   ipcMain.handle('gemini:oauth:start', async () => {
-    console.log('🔐 Starting Gemini OAuth flow...');
+    logger.debug('🔐 Starting Gemini OAuth flow...');
     
     try {
       // Call the command service OAuth endpoint
@@ -36,7 +37,7 @@ function setupGeminiOAuthHandlers(db) {
       const data = await response.json();
       
       if (data.success) {
-        console.log('✅ Gemini OAuth completed successfully');
+        logger.debug('✅ Gemini OAuth completed successfully');
         
         // Store API key and OAuth tokens in user_settings (not mcp_services)
         if (data.apiKey && data.tokens && db) {
@@ -122,9 +123,9 @@ function setupGeminiOAuthHandlers(db) {
               ]);
             }
             
-            console.log('✅ API key and OAuth tokens stored in user_settings');
+            logger.debug('✅ API key and OAuth tokens stored in user_settings');
           } catch (dbError) {
-            console.error('❌ Failed to store OAuth data in user_settings:', dbError);
+            logger.error('❌ Failed to store OAuth data in user_settings:', dbError);
           }
         }
         
@@ -134,14 +135,14 @@ function setupGeminiOAuthHandlers(db) {
           status: data.status
         };
       } else {
-        console.error('❌ Gemini OAuth failed:', data.error);
+        logger.error('❌ Gemini OAuth failed:', data.error);
         return {
           success: false,
           error: data.error
         };
       }
     } catch (error) {
-      console.error('❌ Gemini OAuth error:', error);
+      logger.error('❌ Gemini OAuth error:', error);
       return {
         success: false,
         error: error.message
@@ -169,7 +170,7 @@ function setupGeminiOAuthHandlers(db) {
       const data = await response.json();
       return data;
     } catch (error) {
-      console.error('❌ Failed to get Gemini status:', error);
+      logger.error('❌ Failed to get Gemini status:', error);
       return {
         success: false,
         error: error.message
@@ -197,7 +198,7 @@ function setupGeminiOAuthHandlers(db) {
       const data = await response.json();
       return data;
     } catch (error) {
-      console.error('❌ Failed to revoke Gemini OAuth:', error);
+      logger.error('❌ Failed to revoke Gemini OAuth:', error);
       return {
         success: false,
         error: error.message
@@ -205,7 +206,7 @@ function setupGeminiOAuthHandlers(db) {
     }
   });
 
-  console.log('✅ Gemini OAuth handlers setup complete');
+  logger.debug('✅ Gemini OAuth handlers setup complete');
 }
 
 module.exports = { setupGeminiOAuthHandlers };

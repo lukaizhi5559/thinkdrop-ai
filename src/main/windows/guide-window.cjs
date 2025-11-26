@@ -6,15 +6,16 @@
 const { BrowserWindow } = require('electron');
 const path = require('path');
 
+const logger = require('./../logger.cjs');
 let guideWindow = null;
 
 function createGuideWindow() {
   if (guideWindow) {
-    console.log('⚠️ Guide window already exists');
+    logger.debug('⚠️ Guide window already exists');
     return guideWindow;
   }
 
-  console.log('🎯 Initializing Guide Window...');
+  logger.debug('🎯 Initializing Guide Window...');
 
   // Get screen dimensions for bottom-center positioning
   const { screen } = require('electron');
@@ -70,20 +71,20 @@ function createGuideWindow() {
 
   // Debug logging
   guideWindow.webContents.on('did-finish-load', () => {
-    console.log('✅ [GUIDE] Page loaded successfully');
+    logger.debug('✅ [GUIDE] Page loaded successfully');
   });
 
   guideWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
-    console.log(`[GUIDE Console] ${message}`);
+    logger.debug(`[GUIDE Console] ${message}`);
   });
 
   // Handle window close
   guideWindow.on('closed', () => {
-    console.log('🔴 Guide window closed');
+    logger.debug('🔴 Guide window closed');
     guideWindow = null;
   });
 
-  console.log('✅ Guide Window created');
+  logger.debug('✅ Guide Window created');
   
   return guideWindow;
 }

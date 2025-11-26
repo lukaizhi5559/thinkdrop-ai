@@ -1,3 +1,4 @@
+const logger = require('./../../logger.cjs');
 import { promises as fs } from 'fs';
 import path from 'path';
 import { app } from 'electron';
@@ -17,7 +18,7 @@ export class ScreenshotStorage {
     try {
       await fs.mkdir(this.storageDir, { recursive: true });
     } catch (error) {
-      console.error('Failed to create screenshot storage directory:', error);
+      logger.error('Failed to create screenshot storage directory:', error);
     }
   }
 
@@ -41,7 +42,7 @@ export class ScreenshotStorage {
       // Return relative filename for DB storage
       return filename;
     } catch (error) {
-      console.error('Failed to save screenshot:', error);
+      logger.error('Failed to save screenshot:', error);
       throw error;
     }
   }
@@ -56,7 +57,7 @@ export class ScreenshotStorage {
       const filepath = path.join(this.storageDir, filename);
       return await fs.readFile(filepath);
     } catch (error) {
-      console.error('Failed to load screenshot:', error);
+      logger.error('Failed to load screenshot:', error);
       return null;
     }
   }
@@ -70,7 +71,7 @@ export class ScreenshotStorage {
       const filepath = path.join(this.storageDir, filename);
       await fs.unlink(filepath);
     } catch (error) {
-      console.error('Failed to delete screenshot:', error);
+      logger.error('Failed to delete screenshot:', error);
     }
   }
 
@@ -88,7 +89,7 @@ export class ScreenshotStorage {
       const base64 = buffer.toString('base64');
       return `data:image/png;base64,${base64}`;
     } catch (error) {
-      console.error('Failed to get screenshot data URL:', error);
+      logger.error('Failed to get screenshot data URL:', error);
       return null;
     }
   }
@@ -109,11 +110,11 @@ export class ScreenshotStorage {
         
         if (now - stats.mtimeMs > maxAge) {
           await fs.unlink(filepath);
-          console.log(`Cleaned up old screenshot: ${file}`);
+          logger.debug(`Cleaned up old screenshot: ${file}`);
         }
       }
     } catch (error) {
-      console.error('Failed to cleanup screenshots:', error);
+      logger.error('Failed to cleanup screenshots:', error);
     }
   }
 }

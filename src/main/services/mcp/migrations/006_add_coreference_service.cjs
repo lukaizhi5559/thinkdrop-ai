@@ -3,17 +3,18 @@
  * Adds the Python-based coreference resolution service to MCP registry
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '006_add_coreference_service',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 006_add_coreference_service');
+    logger.debug('🔄 Running migration: 006_add_coreference_service');
     
     // Check if coreference service already exists
     const existing = await db.query(`SELECT id FROM mcp_services WHERE name = 'coreference'`);
     
     if (existing.length > 0) {
-      console.log('⚠️  Coreference service already exists, skipping migration');
+      logger.debug('⚠️  Coreference service already exists, skipping migration');
       return;
     }
     
@@ -48,6 +49,6 @@ module.exports = {
       ]
     );
     
-    console.log('✅ Coreference service added to database');
+    logger.debug('✅ Coreference service added to database');
   }
 };

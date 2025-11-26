@@ -3,6 +3,7 @@
  * Provides a consistent interface for database operations that matches the expected API
  */
 
+const logger = require('./../../logger.cjs');
 class DuckDBWrapper {
   constructor(duckdbConnection) {
     if (!duckdbConnection) {
@@ -34,8 +35,8 @@ class DuckDBWrapper {
     }
     
     if (missingMethods.length > 0) {
-      console.error(`❌ Missing methods: ${missingMethods.join(', ')}`);
-      console.error(`❌ Available methods: ${allMethods.concat(allPrototypeMethods).filter(m => typeof this.connection[m] === 'function').join(', ')}`);
+      logger.error(`❌ Missing methods: ${missingMethods.join(', ')}`);
+      logger.error(`❌ Available methods: ${allMethods.concat(allPrototypeMethods).filter(m => typeof this.connection[m] === 'function').join(', ')}`);
       throw new Error(`Database connection missing required methods: ${missingMethods.join(', ')}`);
     }
   }
@@ -52,7 +53,7 @@ class DuckDBWrapper {
         this._validateConnection();
         this.connection.run(query, ...params, function(err) {
           if (err) {
-            console.error('❌ DuckDB run error:', err.message);
+            logger.error('❌ DuckDB run error:', err.message);
             reject(new Error(`DuckDB run failed: ${err.message}`));
             return;
           }
@@ -64,7 +65,7 @@ class DuckDBWrapper {
           });
         });
       } catch (error) {
-        console.error('❌ DuckDB run exception:', error.message);
+        logger.error('❌ DuckDB run exception:', error.message);
         reject(error);
       }
     });
@@ -82,7 +83,7 @@ class DuckDBWrapper {
         this._validateConnection();
         this.connection.all(query, ...params, (err, rows) => {
           if (err) {
-            console.error('❌ DuckDB all error:', err.message);
+            logger.error('❌ DuckDB all error:', err.message);
             reject(new Error(`DuckDB all failed: ${err.message}`));
             return;
           }
@@ -90,7 +91,7 @@ class DuckDBWrapper {
           resolve(rows || []);
         });
       } catch (error) {
-        console.error('❌ DuckDB all exception:', error.message);
+        logger.error('❌ DuckDB all exception:', error.message);
         reject(error);
       }
     });
@@ -112,7 +113,7 @@ class DuckDBWrapper {
       return rows && rows.length > 0 ? rows[0] : null;
       
     } catch (error) {
-      console.error('❌ DuckDB get exception:', error.message);
+      logger.error('❌ DuckDB get exception:', error.message);
       throw error;
     }
   }
@@ -126,20 +127,20 @@ class DuckDBWrapper {
     return new Promise((resolve, reject) => {
       try {
         this._validateConnection();
-        console.log('🔧 DuckDBWrapper.exec:', sql.substring(0, 100) + '...');
+        logger.debug('🔧 DuckDBWrapper.exec:', sql.substring(0, 100) + '...');
         
         this.connection.exec(sql, (err) => {
           if (err) {
-            console.error('❌ DuckDB exec error:', err.message);
+            logger.error('❌ DuckDB exec error:', err.message);
             reject(new Error(`DuckDB exec failed: ${err.message}`));
             return;
           }
           
-          console.log('✅ DuckDB exec completed successfully');
+          logger.debug('✅ DuckDB exec completed successfully');
           resolve();
         });
       } catch (error) {
-        console.error('❌ DuckDB exec exception:', error.message);
+        logger.error('❌ DuckDB exec exception:', error.message);
         reject(error);
       }
     });
@@ -178,15 +179,15 @@ class DuckDBWrapper {
       try {
         this.connection.close((err) => {
           if (err) {
-            console.error('❌ DuckDB close error:', err.message);
+            logger.error('❌ DuckDB close error:', err.message);
             reject(err);
             return;
           }
-          console.log('✅ DuckDB connection closed');
+          logger.debug('✅ DuckDB connection closed');
           resolve();
         });
       } catch (error) {
-        console.error('❌ DuckDB close exception:', error.message);
+        logger.error('❌ DuckDB close exception:', error.message);
         reject(error);
       }
     });

@@ -8,6 +8,7 @@
 const { ipcMain } = require('electron');
 const AgentOrchestrator = require('../services/mcp/AgentOrchestrator.cjs');
 
+const logger = require('./../logger.cjs');
 // Orchestrator instance
 let orchestrator = null;
 
@@ -17,7 +18,7 @@ let orchestrator = null;
 function getOrchestrator() {
   if (!orchestrator) {
     orchestrator = new AgentOrchestrator();
-    console.log('✅ Private mode orchestrator initialized');
+    logger.debug('✅ Private mode orchestrator initialized');
   }
   return orchestrator;
 }
@@ -26,16 +27,16 @@ function getOrchestrator() {
  * Register private mode IPC handlers
  */
 function registerPrivateModeHandlers() {
-  console.log('🔌 Registering private mode IPC handlers...');
+  logger.debug('🔌 Registering private mode IPC handlers...');
 
   /**
    * Main private mode handler
    * Processes user message through MCP orchestration
    */
   ipcMain.handle('private-mode:process', async (event, { message, context = {} }) => {
-    console.log('\n🔒🔒🔒 [PRIVATE-MODE] Handler called! 🔒🔒🔒');
-    console.log('📥 [PRIVATE-MODE] Received message:', message);
-    console.log('📥 [PRIVATE-MODE] Received context:', JSON.stringify(context, null, 2));
+    logger.debug('\n🔒🔒🔒 [PRIVATE-MODE] Handler called! 🔒🔒🔒');
+    logger.debug('📥 [PRIVATE-MODE] Received message:', message);
+    logger.debug('📥 [PRIVATE-MODE] Received context:', JSON.stringify(context, null, 2));
     
     try {
       // 📋 SELECTION DETECTION: Check for recently selected text
@@ -46,7 +47,7 @@ function registerPrivateModeHandlers() {
         selectionContext = await global.selectionDetector.getSelectionWithContext();
         
         if (selectionContext) {
-          console.log('📋 [SELECTION] Detected selection:', {
+          logger.debug('📋 [SELECTION] Detected selection:', {
             preview: selectionContext.text.substring(0, 100),
             sourceApp: selectionContext.sourceApp,
             windowTitle: selectionContext.windowTitle,
@@ -66,17 +67,17 @@ function registerPrivateModeHandlers() {
         }
       }
       
-      console.log(`\n🔒 [PRIVATE-MODE] Processing: "${augmentedMessage.substring(0, 200)}..."`);
+      logger.debug(`\n🔒 [PRIVATE-MODE] Processing: "${augmentedMessage.substring(0, 200)}..."`);
       
       const orch = getOrchestrator();
-      console.log('🎯 [PRIVATE-MODE] Orchestrator obtained:', !!orch);
+      logger.debug('🎯 [PRIVATE-MODE] Orchestrator obtained:', !!orch);
       
       // Progress callback to stream updates to renderer
       const onProgress = async (nodeName, state, duration, status) => {
         try {
           // Handle early intent response (Phase 1 optimization)
           if (status === 'early' && nodeName === 'earlyResponse') {
-            console.log('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
+            logger.debug('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
             event.sender.send('private-mode:early-response', {
               message: state.earlyMessage,
               intentType: state.intentType,
@@ -96,7 +97,7 @@ function registerPrivateModeHandlers() {
             intentType: state.intent?.type
           });
         } catch (err) {
-          console.warn('⚠️ [PRIVATE-MODE] Failed to send progress update:', err.message);
+          logger.warn('⚠️ [PRIVATE-MODE] Failed to send progress update:', err.message);
         }
       };
       
@@ -108,23 +109,23 @@ function registerPrivateModeHandlers() {
             timestamp: new Date().toISOString()
           });
         } catch (err) {
-          console.warn('⚠️ [PRIVATE-MODE] Failed to send stream token:', err.message);
+          logger.warn('⚠️ [PRIVATE-MODE] Failed to send stream token:', err.message);
         }
       };
       
       // 🌐 Extract online mode flag from context
       const useOnlineMode = context.useOnlineMode || false;
       
-      console.log(`🌐 [PRIVATE-MODE] Online mode: ${useOnlineMode ? 'ENABLED (will fallback to private)' : 'DISABLED'}`);
+      logger.debug(`🌐 [PRIVATE-MODE] Online mode: ${useOnlineMode ? 'ENABLED (will fallback to private)' : 'DISABLED'}`);
       
       // 🔄 Use StateGraph for all routing (intent-based subgraphs)
       // Extract highlighted text from renderer context or selection detector
       const highlightedText = context.highlightedText || selectionContext?.text;
       
-      console.log('📋 [PRIVATE-MODE] Highlighted text sources:');
-      console.log('   - context.highlightedText:', context.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
-      console.log('   - selectionContext?.text:', selectionContext?.text ? `"${selectionContext.text.substring(0, 50)}..."` : 'undefined');
-      console.log('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
+      logger.debug('📋 [PRIVATE-MODE] Highlighted text sources:');
+      logger.debug('   - context.highlightedText:', context.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
+      logger.debug('   - selectionContext?.text:', selectionContext?.text ? `"${selectionContext.text.substring(0, 50)}..."` : 'undefined');
+      logger.debug('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
       
       const result = await orch.processMessageWithGraph(augmentedMessage, {
         sessionId: context.sessionId,
@@ -142,18 +143,18 @@ function registerPrivateModeHandlers() {
         ...context
       }, onProgress, onStreamToken);
 
-      console.log(`✅ [PRIVATE-MODE] Success: ${result.action}`);
-      console.log(`📊 [PRIVATE-MODE] Trace: ${result.trace?.length || 0} nodes executed`);
+      logger.debug(`✅ [PRIVATE-MODE] Success: ${result.action}`);
+      logger.debug(`📊 [PRIVATE-MODE] Trace: ${result.trace?.length || 0} nodes executed`);
       
       // Optional: Log trace for debugging
       if (process.env.DEBUG_TRACE === 'true' && result.trace) {
-        console.log('📊 [PRIVATE-MODE] Execution trace:');
+        logger.debug('📊 [PRIVATE-MODE] Execution trace:');
         result.trace.forEach((step, i) => {
-          console.log(`  ${i + 1}. ${step.success ? '✅' : '❌'} ${step.node} (${step.duration}ms)`);
+          logger.debug(`  ${i + 1}. ${step.success ? '✅' : '❌'} ${step.node} (${step.duration}ms)`);
         });
       }
       
-      console.log('📤 [PRIVATE-MODE] Returning result:', JSON.stringify(result, null, 2));
+      logger.debug('📤 [PRIVATE-MODE] Returning result:', JSON.stringify(result, null, 2));
 
       return {
         success: result.success !== false,
@@ -161,8 +162,8 @@ function registerPrivateModeHandlers() {
       };
 
     } catch (error) {
-      console.error('❌ [PRIVATE-MODE] Error:', error);
-      console.error('❌ [PRIVATE-MODE] Error stack:', error.stack);
+      logger.error('❌ [PRIVATE-MODE] Error:', error);
+      logger.error('❌ [PRIVATE-MODE] Error stack:', error.stack);
       return {
         success: false,
         error: error.message,
@@ -185,7 +186,7 @@ function registerPrivateModeHandlers() {
       };
 
     } catch (error) {
-      console.error('❌ [PRIVATE-MODE] Intent parsing error:', error);
+      logger.error('❌ [PRIVATE-MODE] Intent parsing error:', error);
       return {
         success: false,
         error: error.message
@@ -207,7 +208,7 @@ function registerPrivateModeHandlers() {
       };
 
     } catch (error) {
-      console.error('❌ [PRIVATE-MODE] Custom action error:', error);
+      logger.error('❌ [PRIVATE-MODE] Custom action error:', error);
       return {
         success: false,
         error: error.message
@@ -232,7 +233,7 @@ function registerPrivateModeHandlers() {
       };
 
     } catch (error) {
-      console.error('❌ [PRIVATE-MODE] Health check error:', error);
+      logger.error('❌ [PRIVATE-MODE] Health check error:', error);
       return {
         success: false,
         orchestrator: 'error',
@@ -259,7 +260,7 @@ function registerPrivateModeHandlers() {
         traces
       };
     } catch (error) {
-      console.error('❌ [IPC:WORKFLOW] Failed to get traces:', error.message);
+      logger.error('❌ [IPC:WORKFLOW] Failed to get traces:', error.message);
       return {
         success: false,
         error: error.message,
@@ -281,7 +282,7 @@ function registerPrivateModeHandlers() {
         message: 'Trace history cleared'
       };
     } catch (error) {
-      console.error('❌ [IPC:WORKFLOW] Failed to clear traces:', error.message);
+      logger.error('❌ [IPC:WORKFLOW] Failed to clear traces:', error.message);
       return {
         success: false,
         error: error.message
@@ -295,10 +296,10 @@ function registerPrivateModeHandlers() {
    */
   ipcMain.handle('selection:check', async (event) => {
     try {
-      console.log('📋 [SELECTION:CHECK] Checking for highlighted text...');
+      logger.debug('📋 [SELECTION:CHECK] Checking for highlighted text...');
       
       if (!global.selectionDetector) {
-        console.warn('⚠️  [SELECTION:CHECK] Selection detector not initialized');
+        logger.warn('⚠️  [SELECTION:CHECK] Selection detector not initialized');
         return null;
       }
       
@@ -306,7 +307,7 @@ function registerPrivateModeHandlers() {
       const selectionContext = await global.selectionDetector.getSelectionWithContext();
       
       if (selectionContext) {
-        console.log('📋 [SELECTION:CHECK] Found selection:', {
+        logger.debug('📋 [SELECTION:CHECK] Found selection:', {
           preview: selectionContext.text.substring(0, 100),
           sourceApp: selectionContext.sourceApp,
           method: selectionContext.method
@@ -321,11 +322,11 @@ function registerPrivateModeHandlers() {
         };
       }
       
-      console.log('📋 [SELECTION:CHECK] No selection detected');
+      logger.debug('📋 [SELECTION:CHECK] No selection detected');
       return null;
       
     } catch (error) {
-      console.error('❌ [SELECTION:CHECK] Failed:', error);
+      logger.error('❌ [SELECTION:CHECK] Failed:', error);
       return null;
     }
   });
@@ -339,11 +340,11 @@ function registerPrivateModeHandlers() {
         global.selectionDetector.clearPersistedSelection();
       }
     } catch (error) {
-      console.error('❌ [SELECTION:CLEAR] Failed:', error);
+      logger.error('❌ [SELECTION:CLEAR] Failed:', error);
     }
   });
 
-  console.log('✅ Private mode IPC handlers registered');
+  logger.debug('✅ Private mode IPC handlers registered');
 }
 
 module.exports = {

@@ -5,6 +5,7 @@
 
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const logger = require('./../logger.cjs');
 const execAsync = promisify(exec);
 
 // AppleScript commands for getting browser URLs
@@ -62,8 +63,8 @@ class VirtualScreenDOM {
     this.requestAnalysisCallback = requestAnalysisCallback; // Callback to request analysis from main thread
     this.debugMode = process.env.DEBUG_VIRTUAL_DOM_SCREEN === 'true'; // Debug flag for toasts
     this.analysisMethod = ANALYSIS_METHOD; // Analysis method preference
-    console.log(`[WORKER] 🐛 Debug mode: ${this.debugMode} (env: ${process.env.DEBUG_VIRTUAL_DOM_SCREEN})`);
-    console.log(`[WORKER] 🤖 Analysis method: ${this.analysisMethod}`);
+    logger.debug(`[WORKER] 🐛 Debug mode: ${this.debugMode} (env: ${process.env.DEBUG_VIRTUAL_DOM_SCREEN})`);
+    logger.debug(`[WORKER] 🤖 Analysis method: ${this.analysisMethod}`);
   }
 
   /**
@@ -74,27 +75,27 @@ class VirtualScreenDOM {
   async getBrowserURL(appName) {
     const script = BROWSER_URL_SCRIPTS[appName];
     if (!script) {
-      console.log(`[WORKER] ⚠️  No AppleScript for ${appName}`);
+      logger.debug(`[WORKER] ⚠️  No AppleScript for ${appName}`);
       return null; // Not a supported browser
     }
     
-    // console.log(`[WORKER] 📜 Running AppleScript for ${appName}...`);
-    // console.log(`[WORKER] 📜 Script: ${script}`);
+    // logger.debug(`[WORKER] 📜 Running AppleScript for ${appName}...`);
+    // logger.debug(`[WORKER] 📜 Script: ${script}`);
     
     try {
       const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
       const url = stdout.trim();
       
       if (stderr) {
-        console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
+        logger.debug(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
       }
       
-      // console.log(`[WORKER] 📜 AppleScript stdout: "${url}"`);
+      // logger.debug(`[WORKER] 📜 AppleScript stdout: "${url}"`);
       return url || null;
     } catch (error) {
       // Browser might not be running or AppleScript failed
-      console.log(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
-      console.log(`[WORKER] ❌ Error code: ${error.code}`);
+      logger.debug(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
+      logger.debug(`[WORKER] ❌ Error code: ${error.code}`);
       return null;
     }
   }
@@ -107,25 +108,25 @@ class VirtualScreenDOM {
   async getBrowserTabTitle(appName) {
     const script = BROWSER_TITLE_SCRIPTS[appName];
     if (!script) {
-      console.log(`[WORKER] ⚠️  No tab title script for ${appName}`);
+      logger.debug(`[WORKER] ⚠️  No tab title script for ${appName}`);
       return null; // Not a supported browser
     }
     
-    // console.log(`[WORKER] 📜 Getting tab title for ${appName}...`);
+    // logger.debug(`[WORKER] 📜 Getting tab title for ${appName}...`);
     
     try {
       const { stdout, stderr } = await execAsync(`osascript -e '${script}'`);
       const tabTitle = stdout.trim();
       
       if (stderr) {
-        console.log(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
+        logger.debug(`[WORKER] ⚠️  AppleScript stderr: ${stderr}`);
       }
       
-      // console.log(`[WORKER] 📜 Tab title: "${tabTitle}"`);
+      // logger.debug(`[WORKER] 📜 Tab title: "${tabTitle}"`);
       return tabTitle || null;
     } catch (error) {
       // Browser might not be running or AppleScript failed
-      console.log(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
+      logger.debug(`[WORKER] ❌ AppleScript error for ${appName}:`, error.message);
       return null;
     }
   }
@@ -134,7 +135,7 @@ class VirtualScreenDOM {
    * Start the virtual DOM system
    */
   async start() {
-    console.log('[WORKER] 👁️  Starting Virtual Screen DOM...');
+    logger.debug('[WORKER] 👁️  Starting Virtual Screen DOM...');
     
     // Start periodic cleanup
     this.startCleanup();
@@ -142,14 +143,14 @@ class VirtualScreenDOM {
     // Start watching for window focus changes
     this.startFocusWatcher();
     
-    console.log('[WORKER] ✅ Virtual Screen DOM started');
+    logger.debug('[WORKER] ✅ Virtual Screen DOM started');
   }
 
   /**
    * Watch for window focus changes using node-window-manager directly
    */
   async startFocusWatcher() {
-    console.log('[WORKER] 🔍 Starting active window listener...');
+    logger.debug('[WORKER] 🔍 Starting active window listener...');
     
     try {
       // Dynamic import for ES module - get windowManager directly
@@ -160,7 +161,7 @@ class VirtualScreenDOM {
         throw new Error('Could not load windowManager from node-window-manager');
       }
       
-      console.log('[WORKER] 📦 Using node-window-manager directly for better control');
+      logger.debug('[WORKER] 📦 Using node-window-manager directly for better control');
       
       // Poll for active window changes every 500ms
       let lastWindowPath = null;
@@ -175,7 +176,7 @@ class VirtualScreenDOM {
           const activeWindow = windowManager.getActiveWindow();
           
           if (!activeWindow) {
-            console.log('[WORKER] ⚠️  No active window found');
+            logger.debug('[WORKER] ⚠️  No active window found');
             return;
           }
           
@@ -200,9 +201,9 @@ class VirtualScreenDOM {
             lastUrl = currentUrl;
             
             // Log only when window actually changes
-            console.log(`[WORKER] 👁️  Active window: ${activeWindow.getTitle ? activeWindow.getTitle() : 'Unknown'}`);
+            logger.debug(`[WORKER] 👁️  Active window: ${activeWindow.getTitle ? activeWindow.getTitle() : 'Unknown'}`);
             
-            console.log('[WORKER] 🔔 Window changed detected!');
+            logger.debug('[WORKER] 🔔 Window changed detected!');
             
             // Get window details
             let title = activeWindow.getTitle ? activeWindow.getTitle() : (activeWindow.title || '');
@@ -212,22 +213,22 @@ class VirtualScreenDOM {
             const appMatch = path.match(/([^/\\]+)\.(app|exe)$/i);
             const app = appMatch ? appMatch[1] : path.split(/[/\\]/).pop() || 'Unknown';
             
-            console.log(`[WORKER] 🔍 App detected: "${app}" (path: ${path})`);
-            console.log(`[WORKER] 🔍 Is browser? ${!!BROWSER_URL_SCRIPTS[app]}`);
+            logger.debug(`[WORKER] 🔍 App detected: "${app}" (path: ${path})`);
+            logger.debug(`[WORKER] 🔍 Is browser? ${!!BROWSER_URL_SCRIPTS[app]}`);
             
             // For browsers, get the actual tab title via AppleScript
             if (BROWSER_TITLE_SCRIPTS[app]) {
               const tabTitle = await this.getBrowserTabTitle(app);
               if (tabTitle) {
                 title = tabTitle;
-                console.log(`[WORKER] 📑 Using browser tab title: "${title}"`);
+                logger.debug(`[WORKER] 📑 Using browser tab title: "${title}"`);
               }
             }
             
             // Use the URL we already fetched (or fetch if not a browser)
             let url = currentUrl;
             if (url) {
-              console.log(`[WORKER] 🌐 URL: ${url}`);
+              logger.debug(`[WORKER] 🌐 URL: ${url}`);
             }
             
             // Create unique window ID (include URL for browsers to detect tab changes)
@@ -235,9 +236,9 @@ class VirtualScreenDOM {
               ? `${app}-${url}`.substring(0, 150) // Use URL for browsers
               : `${app}-${title}`.substring(0, 100); // Use title for other apps
             
-            console.log(`[WORKER] 🆔 WindowId: ${windowId}`);
-            console.log(`[WORKER] 🆔 Previous activeWindow: ${this.activeWindow}`);
-            console.log(`[WORKER] 🆔 WindowId changed? ${windowId !== this.activeWindow}`);
+            logger.debug(`[WORKER] 🆔 WindowId: ${windowId}`);
+            logger.debug(`[WORKER] 🆔 Previous activeWindow: ${this.activeWindow}`);
+            logger.debug(`[WORKER] 🆔 WindowId changed? ${windowId !== this.activeWindow}`);
             
             if (windowId !== this.activeWindow && !this.isAnalyzing) {
               // CRITICAL: Skip ThinkDrop AI (Electron) - we never want to analyze it
@@ -246,13 +247,13 @@ class VirtualScreenDOM {
                                    title.toLowerCase().includes('thinkdrop');
               
               if (isThinkDropAI) {
-                console.log(`[WORKER] ⏭️  Skipping ThinkDrop AI window (${app})`);
+                logger.debug(`[WORKER] ⏭️  Skipping ThinkDrop AI window (${app})`);
                 // Still update activeWindow to track it, but don't analyze
                 this.activeWindow = windowId;
                 return;
               }
               
-              console.log(`[WORKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
+              logger.debug(`[WORKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
               
               // Show hotkey toast for window change (using simple toast overlay)
               // For browsers, show URL domain; for others, show title
@@ -279,10 +280,10 @@ class VirtualScreenDOM {
                     title,
                     url
                   });
-                  console.log(`📤 [WORKER] Sent activeWindowUpdate: ${windowId}`);
+                  logger.debug(`📤 [WORKER] Sent activeWindowUpdate: ${windowId}`);
                 }
               } catch (error) {
-                console.warn(`⚠️  [WORKER] Failed to send activeWindowUpdate:`, error.message);
+                logger.warn(`⚠️  [WORKER] Failed to send activeWindowUpdate:`, error.message);
               }
               
               // DISABLED: Pre-scanning causes too many issues
@@ -292,11 +293,11 @@ class VirtualScreenDOM {
               // 
               // NEW APPROACH: Only analyze on-demand when user asks a question
               // The screenIntelligence node will check cache and request fresh analysis if needed
-              console.log(`[WORKER] 📊 Window tracked, analysis will happen on-demand only`);
+              logger.debug(`[WORKER] 📊 Window tracked, analysis will happen on-demand only`);
             }
           }
         } catch (error) {
-          console.error('[WORKER] ❌ Error checking active window:', error);
+          logger.error('[WORKER] ❌ Error checking active window:', error);
         }
       };
       
@@ -306,9 +307,9 @@ class VirtualScreenDOM {
       // Run immediately once
       checkActiveWindow();
       
-      console.log('[WORKER] ✅ Active window listener started (polling every 500ms)');
+      logger.debug('[WORKER] ✅ Active window listener started (polling every 500ms)');
     } catch (error) {
-      console.error('[WORKER] ❌ Failed to start window listener:', error);
+      logger.error('[WORKER] ❌ Failed to start window listener:', error);
       throw error;
     }
   }
@@ -323,7 +324,7 @@ class VirtualScreenDOM {
   selectAnalysisMethod(app, url, title) {
     // 🎯 Check global configuration first
     if (this.analysisMethod !== 'auto') {
-      console.log(`[WORKER] ⚙️  Using configured method: ${this.analysisMethod}`);
+      logger.debug(`[WORKER] ⚙️  Using configured method: ${this.analysisMethod}`);
       return this.analysisMethod;
     }
 
@@ -334,40 +335,40 @@ class VirtualScreenDOM {
 
     // Use OCR for PDFs
     if (urlLower.includes('.pdf') || titleLower.includes('.pdf')) {
-      console.log(`[WORKER] 📄 PDF detected → OCR`);
+      logger.debug(`[WORKER] 📄 PDF detected → OCR`);
       return 'ocr';
     }
 
     // Use OCR for image files
     const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.svg'];
     if (imageExtensions.some(ext => urlLower.includes(ext) || titleLower.includes(ext))) {
-      console.log(`[WORKER] 🖼️  Image detected → OCR`);
+      logger.debug(`[WORKER] 🖼️  Image detected → OCR`);
       return 'ocr';
     }
 
     // Use OCR for specific apps (non-text-selectable content)
     const ocrApps = ['preview', 'acrobat', 'vlc', 'quicktime', 'photos', 'photoshop', 'figma', 'sketch', 'zoom', 'teams'];
     if (ocrApps.some(ocrApp => appLower.includes(ocrApp))) {
-      console.log(`[WORKER] 📱 ${app} detected → OCR`);
+      logger.debug(`[WORKER] 📱 ${app} detected → OCR`);
       return 'ocr';
     }
 
     // Use NutJS for web browsers (text-selectable)
     const browsers = ['chrome', 'safari', 'firefox', 'edge', 'brave', 'arc', 'vivaldi'];
     if (browsers.some(browser => appLower.includes(browser))) {
-      console.log(`[WORKER] 🌐 Browser detected → NutJS`);
+      logger.debug(`[WORKER] 🌐 Browser detected → NutJS`);
       return 'nutjs';
     }
 
     // Use NutJS for text editors and IDEs
     const textApps = ['code', 'vscode', 'sublime', 'atom', 'notepad', 'textedit', 'terminal'];
     if (textApps.some(textApp => appLower.includes(textApp))) {
-      console.log(`[WORKER] 📝 Text app detected → NutJS`);
+      logger.debug(`[WORKER] 📝 Text app detected → NutJS`);
       return 'nutjs';
     }
 
     // Default to auto (let HybridAnalyzer decide)
-    console.log(`[WORKER] ⚡ Default → auto`);
+    logger.debug(`[WORKER] ⚡ Default → auto`);
     return 'auto';
   }
 
@@ -434,7 +435,7 @@ class VirtualScreenDOM {
    */
   async analyzeCurrentWindow(windowId = null) {
     if (this.isAnalyzing) {
-      console.log('⏳ Analysis already in progress, skipping...');
+      logger.debug('⏳ Analysis already in progress, skipping...');
       return;
     }
 
@@ -447,7 +448,7 @@ class VirtualScreenDOM {
       }
       const startTime = Date.now();
 
-      console.log(`🔍 Analyzing window: ${windowId}`);
+      logger.debug(`🔍 Analyzing window: ${windowId}`);
       
       // Show contextual "analyzing" message
       this.showToast(this.getContextualMessage(windowId, 'start'), 'info', 2000);
@@ -486,20 +487,20 @@ class VirtualScreenDOM {
         
         const contextMessage = this.getContextualMessage(windowId, 'success');
         const message = `✓ ${contextMessage} (${data.elements.length} elements, ${duration}s)`;
-        console.log(`✅ ${message}`);
+        logger.debug(`✅ ${message}`);
         this.showToast(contextMessage, 'success', 1500);
         
         // 🆕 Generate Page Insight automatically after successful analysis
         this.generatePageInsight(data, windowId).catch(err => {
-          console.warn('⚠️ Failed to generate Page Insight:', err.message);
+          logger.warn('⚠️ Failed to generate Page Insight:', err.message);
         });
       } else {
-        console.log('⚠️  No elements found');
+        logger.debug('⚠️  No elements found');
         this.showToast('No elements found', 'warning', 2000);
       }
 
     } catch (error) {
-      console.error('❌ Analysis failed:', error.message);
+      logger.error('❌ Analysis failed:', error.message);
       const contextMessage = this.getContextualMessage(windowId || 'screen', 'error');
       this.showToast(contextMessage, 'error', 2000);
     } finally {
@@ -523,10 +524,10 @@ class VirtualScreenDOM {
             app,
             title
           });
-          console.log(`📤 [WORKER] Sent showWindowChangeToast: ${app} - ${title}`);
+          logger.debug(`📤 [WORKER] Sent showWindowChangeToast: ${app} - ${title}`);
         }
       } catch (error) {
-        console.log(`[WORKER] 📢 Window changed: ${app} - ${title}`);
+        logger.debug(`[WORKER] 📢 Window changed: ${app} - ${title}`);
       }
     } else {
       // Main thread - show hotkey toast directly
@@ -536,9 +537,9 @@ class VirtualScreenDOM {
           <strong>${app}</strong>${title ? `<br><span style="opacity: 0.8;">${title}</span>` : ''}
         </div>`;
         showHotkeyToast(message, { persistent: false, duration: 2000 });
-        console.log(`🍞 [MAIN] Showing window change toast: ${app}`);
+        logger.debug(`🍞 [MAIN] Showing window change toast: ${app}`);
       } catch (error) {
-        console.log(`📢 Window changed: ${app} - ${title}`);
+        logger.debug(`📢 Window changed: ${app} - ${title}`);
       }
     }
   }
@@ -551,7 +552,7 @@ class VirtualScreenDOM {
   showToast(message, type, duration) {
     // Check if we're in a worker thread
     const isWorker = typeof process !== 'undefined' && process.env.WORKER_THREAD === 'true';
-    console.log(`[WORKER] 🐛 showToast called: isWorker=${isWorker}, debugMode=${this.debugMode}, message="${message}"`);
+    logger.debug(`[WORKER] 🐛 showToast called: isWorker=${isWorker}, debugMode=${this.debugMode}, message="${message}"`);
     
     if (isWorker) {
       // Worker thread - send to main thread if debug mode
@@ -568,10 +569,10 @@ class VirtualScreenDOM {
             });
           }
         } catch (error) {
-          console.log(`[WORKER] 📢 Toast (debug): ${message}`);
+          logger.debug(`[WORKER] 📢 Toast (debug): ${message}`);
         }
       } else if (this.debugMode) {
-        console.log(`[WORKER] 📢 Toast (debug): ${message}`);
+        logger.debug(`[WORKER] 📢 Toast (debug): ${message}`);
       }
     } else {
       // Main thread - show toast directly
@@ -579,7 +580,7 @@ class VirtualScreenDOM {
         const { showToast } = require('../windows/screen-intelligence-overlay.cjs');
         showToast(message, type, duration);
       } catch (error) {
-        console.log(`📢 Toast: ${message}`);
+        logger.debug(`📢 Toast: ${message}`);
       }
     }
   }
@@ -609,7 +610,7 @@ class VirtualScreenDOM {
       if (age > ttl) {
         this.cache.delete(windowId);
         removed++;
-        console.log(`🗑️  Removed stale cache for ${windowId} (age: ${Math.round(age / 1000)}s)`);
+        logger.debug(`🗑️  Removed stale cache for ${windowId} (age: ${Math.round(age / 1000)}s)`);
       }
     }
 
@@ -626,7 +627,7 @@ class VirtualScreenDOM {
     }
 
     if (removed > 0) {
-      console.log(`🧹 Cleanup: Removed ${removed} entries, ${this.cache.size} remaining`);
+      logger.debug(`🧹 Cleanup: Removed ${removed} entries, ${this.cache.size} remaining`);
     }
   }
 
@@ -654,7 +655,7 @@ class VirtualScreenDOM {
     this.cache.set(windowId, screenData);
     this.activeWindow = windowId;
 
-    console.log(`✅ [WORKER] Cached ${screenData.elementCount} elements for ${windowId}`);
+    logger.debug(`✅ [WORKER] Cached ${screenData.elementCount} elements for ${windowId}`);
     
     // Note: cacheUpdate is sent by cacheAnalysisResult() to avoid duplication
     
@@ -705,7 +706,7 @@ class VirtualScreenDOM {
     const cached = this.cache.get(targetWindow);
 
     if (!cached) {
-      console.log('❌ Cache miss');
+      logger.debug('❌ Cache miss');
       return null;
     }
 
@@ -713,11 +714,11 @@ class VirtualScreenDOM {
     
     // Check if stale
     if (age > CACHE_CONFIG.STALE_THRESHOLD) {
-      console.log(`⚠️  Cache stale (${Math.round(age / 1000)}s old)`);
+      logger.debug(`⚠️  Cache stale (${Math.round(age / 1000)}s old)`);
       return null;
     }
 
-    console.log(`✅ Cache hit (${Math.round(age / 1000)}s old)`);
+    logger.debug(`✅ Cache hit (${Math.round(age / 1000)}s old)`);
     return cached;
   }
 
@@ -807,11 +808,11 @@ class VirtualScreenDOM {
       const ocrText = fullTextElement?.value || '';
       
       if (!ocrText || ocrText.length < 50) {
-        console.log('⏭️ [VIRTUAL_DOM] Skipping Page Insight - insufficient OCR text');
+        logger.debug('⏭️ [VIRTUAL_DOM] Skipping Page Insight - insufficient OCR text');
         return;
       }
       
-      console.log('💡 [VIRTUAL_DOM] Generating Page Insight...');
+      logger.debug('💡 [VIRTUAL_DOM] Generating Page Insight...');
       
       // Get MCP client and insight handlers
       const MCPClient = require('./mcp/MCPClient.cjs');
@@ -836,13 +837,13 @@ class VirtualScreenDOM {
       });
       
       if (state.insights) {
-        console.log(`✅ [VIRTUAL_DOM] Page Insight generated: ${state.insights.links.length} links`);
+        logger.debug(`✅ [VIRTUAL_DOM] Page Insight generated: ${state.insights.links.length} links`);
         sendInsightUpdate(state.insights);
       } else {
         sendInsightError('No insights generated');
       }
     } catch (error) {
-      console.error('❌ [VIRTUAL_DOM] Page Insight generation failed:', error);
+      logger.error('❌ [VIRTUAL_DOM] Page Insight generation failed:', error);
       const { sendInsightError } = require('../handlers/ipc-handlers-insight.cjs');
       sendInsightError(error.message);
     }
@@ -881,7 +882,7 @@ class VirtualScreenDOM {
    */
   cacheAnalysisResult(analysisData) {
     if (!analysisData || !analysisData.windowId) {
-      console.warn('[WORKER] ⚠️  Cannot cache analysis: missing windowId');
+      logger.warn('[WORKER] ⚠️  Cannot cache analysis: missing windowId');
       return;
     }
     
@@ -889,7 +890,7 @@ class VirtualScreenDOM {
     let plainTextClean = '';
     if (analysisData.plainText?.content) {
       plainTextClean = this.normalizePlainText(analysisData.plainText.content);
-      console.log(`[WORKER] 🧹 Normalized plain text: ${plainTextClean.length} chars (from ${analysisData.plainText.content.length})`);
+      logger.debug(`[WORKER] 🧹 Normalized plain text: ${plainTextClean.length} chars (from ${analysisData.plainText.content.length})`);
     }
     
     // Extract app name and title for easy LLM access
@@ -918,8 +919,8 @@ class VirtualScreenDOM {
     };
     
     this.cache.set(analysisData.windowId, cacheEntry);
-    console.log(`[WORKER] ✅ Cached analysis for ${analysisData.windowId}`);
-    console.log(`[WORKER] 🪟 Active window context: ${cacheEntry.activeWindowContext.displayName}`);
+    logger.debug(`[WORKER] ✅ Cached analysis for ${analysisData.windowId}`);
+    logger.debug(`[WORKER] 🪟 Active window context: ${cacheEntry.activeWindowContext.displayName}`);
     
     // 🆕 Send cache update to main thread for semantic cache
     try {
@@ -931,17 +932,17 @@ class VirtualScreenDOM {
           data: cacheEntry,
           timestamp: cacheEntry.timestamp
         });
-        console.log(`📤 [WORKER] Sent cacheUpdate to main thread for ${analysisData.windowId}`);
+        logger.debug(`📤 [WORKER] Sent cacheUpdate to main thread for ${analysisData.windowId}`);
       }
     } catch (error) {
-      console.warn(`⚠️  [WORKER] Failed to send cacheUpdate:`, error.message);
+      logger.warn(`⚠️  [WORKER] Failed to send cacheUpdate:`, error.message);
     }
     
     // Enforce max cache size
     if (this.cache.size > CACHE_CONFIG.MAX_CACHED_WINDOWS) {
       const oldestKey = this.cache.keys().next().value;
       this.cache.delete(oldestKey);
-      console.log(`[WORKER] 🗑️  Removed oldest cache entry: ${oldestKey}`);
+      logger.debug(`[WORKER] 🗑️  Removed oldest cache entry: ${oldestKey}`);
     }
   }
 
@@ -957,7 +958,7 @@ class VirtualScreenDOM {
       clearInterval(this.windowListener);
     }
     this.cache.clear();
-    console.log('[WORKER] 🛑 Virtual Screen DOM stopped');
+    logger.debug('[WORKER] 🛑 Virtual Screen DOM stopped');
   }
 }
 

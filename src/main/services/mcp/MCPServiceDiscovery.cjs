@@ -7,6 +7,7 @@
 
 const fetch = require('node-fetch');
 
+const logger = require('./../../logger.cjs');
 class MCPServiceDiscovery {
   constructor(configManager) {
     this.configManager = configManager;
@@ -18,7 +19,7 @@ class MCPServiceDiscovery {
    * @returns {Promise<object>} Service capabilities
    */
   async discoverService(endpoint) {
-    console.log(`🔍 Discovering service at ${endpoint}...`);
+    logger.debug(`🔍 Discovering service at ${endpoint}...`);
 
     try {
       // 1. Fetch capabilities
@@ -36,12 +37,12 @@ class MCPServiceDiscovery {
       // 2. Validate capabilities schema
       this.validateCapabilities(capabilities);
 
-      console.log(`✅ Discovered service: ${capabilities.name} v${capabilities.version}`);
+      logger.debug(`✅ Discovered service: ${capabilities.name} v${capabilities.version}`);
 
       return capabilities;
 
     } catch (error) {
-      console.error(`❌ Service discovery failed for ${endpoint}:`, error.message);
+      logger.error(`❌ Service discovery failed for ${endpoint}:`, error.message);
       throw new Error(`Service discovery failed: ${error.message}`);
     }
   }
@@ -75,7 +76,7 @@ class MCPServiceDiscovery {
       throw new Error(`Invalid version format: ${capabilities.version}. Expected semver (e.g., 1.0.0)`);
     }
 
-    console.log(`✅ Capabilities validated for ${capabilities.name}`);
+    logger.debug(`✅ Capabilities validated for ${capabilities.name}`);
   }
 
   /**
@@ -85,7 +86,7 @@ class MCPServiceDiscovery {
    * @returns {Promise<object>} Health status
    */
   async checkHealth(endpoint, healthPath = '/health') {
-    console.log(`🏥 Checking health of ${endpoint}...`);
+    logger.debug(`🏥 Checking health of ${endpoint}...`);
 
     try {
       const startTime = Date.now();
@@ -111,12 +112,12 @@ class MCPServiceDiscovery {
         // Health endpoint might not return JSON
       }
 
-      console.log(`✅ Health check: ${health.status} (${duration}ms)`);
+      logger.debug(`✅ Health check: ${health.status} (${duration}ms)`);
 
       return health;
 
     } catch (error) {
-      console.error(`❌ Health check failed for ${endpoint}:`, error.message);
+      logger.error(`❌ Health check failed for ${endpoint}:`, error.message);
       return {
         status: 'down',
         error: error.message,
@@ -133,7 +134,7 @@ class MCPServiceDiscovery {
    * @returns {Promise<object>} Registered service
    */
   async registerService(endpoint, apiKey, options = {}) {
-    console.log(`📝 Registering service at ${endpoint}...`);
+    logger.debug(`📝 Registering service at ${endpoint}...`);
 
     try {
       // 1. Discover capabilities
@@ -166,7 +167,7 @@ class MCPServiceDiscovery {
       // 4. Register in database
       await this.configManager.addService(serviceConfig);
 
-      console.log(`✅ Service registered: ${capabilities.name}`);
+      logger.debug(`✅ Service registered: ${capabilities.name}`);
 
       return {
         service: serviceConfig,
@@ -175,7 +176,7 @@ class MCPServiceDiscovery {
       };
 
     } catch (error) {
-      console.error(`❌ Service registration failed:`, error.message);
+      logger.error(`❌ Service registration failed:`, error.message);
       throw error;
     }
   }
@@ -186,7 +187,7 @@ class MCPServiceDiscovery {
    * @returns {Promise<object>} Updated service
    */
   async updateServiceCapabilities(serviceName) {
-    console.log(`🔄 Updating capabilities for ${serviceName}...`);
+    logger.debug(`🔄 Updating capabilities for ${serviceName}...`);
 
     try {
       // 1. Get existing service
@@ -209,7 +210,7 @@ class MCPServiceDiscovery {
 
       await this.configManager.updateService(serviceName, updates);
 
-      console.log(`✅ Capabilities updated for ${serviceName}`);
+      logger.debug(`✅ Capabilities updated for ${serviceName}`);
 
       return {
         service: serviceName,
@@ -218,7 +219,7 @@ class MCPServiceDiscovery {
       };
 
     } catch (error) {
-      console.error(`❌ Failed to update capabilities for ${serviceName}:`, error.message);
+      logger.error(`❌ Failed to update capabilities for ${serviceName}:`, error.message);
       throw error;
     }
   }
@@ -229,7 +230,7 @@ class MCPServiceDiscovery {
    * @returns {Promise<Array<object>>} Discovery results
    */
   async discoverMultiple(services) {
-    console.log(`🔍 Discovering ${services.length} services...`);
+    logger.debug(`🔍 Discovering ${services.length} services...`);
 
     const results = await Promise.allSettled(
       services.map(({ endpoint, apiKey, options }) => 
@@ -240,7 +241,7 @@ class MCPServiceDiscovery {
     const successful = results.filter(r => r.status === 'fulfilled').length;
     const failed = results.filter(r => r.status === 'rejected').length;
 
-    console.log(`✅ Discovery complete: ${successful} successful, ${failed} failed`);
+    logger.debug(`✅ Discovery complete: ${successful} successful, ${failed} failed`);
 
     return results.map((result, index) => ({
       endpoint: services[index].endpoint,
@@ -315,7 +316,7 @@ class MCPServiceDiscovery {
    * @param {number} intervalMs - Check interval in milliseconds
    */
   startHealthMonitoring(intervalMs = 300000) { // 5 minutes default
-    console.log(`🏥 Starting health monitoring (interval: ${intervalMs}ms)...`);
+    logger.debug(`🏥 Starting health monitoring (interval: ${intervalMs}ms)...`);
 
     this.healthCheckInterval = setInterval(async () => {
       const services = this.configManager.getEnabledServices();
@@ -339,7 +340,7 @@ class MCPServiceDiscovery {
 
             // Disable service after 3 consecutive failures
             if (current + 1 >= 3) {
-              console.warn(`⚠️ Disabling ${service.name} after 3 consecutive failures`);
+              logger.warn(`⚠️ Disabling ${service.name} after 3 consecutive failures`);
               await this.configManager.disableService(service.name);
             }
           } else {
@@ -350,12 +351,12 @@ class MCPServiceDiscovery {
           }
 
         } catch (error) {
-          console.error(`❌ Health check failed for ${service.name}:`, error.message);
+          logger.error(`❌ Health check failed for ${service.name}:`, error.message);
         }
       }
     }, intervalMs);
 
-    console.log('✅ Health monitoring started');
+    logger.debug('✅ Health monitoring started');
   }
 
   /**
@@ -365,7 +366,7 @@ class MCPServiceDiscovery {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
-      console.log('🛑 Health monitoring stopped');
+      logger.debug('🛑 Health monitoring stopped');
     }
   }
 }

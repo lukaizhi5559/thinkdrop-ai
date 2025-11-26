@@ -4,11 +4,12 @@
  * Adds the new knowledge.answer endpoint to phi4 service actions
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '005_add_knowledge_action',
   
   async up(db) {
-    console.log('🔄 Running migration: 005_add_knowledge_action');
+    logger.debug('🔄 Running migration: 005_add_knowledge_action');
     
     try {
       // Get current phi4 actions
@@ -17,7 +18,7 @@ module.exports = {
       `);
       
       if (service.length === 0) {
-        console.log('  ⏭️  Phi4 service not found, skipping migration');
+        logger.debug('  ⏭️  Phi4 service not found, skipping migration');
         return;
       }
       
@@ -34,20 +35,20 @@ module.exports = {
           WHERE name = 'phi4'
         `, [JSON.stringify(currentActions)]);
         
-        console.log('  ✅ Added knowledge.answer action to phi4 service');
-        console.log(`     Actions: ${currentActions.join(', ')}`);
+        logger.debug('  ✅ Added knowledge.answer action to phi4 service');
+        logger.debug(`     Actions: ${currentActions.join(', ')}`);
       } else {
-        console.log('  ⏭️  knowledge.answer already exists');
+        logger.debug('  ⏭️  knowledge.answer already exists');
       }
       
     } catch (error) {
-      console.error('  ❌ Migration failed:', error.message);
+      logger.error('  ❌ Migration failed:', error.message);
       throw error;
     }
   },
   
   async down(db) {
-    console.log('🔄 Rolling back migration: 005_add_knowledge_action');
+    logger.debug('🔄 Rolling back migration: 005_add_knowledge_action');
     
     try {
       // Get current phi4 actions
@@ -56,7 +57,7 @@ module.exports = {
       `);
       
       if (service.length === 0) {
-        console.log('  ⏭️  Phi4 service not found, skipping rollback');
+        logger.debug('  ⏭️  Phi4 service not found, skipping rollback');
         return;
       }
       
@@ -72,10 +73,10 @@ module.exports = {
         WHERE name = 'phi4'
       `, [JSON.stringify(updatedActions)]);
       
-      console.log('  ✅ Removed knowledge.answer action from phi4 service');
+      logger.debug('  ✅ Removed knowledge.answer action from phi4 service');
       
     } catch (error) {
-      console.error('  ❌ Rollback failed:', error.message);
+      logger.error('  ❌ Rollback failed:', error.message);
       throw error;
     }
   }

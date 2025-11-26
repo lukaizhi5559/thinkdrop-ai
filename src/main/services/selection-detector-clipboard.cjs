@@ -1,6 +1,7 @@
 const { clipboard, globalShortcut, screen } = require('electron');
 const { execSync } = require('child_process');
 
+const logger = require('./../logger.cjs');
 /**
  * Event-driven selection detector - much more efficient!
  */
@@ -16,20 +17,20 @@ class SelectionDetector {
    * Start selection monitoring using event-driven approach
    */
   startSelectionMonitoring() {
-    console.log('👀 [SELECTION_DETECTOR] Starting event-driven selection monitoring');
+    logger.debug('👀 [SELECTION_DETECTOR] Starting event-driven selection monitoring');
     
     // Start clipboard monitoring (lightweight)
     this.startClipboardMonitoring();
     
     this.isActive = true;
-    console.log('✅ [SELECTION_DETECTOR] Event-driven monitoring active');
+    logger.debug('✅ [SELECTION_DETECTOR] Event-driven monitoring active');
   }
 
   /**
    * Monitor clipboard changes for text selection (much more efficient)
    */
   startClipboardMonitoring() {
-    console.log('📋 [SELECTION_DETECTOR] Starting clipboard monitoring for selection detection');
+    logger.debug('📋 [SELECTION_DETECTOR] Starting clipboard monitoring for selection detection');
     
     let lastClipboard = clipboard.readText();
     
@@ -49,8 +50,8 @@ class SelectionDetector {
           const timeSinceLastShow = now - this.lastButtonShowTime;
           
           if (currentClipboard !== this.lastDetectedSelection && timeSinceLastShow > 2000) {
-            console.log('📋 [SELECTION_DETECTOR] New text detected in clipboard');
-            console.log(`📝 [SELECTION_DETECTOR] Text: "${currentClipboard.substring(0, 50)}..."`);
+            logger.debug('📋 [SELECTION_DETECTOR] New text detected in clipboard');
+            logger.debug(`📝 [SELECTION_DETECTOR] Text: "${currentClipboard.substring(0, 50)}..."`);
             
             this.lastDetectedSelection = currentClipboard;
             this.lastButtonShowTime = now;
@@ -76,23 +77,23 @@ class SelectionDetector {
       // Get current mouse position
       const cursorPos = screen.getCursorScreenPoint();
       
-      console.log('🎯 [SELECTION_DETECTOR] Showing floating button at current mouse position');
-      console.log(`🖱️  [SELECTION_DETECTOR] Mouse position: (${cursorPos.x}, ${cursorPos.y})`);
+      logger.debug('🎯 [SELECTION_DETECTOR] Showing floating button at current mouse position');
+      logger.debug(`🖱️  [SELECTION_DETECTOR] Mouse position: (${cursorPos.x}, ${cursorPos.y})`);
       
       // Calculate button position (slightly offset from cursor)
       const buttonX = cursorPos.x + 15;
       const buttonY = cursorPos.y + 25;
       
-      console.log(`📍 [SELECTION_DETECTOR] Button position: (${buttonX}, ${buttonY})`);
+      logger.debug(`📍 [SELECTION_DETECTOR] Button position: (${buttonX}, ${buttonY})`);
       
       // Show the floating button
       const { showSelectionButton } = require('../windows/selection-overlay.cjs');
       showSelectionButton(buttonX, buttonY, selectedText);
       
-      console.log('✅ [SELECTION_DETECTOR] Floating button shown at mouse position');
+      logger.debug('✅ [SELECTION_DETECTOR] Floating button shown at mouse position');
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to show floating button:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to show floating button:', error);
     }
   }
 
@@ -100,19 +101,19 @@ class SelectionDetector {
    * Manual capture for Cmd+Option+A shortcut
    */
   async captureSelectionWithNutJS() {
-    console.log('📋 [SELECTION_DETECTOR] Starting capture...');
+    logger.debug('📋 [SELECTION_DETECTOR] Starting capture...');
     
     try {
       // Save original clipboard
       const originalClipboard = clipboard.readText();
-      console.log(`📋 [SELECTION_DETECTOR] Original clipboard: ${originalClipboard.substring(0, 50)}`);
+      logger.debug(`📋 [SELECTION_DETECTOR] Original clipboard: ${originalClipboard.substring(0, 50)}`);
       
       // Clear clipboard with temp marker
       clipboard.writeText('__THINKDROP_TEMP__');
-      console.log('📋 [SELECTION_DETECTOR] Clipboard cleared');
+      logger.debug('📋 [SELECTION_DETECTOR] Clipboard cleared');
       
       // Simulate Cmd+C
-      console.log('📋 [SELECTION_DETECTOR] Simulating Cmd+C...');
+      logger.debug('📋 [SELECTION_DETECTOR] Simulating Cmd+C...');
       execSync('osascript -e "tell application \\"System Events\\" to keystroke \\"c\\" using command down"');
       
       // Wait for clipboard to update
@@ -120,13 +121,13 @@ class SelectionDetector {
       
       // Get new clipboard content
       const newClipboard = clipboard.readText();
-      console.log('📋 [SELECTION_DETECTOR] Cmd+C simulated');
+      logger.debug('📋 [SELECTION_DETECTOR] Cmd+C simulated');
       
       // Restore original clipboard
       clipboard.writeText(originalClipboard);
       
       if (newClipboard && newClipboard !== '__THINKDROP_TEMP__' && newClipboard !== originalClipboard) {
-        console.log(`✅ [SELECTION_DETECTOR] Captured highlighted text: ${newClipboard}`);
+        logger.debug(`✅ [SELECTION_DETECTOR] Captured highlighted text: ${newClipboard}`);
         
         // Notify renderer about selection
         this.notifySelectionAvailable({
@@ -137,12 +138,12 @@ class SelectionDetector {
         
         return newClipboard;
       } else {
-        console.log('⚠️  [SELECTION_DETECTOR] No highlighted text detected');
+        logger.debug('⚠️  [SELECTION_DETECTOR] No highlighted text detected');
         return null;
       }
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Capture failed:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Capture failed:', error);
       return null;
     }
   }
@@ -179,7 +180,7 @@ class SelectionDetector {
    * Show floating button for testing (Cmd+Option+T)
    */
   async showFloatingButtonWithEstimatedPosition(testText) {
-    console.log('🧪 [SELECTION_DETECTOR] Showing test floating button');
+    logger.debug('🧪 [SELECTION_DETECTOR] Showing test floating button');
     
     const cursorPos = screen.getCursorScreenPoint();
     const buttonX = cursorPos.x + 15;
@@ -188,14 +189,14 @@ class SelectionDetector {
     const { showSelectionButton } = require('../windows/selection-overlay.cjs');
     showSelectionButton(buttonX, buttonY, testText);
     
-    console.log('✅ [SELECTION_DETECTOR] Test button shown');
+    logger.debug('✅ [SELECTION_DETECTOR] Test button shown');
   }
 
   /**
    * Stop all monitoring
    */
   stop() {
-    console.log('🛑 [SELECTION_DETECTOR] Stopping selection monitoring');
+    logger.debug('🛑 [SELECTION_DETECTOR] Stopping selection monitoring');
     
     if (this.clipboardMonitorInterval) {
       clearInterval(this.clipboardMonitorInterval);
@@ -203,7 +204,7 @@ class SelectionDetector {
     }
     
     this.isActive = false;
-    console.log('✅ [SELECTION_DETECTOR] Selection monitoring stopped');
+    logger.debug('✅ [SELECTION_DETECTOR] Selection monitoring stopped');
   }
 }
 

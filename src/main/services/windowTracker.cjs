@@ -6,6 +6,7 @@
 
 const { exec } = require('child_process');
 const { promisify } = require('util');
+const logger = require('./../logger.cjs');
 const execAsync = promisify(exec);
 
 // AppleScript commands for getting browser URLs
@@ -55,7 +56,7 @@ class WindowTracker {
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       return stdout.trim() || null;
     } catch (error) {
-      console.log(`[TRACKER] ❌ AppleScript error for ${appName}:`, error.message);
+      logger.debug(`[TRACKER] ❌ AppleScript error for ${appName}:`, error.message);
       return null;
     }
   }
@@ -71,7 +72,7 @@ class WindowTracker {
       const { stdout } = await execAsync(`osascript -e '${script}'`);
       return stdout.trim() || null;
     } catch (error) {
-      console.log(`[TRACKER] ❌ Tab title error for ${appName}:`, error.message);
+      logger.debug(`[TRACKER] ❌ Tab title error for ${appName}:`, error.message);
       return null;
     }
   }
@@ -80,16 +81,16 @@ class WindowTracker {
    * Start the window tracker
    */
   async start() {
-    console.log('[TRACKER] 👁️  Starting Window Tracker...');
+    logger.debug('[TRACKER] 👁️  Starting Window Tracker...');
     this.startFocusWatcher();
-    console.log('[TRACKER] ✅ Window Tracker started');
+    logger.debug('[TRACKER] ✅ Window Tracker started');
   }
 
   /**
    * Watch for window focus changes using node-window-manager
    */
   async startFocusWatcher() {
-    console.log('[TRACKER] 🔍 Starting active window listener...');
+    logger.debug('[TRACKER] 🔍 Starting active window listener...');
     
     try {
       const windowManagerModule = await import('node-window-manager');
@@ -99,7 +100,7 @@ class WindowTracker {
         throw new Error('Could not load windowManager from node-window-manager');
       }
       
-      console.log('[TRACKER] 📦 Using node-window-manager for window detection');
+      logger.debug('[TRACKER] 📦 Using node-window-manager for window detection');
       
       let lastWindowPath = null;
       let lastUrl = null;
@@ -128,7 +129,7 @@ class WindowTracker {
             lastWindowPath = currentPath;
             lastUrl = currentUrl;
             
-            console.log('[TRACKER] 🔔 Window changed detected!');
+            logger.debug('[TRACKER] 🔔 Window changed detected!');
             
             let title = activeWindow.getTitle ? activeWindow.getTitle() : (activeWindow.title || '');
             
@@ -137,13 +138,13 @@ class WindowTracker {
               const tabTitle = await this.getBrowserTabTitle(app);
               if (tabTitle) {
                 title = tabTitle;
-                console.log(`[TRACKER] 📑 Using browser tab title: "${title}"`);
+                logger.debug(`[TRACKER] 📑 Using browser tab title: "${title}"`);
               }
             }
             
             let url = currentUrl;
             if (url) {
-              console.log(`[TRACKER] 🌐 URL: ${url}`);
+              logger.debug(`[TRACKER] 🌐 URL: ${url}`);
             }
             
             // Create unique window ID
@@ -151,7 +152,7 @@ class WindowTracker {
               ? `${app}-${url}`.substring(0, 150)
               : `${app}-${title}`.substring(0, 100);
             
-            console.log(`[TRACKER] 🆔 WindowId: ${windowId}`);
+            logger.debug(`[TRACKER] 🆔 WindowId: ${windowId}`);
             
             if (windowId !== this.activeWindow) {
               // Skip ThinkDrop AI (Electron)
@@ -160,12 +161,12 @@ class WindowTracker {
                                    title.toLowerCase().includes('thinkdrop');
               
               if (isThinkDropAI) {
-                console.log(`[TRACKER] ⏭️  Skipping ThinkDrop AI window (${app})`);
+                logger.debug(`[TRACKER] ⏭️  Skipping ThinkDrop AI window (${app})`);
                 this.activeWindow = windowId;
                 return;
               }
               
-              console.log(`[TRACKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
+              logger.debug(`[TRACKER] 🔄 Window/tab changed: ${app}${url ? ` - ${url}` : ` - ${title}`}`);
               
               // Show window change toast
               let displayText = title;
@@ -191,15 +192,15 @@ class WindowTracker {
                     title,
                     url
                   });
-                  console.log(`📤 [TRACKER] Sent activeWindowUpdate: ${windowId}`);
+                  logger.debug(`📤 [TRACKER] Sent activeWindowUpdate: ${windowId}`);
                 }
               } catch (error) {
-                console.warn(`⚠️  [TRACKER] Failed to send activeWindowUpdate:`, error.message);
+                logger.warn(`⚠️  [TRACKER] Failed to send activeWindowUpdate:`, error.message);
               }
             }
           }
         } catch (error) {
-          console.error('[TRACKER] ❌ Error checking active window:', error);
+          logger.error('[TRACKER] ❌ Error checking active window:', error);
         }
       };
       
@@ -209,9 +210,9 @@ class WindowTracker {
       // Run immediately once
       checkActiveWindow();
       
-      console.log('[TRACKER] ✅ Active window listener started (polling every 500ms)');
+      logger.debug('[TRACKER] ✅ Active window listener started (polling every 500ms)');
     } catch (error) {
-      console.error('[TRACKER] ❌ Failed to start window listener:', error);
+      logger.error('[TRACKER] ❌ Failed to start window listener:', error);
       throw error;
     }
   }
@@ -231,10 +232,10 @@ class WindowTracker {
             app,
             title
           });
-          console.log(`📤 [TRACKER] Sent showWindowChangeToast: ${app} - ${title}`);
+          logger.debug(`📤 [TRACKER] Sent showWindowChangeToast: ${app} - ${title}`);
         }
       } catch (error) {
-        console.log(`[TRACKER] 📢 Window changed: ${app} - ${title}`);
+        logger.debug(`[TRACKER] 📢 Window changed: ${app} - ${title}`);
       }
     } else {
       try {
@@ -243,9 +244,9 @@ class WindowTracker {
           <strong>${app}</strong>${title ? `<br><span style="opacity: 0.8;">${title}</span>` : ''}
         </div>`;
         showHotkeyToast(message, { persistent: false, duration: 2000 });
-        console.log(`🍞 [TRACKER] Showing window change toast: ${app}`);
+        logger.debug(`🍞 [TRACKER] Showing window change toast: ${app}`);
       } catch (error) {
-        console.log(`📢 Window changed: ${app} - ${title}`);
+        logger.debug(`📢 Window changed: ${app} - ${title}`);
       }
     }
   }
@@ -257,7 +258,7 @@ class WindowTracker {
     if (this.windowListener) {
       clearInterval(this.windowListener);
       this.windowListener = null;
-      console.log('[TRACKER] 🛑 Window tracker stopped');
+      logger.debug('[TRACKER] 🛑 Window tracker stopped');
     }
   }
 }

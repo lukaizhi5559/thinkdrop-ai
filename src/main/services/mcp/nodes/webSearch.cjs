@@ -3,10 +3,11 @@
  * Performs web search for factual queries
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function webSearch(state) {
   const { mcpClient, message, resolvedMessage, intent } = state;
 
-  console.log('🌐 [NODE:WEB_SEARCH] Performing web search...');
+  logger.debug('🌐 [NODE:WEB_SEARCH] Performing web search...');
 
   try {
     // Use resolved message if available (after coreference resolution), otherwise original
@@ -15,7 +16,7 @@ module.exports = async function webSearch(state) {
     // Extract search query
     const query = searchMessage.replace(/^(search for|search|find|look up|google)\s+/i, '').trim();
     
-    console.log(`🔍 [NODE:WEB_SEARCH] Query: "${query}"`);
+    logger.debug(`🔍 [NODE:WEB_SEARCH] Query: "${query}"`);
 
     // Call web-search service (limit 3 for faster response)
     const result = await mcpClient.callService('web-search', 'web.search', {
@@ -27,7 +28,7 @@ module.exports = async function webSearch(state) {
     const searchData = result.data || result;
     const searchResults = searchData.results || [];
     
-    console.log(`✅ [NODE:WEB_SEARCH] Found ${searchResults.length} results`);
+    logger.debug(`✅ [NODE:WEB_SEARCH] Found ${searchResults.length} results`);
 
     return {
       ...state,
@@ -40,7 +41,7 @@ module.exports = async function webSearch(state) {
       }))
     };
   } catch (error) {
-    console.error('❌ [NODE:WEB_SEARCH] Error:', error.message);
+    logger.error('❌ [NODE:WEB_SEARCH] Error:', error.message);
     return {
       ...state,
       searchResults: [],

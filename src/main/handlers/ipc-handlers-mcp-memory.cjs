@@ -6,22 +6,23 @@
 
 const { ipcMain } = require('electron');
 
+const logger = require('./../logger.cjs');
 /**
  * Setup MCP memory handlers
  */
 function setupMCPMemoryHandlers(mcpClient) {
-  console.log('🔌 Registering MCP memory IPC handlers...');
+  logger.debug('🔌 Registering MCP memory IPC handlers...');
 
   /**
    * Query memories through MCP user-memory service
    */
   ipcMain.handle('query-memories-direct', async (event, options = {}) => {
     try {
-      console.log('🔍 [MCP-MEMORY] Query memories via MCP service:', options);
+      logger.debug('🔍 [MCP-MEMORY] Query memories via MCP service:', options);
       const { limit = 50, offset = 0, searchQuery = null } = options;
 
       if (!mcpClient) {
-        console.error('❌ [MCP-MEMORY] MCP client not available');
+        logger.error('❌ [MCP-MEMORY] MCP client not available');
         return {
           success: false,
           error: 'MCP client not initialized'
@@ -47,18 +48,18 @@ function setupMCPMemoryHandlers(mcpClient) {
         });
       }
 
-      console.log('📥 [MCP-MEMORY] MCP service result:', result);
+      logger.debug('📥 [MCP-MEMORY] MCP service result:', result);
 
       if (result.status === 'ok' && result.data) {
         // Transform MCP response to match expected format
         const mcpMemories = result.data.memories || [];
         const total = result.data.total || mcpMemories.length;
 
-        console.log(`✅ [MCP-MEMORY] Retrieved ${mcpMemories.length} memories from MCP service`);
+        logger.debug(`✅ [MCP-MEMORY] Retrieved ${mcpMemories.length} memories from MCP service`);
         
         // Log first memory structure for debugging
         if (mcpMemories.length > 0) {
-          console.log('📋 [MCP-MEMORY] First memory structure:', JSON.stringify(mcpMemories[0], null, 2));
+          logger.debug('📋 [MCP-MEMORY] First memory structure:', JSON.stringify(mcpMemories[0], null, 2));
         }
 
         // Transform MCP memory format to match frontend expectations
@@ -108,7 +109,7 @@ function setupMCPMemoryHandlers(mcpClient) {
           };
         });
 
-        console.log('📋 [MCP-MEMORY] Transformed first memory:', memories.length > 0 ? JSON.stringify(memories[0], null, 2) : 'none');
+        logger.debug('📋 [MCP-MEMORY] Transformed first memory:', memories.length > 0 ? JSON.stringify(memories[0], null, 2) : 'none');
 
         return {
           success: true,
@@ -127,7 +128,7 @@ function setupMCPMemoryHandlers(mcpClient) {
           source: 'mcp-user-memory'
         };
       } else {
-        console.warn('⚠️ [MCP-MEMORY] MCP service returned no data:', result);
+        logger.warn('⚠️ [MCP-MEMORY] MCP service returned no data:', result);
         return {
           success: false,
           error: result.error || 'Failed to retrieve memories from MCP service',
@@ -144,7 +145,7 @@ function setupMCPMemoryHandlers(mcpClient) {
       }
 
     } catch (error) {
-      console.error('❌ [MCP-MEMORY] Query error:', error);
+      logger.error('❌ [MCP-MEMORY] Query error:', error);
       return {
         success: false,
         error: error.message,
@@ -166,10 +167,10 @@ function setupMCPMemoryHandlers(mcpClient) {
    */
   ipcMain.handle('delete-memory-direct', async (event, memoryId) => {
     try {
-      console.log('🗑️ [MCP-MEMORY] Delete memory via MCP service:', memoryId);
+      logger.debug('🗑️ [MCP-MEMORY] Delete memory via MCP service:', memoryId);
 
       if (!mcpClient) {
-        console.error('❌ [MCP-MEMORY] MCP client not available');
+        logger.error('❌ [MCP-MEMORY] MCP client not available');
         return {
           success: false,
           error: 'MCP client not initialized'
@@ -182,17 +183,17 @@ function setupMCPMemoryHandlers(mcpClient) {
         userId: 'default_user'
       });
 
-      console.log('📥 [MCP-MEMORY] Delete result:', result);
+      logger.debug('📥 [MCP-MEMORY] Delete result:', result);
 
       if (result.status === 'ok') {
-        console.log('✅ [MCP-MEMORY] Memory deleted successfully');
+        logger.debug('✅ [MCP-MEMORY] Memory deleted successfully');
         return {
           success: true,
           deletedCount: 1,
           message: 'Memory deleted successfully'
         };
       } else {
-        console.warn('⚠️ [MCP-MEMORY] Delete failed:', result.error);
+        logger.warn('⚠️ [MCP-MEMORY] Delete failed:', result.error);
         return {
           success: false,
           error: result.error || 'Failed to delete memory'
@@ -200,7 +201,7 @@ function setupMCPMemoryHandlers(mcpClient) {
       }
 
     } catch (error) {
-      console.error('❌ [MCP-MEMORY] Delete error:', error);
+      logger.error('❌ [MCP-MEMORY] Delete error:', error);
       return {
         success: false,
         error: error.message
@@ -208,7 +209,7 @@ function setupMCPMemoryHandlers(mcpClient) {
     }
   });
 
-  console.log('✅ MCP memory IPC handlers registered');
+  logger.debug('✅ MCP memory IPC handlers registered');
 }
 
 module.exports = {

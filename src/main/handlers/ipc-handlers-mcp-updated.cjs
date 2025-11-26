@@ -10,6 +10,7 @@ const { initializeMCP } = require('../services/mcp/initialize.cjs');
 const MCPConfigManager = require('../services/mcp/MCPConfigManager.cjs');
 const MCPClient = require('../services/mcp/MCPClient.cjs');
 
+const logger = require('./../logger.cjs');
 // MCP Client instance
 let mcpClient = null;
 
@@ -31,7 +32,7 @@ function getFallbackAgents() {
 function getMCPClient() {
   if (!mcpClient) {
     mcpClient = new MCPClient(MCPConfigManager);
-    console.log('✅ MCP Client initialized');
+    logger.debug('✅ MCP Client initialized');
   }
   return mcpClient;
 }
@@ -44,9 +45,9 @@ async function initializeMCPSystem(database) {
     await initializeMCP(database);
     // Initialize client after config manager is ready
     getMCPClient();
-    console.log('✅ MCP system initialized');
+    logger.debug('✅ MCP system initialized');
   } catch (error) {
-    console.warn('⚠️ MCP initialization failed, will use local fallback:', error.message);
+    logger.warn('⚠️ MCP initialization failed, will use local fallback:', error.message);
   }
 }
 
@@ -54,7 +55,7 @@ async function initializeMCPSystem(database) {
  * Register all MCP IPC handlers
  */
 function registerMCPHandlers() {
-  console.log('🔌 Registering MCP IPC handlers...');
+  logger.debug('🔌 Registering MCP IPC handlers...');
 
   // ============================================
   // Core Service Handlers
@@ -74,7 +75,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Intent parsing failed, using fallback:', error.message);
+      logger.error('❌ Intent parsing failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -107,7 +108,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Memory store failed, using fallback:', error.message);
+      logger.error('❌ Memory store failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -140,7 +141,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Memory query failed, using fallback:', error.message);
+      logger.error('❌ Memory query failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -173,7 +174,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Memory retrieve failed, using fallback:', error.message);
+      logger.error('❌ Memory retrieve failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -206,7 +207,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Memory list failed, using fallback:', error.message);
+      logger.error('❌ Memory list failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -239,7 +240,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error('❌ Web search failed, using fallback:', error.message);
+      logger.error('❌ Web search failed, using fallback:', error.message);
       
       try {
         const agents = getFallbackAgents();
@@ -276,7 +277,7 @@ function registerMCPHandlers() {
         source: 'mcp'
       };
     } catch (error) {
-      console.error(`❌ Service call failed: ${serviceName}.${action}`, error.message);
+      logger.error(`❌ Service call failed: ${serviceName}.${action}`, error.message);
       return {
         success: false,
         error: error.message
@@ -299,7 +300,7 @@ function registerMCPHandlers() {
         data: services
       };
     } catch (error) {
-      console.error('❌ Failed to list services:', error);
+      logger.error('❌ Failed to list services:', error);
       return {
         success: false,
         error: error.message
@@ -324,7 +325,7 @@ function registerMCPHandlers() {
         data: service
       };
     } catch (error) {
-      console.error('❌ Failed to get service:', error);
+      logger.error('❌ Failed to get service:', error);
       return {
         success: false,
         error: error.message
@@ -343,7 +344,7 @@ function registerMCPHandlers() {
         message: `Service added: ${serviceConfig.name}`
       };
     } catch (error) {
-      console.error('❌ Failed to add service:', error);
+      logger.error('❌ Failed to add service:', error);
       return {
         success: false,
         error: error.message
@@ -362,7 +363,7 @@ function registerMCPHandlers() {
         message: `Service updated: ${serviceName}`
       };
     } catch (error) {
-      console.error('❌ Failed to update service:', error);
+      logger.error('❌ Failed to update service:', error);
       return {
         success: false,
         error: error.message
@@ -381,7 +382,7 @@ function registerMCPHandlers() {
         message: `Service removed: ${serviceName}`
       };
     } catch (error) {
-      console.error('❌ Failed to remove service:', error);
+      logger.error('❌ Failed to remove service:', error);
       return {
         success: false,
         error: error.message
@@ -404,7 +405,7 @@ function registerMCPHandlers() {
         message: `Service ${enabled ? 'enabled' : 'disabled'}: ${serviceName}`
       };
     } catch (error) {
-      console.error('❌ Failed to toggle service:', error);
+      logger.error('❌ Failed to toggle service:', error);
       return {
         success: false,
         error: error.message
@@ -428,7 +429,7 @@ function registerMCPHandlers() {
         data: health
       };
     } catch (error) {
-      console.error('❌ Health check failed:', error);
+      logger.error('❌ Health check failed:', error);
       return {
         success: false,
         error: error.message
@@ -448,7 +449,7 @@ function registerMCPHandlers() {
         data: healthChecks
       };
     } catch (error) {
-      console.error('❌ Health check all failed:', error);
+      logger.error('❌ Health check all failed:', error);
       return {
         success: false,
         error: error.message
@@ -479,7 +480,7 @@ function registerMCPHandlers() {
         data: logs
       };
     } catch (error) {
-      console.error('❌ Failed to get audit logs:', error);
+      logger.error('❌ Failed to get audit logs:', error);
       return {
         success: false,
         error: error.message
@@ -487,7 +488,7 @@ function registerMCPHandlers() {
     }
   });
 
-  console.log('✅ MCP IPC handlers registered');
+  logger.debug('✅ MCP IPC handlers registered');
 }
 
 module.exports = {

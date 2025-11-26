@@ -38,6 +38,7 @@ const executeCommandNode = require('./nodes/executeCommand.cjs');
 const visionNode = require('./nodes/vision.cjs');
 const screenIntelligenceNode = require('./nodes/screenIntelligence.cjs');
 
+const logger = require('./../../logger.cjs');
 class AgentOrchestrator {
   constructor() {
     this.mcpClient = new MCPClient(MCPConfigManager);
@@ -48,11 +49,11 @@ class AgentOrchestrator {
     this.traceHistory = [];
     this.maxTraceHistory = 100; // Keep last 100 traces
     
-    console.log('🎯 MCP AgentOrchestrator initialized (StateGraph Edition)');
+    logger.debug('🎯 MCP AgentOrchestrator initialized (StateGraph Edition)');
     
     // Run health check on initialization (async, non-blocking)
     this.checkMemoryServiceHealth().catch(err => {
-      console.warn('⚠️ [ORCHESTRATOR] Memory service health check failed:', err.message);
+      logger.warn('⚠️ [ORCHESTRATOR] Memory service health check failed:', err.message);
     });
   }
 
@@ -66,7 +67,7 @@ class AgentOrchestrator {
     }
 
     if (DEBUG) {
-      console.log('🔧 [ORCHESTRATOR] Building StateGraph with intent-based routing...');
+      logger.debug('🔧 [ORCHESTRATOR] Building StateGraph with intent-based routing...');
     }
 
     // Create nodes with mcpClient bound
@@ -103,14 +104,14 @@ class AgentOrchestrator {
                               (state.memories && state.memories.length > 0);
         
         if (state.resolvedMessage && !hasNewContext) {
-          console.log('⏭️  [NODE:RESOLVE_REFERENCES] Skipping - already resolved early, no new context');
+          logger.debug('⏭️  [NODE:RESOLVE_REFERENCES] Skipping - already resolved early, no new context');
           return state;
         }
         
         // Re-resolve if we have new context (web search results, memories)
         // The fresh context might help resolve references better
         if (hasNewContext) {
-          console.log('🔄 [NODE:RESOLVE_REFERENCES] Re-resolving with new context (web/memory results)');
+          logger.debug('🔄 [NODE:RESOLVE_REFERENCES] Re-resolving with new context (web/memory results)');
         }
         
         return resolveReferencesNode({ ...state, mcpClient: this.mcpClient });
@@ -193,23 +194,23 @@ class AgentOrchestrator {
         const needsScreenContext = screenKeywords.some(keyword => queryLower.includes(keyword));
         
         if (needsScreenContext && state.intent?.type === 'question') {
-          console.log('🎯 [NODE:PARALLEL] Question mentions screen content - capturing screen context first...');
+          logger.debug('🎯 [NODE:PARALLEL] Question mentions screen content - capturing screen context first...');
           try {
             // Capture screen context before parallel execution
             const screenState = await screenIntelligenceNode({ ...state, mcpClient: this.mcpClient });
             // Merge screen context into state
             state = { ...state, ...screenState };
-            console.log('✅ [NODE:PARALLEL] Screen context captured, proceeding with web search + memory retrieval');
+            logger.debug('✅ [NODE:PARALLEL] Screen context captured, proceeding with web search + memory retrieval');
           } catch (error) {
-            console.warn('⚠️  [NODE:PARALLEL] Failed to capture screen context, continuing without it:', error.message);
+            logger.warn('⚠️  [NODE:PARALLEL] Failed to capture screen context, continuing without it:', error.message);
           }
         }
         
-        console.log('🔄 [NODE:PARALLEL] Running webSearch + retrieveMemory in parallel...');
+        logger.debug('🔄 [NODE:PARALLEL] Running webSearch + retrieveMemory in parallel...');
         return await this.stateGraph.executeParallel(['webSearch', 'retrieveMemory'], state);
       },
       parallelSanitizeAndFilter: async (state) => {
-        console.log('🔄 [NODE:PARALLEL] Running sanitizeWeb + filterMemory in parallel...');
+        logger.debug('🔄 [NODE:PARALLEL] Running sanitizeWeb + filterMemory in parallel...');
         return await this.stateGraph.executeParallel(['sanitizeWeb', 'filterMemory'], state);
       },
       
@@ -228,7 +229,7 @@ class AgentOrchestrator {
       parseIntent: (state) => {
         const intentType = state.intent?.type || 'general_query';
         const useOnlineMode = state.useOnlineMode || false;
-        console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
+        logger.debug(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
         
         // Memory store: save information
         if (intentType === 'memory_store' || intentType === 'store_memory' || intentType === 'remember') {
@@ -237,19 +238,19 @@ class AgentOrchestrator {
         
         // 🌐 ONLINE MODE: Skip web search, online LLMs have up-to-date knowledge
         if (useOnlineMode) {
-          console.log('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
+          logger.debug('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
           
           // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
           // Vision intent now routes to screen intelligence first, falls back to vision service if needed
           if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-            console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
+            logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
             return 'screenIntelligence';
           }
           
           // Commands: system commands (all sub-types)
           if (intentType === 'command' || intentType === 'command_execute' || 
               intentType === 'command_automate' || intentType === 'command_guide') {
-            console.log(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
+            logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
             return 'executeCommand';
           }
           
@@ -267,14 +268,14 @@ class AgentOrchestrator {
         // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
         // Vision intent now routes to screen intelligence first, falls back to vision service if needed
         if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
-          console.log('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
+          logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
           return 'screenIntelligence';
         }
         
         // Commands: system commands (all sub-types - works in both online and private mode)
         if (intentType === 'command' || intentType === 'command_execute' || 
             intentType === 'command_automate' || intentType === 'command_guide') {
-          console.log(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
+          logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
           return 'executeCommand';
         }
         
@@ -301,7 +302,7 @@ class AgentOrchestrator {
       screenIntelligence: (state) => {
         // If screen intelligence failed, fallback to vision service
         if (state.screenIntelligenceError) {
-          console.log('⚠️  [STATEGRAPH:FALLBACK] Screen intelligence failed, falling back to vision service');
+          logger.debug('⚠️  [STATEGRAPH:FALLBACK] Screen intelligence failed, falling back to vision service');
           return 'vision';
         }
         // Screen intelligence succeeded, proceed to answer
@@ -320,7 +321,7 @@ class AgentOrchestrator {
       executeCommand: (state) => {
         // If command execution requested retry with different intent, route to that intent
         if (state.retryWithIntent === 'screen_intelligence') {
-          console.log('🔄 [STATEGRAPH:RETRY] Command failed, retrying as screen_intelligence');
+          logger.debug('🔄 [STATEGRAPH:RETRY] Command failed, retrying as screen_intelligence');
           return 'screenIntelligence';
         }
         // If command requires confirmation, end workflow early
@@ -353,7 +354,7 @@ class AgentOrchestrator {
         // PRIORITY 1: Check if LLM requested web search
         // 🌐 SKIP in online mode - online LLMs have up-to-date knowledge
         if (state.shouldPerformWebSearch && !useOnlineMode) {
-          console.log(`🔍 [STATEGRAPH:WEB_SEARCH_NEEDED] LLM needs web search, routing to webSearch node`);
+          logger.debug(`🔍 [STATEGRAPH:WEB_SEARCH_NEEDED] LLM needs web search, routing to webSearch node`);
           // For streaming mode, we need to send a follow-up message
           if (isStreaming && state.streamCallback) {
             // Send a message that we're now searching
@@ -364,17 +365,17 @@ class AgentOrchestrator {
         
         // 🌐 Log if web search was requested but skipped due to online mode
         if (state.shouldPerformWebSearch && useOnlineMode) {
-          console.log(`⏭️  [STATEGRAPH:WEB_SEARCH_SKIPPED] Online mode active - skipping web search request`);
+          logger.debug(`⏭️  [STATEGRAPH:WEB_SEARCH_SKIPPED] Online mode active - skipping web search request`);
         }
         
         // PRIORITY 2: Retry logic for other validation failures
         // BUT: Don't retry if streaming (causes double responses in UI)
         if (state.needsRetry && (state.retryCount || 0) < 2 && !isStreaming) {
-          console.log(`🔄 [STATEGRAPH:RETRY] Validation failed, retrying (attempt ${state.retryCount + 1})`);
+          logger.debug(`🔄 [STATEGRAPH:RETRY] Validation failed, retrying (attempt ${state.retryCount + 1})`);
           return 'answer'; // Retry answer generation
         }
         if (state.needsRetry && isStreaming) {
-          console.log(`⏭️  [STATEGRAPH:RETRY] Skipping retry for streaming mode (would cause double response)`);
+          logger.debug(`⏭️  [STATEGRAPH:RETRY] Skipping retry for streaming mode (would cause double response)`);
         }
         // Otherwise, proceed to store conversation
         return 'storeConversation';
@@ -386,7 +387,7 @@ class AgentOrchestrator {
 
     this.stateGraph = new StateGraph(nodes, edges);
     if (DEBUG) {
-      console.log('✅ [ORCHESTRATOR] StateGraph built with 3 subgraphs (memory_store, web_search, retrieve/general)');
+      logger.debug('✅ [ORCHESTRATOR] StateGraph built with 3 subgraphs (memory_store, web_search, retrieve/general)');
     }
 
     return this.stateGraph;
@@ -405,9 +406,9 @@ class AgentOrchestrator {
     const useOnlineMode = context.useOnlineMode || false;
     
     if (DEBUG) {
-      console.log(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
-      console.log(`🌊 [ORCHESTRATOR:GRAPH] Streaming enabled: ${!!onStreamToken}`);
-      console.log(`🌐 [ORCHESTRATOR:GRAPH] Online mode: ${useOnlineMode ? 'ENABLED (fallback to private)' : 'DISABLED'}`);
+      logger.debug(`\n🔄 [ORCHESTRATOR:GRAPH] Processing with StateGraph: "${message}"`);
+      logger.debug(`🌊 [ORCHESTRATOR:GRAPH] Streaming enabled: ${!!onStreamToken}`);
+      logger.debug(`🌐 [ORCHESTRATOR:GRAPH] Online mode: ${useOnlineMode ? 'ENABLED (fallback to private)' : 'DISABLED'}`);
     }
     
     try {
@@ -486,7 +487,7 @@ class AgentOrchestrator {
       };
 
     } catch (error) {
-      console.error(`❌ [ORCHESTRATOR:GRAPH] Error:`, error.message);
+      logger.error(`❌ [ORCHESTRATOR:GRAPH] Error:`, error.message);
       return {
         success: false,
         error: error.message,
@@ -501,28 +502,28 @@ class AgentOrchestrator {
    */
   async checkMemoryServiceHealth() {
     try {
-      console.log('🏥 [ORCHESTRATOR] Checking memory service health...');
+      logger.debug('🏥 [ORCHESTRATOR] Checking memory service health...');
       
       const healthResult = await this.mcpClient.callService('user-memory', 'memory.health-check', {});
       
       if (healthResult.status === 'healthy') {
-        console.log('✅ [ORCHESTRATOR] Memory service healthy');
-        console.log(`📊 [ORCHESTRATOR] Embedding coverage: ${healthResult.database?.embeddingCoverage || 'unknown'}`);
-        console.log(`📊 [ORCHESTRATOR] Total memories: ${healthResult.database?.totalMemories || 0}`);
+        logger.debug('✅ [ORCHESTRATOR] Memory service healthy');
+        logger.debug(`📊 [ORCHESTRATOR] Embedding coverage: ${healthResult.database?.embeddingCoverage || 'unknown'}`);
+        logger.debug(`📊 [ORCHESTRATOR] Total memories: ${healthResult.database?.totalMemories || 0}`);
         this.memoryServiceHealthy = true;
       } else {
-        console.warn('⚠️ [ORCHESTRATOR] Memory service degraded:', healthResult.message);
+        logger.warn('⚠️ [ORCHESTRATOR] Memory service degraded:', healthResult.message);
         this.memoryServiceHealthy = false;
       }
 
       // Check embedding coverage
       const embeddingCoverage = healthResult.database?.embeddingCoverage;
       if (embeddingCoverage && embeddingCoverage !== '100%') {
-        console.warn(`⚠️ [ORCHESTRATOR] Embedding coverage is ${embeddingCoverage}, should be 100%`);
+        logger.warn(`⚠️ [ORCHESTRATOR] Embedding coverage is ${embeddingCoverage}, should be 100%`);
       }
 
     } catch (error) {
-      console.error('❌ [ORCHESTRATOR] Memory service health check failed:', error.message);
+      logger.error('❌ [ORCHESTRATOR] Memory service health check failed:', error.message);
       this.memoryServiceHealthy = false;
     }
   }
@@ -573,7 +574,7 @@ class AgentOrchestrator {
    */
   clearTraceHistory() {
     this.traceHistory = [];
-    console.log('🧹 [ORCHESTRATOR] Trace history cleared');
+    logger.debug('🧹 [ORCHESTRATOR] Trace history cleared');
   }
 }
 

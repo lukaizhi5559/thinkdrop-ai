@@ -11,6 +11,7 @@ const { MCPCircuitBreaker, CircuitBreakerManager, CircuitState, getCircuitBreake
 const { MCPMetrics, getMetrics, resetMetrics } = require('./MCPMetrics.js');
 const { MCPOrchestrator, getMCPOrchestrator, resetMCPOrchestrator } = require('./MCPOrchestrator.js');
 
+const logger = require('./../../logger.cjs');
 // Configuration
 const { 
   MCPConfig, 
@@ -70,18 +71,18 @@ const {
  * @returns {Promise<object>} Initialized components
  */
 async function initializeMCP(config = MCPConfig) {
-  console.log('🚀 Initializing MCP System...');
+  logger.debug('🚀 Initializing MCP System...');
 
   // Initialize API keys if not exist
   if (!apiKeysExist()) {
-    console.log('🔑 Generating MCP API keys...');
+    logger.debug('🔑 Generating MCP API keys...');
     initializeApiKeys();
   }
 
   // Validate configuration
   const validation = validateConfig();
   if (!validation.valid) {
-    console.warn('⚠️ MCP Configuration validation failed:', validation.errors);
+    logger.warn('⚠️ MCP Configuration validation failed:', validation.errors);
   }
 
   // Log configuration (with masked keys)
@@ -91,7 +92,7 @@ async function initializeMCP(config = MCPConfig) {
   const orchestrator = getMCPOrchestrator(config);
   await orchestrator.initialize();
 
-  console.log('✅ MCP System initialized');
+  logger.debug('✅ MCP System initialized');
 
   return {
     orchestrator,
@@ -106,7 +107,7 @@ async function initializeMCP(config = MCPConfig) {
  * Shutdown MCP system
  */
 function shutdownMCP() {
-  console.log('🛑 Shutting down MCP System...');
+  logger.debug('🛑 Shutting down MCP System...');
   
   const orchestrator = getMCPOrchestrator();
   orchestrator.shutdown();
@@ -117,7 +118,7 @@ function shutdownMCP() {
   resetMetrics();
   resetClient();
   
-  console.log('✅ MCP System shut down');
+  logger.debug('✅ MCP System shut down');
 }
 
 /**

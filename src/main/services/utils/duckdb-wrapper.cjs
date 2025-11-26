@@ -4,6 +4,7 @@ const duckdb = require('duckdb');
 const path = require('path');
 const fs = require('fs');
 
+const logger = require('./../../logger.cjs');
 let db;
 let connection;
 let currentDbPath;
@@ -79,19 +80,19 @@ function handleWALCorruption(dbPath) {
     const shmPath = dbPath + '.wal-shm';
     
     if (fs.existsSync(walPath)) {
-      console.log('🔍 WAL file detected - attempting to preserve data before cleanup...');
+      logger.debug('🔍 WAL file detected - attempting to preserve data before cleanup...');
       
       // CRITICAL FIX: Try to commit WAL data before removing it to prevent data loss
       try {
-        console.log('🔄 Attempting to commit WAL data to preserve transactions...');
+        logger.debug('🔄 Attempting to commit WAL data to preserve transactions...');
         
         // Create a temporary connection to commit the WAL
         const tempDb = new duckdb.Database(dbPath);
         tempDb.run('PRAGMA force_checkpoint', (checkpointErr) => {
           if (checkpointErr) {
-            console.warn('⚠️ WAL checkpoint failed, proceeding with backup approach:', checkpointErr.message);
+            logger.warn('⚠️ WAL checkpoint failed, proceeding with backup approach:', checkpointErr.message);
           } else {
-            console.log('✅ WAL data committed successfully before cleanup');
+            logger.debug('✅ WAL data committed successfully before cleanup');
           }
           
           // Close the temporary connection
@@ -103,7 +104,7 @@ function handleWALCorruption(dbPath) {
         
         return true;
       } catch (commitErr) {
-        console.warn('⚠️ Could not commit WAL data, using backup approach:', commitErr.message);
+        logger.warn('⚠️ Could not commit WAL data, using backup approach:', commitErr.message);
         removeWalFiles();
         return true;
       }
@@ -114,35 +115,35 @@ function handleWALCorruption(dbPath) {
         const backupPath = `${walPath}.bak-${timestamp}`;
         try {
           fs.copyFileSync(walPath, backupPath);
-          console.log(`💾 Backed up WAL to: ${backupPath}`);
+          logger.debug(`💾 Backed up WAL to: ${backupPath}`);
         } catch (backupErr) {
-          console.log('⚠️ Could not backup WAL file:', backupErr.message);
+          logger.debug('⚠️ Could not backup WAL file:', backupErr.message);
         }
         
         // Remove WAL and SHM files
         fs.unlinkSync(walPath);
-        console.log('🗑️ Removed WAL file after data preservation attempt');
+        logger.debug('🗑️ Removed WAL file after data preservation attempt');
         
         if (fs.existsSync(shmPath)) {
           fs.unlinkSync(shmPath);
-          console.log('🗑️ Removed WAL-SHM file');
+          logger.debug('🗑️ Removed WAL-SHM file');
         }
       }
     }
     
     return false;
   } catch (error) {
-    console.log('⚠️ Error checking WAL file:', error.message);
+    logger.debug('⚠️ Error checking WAL file:', error.message);
     // If we can't check the WAL file, try to remove it to be safe
     try {
       const walPath = dbPath + '.wal';
       if (fs.existsSync(walPath)) {
         fs.unlinkSync(walPath);
-        console.log('🗑️ Removed potentially problematic WAL file');
+        logger.debug('🗑️ Removed potentially problematic WAL file');
         return true;
       }
     } catch (removeErr) {
-      console.log('❌ Could not remove WAL file:', removeErr.message);
+      logger.debug('❌ Could not remove WAL file:', removeErr.message);
     }
     return false;
   }
@@ -160,20 +161,20 @@ function connect(dbPath, cb) {
   // STEP 1: Check and handle WAL corruption before attempting connection
   const walWasCorrupted = handleWALCorruption(dbPath);
   if (walWasCorrupted) {
-    console.log('🔄 WAL corruption handled - proceeding with fresh connection');
+    logger.debug('🔄 WAL corruption handled - proceeding with fresh connection');
   }
   
   // STEP 1.5: Ensure database directory exists
   const dbDir = path.dirname(dbPath);
   if (!fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
-    console.log('📁 Created database directory');
+    logger.debug('📁 Created database directory');
   }
   
   // STEP 2: Implement LLM expert's consistent catalog aliasing solution
   function attemptConnection(retryCount = 0) {
     try {
-      console.log(`🔄 Attempting DuckDB connection with consistent catalog aliasing (attempt ${retryCount + 1})...`);
+      logger.debug(`🔄 Attempting DuckDB connection with consistent catalog aliasing (attempt ${retryCount + 1})...`);
       
       // Close existing connections
       if (db) {
@@ -185,29 +186,29 @@ function connect(dbPath, cb) {
       }
       
       // STEP 2.1: Create bootstrap host database (:memory:)
-      console.log('🔄 Creating bootstrap host database...');
+      logger.debug('🔄 Creating bootstrap host database...');
       db = new duckdb.Database(':memory:', (dbErr) => {
         if (dbErr) {
-          console.error('❌ Bootstrap database creation failed:', dbErr);
+          logger.error('❌ Bootstrap database creation failed:', dbErr);
           return cb(dbErr);
         }
         
-        console.log('✅ Bootstrap database created successfully');
+        logger.debug('✅ Bootstrap database created successfully');
         
-        console.log('🔄 Establishing connection to bootstrap host...');
+        logger.debug('🔄 Establishing connection to bootstrap host...');
         connection = db.connect();
-        console.log('✅ Bootstrap connection established');
+        logger.debug('✅ Bootstrap connection established');
         
         // STEP 2.2: ATTACH the real database file with consistent alias
-        console.log('🔄 Attaching agent_memory database with consistent alias...');
+        logger.debug('🔄 Attaching agent_memory database with consistent alias...');
         const attachSQL = `ATTACH '${dbPath}' AS agent_memory`;
         connection.run(attachSQL, (attachErr) => {
           if (attachErr) {
-            console.error('❌ Database ATTACH failed:', attachErr);
+            logger.error('❌ Database ATTACH failed:', attachErr);
             
             // If attach fails with WAL corruption, try crash-safe recovery
             if (attachErr.message.includes('WAL') || attachErr.message.includes('Catalog')) {
-              console.log('🔄 ATTACH failed with WAL/Catalog error - attempting crash-safe recovery...');
+              logger.debug('🔄 ATTACH failed with WAL/Catalog error - attempting crash-safe recovery...');
               
               // Backup and remove WAL file
               try {
@@ -218,14 +219,14 @@ function connect(dbPath, cb) {
                 if (fs.existsSync(walPath)) {
                   const walBackupPath = `${walPath}.bak-${timestamp}`;
                   fs.copyFileSync(walPath, walBackupPath);
-                  console.log(`💾 Backed up WAL to: ${walBackupPath}`);
+                  logger.debug(`💾 Backed up WAL to: ${walBackupPath}`);
                   
                   fs.unlinkSync(walPath);
-                  console.log('🗑️ Removed corrupted WAL file');
+                  logger.debug('🗑️ Removed corrupted WAL file');
                 }
                 if (fs.existsSync(shmPath)) {
                   fs.unlinkSync(shmPath);
-                  console.log('🗑️ Removed corrupted WAL-SHM file');
+                  logger.debug('🗑️ Removed corrupted WAL-SHM file');
                 }
                 
                 // Retry attach after cleanup
@@ -233,69 +234,69 @@ function connect(dbPath, cb) {
                   return attemptConnection(1);
                 }
               } catch (cleanupErr) {
-                console.warn('⚠️ WAL cleanup failed:', cleanupErr.message);
+                logger.warn('⚠️ WAL cleanup failed:', cleanupErr.message);
               }
             }
             
             return cb(attachErr);
           }
           
-          console.log('✅ agent_memory database attached successfully');
+          logger.debug('✅ agent_memory database attached successfully');
           
           // STEP 1.3: Set active database context for DDL operations
-          console.log('🔄 Setting active database context for DDL operations...');
+          logger.debug('🔄 Setting active database context for DDL operations...');
           connection.run('USE agent_memory', (useErr) => {
             if (useErr) {
-              console.warn('⚠️ Failed to set active database context:', useErr.message);
+              logger.warn('⚠️ Failed to set active database context:', useErr.message);
               // Continue anyway - this is not critical
             } else {
-              console.log('✅ Active database context set to agent_memory');
+              logger.debug('✅ Active database context set to agent_memory');
             }
             
             // STEP 1.4: Test connection with health check on attached database
-            console.log('🔄 Testing connection with health check on attached database...');
+            logger.debug('🔄 Testing connection with health check on attached database...');
             connection.all('SELECT 1 as health_check FROM agent_memory.memory LIMIT 1', (healthErr, healthResult) => {
             if (healthErr) {
-              console.log('🔄 Trying simpler health check...');
+              logger.debug('🔄 Trying simpler health check...');
               connection.all('SELECT 1 as health_check', (simpleHealthErr, simpleHealthResult) => {
                 if (simpleHealthErr) {
-                  console.error('❌ Connection health check failed:', simpleHealthErr);
+                  logger.error('❌ Connection health check failed:', simpleHealthErr);
                   return cb(simpleHealthErr);
                 }
                 
-                console.log('✅ Connection health check passed');
+                logger.debug('✅ Connection health check passed');
                 
                 // Continue with integrity check and setup
                 completeSetup();
               });
             } else {
-              console.log('✅ Connection health check passed');
+              logger.debug('✅ Connection health check passed');
               completeSetup();
             }
           });
           
             function completeSetup() {
               // STEP 1.5: Run integrity check (DuckDB compatible)
-              console.log('🔄 Verifying database integrity...');
+              logger.debug('🔄 Verifying database integrity...');
               connection.all('SELECT 1 as integrity_check', (integrityErr, integrityResult) => {
                 if (integrityErr) {
-                  console.warn('⚠️ Database integrity check warning:', integrityErr.message);
+                  logger.warn('⚠️ Database integrity check warning:', integrityErr.message);
                   // Don't fail on integrity warnings
                 } else {
-                  console.log('✅ Database integrity verified');
+                  logger.debug('✅ Database integrity verified');
                 }
                 
                 // STEP 1.6: Perform WAL checkpoint
-                console.log('🔄 Performing WAL checkpoint to preserve data...');
+                logger.debug('🔄 Performing WAL checkpoint to preserve data...');
                 connection.run('CHECKPOINT', (checkpointErr) => {
                   if (checkpointErr) {
-                    console.warn('⚠️ WAL checkpoint warning:', checkpointErr.message);
+                    logger.warn('⚠️ WAL checkpoint warning:', checkpointErr.message);
                     // Don't fail on checkpoint errors, just warn
                   } else {
-                    console.log('✅ WAL checkpoint completed - data preserved');
+                    logger.debug('✅ WAL checkpoint completed - data preserved');
                   }
                   
-                  console.log('🎉 DuckDB with consistent catalog aliasing fully operational!');
+                  logger.debug('🎉 DuckDB with consistent catalog aliasing fully operational!');
                   
                   // STEP 1.7: Start periodic WAL checkpoints
                   startPeriodicCheckpoints();
@@ -309,7 +310,7 @@ function connect(dbPath, cb) {
       });
       
     } catch (err) {
-      console.error('❌ DuckDB connection attempt failed:', err);
+      logger.error('❌ DuckDB connection attempt failed:', err);
       return cb(err);
     }
   }
@@ -363,8 +364,8 @@ function processQueue() {
   // Only log queries in debug mode or for important operations
   const isImportantQuery = sql.includes('CREATE') || sql.includes('DROP') || sql.includes('ALTER');
   if (process.env.DEBUG_DB || isImportantQuery) {
-    console.log(`[DUCKDB-WRAPPER] Executing ${type}:`, sql.substring(0, 100) + '...');
-    console.log('[DUCKDB-WRAPPER] With params:', params);
+    logger.debug(`[DUCKDB-WRAPPER] Executing ${type}:`, sql.substring(0, 100) + '...');
+    logger.debug('[DUCKDB-WRAPPER] With params:', params);
   }
   
   // Wrap the callback to ensure we always return results and continue queue
@@ -372,7 +373,7 @@ function processQueue() {
     isProcessingQueue = false;
     
     if (err) {
-      console.error(`[DUCKDB-WRAPPER] ${type} failed:`, err.message || err);
+      logger.error(`[DUCKDB-WRAPPER] ${type} failed:`, err.message || err);
       reject(err);
       if (callback) callback(err);
     } else {
@@ -383,7 +384,7 @@ function processQueue() {
       
       // Only log success for important queries to reduce noise
       if (process.env.DEBUG_DB || isImportantQuery) {
-        console.log(`[DUCKDB-WRAPPER] ${type} succeeded`);
+        logger.debug(`[DUCKDB-WRAPPER] ${type} succeeded`);
       }
       
       resolve(finalResult);
@@ -410,7 +411,7 @@ function processQueue() {
       }
     }
   } catch (syncError) {
-    console.error(`[DUCKDB-WRAPPER] ${type} sync error:`, syncError);
+    logger.error(`[DUCKDB-WRAPPER] ${type} sync error:`, syncError);
     isProcessingQueue = false;
     reject(syncError);
     if (callback) callback(syncError);
@@ -428,7 +429,7 @@ function query(sql, params = [], cb) {
   if (typeof cb !== 'function') {
     cb = (err, rows) => {
       if (err) {
-        console.error('[DUCKDB-WRAPPER] Query failed with error:', err);
+        logger.error('[DUCKDB-WRAPPER] Query failed with error:', err);
       }
     };
   }
@@ -450,7 +451,7 @@ function run(sql, params = [], cb) {
   if (typeof cb !== 'function') {
     cb = (err) => {
       if (err) {
-        console.error('[DUCKDB-WRAPPER] Run failed with error:', err);
+        logger.error('[DUCKDB-WRAPPER] Run failed with error:', err);
       }
     };
   }
@@ -465,12 +466,12 @@ function run(sql, params = [], cb) {
 function close(cb) {
   if (connection) {
     connection.close((err) => {
-      if (err) console.error('❌ Error closing connection:', err);
+      if (err) logger.error('❌ Error closing connection:', err);
       connection = null;
       
       if (db) {
         db.close((dbErr) => {
-          if (dbErr) console.error('❌ Error closing database:', dbErr);
+          if (dbErr) logger.error('❌ Error closing database:', dbErr);
           db = null;
           cb && cb(dbErr || err);
         });
@@ -493,9 +494,9 @@ function performPeriodicCheckpoint() {
   
   connection.run('CHECKPOINT', (err) => {
     if (err) {
-      console.warn('⚠️ Periodic WAL checkpoint failed:', err.message);
+      logger.warn('⚠️ Periodic WAL checkpoint failed:', err.message);
     } else {
-      console.log('✅ Periodic WAL checkpoint completed');
+      logger.debug('✅ Periodic WAL checkpoint completed');
     }
   });
 }
@@ -505,14 +506,14 @@ let checkpointInterval;
 function startPeriodicCheckpoints() {
   if (checkpointInterval) clearInterval(checkpointInterval);
   checkpointInterval = setInterval(performPeriodicCheckpoint, 5 * 60 * 1000); // 5 minutes
-  console.log('🔄 Started periodic WAL checkpoints (every 5 minutes)');
+  logger.debug('🔄 Started periodic WAL checkpoints (every 5 minutes)');
 }
 
 function stopPeriodicCheckpoints() {
   if (checkpointInterval) {
     clearInterval(checkpointInterval);
     checkpointInterval = null;
-    console.log('⏹️ Stopped periodic WAL checkpoints');
+    logger.debug('⏹️ Stopped periodic WAL checkpoints');
   }
 }
 

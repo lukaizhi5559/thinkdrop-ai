@@ -20,7 +20,7 @@ process.stdout.on('error', (err) => {
     // Ignore EPIPE errors - they happen when output pipe is broken
     return;
   }
-  console.error('stdout error:', err);
+  logger.error('stdout error:', err);
 });
 
 process.stderr.on('error', (err) => {
@@ -28,7 +28,7 @@ process.stderr.on('error', (err) => {
     // Ignore EPIPE errors - they happen when output pipe is broken
     return;
   }
-  console.error('stderr error:', err);
+  logger.error('stderr error:', err);
 });
 
 // Handle uncaught exceptions that might be related to logging
@@ -37,7 +37,7 @@ process.on('uncaughtException', (err) => {
     // Ignore EPIPE errors
     return;
   }
-  console.error('Uncaught Exception:', err);
+  logger.error('Uncaught Exception:', err);
   // Don't exit the process for EPIPE errors
   if (err.code !== 'EPIPE') {
     process.exit(1);
@@ -48,11 +48,11 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason, promise) => {
   // Check if it's a database corruption error
   if (reason && reason.message && reason.message.includes('Corrupt database')) {
-    console.warn('⚠️  Unhandled database corruption error (non-fatal):', reason.message);
+    logger.warn('⚠️  Unhandled database corruption error (non-fatal):', reason.message);
     // Don't crash - database errors are logged but shouldn't kill the app
     return;
   }
-  console.error('Unhandled Promise Rejection:', reason);
+  logger.error('Unhandled Promise Rejection:', reason);
   // Log but don't crash for promise rejections
 });
 
@@ -74,6 +74,7 @@ const { registerScreenIntelligenceHandlers } = require('./handlers/ipc-handlers-
 const { registerInsightHandlers } = require('./handlers/ipc-handlers-insight.cjs');
 const { setupInsightHistoryHandlers } = require('./handlers/ipc-handlers-insight-history.cjs');
 
+const logger = require('./logger.cjs');
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
 
 let overlayWindow = null;
@@ -168,16 +169,16 @@ function createOverlayWindow() {
     overlayWindow.show();
     isOverlayVisible = true;
     isGloballyVisible = true;
-    console.log('✅ Main overlay window shown (index.html loaded)');
+    logger.debug('✅ Main overlay window shown (index.html loaded)');
   });
   
   // Handle load errors
   overlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    console.error('❌ [MAIN WINDOW] Failed to load:', errorDescription, 'URL:', validatedURL);
+    logger.error('❌ [MAIN WINDOW] Failed to load:', errorDescription, 'URL:', validatedURL);
   });
 
   overlayWindow.webContents.on('did-finish-load', () => {
-    console.log('✅ [MAIN WINDOW] index.html loaded successfully');
+    logger.debug('✅ [MAIN WINDOW] index.html loaded successfully');
   });
   
   // Hide window instead of closing
@@ -224,24 +225,24 @@ function toggleOverlay() {
 }
 
 app.whenReady().then(async () => {
-  console.log('🚀 App ready - starting initialization sequence...');
+  logger.debug('🚀 App ready - starting initialization sequence...');
   
     // Step 1: Initialize core services FIRST
-    console.log('🔧 Step 1: Initializing core services...');
+    logger.debug('🔧 Step 1: Initializing core services...');
     //await initializeServices();
-    console.log('✅ Step 1: Core services initialized');
+    logger.debug('✅ Step 1: Core services initialized');
     
     // Step 2: Setup IPC handlers AFTER services are ready
-    console.log('🔧 Step 2: Setting up IPC handlers...');
+    logger.debug('🔧 Step 2: Setting up IPC handlers...');
 
     createOverlayWindow();
-    console.log('✅ Step 3: Overlay window created');
+    logger.debug('✅ Step 3: Overlay window created');
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
-    console.log('👁️  Creating combined overlay...');
+    logger.debug('👁️  Creating combined overlay...');
     // const { createAIViewingOverlay, hideAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
     // createAIViewingOverlay();
-    console.log('✅ Combined overlay created');
+    logger.debug('✅ Combined overlay created');
     
   // Initialize core services including LocalLLMAgent
   let handlersSetup = false;
@@ -262,7 +263,7 @@ app.whenReady().then(async () => {
       await setupIPCHandlers();
     }
   }).catch(async error => {
-    console.error('❌ Error during initialization sequence:', error);
+    logger.error('❌ Error during initialization sequence:', error);
     // Setup IPC handlers anyway to allow basic functionality (only once)
     if (!handlersSetup) {
       handlersSetup = true;
@@ -270,10 +271,10 @@ app.whenReady().then(async () => {
     }
   });
   
-  console.log('🎉 Initialization sequence complete!');
+  logger.debug('🎉 Initialization sequence complete!');
   
   // Initialize Window Tracker in Worker Thread (lightweight window change detection)
-  console.log('🔧 Initializing Window Tracker in worker thread...');
+  logger.debug('🔧 Initializing Window Tracker in worker thread...');
   try {
     const { Worker } = require('worker_threads');
     const path = require('path');
@@ -289,7 +290,7 @@ app.whenReady().then(async () => {
     global.windowTracker.on('message', async (msg) => {
       if (msg.type === 'ready') {
         global.windowTrackerReady = true;
-        console.log('✅ Window Tracker worker ready');
+        logger.debug('✅ Window Tracker worker ready');
       } else if (msg.type === 'showWindowChangeToast') {
         // Worker requesting window change toast
         try {
@@ -298,9 +299,9 @@ app.whenReady().then(async () => {
             <strong>${msg.app}</strong>${msg.title ? `<br><span style="opacity: 0.8;">${msg.title}</span>` : ''}
           </div>`;
           showHotkeyToast(message, { persistent: true, duration: 2000 });
-          console.log(`🍞 [MAIN] Window change toast shown: ${msg.app}`);
+          logger.debug(`🍞 [MAIN] Window change toast shown: ${msg.app}`);
         } catch (error) {
-          console.error('❌ [MAIN] Failed to show window change toast:', error);
+          logger.error('❌ [MAIN] Failed to show window change toast:', error);
         }
       } else if (msg.type === 'activeWindowUpdate') {
         // Worker notifying of active window change
@@ -312,8 +313,8 @@ app.whenReady().then(async () => {
           url: msg.url,
           windowId: msg.windowId
         };
-        console.log(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
-        console.log(`   Previous: ${previousWindowId || 'none'}`);
+        logger.debug(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
+        logger.debug(`   Previous: ${previousWindowId || 'none'}`);
         
         // 👁️  Send active window update to overlay for AI viewing indicator
         try {
@@ -327,69 +328,69 @@ app.whenReady().then(async () => {
             windowId: msg.windowId
           });
         } catch (error) {
-          console.warn('⚠️  [MAIN] Failed to send active-window-update:', error.message);
+          logger.warn('⚠️  [MAIN] Failed to send active-window-update:', error.message);
         }
       } else if (msg.type === 'error') {
-        console.error('❌ [MAIN] Window Tracker error:', msg.error);
+        logger.error('❌ [MAIN] Window Tracker error:', msg.error);
       } else {
-        console.warn('⚠️  [MAIN] Unknown message type from window tracker:', msg.type);
+        logger.warn('⚠️  [MAIN] Unknown message type from window tracker:', msg.type);
       }
     });
     
     global.windowTracker.on('error', (error) => {
-      console.error('❌ Window Tracker thread error:', error);
+      logger.error('❌ Window Tracker thread error:', error);
       global.windowTrackerReady = false;
     });
     
     global.windowTracker.on('exit', (code) => {
-      console.log(`⚠️  Window Tracker exited with code ${code}`);
+      logger.debug(`⚠️  Window Tracker exited with code ${code}`);
       global.windowTrackerReady = false;
     });
     
     // Initialize the worker
     global.windowTracker.postMessage({ type: 'init' });
     
-    console.log('✅ Window Tracker worker thread started');
+    logger.debug('✅ Window Tracker worker thread started');
   } catch (error) {
-    console.error('❌ Failed to start Window Tracker worker:', error);
-    console.log('⚠️  Continuing without window tracking');
+    logger.error('❌ Failed to start Window Tracker worker:', error);
+    logger.debug('⚠️  Continuing without window tracking');
   }
   
   // Initialize Selection Detector for context-aware queries
-  console.log('📋 Initializing Selection Detector...');
+  logger.debug('📋 Initializing Selection Detector...');
   const { getSelectionDetector } = require('./services/selection-detector.cjs');
   global.selectionDetector = getSelectionDetector();
   global.selectionDetector.start();
-  console.log('✅ Selection Detector initialized');
+  logger.debug('✅ Selection Detector initialized');
   
   // Show hotkey hint once on startup (user can dismiss it)
   setTimeout(() => {
     if (global.selectionDetector) {
-      console.log('🔔 Showing hotkey hint toast...');
+      logger.debug('🔔 Showing hotkey hint toast...');
       global.selectionDetector.showHotkeyHintOnce();
     }
   }, 3000); // Show after 3 seconds to ensure overlay is ready
   
   // Initialize Selection Overlay for floating ThinkDrop button
-  console.log('💧 Initializing Selection Overlay...');
+  logger.debug('💧 Initializing Selection Overlay...');
   const { createSelectionOverlay } = require('./windows/selection-overlay.cjs');
   createSelectionOverlay();
-  console.log('✅ Selection Overlay initialized');
+  logger.debug('✅ Selection Overlay initialized');
   
   // Initialize FAB Window (Floating Action Button)
-  // console.log('🎯 Initializing FAB Window...');
+  // logger.debug('🎯 Initializing FAB Window...');
   // const { createFABWindow, updateFABState } = require('./windows/fab-window.cjs');
   // createFABWindow();
   // global.updateFABState = updateFABState; // Make it globally accessible
-  // console.log('✅ FAB Window initialized');
+  // logger.debug('✅ FAB Window initialized');
   
   // Initialize Guide Window (Interactive Guides)
-  console.log('🎯 Initializing Guide Window...');
+  logger.debug('🎯 Initializing Guide Window...');
   const { createGuideWindow, showGuideWindow, hideGuideWindow } = require('./windows/guide-window.cjs');
   createGuideWindow();
   global.showGuideWindow = showGuideWindow; // Make it globally accessible
   global.hideGuideWindow = hideGuideWindow;
-  console.log('✅ Guide Window initialized');
+  logger.debug('✅ Guide Window initialized');
   
   // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
   // DISABLED: Overlay temporarily disabled in favor of "Prompted Anywhere" feature
@@ -400,14 +401,14 @@ app.whenReady().then(async () => {
       toggleOverlay();
       // hideAIViewingOverlay();
     });
-    console.log('✅ Overlay shortcut (Cmd+Shift+Space) registered');
+    logger.debug('✅ Overlay shortcut (Cmd+Shift+Space) registered');
   } else {
-    console.log('⏭️  Overlay shortcut disabled (use ENABLE_OVERLAY=true to re-enable)');
+    logger.debug('⏭️  Overlay shortcut disabled (use ENABLE_OVERLAY=true to re-enable)');
   }
   
   // 🎯 Cmd+Option+A to capture selection and show "Ask" interface
   globalShortcut.register('Cmd+Option+A', async () => {
-    console.log('🎯 [ASK] Cmd+Option+A triggered - capturing selection');
+    logger.debug('🎯 [ASK] Cmd+Option+A triggered - capturing selection');
     
     // Capture selection from active window using nut.js
     if (global.selectionDetector) {
@@ -423,7 +424,7 @@ app.whenReady().then(async () => {
   
   // 🧪 Cmd+Option+T to test floating button (for debugging)
   globalShortcut.register('Cmd+Option+T', async () => {
-    console.log('🧪 [TEST] Cmd+Option+T triggered - testing floating button');
+    logger.debug('🧪 [TEST] Cmd+Option+T triggered - testing floating button');
     
     if (global.selectionDetector) {
       const testText = "This is a test selection for the floating ThinkDrop button!";
@@ -433,18 +434,18 @@ app.whenReady().then(async () => {
   
   // 🚀 Shift+Cmd+L for "Prompted Anywhere" - AI assistance in any app
   globalShortcut.register('Shift+Cmd+L', async () => {
-    console.log('🚀 [Prompted Anywhere] Shift+Cmd+L triggered!');
+    logger.debug('🚀 [Prompted Anywhere] Shift+Cmd+L triggered!');
     
     if (global.promptedAnywhereService) {
       await global.promptedAnywhereService.handlePromptAnywhere();
     } else {
-      console.error('❌ [Prompted Anywhere] Service not initialized');
+      logger.error('❌ [Prompted Anywhere] Service not initialized');
     }
   });
   
   // 🛑 Cancel running automation function (shared by multiple shortcuts)
   const cancelAutomation = async (triggerKey) => {
-    console.log(`🛑 [Cancel Automation] ${triggerKey} triggered!`);
+    logger.debug(`🛑 [Cancel Automation] ${triggerKey} triggered!`);
     
     try {
       const response = await mcpClient.callService(
@@ -455,12 +456,12 @@ app.whenReady().then(async () => {
       );
       
       if (response.success && response.cancelled) {
-        console.log('✅ [Cancel Automation] Automation cancelled successfully');
+        logger.debug('✅ [Cancel Automation] Automation cancelled successfully');
       } else {
-        console.log('ℹ️  [Cancel Automation] No automation was running');
+        logger.debug('ℹ️  [Cancel Automation] No automation was running');
       }
     } catch (error) {
-      console.error('❌ [Cancel Automation] Failed:', error.message);
+      logger.error('❌ [Cancel Automation] Failed:', error.message);
     }
   };
     
@@ -472,7 +473,7 @@ app.whenReady().then(async () => {
   
   // Screen Intelligence shortcuts
   globalShortcut.register('Cmd+Option+I', async () => {
-    console.log('🔍 Screen Intelligence: Discovery Mode triggered');
+    logger.debug('🔍 Screen Intelligence: Discovery Mode triggered');
     const { createScreenIntelligenceOverlay, showDiscoveryMode, showToast } = require('./windows/screen-intelligence-overlay.cjs');
     
     try {
@@ -529,7 +530,7 @@ app.whenReady().then(async () => {
         // 3️⃣ Cache the results
         if (virtualDOM) {
           await virtualDOM.cacheAnalysis(data);
-          console.log('✅ Cached screen analysis');
+          logger.debug('✅ Cached screen analysis');
         }
         
         // Show discovery mode with all elements
@@ -540,14 +541,14 @@ app.whenReady().then(async () => {
       }
       
     } catch (error) {
-      console.error('Screen Intelligence error:', error);
+      logger.error('Screen Intelligence error:', error);
       showToast(`Error: ${error.message}`, 'error', 3000);
     }
   });
   
   // Clear screen intelligence overlays
   globalShortcut.register('Cmd+Option+C', () => {
-    console.log('🧹 Screen Intelligence: Clearing overlays');
+    logger.debug('🧹 Screen Intelligence: Clearing overlays');
     const { clearOverlays, hideOverlay } = require('./windows/screen-intelligence-overlay.cjs');
     clearOverlays();
     hideOverlay();
@@ -588,8 +589,8 @@ async function initializeServices() {
   const USE_MCP_PRIVATE_MODE = process.env.USE_MCP_PRIVATE_MODE === 'true';
   
   if (USE_MCP_PRIVATE_MODE) {
-    console.log('🔒 [MCP-MODE] Private mode enabled - skipping local agent initialization');
-    console.log('🔒 [MCP-MODE] Using MCP services for all AI operations');
+    logger.debug('🔒 [MCP-MODE] Private mode enabled - skipping local agent initialization');
+    logger.debug('🔒 [MCP-MODE] Using MCP services for all AI operations');
     
     // Only initialize minimal database for conversation persistence
     try {
@@ -612,7 +613,7 @@ async function initializeServices() {
       
       // In MCP mode, conversation persistence is handled by the MCP conversation service
       // No need to bootstrap ConversationSessionAgent here
-      console.log('✅ [MCP-MODE] Database initialized for MCP services only');
+      logger.debug('✅ [MCP-MODE] Database initialized for MCP services only');
       
       // Create minimal coreAgent stub (no conversation agent)
       global.coreAgent = {
@@ -622,7 +623,7 @@ async function initializeServices() {
         }
       };
       
-      console.log('✅ [MCP-MODE] Minimal stub ready - all operations via MCP services');
+      logger.debug('✅ [MCP-MODE] Minimal stub ready - all operations via MCP services');
       
       // Register stub handlers EARLY to prevent frontend errors during initialization
       const { ipcMain } = require('electron');
@@ -643,10 +644,10 @@ async function initializeServices() {
         return { success: true, communications: [] };
       });
       
-      console.log('✅ [MCP-MODE] Early stub handlers registered');
+      logger.debug('✅ [MCP-MODE] Early stub handlers registered');
       
     } catch (error) {
-      console.error('❌ [MCP-MODE] Database initialization failed:', error);
+      logger.error('❌ [MCP-MODE] Database initialization failed:', error);
     }
     
     return; // Skip all agent bootstrapping
@@ -655,12 +656,12 @@ async function initializeServices() {
   try {
     // Initialize CoreAgent (AgentOrchestrator) for dynamic agent management
     try {
-      console.log('🔄 Step 1: Importing AgentOrchestrator...');
+      logger.debug('🔄 Step 1: Importing AgentOrchestrator...');
       // Dynamic import for ES module compatibility
       const { AgentOrchestrator } = await import('./services/agents/AgentOrchestrator.js');
-      console.log('✅ Step 1: AgentOrchestrator imported successfully');
+      logger.debug('✅ Step 1: AgentOrchestrator imported successfully');
       
-      console.log('🔄 Step 2: Setting up database paths...');
+      logger.debug('🔄 Step 2: Setting up database paths...');
       // Initialize DuckDB for agent memory storage using DatabaseManager
       const path = require('path');
       const fs = require('fs');
@@ -670,22 +671,22 @@ async function initializeServices() {
       
       // Ensure data directory exists
       if (!fs.existsSync(dataDir)) {
-        console.log(`📁 Creating data directory: ${dataDir}`);
+        logger.debug(`📁 Creating data directory: ${dataDir}`);
         fs.mkdirSync(dataDir, { recursive: true });
       }
-      console.log('✅ Step 2: Database paths configured');
+      logger.debug('✅ Step 2: Database paths configured');
       
-      console.log('🔄 Step 3: Importing and initializing DatabaseManager...');
+      logger.debug('🔄 Step 3: Importing and initializing DatabaseManager...');
       // Import and initialize DatabaseManager
       const { default: databaseManager } = await import('./services/utils/DatabaseManager.js');
       await databaseManager.initialize(dbPath);
-      console.log('✅ Step 3: DatabaseManager initialized successfully');
+      logger.debug('✅ Step 3: DatabaseManager initialized successfully');
       
-      console.log('🔄 Step 4: Creating AgentOrchestrator instance...');
+      logger.debug('🔄 Step 4: Creating AgentOrchestrator instance...');
       coreAgent = new AgentOrchestrator();
-      console.log('✅ Step 4: AgentOrchestrator instance created');
+      logger.debug('✅ Step 4: AgentOrchestrator instance created');
       
-      console.log('🔄 Step 5: Initializing CoreAgent...');
+      logger.debug('🔄 Step 5: Initializing CoreAgent...');
       // Initialize the CoreAgent
       const initResult = await coreAgent.initialize({
         llmClient: null, // Will be set when needed
@@ -698,17 +699,17 @@ async function initializeServices() {
       
       // Make CoreAgent available globally for IPC handlers AFTER initialization
       global.coreAgent = coreAgent;
-      console.log('✅ Step 5: CoreAgent initialized successfully:', initResult);
+      logger.debug('✅ Step 5: CoreAgent initialized successfully:', initResult);
 
       // Initialize performance optimizations
-      console.log('🔄 Step 6: Initializing performance optimizations...');
+      logger.debug('🔄 Step 6: Initializing performance optimizations...');
       const { optimizationManager } = require('./services/cache/OptimizationManager.cjs');
       await optimizationManager.initialize();
-      console.log('✅ Step 6: Performance optimizations ready');
+      logger.debug('✅ Step 6: Performance optimizations ready');
 
       // Start the embedding daemon for automatic background embedding generation
       try {
-        console.log('🤖 Starting embedding daemon for semantic search...');
+        logger.debug('🤖 Starting embedding daemon for semantic search...');
         
         // Bootstrap SemanticEmbeddingAgent first
         await coreAgent.ask({
@@ -717,14 +718,14 @@ async function initializeServices() {
         });
         
         // Bootstrap ConversationSessionAgent to create conversation database tables
-        console.log('🗣️ Bootstrapping ConversationSessionAgent...');
+        logger.debug('🗣️ Bootstrapping ConversationSessionAgent...');
         await coreAgent.ask({
           agent: 'ConversationSessionAgent',
           action: 'bootstrap'
         });
         
         // Bootstrap WebSearchAgent for hybrid query support
-        console.log('🔍 Bootstrapping WebSearchAgent...');
+        logger.debug('🔍 Bootstrapping WebSearchAgent...');
         await coreAgent.ask({
           agent: 'WebSearchAgent',
           action: 'bootstrap'
@@ -737,20 +738,20 @@ async function initializeServices() {
         });
         
         if (daemonResult.success) {
-          console.log('✅ Embedding daemon started successfully:', daemonResult.message);
+          logger.debug('✅ Embedding daemon started successfully:', daemonResult.message);
         } else {
-          console.warn('⚠️ Embedding daemon failed to start:', daemonResult.error);
+          logger.warn('⚠️ Embedding daemon failed to start:', daemonResult.error);
         }
         
       } catch (daemonError) {
-        console.error('❌ Failed to start embedding daemon:', daemonError);
+        logger.error('❌ Failed to start embedding daemon:', daemonError);
         // Continue without daemon - app should still work
       }
 
     } catch (error) {
-      console.error('❌ Failed to initialize CoreAgent:', error);
-      console.error('❌ CoreAgent error stack:', error.stack);
-      console.error('❌ CoreAgent error details:', {
+      logger.error('❌ Failed to initialize CoreAgent:', error);
+      logger.error('❌ CoreAgent error stack:', error.stack);
+      logger.error('❌ CoreAgent error details:', {
         message: error.message,
         name: error.name,
         code: error.code
@@ -762,14 +763,14 @@ async function initializeServices() {
     // Legacy event listeners removed - functionality will be re-implemented using new agent architecture as needed
     
   } catch (error) {
-    console.error('❌ Service initialization error:', error);
+    logger.error('❌ Service initialization error:', error);
     // Continue without services for demo mode
   }
 }
 
 // Setup IPC handlers using modularized files
 async function setupIPCHandlers() {
-  console.log('🔧 Setting up IPC handlers...');
+  logger.debug('🔧 Setting up IPC handlers...');
   
   const USE_MCP_PRIVATE_MODE = process.env.USE_MCP_PRIVATE_MODE === 'true';
   
@@ -811,52 +812,52 @@ async function setupIPCHandlers() {
         windowState,
         windowCreators
       });
-    console.log('✅ Main IPC handlers setup complete');
+    logger.debug('✅ Main IPC handlers setup complete');
     
     if (!USE_MCP_PRIVATE_MODE) {
       // DEPRECATED - Setup memory handlers (skip in MCP mode - use MCP user-memory service)
-      console.log('⏭️  [DEPRECATED] Skipping memory handlers - removed in Phase 1 cleanup');
+      logger.debug('⏭️  [DEPRECATED] Skipping memory handlers - removed in Phase 1 cleanup');
       // setupMemoryHandlers(ipcMain, coreAgent);
     } else {
-      console.log('⏭️  [MCP-MODE] Skipping memory handlers - using MCP user-memory service');
+      logger.debug('⏭️  [MCP-MODE] Skipping memory handlers - using MCP user-memory service');
     }
     
     // DEPRECATED - Initialize screenshot, system health, and legacy LLM handlers
     if (!USE_MCP_PRIVATE_MODE) {
-      console.log('⏭️  [DEPRECATED] Skipping screenshot handlers - removed in Phase 1 cleanup');
+      logger.debug('⏭️  [DEPRECATED] Skipping screenshot handlers - removed in Phase 1 cleanup');
       // initializeHandlersPart3({ ipcMain, coreAgent, windowState, windows });
     }
 
-    console.log('🔧 Setting up conversation persistence handlers...');
+    logger.debug('🔧 Setting up conversation persistence handlers...');
     // In MCP mode, pass conversationAgent directly instead of coreAgent
     const agentForConversation = USE_MCP_PRIVATE_MODE ? conversationAgent : coreAgent;
     setupConversationHandlers(ipcMain, agentForConversation);
-    console.log('✅ Conversation persistence handlers setup complete');
+    logger.debug('✅ Conversation persistence handlers setup complete');
     
     // Declare sendWorkflowClarification outside conditional to avoid undefined error
     let sendWorkflowClarification = null;
     
     if (!USE_MCP_PRIVATE_MODE) {
       // DEPRECATED - Skip Local LLM handlers (removed in Phase 1 cleanup)
-      console.log('⏭️  [DEPRECATED] Skipping Local LLM handlers - removed in Phase 1 cleanup');
+      logger.debug('⏭️  [DEPRECATED] Skipping Local LLM handlers - removed in Phase 1 cleanup');
       // initializeLocalLLMHandlers({ ipcMain, coreAgent, windowState, windows });
       
       // DEPRECATED - Setup orchestration workflow handlers (removed in Phase 1 cleanup)
-      console.log('⏭️  [DEPRECATED] Skipping orchestration handlers - removed in Phase 1 cleanup');
+      logger.debug('⏭️  [DEPRECATED] Skipping orchestration handlers - removed in Phase 1 cleanup');
       // const result = setupOrchestrationWorkflowHandlers(ipcMain, localLLMAgent, windows);
       // sendWorkflowClarification = result.sendClarificationRequest;
     } else {
-      console.log('⏭️  [MCP-MODE] Skipping Local LLM handlers - using MCP phi4 service');
-      console.log('⏭️  [MCP-MODE] Skipping orchestration workflow handlers - using MCP orchestrator');
+      logger.debug('⏭️  [MCP-MODE] Skipping Local LLM handlers - using MCP phi4 service');
+      logger.debug('⏭️  [MCP-MODE] Skipping orchestration workflow handlers - using MCP orchestrator');
     }
     
     if (!USE_MCP_PRIVATE_MODE) {
       // Skip database notification handlers in MCP mode
-      console.log('🔧 Setting up database notification handlers...');
+      logger.debug('🔧 Setting up database notification handlers...');
       await setupDatabaseNotificationHandlers();
-      console.log('✅ Database notification IPC handlers setup complete');
+      logger.debug('✅ Database notification IPC handlers setup complete');
     } else {
-      console.log('⏭️  [MCP-MODE] Skipping database notification handlers');
+      logger.debug('⏭️  [MCP-MODE] Skipping database notification handlers');
     }
     
     // Initialize MCP client and config manager (used by multiple handlers)
@@ -865,56 +866,56 @@ async function setupIPCHandlers() {
     const mcpClient = new MCPClient(MCPConfigManager);
     
     // Initialize Prompted Anywhere service
-    console.log('🚀 Initializing Prompted Anywhere service...');
+    logger.debug('🚀 Initializing Prompted Anywhere service...');
     const { PromptedAnywhereService } = require('./services/promptedAnywhere.cjs');
     global.promptedAnywhereService = new PromptedAnywhereService(mcpClient);
-    console.log('✅ Prompted Anywhere service initialized');
+    logger.debug('✅ Prompted Anywhere service initialized');
     
     // Initialize MCP handlers (microservices)
-    console.log('🔧 Setting up MCP handlers...');
+    logger.debug('🔧 Setting up MCP handlers...');
     registerMCPHandlers();
-    console.log('✅ MCP handlers setup complete');
+    logger.debug('✅ MCP handlers setup complete');
     
     // Initialize Screen Intelligence handlers
-    console.log('🎯 Setting up Screen Intelligence handlers...');
+    logger.debug('🎯 Setting up Screen Intelligence handlers...');
     registerScreenIntelligenceHandlers();
-    console.log('✅ Screen Intelligence handlers setup complete');
+    logger.debug('✅ Screen Intelligence handlers setup complete');
     
     // Initialize Insight handlers
-    console.log('💡 Setting up Insight handlers...');
+    logger.debug('💡 Setting up Insight handlers...');
     registerInsightHandlers(mcpClient);
-    console.log('✅ Insight handlers setup complete');
+    logger.debug('✅ Insight handlers setup complete');
     
     // Initialize Insight History handlers
-    console.log('📚 Setting up Insight History handlers...');
+    logger.debug('📚 Setting up Insight History handlers...');
     setupInsightHistoryHandlers();
-    console.log('✅ Insight History handlers setup complete');
+    logger.debug('✅ Insight History handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
-    console.log('🔧 Setting up MCP Private Mode handlers...');
+    logger.debug('🔧 Setting up MCP Private Mode handlers...');
     registerPrivateModeHandlers();
-    console.log('✅ MCP Private Mode handlers setup complete');
+    logger.debug('✅ MCP Private Mode handlers setup complete');
     
     // Initialize MCP Memory handlers (for Memory Debugger in private mode)
     if (USE_MCP_PRIVATE_MODE) {
-      console.log('🔧 Setting up MCP Memory handlers...');
+      logger.debug('🔧 Setting up MCP Memory handlers...');
       setupMCPMemoryHandlers(mcpClient);
-      console.log('✅ MCP Memory handlers setup complete');
+      logger.debug('✅ MCP Memory handlers setup complete');
     }
     
     // Initialize Gemini OAuth handlers
-    console.log('🔧 Setting up Gemini OAuth handlers...');
+    logger.debug('🔧 Setting up Gemini OAuth handlers...');
     setupGeminiOAuthHandlers(MCPConfigManager.db);
-    console.log('✅ Gemini OAuth handlers setup complete');
+    logger.debug('✅ Gemini OAuth handlers setup complete');
     
     // Initialize Vision OAuth handlers
-    console.log('🔧 Setting up Vision OAuth handlers...');
+    logger.debug('🔧 Setting up Vision OAuth handlers...');
     setupVisionOAuthHandlers(MCPConfigManager.db, MCPConfigManager);
-    console.log('✅ Vision OAuth handlers setup complete');
+    logger.debug('✅ Vision OAuth handlers setup complete');
     
     // Update stub handlers with full MCP service info (already registered early)
     if (USE_MCP_PRIVATE_MODE) {
-      console.log('🔧 Updating MCP mode stub handlers with service info...');
+      logger.debug('🔧 Updating MCP mode stub handlers with service info...');
       
       // Remove early stubs and replace with full versions
       ipcMain.removeHandler('agent-execute');
@@ -971,7 +972,7 @@ async function setupIPCHandlers() {
       ipcMain.handle('window-hide', async () => {
         if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
           global.overlayWindow.hide();
-          console.log('🙈 [WINDOW] Overlay hidden for automation');
+          logger.debug('🙈 [WINDOW] Overlay hidden for automation');
           return { success: true };
         }
         return { success: false, error: 'Window not available' };
@@ -980,28 +981,28 @@ async function setupIPCHandlers() {
       ipcMain.handle('window-show', async () => {
         if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
           global.overlayWindow.show();
-          console.log('👁️ [WINDOW] Overlay restored after automation');
+          logger.debug('👁️ [WINDOW] Overlay restored after automation');
           return { success: true };
         }
         return { success: false, error: 'Window not available' };
       });
       
-      console.log('✅ MCP mode stub handlers updated');
+      logger.debug('✅ MCP mode stub handlers updated');
     }
     
     // Initialize main IPC handlers
-    console.log('🔧 Setting up main IPC handlers...');
-    console.log('✅ Screenshot and system handlers setup complete');
+    logger.debug('🔧 Setting up main IPC handlers...');
+    logger.debug('✅ Screenshot and system handlers setup complete');
     
     
     // Store the broadcast and clarification functions for use elsewhere
     global.broadcastOrchestrationUpdate = broadcastUpdate;
     global.sendClarificationRequest = sendWorkflowClarification || sendClarification;
     
-    console.log('✅ All IPC handlers registered successfully');
+    logger.debug('✅ All IPC handlers registered successfully');
     
   } catch (error) {
-    console.error('❌ Error setting up IPC handlers:', error);
+    logger.error('❌ Error setting up IPC handlers:', error);
     throw error;
   }
 }

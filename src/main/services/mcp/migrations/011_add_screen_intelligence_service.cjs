@@ -3,17 +3,18 @@
  * Adds the screen intelligence service for context-aware screen analysis
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '011_add_screen_intelligence_service',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 011_add_screen_intelligence_service');
+    logger.debug('🔄 Running migration: 011_add_screen_intelligence_service');
     
     // Check if screen-intelligence service already exists
     const existing = await db.query(`SELECT id FROM mcp_services WHERE name = 'screen-intelligence'`);
     
     if (existing.length > 0) {
-      console.log('⚠️  Screen Intelligence service already exists, updating API key and endpoint...');
+      logger.debug('⚠️  Screen Intelligence service already exists, updating API key and endpoint...');
       
       // Update API key and endpoint from environment variables
       const apiKey = process.env.MCP_SCREEN_INTELLIGENCE_API_KEY || 'PIFMEY6GrUwzt2vQRd2WwpL6qbTTxRGg';
@@ -24,10 +25,10 @@ module.exports = {
         [apiKey, endpoint, 'screen-intelligence']
       );
       
-      console.log(`  ✅ Updated screen-intelligence service:`);
-      console.log(`     Endpoint: ${endpoint}`);
-      console.log(`     API key: ${apiKey ? apiKey.substring(0, 10) + '...' : 'EMPTY'}`);
-      console.log('✅ Screen Intelligence service updated');
+      logger.debug(`  ✅ Updated screen-intelligence service:`);
+      logger.debug(`     Endpoint: ${endpoint}`);
+      logger.debug(`     API key: ${apiKey ? apiKey.substring(0, 10) + '...' : 'EMPTY'}`);
+      logger.debug('✅ Screen Intelligence service updated');
       return;
     }
     
@@ -102,7 +103,7 @@ module.exports = {
       ]
     );
     
-    console.log('✅ Screen Intelligence service added to database');
-    console.log('💡 Note: Set MCP_SCREEN_INTELLIGENCE_API_KEY in .env for API authentication');
+    logger.debug('✅ Screen Intelligence service added to database');
+    logger.debug('💡 Note: Set MCP_SCREEN_INTELLIGENCE_API_KEY in .env for API authentication');
   }
 };

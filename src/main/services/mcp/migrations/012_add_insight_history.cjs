@@ -7,11 +7,12 @@
  * - Delete individual insights or clear all
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '012_add_insight_history',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 012_add_insight_history');
+    logger.debug('🔄 Running migration: 012_add_insight_history');
     
     // Create insight_history table
     await db.run(`
@@ -54,7 +55,7 @@ module.exports = {
       ON insight_history(insight_type)
     `);
     
-    console.log('✅ insight_history table created');
-    console.log('✅ Migration 012_add_insight_history completed');
+    logger.debug('✅ insight_history table created');
+    logger.debug('✅ Migration 012_add_insight_history completed');
   }
 };

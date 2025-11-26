@@ -9,6 +9,7 @@ const axios = require('axios');
 const { createRequest, createResponse, createError, ErrorCodes, isRetryableError } = require('./schemas/envelope.cjs');
 const { MCPConfig } = require('./config.cjs');
 
+const logger = require('./../../logger.cjs');
 class MCPClient {
   constructor(config = MCPConfig) {
     this.config = config;
@@ -83,7 +84,7 @@ class MCPClient {
 
         // Calculate retry delay with exponential backoff and jitter
         const delay = this.calculateRetryDelay(attempt);
-        console.warn(`⚠️ MCP request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
+        logger.warn(`⚠️ MCP request failed (attempt ${attempt + 1}/${maxRetries + 1}), retrying in ${delay}ms...`);
         await this.sleep(delay);
       }
     }

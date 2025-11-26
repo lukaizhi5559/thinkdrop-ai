@@ -3,17 +3,18 @@
  * Adds conversation service with all its actions
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '002_conversation_service',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 002_conversation_service');
+    logger.debug('🔄 Running migration: 002_conversation_service');
     
     // Check if conversation service already exists
     const existing = await db.query(`SELECT id FROM mcp_services WHERE name = 'conversation'`);
     
     if (existing.length > 0) {
-      console.log('⚠️  Conversation service already exists, skipping migration');
+      logger.debug('⚠️  Conversation service already exists, skipping migration');
       return;
     }
     
@@ -62,15 +63,15 @@ module.exports = {
       ]
     );
     
-    console.log('✅ Conversation service migration complete');
+    logger.debug('✅ Conversation service migration complete');
   },
   
   async rollback(db) {
-    console.log('🔄 Rolling back migration: 002_conversation_service');
+    logger.debug('🔄 Rolling back migration: 002_conversation_service');
     
     // Delete conversation service
     await db.run(`DELETE FROM mcp_services WHERE id = 'conversation-1'`);
     
-    console.log('✅ Conversation service rollback complete');
+    logger.debug('✅ Conversation service rollback complete');
   }
 };

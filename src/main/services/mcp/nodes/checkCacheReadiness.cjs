@@ -18,6 +18,7 @@
  * @param {Function} onProgress - Callback for progress updates
  * @returns {Promise<boolean>} True if cache became ready, false if timeout
  */
+const logger = require('./../../../logger.cjs');
 async function waitForCache(activeWindowId, maxWaitMs = 5000, onProgress = null) {
   const startTime = Date.now();
   const checkInterval = 200; // Check every 200ms
@@ -32,7 +33,7 @@ async function waitForCache(activeWindowId, maxWaitMs = 5000, onProgress = null)
     
     if (hasCache) {
       const elapsed = Date.now() - startTime;
-      console.log(`✅ [NODE:CACHE_READINESS] Cache ready after ${elapsed}ms (${attempts} attempts)`);
+      logger.debug(`✅ [NODE:CACHE_READINESS] Cache ready after ${elapsed}ms (${attempts} attempts)`);
       return true;
     }
     
@@ -46,7 +47,7 @@ async function waitForCache(activeWindowId, maxWaitMs = 5000, onProgress = null)
     await new Promise(resolve => setTimeout(resolve, checkInterval));
   }
   
-  console.log(`⏰ [NODE:CACHE_READINESS] Timeout after ${maxWaitMs}ms - proceeding without cache`);
+  logger.debug(`⏰ [NODE:CACHE_READINESS] Timeout after ${maxWaitMs}ms - proceeding without cache`);
   return false;
 }
 
@@ -66,10 +67,10 @@ function sendThinkingUpdate(message, sessionId) {
         sessionId,
         timestamp: Date.now()
       });
-      console.log(`💭 [NODE:CACHE_READINESS] Sent thinking update: "${message}"`);
+      logger.debug(`💭 [NODE:CACHE_READINESS] Sent thinking update: "${message}"`);
     }
   } catch (error) {
-    console.warn('⚠️ [NODE:CACHE_READINESS] Failed to send thinking update:', error.message);
+    logger.warn('⚠️ [NODE:CACHE_READINESS] Failed to send thinking update:', error.message);
   }
 }
 
@@ -86,21 +87,21 @@ async function checkCacheReadiness(state) {
   const isScreenIntent = screenIntents.includes(intent?.type);
   
   if (!isScreenIntent) {
-    console.log('⏭️ [NODE:CACHE_READINESS] Not a screen intent, skipping cache check');
+    logger.debug('⏭️ [NODE:CACHE_READINESS] Not a screen intent, skipping cache check');
     return state;
   }
   
-  console.log('🔍 [NODE:CACHE_READINESS] Screen intent detected, checking cache readiness...');
+  logger.debug('🔍 [NODE:CACHE_READINESS] Screen intent detected, checking cache readiness...');
   
   // Get active window ID
   const activeWindowId = global.activeWindowId;
   
   if (!activeWindowId) {
-    console.log('⚠️ [NODE:CACHE_READINESS] No active window tracked, proceeding without cache check');
+    logger.debug('⚠️ [NODE:CACHE_READINESS] No active window tracked, proceeding without cache check');
     return state;
   }
   
-  console.log(`🎯 [NODE:CACHE_READINESS] Active window: ${activeWindowId}`);
+  logger.debug(`🎯 [NODE:CACHE_READINESS] Active window: ${activeWindowId}`);
   
   // Check if cache exists for active window
   const hasCache = global.screenWorkerCache?.has(activeWindowId);
@@ -108,7 +109,7 @@ async function checkCacheReadiness(state) {
   if (hasCache) {
     const cache = global.screenWorkerCache.get(activeWindowId);
     const cacheAge = Math.round((Date.now() - cache.timestamp) / 1000);
-    console.log(`✅ [NODE:CACHE_READINESS] Cache ready (${cacheAge}s old)`);
+    logger.debug(`✅ [NODE:CACHE_READINESS] Cache ready (${cacheAge}s old)`);
     return state;
   }
   
@@ -117,10 +118,10 @@ async function checkCacheReadiness(state) {
     ? Array.from(global.screenWorkerCache.keys()) 
     : [];
   
-  console.log(`⚠️ [NODE:CACHE_READINESS] Cache not ready for active window`);
-  console.log(`   Active window: ${activeWindowId}`);
-  console.log(`   Available caches: ${availableCaches.join(', ') || 'none'}`);
-  console.log(`   This indicates a race condition - analysis may be in progress`);
+  logger.debug(`⚠️ [NODE:CACHE_READINESS] Cache not ready for active window`);
+  logger.debug(`   Active window: ${activeWindowId}`);
+  logger.debug(`   Available caches: ${availableCaches.join(', ') || 'none'}`);
+  logger.debug(`   This indicates a race condition - analysis may be in progress`);
   
   // Send initial thinking message
   sendThinkingUpdate('Scanning the page now...', sessionId);
@@ -156,7 +157,7 @@ async function checkCacheReadiness(state) {
     };
   } else {
     // Timeout - proceed anyway
-    console.log('⏰ [NODE:CACHE_READINESS] Timeout - proceeding with fresh analysis');
+    logger.debug('⏰ [NODE:CACHE_READINESS] Timeout - proceeding with fresh analysis');
     sendThinkingUpdate('Analyzing screen...', sessionId);
     
     return {

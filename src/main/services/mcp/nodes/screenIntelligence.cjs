@@ -16,6 +16,7 @@ const { showHighlights } = require('../../../windows/screen-intelligence-overlay
 const { getGuideWindow } = require('../../../windows/guide-window.cjs');
 const { getAIViewingOverlay, hideAIViewingOverlay, showAIViewingOverlay } = require('../../../windows/ai-viewing-overlay.cjs');
 
+const logger = require('./../../../logger.cjs');
 // Element color mapping by type
 const ELEMENT_COLORS = {
   file: '#10b981',        // Green - Desktop files/folders
@@ -33,7 +34,7 @@ const ELEMENT_COLORS = {
  */
 async function captureWithoutOverlay(captureFunction) {
   const overlay = getAIViewingOverlay();
-  console.log('👻 [SCREEN_CAPTURE] Overlay check:', {
+  logger.debug('👻 [SCREEN_CAPTURE] Overlay check:', {
     exists: !!overlay,
     isVisible: overlay ? overlay.isVisible() : false,
     isDestroyed: overlay ? overlay.isDestroyed() : false
@@ -44,13 +45,13 @@ async function captureWithoutOverlay(captureFunction) {
   try {
     // Hide overlay if visible
     if (wasVisible) {
-      console.log('👻 [SCREEN_CAPTURE] Hiding overlay for clean capture...');
+      logger.debug('👻 [SCREEN_CAPTURE] Hiding overlay for clean capture...');
       hideAIViewingOverlay();
       // Wait for overlay to fully hide (animation + render)
       await new Promise(resolve => setTimeout(resolve, 500));
-      console.log('👻 [SCREEN_CAPTURE] Overlay should be hidden now');
+      logger.debug('👻 [SCREEN_CAPTURE] Overlay should be hidden now');
     } else {
-      console.log('👻 [SCREEN_CAPTURE] Overlay not visible, proceeding with capture');
+      logger.debug('👻 [SCREEN_CAPTURE] Overlay not visible, proceeding with capture');
     }
     
     // Perform capture
@@ -60,7 +61,7 @@ async function captureWithoutOverlay(captureFunction) {
   } finally {
     // Always restore overlay if it was visible
     if (wasVisible) {
-      console.log('👁️  [SCREEN_CAPTURE] Restoring overlay...');
+      logger.debug('👁️  [SCREEN_CAPTURE] Restoring overlay...');
       showAIViewingOverlay();
     }
   }
@@ -180,18 +181,18 @@ function extractTargetEntity(message) {
 module.exports = async function screenIntelligence(state) {
   const { mcpClient, message, context } = state;
   
-  console.log('🎯 [NODE:SCREEN_INTELLIGENCE] Analyzing screen context');
+  logger.debug('🎯 [NODE:SCREEN_INTELLIGENCE] Analyzing screen context');
   
   // Extract target entity from query
   const targetEntity = extractTargetEntity(message);
   if (targetEntity) {
-    console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Target entity: "${targetEntity}"`);
+    logger.debug(`🎯 [NODE:SCREEN_INTELLIGENCE] Target entity: "${targetEntity}"`);
     state.targetEntity = targetEntity; // Store for answer node
   }
   
   // Calculate context relevance score to decide if conversation history is needed
   const contextRelevance = calculateContextRelevance(message);
-  console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Context relevance score: ${contextRelevance.score.toFixed(2)} (${contextRelevance.reason})`);
+  logger.debug(`🎯 [NODE:SCREEN_INTELLIGENCE] Context relevance score: ${contextRelevance.score.toFixed(2)} (${contextRelevance.reason})`);
   
   // Fetch conversation history ONLY if query needs contextual understanding
   if (contextRelevance.score >= 0.5) {
@@ -213,15 +214,15 @@ module.exports = async function screenIntelligence(state) {
       
       // Add conversation history to state for answer node
       state.conversationHistory = conversationHistory;
-      console.log(`📚 [NODE:SCREEN_INTELLIGENCE] Loaded ${conversationHistory.length} messages for context (relevance: ${contextRelevance.score.toFixed(2)})`);
+      logger.debug(`📚 [NODE:SCREEN_INTELLIGENCE] Loaded ${conversationHistory.length} messages for context (relevance: ${contextRelevance.score.toFixed(2)})`);
     } catch (error) {
-      console.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to fetch conversation history:', error.message);
+      logger.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to fetch conversation history:', error.message);
       state.conversationHistory = [];
     }
   } else {
     // Query is self-contained, no history needed
     state.conversationHistory = [];
-    console.log(`📚 [NODE:SCREEN_INTELLIGENCE] Skipping conversation history (query is self-contained, relevance: ${contextRelevance.score.toFixed(2)})`);
+    logger.debug(`📚 [NODE:SCREEN_INTELLIGENCE] Skipping conversation history (query is self-contained, relevance: ${contextRelevance.score.toFixed(2)})`);
   }
   
   try {
@@ -243,9 +244,9 @@ module.exports = async function screenIntelligence(state) {
         // The cache is keyed by windowId (e.g., "Google Chrome") but screen content
         // changes frequently (LinkedIn → ChatGPT), so we need aggressive invalidation
         if (age < 30) {
-          console.log(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache for active window (${age}s old, instant lookup)`);
-          console.log(`   Active window: ${activeWindowId}`);
-          console.log(`   Cached screen ID: ${cacheEntry.data?.screenId || 'unknown'}`);
+          logger.debug(`⚡ [NODE:SCREEN_INTELLIGENCE] Using worker cache for active window (${age}s old, instant lookup)`);
+          logger.debug(`   Active window: ${activeWindowId}`);
+          logger.debug(`   Cached screen ID: ${cacheEntry.data?.screenId || 'unknown'}`);
           
           data = cacheEntry.data;
           fromCache = true;
@@ -253,14 +254,14 @@ module.exports = async function screenIntelligence(state) {
           // Extract URL if available
           if (data.url) {
             cachedUrl = data.url;
-            console.log(`🌐 [NODE:SCREEN_INTELLIGENCE] Cached URL: ${cachedUrl}`);
+            logger.debug(`🌐 [NODE:SCREEN_INTELLIGENCE] Cached URL: ${cachedUrl}`);
           }
         } else {
-          console.log(`⚠️  [NODE:SCREEN_INTELLIGENCE] Cache for active window is stale (${age}s old), will request fresh analysis`);
+          logger.debug(`⚠️  [NODE:SCREEN_INTELLIGENCE] Cache for active window is stale (${age}s old), will request fresh analysis`);
         }
       } else {
-        console.log(`⚠️  [NODE:SCREEN_INTELLIGENCE] No cache for active window: ${activeWindowId}`);
-        console.log(`   Available caches: ${Array.from(global.screenWorkerCache.keys()).join(', ') || 'none'}`);
+        logger.debug(`⚠️  [NODE:SCREEN_INTELLIGENCE] No cache for active window: ${activeWindowId}`);
+        logger.debug(`   Available caches: ${Array.from(global.screenWorkerCache.keys()).join(', ') || 'none'}`);
       }
     }
     
@@ -269,14 +270,14 @@ module.exports = async function screenIntelligence(state) {
     let screenContext = '';
     
     if (!fromCache) {
-      console.log('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling element.search...');
+      logger.debug('📊 [NODE:SCREEN_INTELLIGENCE] Cache miss, calling element.search...');
       
       // CRITICAL: Hide ThinkDrop AI guide window before screenshot
       // If ThinkDrop AI is the active window, we want to analyze the window BEHIND it
       const guideWindow = getGuideWindow();
       let wasGuideVisible = false;
       if (guideWindow && guideWindow.isVisible()) {
-        console.log('👁️  [NODE:SCREEN_INTELLIGENCE] Hiding ThinkDrop AI panel before screenshot...');
+        logger.debug('👁️  [NODE:SCREEN_INTELLIGENCE] Hiding ThinkDrop AI panel before screenshot...');
         guideWindow.hide();
         wasGuideVisible = true;
         // Wait 100ms for window to fully hide
@@ -293,14 +294,14 @@ module.exports = async function screenIntelligence(state) {
         if (contextResult.data?.windows?.[0]) {
           currentApp = contextResult.data.windows[0].appName;
           currentWindowTitle = contextResult.data.windows[0].title;
-          console.log(`🎯 [NODE:SCREEN_INTELLIGENCE] Current context: ${currentApp} - ${currentWindowTitle?.substring(0, 50)}`);
+          logger.debug(`🎯 [NODE:SCREEN_INTELLIGENCE] Current context: ${currentApp} - ${currentWindowTitle?.substring(0, 50)}`);
         }
       } catch (contextError) {
-        console.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Could not get current context:', contextError.message);
+        logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Could not get current context:', contextError.message);
       }
       
       // FRESH CAPTURE: Trigger on-demand screen analysis for accurate results
-      console.log('📸 [NODE:SCREEN_INTELLIGENCE] Triggering fresh screen capture...');
+      logger.debug('📸 [NODE:SCREEN_INTELLIGENCE] Triggering fresh screen capture...');
       
       // Send progress update to user
       if (state.onProgress) {
@@ -312,7 +313,7 @@ module.exports = async function screenIntelligence(state) {
       
       const captureStart = Date.now();
       try {
-        console.log('🎬 [NODE:SCREEN_INTELLIGENCE] About to call captureWithoutOverlay...');
+        logger.debug('🎬 [NODE:SCREEN_INTELLIGENCE] About to call captureWithoutOverlay...');
         // Wrap capture in overlay hide/show logic
         const captureResult = await captureWithoutOverlay(async () => {
           return await mcpClient.callService('screen-intelligence', 'screen.analyze', {
@@ -328,7 +329,7 @@ module.exports = async function screenIntelligence(state) {
         });
         
         const captureTime = Date.now() - captureStart;
-        console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Fresh capture complete (${captureTime}ms)`);
+        logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Fresh capture complete (${captureTime}ms)`);
         
         // Send completion update
         if (state.onProgress) {
@@ -338,7 +339,7 @@ module.exports = async function screenIntelligence(state) {
           }, captureTime, 'completed');
         }
       } catch (captureError) {
-        console.error('❌ [NODE:SCREEN_INTELLIGENCE] Fresh capture failed:', captureError.message);
+        logger.error('❌ [NODE:SCREEN_INTELLIGENCE] Fresh capture failed:', captureError.message);
         // Continue anyway - might have recent data in DB
       }
       
@@ -355,26 +356,26 @@ module.exports = async function screenIntelligence(state) {
       
       // Restore guide window if it was visible
       if (wasGuideVisible && guideWindow) {
-        console.log('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
+        logger.debug('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
         guideWindow.show();
       }
       
       const analysisTime = Date.now() - startTime;
-      console.log(`📊 [NODE:SCREEN_INTELLIGENCE] Semantic search complete (${analysisTime}ms)`);
+      logger.debug(`📊 [NODE:SCREEN_INTELLIGENCE] Semantic search complete (${analysisTime}ms)`);
       
       // Extract semantic search results
       semanticResults = result.data?.results || result.results || [];
-      console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
+      logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
       
       // Log first 10 results with full details
-      console.log('\n🔍 [NODE:SCREEN_INTELLIGENCE] TOP 10 SEARCH RESULTS:');
+      logger.debug('\n🔍 [NODE:SCREEN_INTELLIGENCE] TOP 10 SEARCH RESULTS:');
       semanticResults.slice(0, 10).forEach((r, i) => {
-        console.log(`\n${i + 1}. Score: ${r.score?.toFixed(3)} | App: ${r.app || 'N/A'} | Type: ${r.type}`);
-        console.log(`   Window: ${r.windowTitle?.substring(0, 60) || 'N/A'}`);
-        console.log(`   Timestamp: ${r.timestamp ? new Date(r.timestamp).toISOString() : 'N/A'}`);
-        console.log(`   Text: ${r.text?.substring(0, 100) || r.description?.substring(0, 100) || 'N/A'}...`);
+        logger.debug(`\n${i + 1}. Score: ${r.score?.toFixed(3)} | App: ${r.app || 'N/A'} | Type: ${r.type}`);
+        logger.debug(`   Window: ${r.windowTitle?.substring(0, 60) || 'N/A'}`);
+        logger.debug(`   Timestamp: ${r.timestamp ? new Date(r.timestamp).toISOString() : 'N/A'}`);
+        logger.debug(`   Text: ${r.text?.substring(0, 100) || r.description?.substring(0, 100) || 'N/A'}...`);
       });
-      console.log('\n');
+      logger.debug('\n');
       
       // Create minimal data structure for compatibility
       data = {
@@ -401,14 +402,14 @@ module.exports = async function screenIntelligence(state) {
     //     );
     //     
     //     if (validElements.length > 0) {
-    //       console.log(`🎨 [NODE:SCREEN_INTELLIGENCE] Showing overlay for spatial query with ${validElements.length} elements`);
+    //       logger.debug(`🎨 [NODE:SCREEN_INTELLIGENCE] Showing overlay for spatial query with ${validElements.length} elements`);
     //       showHighlights(validElements, 10000);
     //       state.overlayShown = true;
     //     } else {
-    //       console.log(`ℹ️  [NODE:SCREEN_INTELLIGENCE] No valid elements to highlight for spatial query`);
+    //       logger.debug(`ℹ️  [NODE:SCREEN_INTELLIGENCE] No valid elements to highlight for spatial query`);
     //     }
     //   } catch (overlayError) {
-    //     console.error('⚠️  [NODE:SCREEN_INTELLIGENCE] Failed to show overlay:', overlayError);
+    //     logger.error('⚠️  [NODE:SCREEN_INTELLIGENCE] Failed to show overlay:', overlayError);
     //     // Don't fail the entire flow if overlay fails
     //   }
     // }
@@ -424,11 +425,11 @@ module.exports = async function screenIntelligence(state) {
       state.context = `## Screen Context\n${screenContext}`;
     }
     
-    console.log('📝 [NODE:SCREEN_INTELLIGENCE] Screen context added to state');
-    console.log('=' .repeat(80));
-    console.log('📊 SCREEN CONTEXT BEING PASSED TO ANSWER NODE:');
-    console.log(screenContext);
-    console.log('=' .repeat(80));
+    logger.debug('📝 [NODE:SCREEN_INTELLIGENCE] Screen context added to state');
+    logger.debug('=' .repeat(80));
+    logger.debug('📊 SCREEN CONTEXT BEING PASSED TO ANSWER NODE:');
+    logger.debug(screenContext);
+    logger.debug('=' .repeat(80));
     
     // 🆕 Generate Page Insight if we have text content from semantic results
     // Extract text from semantic search results
@@ -439,7 +440,7 @@ module.exports = async function screenIntelligence(state) {
     
     if (allText && allText.length > 50) {
       try {
-        console.log('💡 [NODE:SCREEN_INTELLIGENCE] Generating Page Insight...');
+        logger.debug('💡 [NODE:SCREEN_INTELLIGENCE] Generating Page Insight...');
         
         // Send loading state to renderer
         const { sendInsightLoading, sendInsightUpdate, sendInsightError } = require('../../../handlers/ipc-handlers-insight.cjs');
@@ -455,7 +456,7 @@ module.exports = async function screenIntelligence(state) {
         
         if (insightState.insights) {
           state.insights = insightState.insights;
-          console.log(`✅ [NODE:SCREEN_INTELLIGENCE] Page Insight generated: ${insightState.insights.links.length} links`);
+          logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Page Insight generated: ${insightState.insights.links.length} links`);
           
           // Send insight to renderer
           sendInsightUpdate(insightState.insights);
@@ -463,7 +464,7 @@ module.exports = async function screenIntelligence(state) {
           sendInsightError('No insights generated');
         }
       } catch (insightError) {
-        console.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to generate Page Insight:', insightError.message);
+        logger.warn('⚠️ [NODE:SCREEN_INTELLIGENCE] Failed to generate Page Insight:', insightError.message);
         const { sendInsightError } = require('../../../handlers/ipc-handlers-insight.cjs');
         sendInsightError(insightError.message);
         // Don't fail the entire flow if insight generation fails
@@ -473,7 +474,7 @@ module.exports = async function screenIntelligence(state) {
     return state;
     
   } catch (error) {
-    console.error('❌ [NODE:SCREEN_INTELLIGENCE] Screen analysis failed:', error);
+    logger.error('❌ [NODE:SCREEN_INTELLIGENCE] Screen analysis failed:', error);
     
     // Add error to state but don't fail the entire flow
     state.screenIntelligenceError = error.message;

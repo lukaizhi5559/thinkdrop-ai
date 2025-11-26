@@ -9,6 +9,7 @@
  */
 
 // Conditional logging based on environment variable
+const logger = require('./../../logger.cjs');
 const DEBUG = process.env.DEBUG_STATEGRAPH === 'true';
 
 class StateGraph {
@@ -37,12 +38,12 @@ class StateGraph {
     // const cached = this.cache.get(cacheKey);
     // if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
     //   this.cacheStats.hits++;
-    //   console.log(`✅ [STATEGRAPH:CACHE] Cache hit! (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+    //   logger.debug(`✅ [STATEGRAPH:CACHE] Cache hit! (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
     //   if (onProgress && typeof onProgress === 'function') {
     //     try {
     //       await onProgress('cached', cached.result, 0, 'cached');
     //     } catch (err) {
-    //       console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+    //       logger.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
     //     }
     //   }
     //   return { ...cached.result, fromCache: true, cacheAge: Date.now() - cached.timestamp };
@@ -50,7 +51,7 @@ class StateGraph {
     
     this.cacheStats.misses++;
     if (DEBUG) {
-      console.log(`⚠️ [STATEGRAPH:CACHE] Cache disabled - executing workflow (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
+      logger.debug(`⚠️ [STATEGRAPH:CACHE] Cache disabled - executing workflow (${this.cacheStats.hits} hits, ${this.cacheStats.misses} misses)`);
     }
     
     const state = {
@@ -71,7 +72,7 @@ class StateGraph {
       // Check for infinite loops
       const visitKey = `${currentNode}_${iterations}`;
       if (visited.has(visitKey) && iterations > 10) {
-        console.warn(`⚠️ [STATEGRAPH] Possible infinite loop detected at node: ${currentNode}`);
+        logger.warn(`⚠️ [STATEGRAPH] Possible infinite loop detected at node: ${currentNode}`);
         state.error = `Infinite loop detected at node: ${currentNode}`;
         break;
       }
@@ -80,7 +81,7 @@ class StateGraph {
       // Execute node
       const nodeStartTime = Date.now();
       if (DEBUG) {
-        console.log(`🔄 [STATEGRAPH] Executing node: ${currentNode}`);
+        logger.debug(`🔄 [STATEGRAPH] Executing node: ${currentNode}`);
       }
 
       // Call progress callback before node execution
@@ -88,7 +89,7 @@ class StateGraph {
         try {
           await onProgress(currentNode, state, 0, 'started');
         } catch (err) {
-          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+          logger.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
         }
       }
 
@@ -119,7 +120,7 @@ class StateGraph {
         });
 
         if (DEBUG) {
-          console.log(`✅ [STATEGRAPH] Node ${currentNode} completed in ${duration}ms`);
+          logger.debug(`✅ [STATEGRAPH] Node ${currentNode} completed in ${duration}ms`);
         }
 
         // Update state
@@ -130,7 +131,7 @@ class StateGraph {
           try {
             await onProgress(currentNode, state, duration, 'completed');
           } catch (err) {
-            console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+            logger.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
           }
         }
 
@@ -154,23 +155,23 @@ class StateGraph {
             }, 0, 'early');
             
             if (DEBUG) {
-              console.log(`💬 [STATEGRAPH] Early response sent: "${earlyMessage}"`);
+              logger.debug(`💬 [STATEGRAPH] Early response sent: "${earlyMessage}"`);
             }
           } catch (err) {
-            console.warn('⚠️ [STATEGRAPH] Early response error:', err.message);
+            logger.warn('⚠️ [STATEGRAPH] Early response error:', err.message);
           }
         }
 
         // Determine next node
         const nextNode = this._getNextNode(currentNode, state);
         if (DEBUG) {
-          console.log(`➡️  [STATEGRAPH] Routing: ${currentNode} → ${nextNode}`);
+          logger.debug(`➡️  [STATEGRAPH] Routing: ${currentNode} → ${nextNode}`);
         }
 
         currentNode = nextNode;
 
       } catch (error) {
-        console.error(`❌ [STATEGRAPH] Node ${currentNode} failed:`, error.message);
+        logger.error(`❌ [STATEGRAPH] Node ${currentNode} failed:`, error.message);
 
         // Record error in trace
         state.trace.push({
@@ -193,7 +194,7 @@ class StateGraph {
     state.success = !state.error;
 
     if (DEBUG) {
-      console.log(`🏁 [STATEGRAPH] Workflow completed in ${state.elapsedMs}ms (${iterations} iterations)`);
+      logger.debug(`🏁 [STATEGRAPH] Workflow completed in ${state.elapsedMs}ms (${iterations} iterations)`);
     }
 
     // CACHE DISABLED: Don't store results
@@ -204,7 +205,7 @@ class StateGraph {
     //   });
     //   this._cleanupCache();
     //   if (DEBUG) {
-    //     console.log(`💾 [STATEGRAPH:CACHE] Result cached (${this.cache.size} entries)`);
+    //     logger.debug(`💾 [STATEGRAPH:CACHE] Result cached (${this.cache.size} entries)`);
     //   }
     // }
 
@@ -236,7 +237,7 @@ class StateGraph {
     }
 
     // Invalid edge
-    console.warn(`⚠️ [STATEGRAPH] Invalid edge for node ${currentNode}`);
+    logger.warn(`⚠️ [STATEGRAPH] Invalid edge for node ${currentNode}`);
     return 'end';
   }
 
@@ -248,7 +249,7 @@ class StateGraph {
    * @returns {Object} Merged state from all nodes
    */
   async executeParallel(nodeNames, state, onProgress = null) {
-    console.log(`⚡ [STATEGRAPH:PARALLEL] Executing ${nodeNames.length} nodes in parallel: ${nodeNames.join(', ')}`);
+    logger.debug(`⚡ [STATEGRAPH:PARALLEL] Executing ${nodeNames.length} nodes in parallel: ${nodeNames.join(', ')}`);
     
     const promises = nodeNames.map(async (nodeName) => {
       const nodeFunction = this.nodes[nodeName];
@@ -264,7 +265,7 @@ class StateGraph {
         try {
           await onProgress(nodeName, state, 0, 'started');
         } catch (err) {
-          console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+          logger.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
         }
       }
       
@@ -274,14 +275,14 @@ class StateGraph {
         const duration = Date.now() - nodeStartTime;
         const outputSnapshot = this._captureStateSnapshot(result);
         
-        console.log(`✅ [STATEGRAPH:PARALLEL] Node ${nodeName} completed in ${duration}ms`);
+        logger.debug(`✅ [STATEGRAPH:PARALLEL] Node ${nodeName} completed in ${duration}ms`);
         
         // Call progress callback after completion
         if (onProgress && typeof onProgress === 'function') {
           try {
             await onProgress(nodeName, result, duration, 'completed');
           } catch (err) {
-            console.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
+            logger.warn('⚠️ [STATEGRAPH] Progress callback error:', err.message);
           }
         }
         
@@ -302,7 +303,7 @@ class StateGraph {
         
       } catch (error) {
         const duration = Date.now() - nodeStartTime;
-        console.error(`❌ [STATEGRAPH:PARALLEL] Node ${nodeName} failed:`, error.message);
+        logger.error(`❌ [STATEGRAPH:PARALLEL] Node ${nodeName} failed:`, error.message);
         
         return { 
           success: false, 
@@ -333,7 +334,7 @@ class StateGraph {
         // Merge successful result into state
         Object.assign(mergedState, result);
       } else {
-        console.warn(`⚠️ [STATEGRAPH:PARALLEL] Skipping failed parallel node: ${nodeName}`);
+        logger.warn(`⚠️ [STATEGRAPH:PARALLEL] Skipping failed parallel node: ${nodeName}`);
         mergedState.parallelErrors = mergedState.parallelErrors || [];
         mergedState.parallelErrors.push({ nodeName, error });
       }
@@ -344,7 +345,7 @@ class StateGraph {
     mergedState.trace.push(...parallelTraces);
     
     const totalDuration = Math.max(...results.map(r => r.duration));
-    console.log(`⚡ [STATEGRAPH:PARALLEL] All nodes completed in ${totalDuration}ms (parallel)`);
+    logger.debug(`⚡ [STATEGRAPH:PARALLEL] All nodes completed in ${totalDuration}ms (parallel)`);
     
     return mergedState;
   }
@@ -393,11 +394,11 @@ class StateGraph {
     const cacheKey = `${sessionId}:${message}:${contextHash}`;
     
     // Always log cache key for debugging context-awareness
-    console.log(`🔑 [STATEGRAPH:CACHE] Cache key generated:`);
-    console.log(`   Message: "${message}"`);
-    console.log(`   Context hash: ${contextHash} (from ${conversationHistory.length} messages)`);
-    console.log(`   Recent context: ${recentMessages.substring(0, 100)}...`);
-    console.log(`   Full key: ${cacheKey}`);
+    logger.debug(`🔑 [STATEGRAPH:CACHE] Cache key generated:`);
+    logger.debug(`   Message: "${message}"`);
+    logger.debug(`   Context hash: ${contextHash} (from ${conversationHistory.length} messages)`);
+    logger.debug(`   Recent context: ${recentMessages.substring(0, 100)}...`);
+    logger.debug(`   Full key: ${cacheKey}`);
     
     return cacheKey;
   }
@@ -433,7 +434,7 @@ class StateGraph {
     }
     
     if (cleaned > 0 && DEBUG) {
-      console.log(`🧹 [STATEGRAPH:CACHE] Cleaned ${cleaned} expired entries`);
+      logger.debug(`🧹 [STATEGRAPH:CACHE] Cleaned ${cleaned} expired entries`);
     }
   }
 
@@ -457,7 +458,7 @@ class StateGraph {
   clearCache() {
     this.cache.clear();
     this.cacheStats = { hits: 0, misses: 0 };
-    console.log('🧹 [STATEGRAPH:CACHE] Cache cleared');
+    logger.debug('🧹 [STATEGRAPH:CACHE] Cache cleared');
   }
 
   /**

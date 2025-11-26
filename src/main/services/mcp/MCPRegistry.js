@@ -8,6 +8,7 @@
 const { getClient } = require('./MCPClient.js');
 const { MCPConfig } = require('./config.cjs');
 
+const logger = require('./../../logger.cjs');
 class MCPRegistry {
   constructor(config = MCPConfig) {
     this.config = config;
@@ -23,7 +24,7 @@ class MCPRegistry {
   async initialize() {
     if (this.isInitialized) return;
 
-    console.log('🔧 Initializing MCP Service Registry...');
+    logger.debug('🔧 Initializing MCP Service Registry...');
 
     // Register all configured services
     this.registerConfiguredServices();
@@ -34,7 +35,7 @@ class MCPRegistry {
     }
 
     this.isInitialized = true;
-    console.log('✅ MCP Service Registry initialized');
+    logger.debug('✅ MCP Service Registry initialized');
   }
 
   /**
@@ -53,7 +54,7 @@ class MCPRegistry {
       }
     });
 
-    console.log(`📋 Registered ${this.services.size} services`);
+    logger.debug(`📋 Registered ${this.services.size} services`);
   }
 
   /**
@@ -85,7 +86,7 @@ class MCPRegistry {
       metadata: {}
     });
 
-    console.log(`✅ Registered service: ${name} (${endpoint})`);
+    logger.debug(`✅ Registered service: ${name} (${endpoint})`);
   }
 
   /**
@@ -96,7 +97,7 @@ class MCPRegistry {
     if (this.services.has(serviceName)) {
       this.services.delete(serviceName);
       this.healthCache.delete(serviceName);
-      console.log(`🗑️ Unregistered service: ${serviceName}`);
+      logger.debug(`🗑️ Unregistered service: ${serviceName}`);
     }
   }
 
@@ -200,7 +201,7 @@ class MCPRegistry {
       service.consecutiveFailures = 0;
       service.consecutiveSuccesses += 1;
 
-      console.log(`✅ Health check passed for ${serviceName} (${duration}ms)`);
+      logger.debug(`✅ Health check passed for ${serviceName} (${duration}ms)`);
 
       return {
         service: serviceName,
@@ -222,7 +223,7 @@ class MCPRegistry {
       service.consecutiveSuccesses = 0;
       service.totalFailures += 1;
 
-      console.warn(`⚠️ Health check failed for ${serviceName}: ${error.message}`);
+      logger.warn(`⚠️ Health check failed for ${serviceName}: ${error.message}`);
 
       return {
         service: serviceName,
@@ -289,7 +290,7 @@ class MCPRegistry {
       return; // Already running
     }
 
-    console.log(`🔄 Starting periodic health checks (interval: ${this.config.healthCheck.interval}ms)`);
+    logger.debug(`🔄 Starting periodic health checks (interval: ${this.config.healthCheck.interval}ms)`);
 
     this.healthCheckInterval = setInterval(async () => {
       await this.checkAllServices();
@@ -297,7 +298,7 @@ class MCPRegistry {
 
     // Perform initial health check
     this.checkAllServices().catch(err => {
-      console.warn('⚠️ Initial health check failed:', err.message);
+      logger.warn('⚠️ Initial health check failed:', err.message);
     });
   }
 
@@ -308,7 +309,7 @@ class MCPRegistry {
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
       this.healthCheckInterval = null;
-      console.log('🛑 Stopped periodic health checks');
+      logger.debug('🛑 Stopped periodic health checks');
     }
   }
 
@@ -364,7 +365,7 @@ class MCPRegistry {
 
       return capabilities;
     } catch (error) {
-      console.warn(`⚠️ Failed to get capabilities for ${serviceName}:`, error.message);
+      logger.warn(`⚠️ Failed to get capabilities for ${serviceName}:`, error.message);
       throw error;
     }
   }
@@ -491,7 +492,7 @@ class MCPRegistry {
     this.services.clear();
     this.healthCache.clear();
     this.isInitialized = false;
-    console.log('🛑 MCP Service Registry shut down');
+    logger.debug('🛑 MCP Service Registry shut down');
   }
 }
 

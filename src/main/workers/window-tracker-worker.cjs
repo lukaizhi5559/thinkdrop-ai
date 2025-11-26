@@ -19,6 +19,7 @@ process.env.WORKER_THREAD = 'true';
 const { parentPort } = require('worker_threads');
 const WindowTracker = require('../services/windowTracker.cjs');
 
+const logger = require('./../logger.cjs');
 let tracker = null;
 let isInitialized = false;
 
@@ -29,7 +30,7 @@ async function initialize() {
   if (isInitialized) return;
   
   try {
-    console.log('[WORKER] Initializing WindowTracker...');
+    logger.debug('[WORKER] Initializing WindowTracker...');
     
     tracker = new WindowTracker();
     await tracker.start();
@@ -40,9 +41,9 @@ async function initialize() {
       timestamp: Date.now()
     });
     
-    console.log('[WORKER] WindowTracker initialized successfully');
+    logger.debug('[WORKER] WindowTracker initialized successfully');
   } catch (error) {
-    console.error('[WORKER] Failed to initialize WindowTracker:', error);
+    logger.error('[WORKER] Failed to initialize WindowTracker:', error);
     parentPort.postMessage({
       type: 'error',
       error: error.message
@@ -63,15 +64,15 @@ parentPort.on('message', async (msg) => {
       case 'stop':
         if (tracker) {
           tracker.stop();
-          console.log('[WORKER] WindowTracker stopped');
+          logger.debug('[WORKER] WindowTracker stopped');
         }
         break;
         
       default:
-        console.warn('[WORKER] Unknown message type:', msg.type);
+        logger.warn('[WORKER] Unknown message type:', msg.type);
     }
   } catch (error) {
-    console.error('[WORKER] Error handling message:', error);
+    logger.error('[WORKER] Error handling message:', error);
     parentPort.postMessage({
       type: 'error',
       error: error.message
@@ -81,7 +82,7 @@ parentPort.on('message', async (msg) => {
 
 // Handle worker errors
 process.on('uncaughtException', (error) => {
-  console.error('[WORKER] Uncaught exception:', error);
+  logger.error('[WORKER] Uncaught exception:', error);
   parentPort.postMessage({
     type: 'error',
     error: error.message
@@ -89,7 +90,7 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-  console.error('[WORKER] Unhandled rejection at:', promise, 'reason:', reason);
+  logger.error('[WORKER] Unhandled rejection at:', promise, 'reason:', reason);
   parentPort.postMessage({
     type: 'error',
     error: String(reason)
@@ -97,4 +98,4 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Start initialization
-console.log('[WORKER] Window Tracker Worker started');
+logger.debug('[WORKER] Window Tracker Worker started');

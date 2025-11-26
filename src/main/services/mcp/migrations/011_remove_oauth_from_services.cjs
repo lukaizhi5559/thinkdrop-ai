@@ -5,11 +5,12 @@
  * This migration removes the now-unused OAuth columns from mcp_services.
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '011_remove_oauth_from_services',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 011_remove_oauth_from_services');
+    logger.debug('🔄 Running migration: 011_remove_oauth_from_services');
     
     // DuckDB doesn't support DROP COLUMN directly, so we need to recreate the table
     // First, create a new table with the correct schema (without OAuth columns)
@@ -41,7 +42,7 @@ module.exports = {
       )
     `);
     
-    console.log('✅ Created mcp_services_new table without OAuth columns');
+    logger.debug('✅ Created mcp_services_new table without OAuth columns');
     
     // Copy data from old table to new table (excluding OAuth columns)
     await db.run(`
@@ -59,23 +60,23 @@ module.exports = {
       FROM mcp_services
     `);
     
-    console.log('✅ Copied data to new table');
+    logger.debug('✅ Copied data to new table');
     
     // Drop old table
     await db.run(`DROP TABLE mcp_services`);
-    console.log('✅ Dropped old mcp_services table');
+    logger.debug('✅ Dropped old mcp_services table');
     
     // Rename new table to original name
     await db.run(`ALTER TABLE mcp_services_new RENAME TO mcp_services`);
-    console.log('✅ Renamed mcp_services_new to mcp_services');
+    logger.debug('✅ Renamed mcp_services_new to mcp_services');
     
     // Recreate indexes
     await db.run(`CREATE INDEX IF NOT EXISTS idx_mcp_services_name ON mcp_services(name)`);
     await db.run(`CREATE INDEX IF NOT EXISTS idx_mcp_services_enabled ON mcp_services(enabled)`);
     await db.run(`CREATE INDEX IF NOT EXISTS idx_mcp_services_trusted ON mcp_services(trusted)`);
     
-    console.log('✅ Recreated indexes');
-    console.log('✅ Migration 011_remove_oauth_from_services completed');
-    console.log('ℹ️  OAuth data is now exclusively stored in user_settings table');
+    logger.debug('✅ Recreated indexes');
+    logger.debug('✅ Migration 011_remove_oauth_from_services completed');
+    logger.debug('ℹ️  OAuth data is now exclusively stored in user_settings table');
   }
 };

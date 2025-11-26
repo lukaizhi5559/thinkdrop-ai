@@ -16,6 +16,7 @@
  * @param {number} maxChars - Maximum characters per chunk
  * @returns {string[]} Array of text chunks
  */
+const logger = require('./../../../logger.cjs');
 function chunkText(text, maxChars = 1000) {
   const chunks = [];
   for (let i = 0; i < text.length; i += maxChars) {
@@ -169,64 +170,64 @@ function buildScreenContext(data, query, selectedText = null) {
 module.exports = async function checkScreenCache(state) {
   const { message, mcpClient } = state;
   
-  console.log('🔍 [NODE:CHECK_SCREEN_CACHE] Checking if cached screen data can answer query...');
-  console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Cache status: exists=${!!global.screenWorkerCache}, size=${global.screenWorkerCache?.size || 0}`);
+  logger.debug('🔍 [NODE:CHECK_SCREEN_CACHE] Checking if cached screen data can answer query...');
+  logger.debug(`📊 [NODE:CHECK_SCREEN_CACHE] Cache status: exists=${!!global.screenWorkerCache}, size=${global.screenWorkerCache?.size || 0}`);
   if (global.screenWorkerCache && global.screenWorkerCache.size > 0) {
-    console.log(`📋 [NODE:CHECK_SCREEN_CACHE] Cached windows: ${Array.from(global.screenWorkerCache.keys()).join(', ')}`);
+    logger.debug(`📋 [NODE:CHECK_SCREEN_CACHE] Cached windows: ${Array.from(global.screenWorkerCache.keys()).join(', ')}`);
   }
   
   // 1. Check if we have recent cached screen data
   if (!global.screenWorkerCache || global.screenWorkerCache.size === 0) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No cached data, proceeding to parseIntent');
+    logger.debug('⏭️  [NODE:CHECK_SCREEN_CACHE] No cached data, proceeding to parseIntent');
     return state;
   }
   
   // 2. Get cache for CURRENT ACTIVE WINDOW (not just any recent cache)
   const activeWindowId = global.activeWindowId;
   if (!activeWindowId) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No active window tracked, proceeding to parseIntent');
+    logger.debug('⏭️  [NODE:CHECK_SCREEN_CACHE] No active window tracked, proceeding to parseIntent');
     return state;
   }
   
-  console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Looking for cache for active window: ${activeWindowId}`);
+  logger.debug(`🔍 [NODE:CHECK_SCREEN_CACHE] Looking for cache for active window: ${activeWindowId}`);
   
   // 🔍 DEBUG: Show all cached windows with details
   const allCachedWindows = Array.from(global.screenWorkerCache.keys());
-  console.log(`   Available cached windows (${allCachedWindows.length}):`);
+  logger.debug(`   Available cached windows (${allCachedWindows.length}):`);
   allCachedWindows.forEach(windowId => {
     const cache = global.screenWorkerCache.get(windowId);
     const age = Math.round((Date.now() - cache.timestamp) / 1000);
     const app = cache.data?.windowsAnalyzed?.[0]?.app || 'unknown';
-    console.log(`     - ${windowId.substring(0, 60)}... (${app}, ${age}s old)`);
+    logger.debug(`     - ${windowId.substring(0, 60)}... (${app}, ${age}s old)`);
   });
   
   const recentCache = global.screenWorkerCache.get(activeWindowId);
   if (!recentCache) {
-    console.log(`⏭️  [NODE:CHECK_SCREEN_CACHE] No cache for active window (${activeWindowId}), proceeding to parseIntent`);
-    console.log(`   ⚠️  This might indicate a race condition - window changed but cache not ready yet`);
+    logger.debug(`⏭️  [NODE:CHECK_SCREEN_CACHE] No cache for active window (${activeWindowId}), proceeding to parseIntent`);
+    logger.debug(`   ⚠️  This might indicate a race condition - window changed but cache not ready yet`);
     return state;
   }
   
   // Check if cache is still fresh (5 minutes)
   if (Date.now() - recentCache.timestamp > 300000) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] Cache expired, proceeding to parseIntent');
+    logger.debug('⏭️  [NODE:CHECK_SCREEN_CACHE] Cache expired, proceeding to parseIntent');
     return state;
   }
   
   const cacheAge = Math.round((Date.now() - recentCache.timestamp) / 1000);
-  console.log(`📦 [NODE:CHECK_SCREEN_CACHE] Found cached data for active window: ${activeWindowId} (${cacheAge}s old)`);
+  logger.debug(`📦 [NODE:CHECK_SCREEN_CACHE] Found cached data for active window: ${activeWindowId} (${cacheAge}s old)`);
   
   // 3. Extract plain text from cached data (prefer normalized plainTextClean for LLM)
   const data = recentCache.data;
   
   // 🔍 DEBUG: Log what window this cache is actually for
-  console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Cache details:`);
-  console.log(`   Window ID: ${activeWindowId}`);
-  console.log(`   App: ${data.windowsAnalyzed?.[0]?.app || 'unknown'}`);
-  console.log(`   Title: ${data.windowsAnalyzed?.[0]?.title || 'unknown'}`);
-  console.log(`   URL: ${data.windowsAnalyzed?.[0]?.url || 'none'}`);
-  console.log(`   Method: ${data.method || 'unknown'}`);
-  console.log(`   Timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
+  logger.debug(`🔍 [NODE:CHECK_SCREEN_CACHE] Cache details:`);
+  logger.debug(`   Window ID: ${activeWindowId}`);
+  logger.debug(`   App: ${data.windowsAnalyzed?.[0]?.app || 'unknown'}`);
+  logger.debug(`   Title: ${data.windowsAnalyzed?.[0]?.title || 'unknown'}`);
+  logger.debug(`   URL: ${data.windowsAnalyzed?.[0]?.url || 'none'}`);
+  logger.debug(`   Method: ${data.method || 'unknown'}`);
+  logger.debug(`   Timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
   
   // Use plainTextClean if available (normalized for LLM), otherwise fallback to raw text
   const plainTextClean = data.plainTextClean || '';
@@ -235,13 +236,13 @@ module.exports = async function checkScreenCache(state) {
   const screenText = plainTextClean || visionText || fullTextElement?.value || '';
   
   if (!screenText || screenText.length < 50) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] No screen text in cache, proceeding to parseIntent');
+    logger.debug('⏭️  [NODE:CHECK_SCREEN_CACHE] No screen text in cache, proceeding to parseIntent');
     return state;
   }
   
   const textSource = plainTextClean ? 'plainTextClean (normalized for LLM)' : (visionText ? 'vision' : 'fallback');
-  console.log(`📝 [NODE:CHECK_SCREEN_CACHE] Screen text available (${screenText.length} chars, source: ${textSource})`);
-  console.log(`   Text preview (first 300 chars): "${screenText.substring(0, 300)}..."`);
+  logger.debug(`📝 [NODE:CHECK_SCREEN_CACHE] Screen text available (${screenText.length} chars, source: ${textSource})`);
+  logger.debug(`   Text preview (first 300 chars): "${screenText.substring(0, 300)}..."`);
   
   // 4. Check if query is about screen content (quick keyword check)
   const queryLower = message.toLowerCase();
@@ -277,28 +278,28 @@ module.exports = async function checkScreenCache(state) {
   const isScreenQuery = screenKeywords.some(kw => queryLower.includes(kw));
   
   if (!isScreenQuery) {
-    console.log('⏭️  [NODE:CHECK_SCREEN_CACHE] Not a screen query, proceeding to parseIntent');
+    logger.debug('⏭️  [NODE:CHECK_SCREEN_CACHE] Not a screen query, proceeding to parseIntent');
     return state;
   }
   
-  console.log('🎯 [NODE:CHECK_SCREEN_CACHE] Screen query detected');
+  logger.debug('🎯 [NODE:CHECK_SCREEN_CACHE] Screen query detected');
   
   // ⏸️  DISABLED: Tier 3 predictive cache (phi4 performance issues)
   // TODO: Re-enable when phi4 LLM is faster and returns valid JSON
   // if (global.predictiveCache && global.predictiveCache.size > 0) {
-  //   console.log('🔮 [NODE:CHECK_SCREEN_CACHE] Checking Tier 3 predictive cache...');
+  //   logger.debug('🔮 [NODE:CHECK_SCREEN_CACHE] Checking Tier 3 predictive cache...');
   //   ...
   // }
-  console.log('⏸️  [NODE:CHECK_SCREEN_CACHE] Predictive cache disabled (phi4 performance issues)');
+  logger.debug('⏸️  [NODE:CHECK_SCREEN_CACHE] Predictive cache disabled (phi4 performance issues)');
   
   // 5. Perform semantic search using phi4 embeddings (Tier 2 fallback)
-  console.log('🔍 [NODE:CHECK_SCREEN_CACHE] Performing Tier 2 semantic search...');
+  logger.debug('🔍 [NODE:CHECK_SCREEN_CACHE] Performing Tier 2 semantic search...');
   
   try {
     const startTime = Date.now();
     
     // Use screenText (already normalized via plainTextClean if available)
-    console.log(`🧹 [NODE:CHECK_SCREEN_CACHE] Using screen text for semantic search: ${screenText.length} chars`);
+    logger.debug(`🧹 [NODE:CHECK_SCREEN_CACHE] Using screen text for semantic search: ${screenText.length} chars`);
     
     // Generate embedding for query
     const queryEmbedResult = await mcpClient.callService('phi4', 'embedding.generate', {
@@ -308,13 +309,13 @@ module.exports = async function checkScreenCache(state) {
     const queryEmbedding = queryEmbedResult.data?.embedding || queryEmbedResult.embedding;
     
     if (!queryEmbedding) {
-      console.warn('⚠️  [NODE:CHECK_SCREEN_CACHE] Failed to generate query embedding');
+      logger.warn('⚠️  [NODE:CHECK_SCREEN_CACHE] Failed to generate query embedding');
       return state;
     }
     
     // Generate embedding for screen text (chunked if too long)
     const textChunks = chunkText(screenText, 1000); // 1000 char chunks
-    console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Generating embeddings for ${textChunks.length} chunks...`);
+    logger.debug(`📊 [NODE:CHECK_SCREEN_CACHE] Generating embeddings for ${textChunks.length} chunks...`);
     
     const chunkEmbeddings = await Promise.all(
       textChunks.slice(0, 10).map(async (chunk) => { // Limit to 10 chunks for performance
@@ -339,13 +340,13 @@ module.exports = async function checkScreenCache(state) {
     const relevanceThreshold = parseFloat(process.env.SCREEN_CACHE_THRESHOLD || '0.45');
     
     const searchTime = Date.now() - startTime;
-    console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Semantic search complete (${searchTime}ms)`);
-    console.log(`📊 [NODE:CHECK_SCREEN_CACHE] Top similarity: ${topSimilarity.toFixed(3)}, Threshold: ${relevanceThreshold}`);
+    logger.debug(`🔍 [NODE:CHECK_SCREEN_CACHE] Semantic search complete (${searchTime}ms)`);
+    logger.debug(`📊 [NODE:CHECK_SCREEN_CACHE] Top similarity: ${topSimilarity.toFixed(3)}, Threshold: ${relevanceThreshold}`);
     
     // Log top 3 matches for debugging
-    console.log('🔍 [NODE:CHECK_SCREEN_CACHE] Top 3 matches:');
+    logger.debug('🔍 [NODE:CHECK_SCREEN_CACHE] Top 3 matches:');
     similarities.slice(0, 3).forEach((s, i) => {
-      console.log(`   ${i + 1}. Similarity: ${s.similarity.toFixed(3)} | Chunk: "${s.chunk.substring(0, 80)}..."`);
+      logger.debug(`   ${i + 1}. Similarity: ${s.similarity.toFixed(3)} | Chunk: "${s.chunk.substring(0, 80)}..."`);
     });
     
     // 🔧 KEYWORD BOOST: Check for specific email/inbox patterns
@@ -362,28 +363,28 @@ module.exports = async function checkScreenCache(state) {
     let boostedSimilarity = topSimilarity;
     if (hasEmailKeyword && inboxMatch) {
       boostedSimilarity = Math.max(topSimilarity, 0.70); // Boost to pass threshold
-      console.log(`🚀 [NODE:CHECK_SCREEN_CACHE] Keyword boost applied! Found "${inboxMatch[0]}" (similarity: ${topSimilarity.toFixed(3)} → ${boostedSimilarity.toFixed(3)})`);
+      logger.debug(`🚀 [NODE:CHECK_SCREEN_CACHE] Keyword boost applied! Found "${inboxMatch[0]}" (similarity: ${topSimilarity.toFixed(3)} → ${boostedSimilarity.toFixed(3)})`);
     }
     
     if (boostedSimilarity >= relevanceThreshold) {
-      console.log(`🎯 [NODE:CHECK_SCREEN_CACHE] Cache HIT! (similarity: ${boostedSimilarity.toFixed(3)})`);
-      console.log(`   Matched chunk: "${similarities[0].chunk.substring(0, 200)}..."`);
+      logger.debug(`🎯 [NODE:CHECK_SCREEN_CACHE] Cache HIT! (similarity: ${boostedSimilarity.toFixed(3)})`);
+      logger.debug(`   Matched chunk: "${similarities[0].chunk.substring(0, 200)}..."`);
       
       // ✅ VALIDATE: The cache we retrieved MUST be from activeWindowId
       // We already got it from global.screenWorkerCache.get(activeWindowId)
       // So if we have data here, it's guaranteed to be from the active window
       // The real validation is: does the cache exist AND is it fresh?
       
-      console.log(`🔍 [NODE:CHECK_SCREEN_CACHE] Validating cache freshness...`);
-      console.log(`   Active window: ${activeWindowId}`);
-      console.log(`   Cache age: ${cacheAge}s`);
-      console.log(`   Cache timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
+      logger.debug(`🔍 [NODE:CHECK_SCREEN_CACHE] Validating cache freshness...`);
+      logger.debug(`   Active window: ${activeWindowId}`);
+      logger.debug(`   Cache age: ${cacheAge}s`);
+      logger.debug(`   Cache timestamp: ${new Date(recentCache.timestamp).toISOString()}`);
       
       // Check if cache is stale (older than 5 minutes)
       const isCacheStale = cacheAge > 300; // 5 minutes
       
       if (!isCacheStale) {
-        console.log(`✅ [NODE:CHECK_SCREEN_CACHE] Cache validated - belongs to active window!`);
+        logger.debug(`✅ [NODE:CHECK_SCREEN_CACHE] Cache validated - belongs to active window!`);
         
         // Build context from cached screen data
         let contextText = screenText;
@@ -395,7 +396,7 @@ module.exports = async function checkScreenCache(state) {
           const emailCount = numberMatch ? numberMatch[0].replace(/[\s,]/g, '') : 'unknown';
           
           contextText = `📧 IMPORTANT: Total emails in inbox = ${emailCount}\n📧 Raw text: ${inboxInfo}\n\n${contextText}`;
-          console.log(`📧 [NODE:CHECK_SCREEN_CACHE] Prioritized inbox info: "${inboxInfo}" → count: ${emailCount}`);
+          logger.debug(`📧 [NODE:CHECK_SCREEN_CACHE] Prioritized inbox info: "${inboxInfo}" → count: ${emailCount}`);
         }
         
         const screenContext = `## Screen Content (from cache)
@@ -413,12 +414,12 @@ ${contextText.substring(0, 2000)}${contextText.length > 2000 ? '...' : ''}`;
           confidence: boostedSimilarity
         };
         
-        console.log('⚡ [NODE:CHECK_SCREEN_CACHE] Skipping to answer with validated cached screen data');
+        logger.debug('⚡ [NODE:CHECK_SCREEN_CACHE] Skipping to answer with validated cached screen data');
         return state;
       } else {
-        console.log(`⚠️  [NODE:CHECK_SCREEN_CACHE] Cache mismatch! Cache is from different window.`);
-        console.log(`   This indicates a race condition - window changed but cache not updated yet`);
-        console.log(`   Proceeding to parseIntent → checkCacheReadiness will wait for correct cache`);
+        logger.debug(`⚠️  [NODE:CHECK_SCREEN_CACHE] Cache mismatch! Cache is from different window.`);
+        logger.debug(`   This indicates a race condition - window changed but cache not updated yet`);
+        logger.debug(`   Proceeding to parseIntent → checkCacheReadiness will wait for correct cache`);
         
         // 💭 Send thinking indicator to user immediately
         try {
@@ -431,10 +432,10 @@ ${contextText.substring(0, 2000)}${contextText.length > 2000 ? '...' : ''}`;
               sessionId: state.context?.sessionId,
               timestamp: Date.now()
             });
-            console.log(`💭 [NODE:CHECK_SCREEN_CACHE] Sent thinking update: "Scanning the page now..."`);
+            logger.debug(`💭 [NODE:CHECK_SCREEN_CACHE] Sent thinking update: "Scanning the page now..."`);
           }
         } catch (error) {
-          console.warn('⚠️ [NODE:CHECK_SCREEN_CACHE] Failed to send thinking update:', error.message);
+          logger.warn('⚠️ [NODE:CHECK_SCREEN_CACHE] Failed to send thinking update:', error.message);
         }
         
         // Don't skip - let checkCacheReadiness wait for the correct window's cache
@@ -443,12 +444,12 @@ ${contextText.substring(0, 2000)}${contextText.length > 2000 ? '...' : ''}`;
         return state;
       }
     } else {
-      console.log(`⏭️  [NODE:CHECK_SCREEN_CACHE] Low similarity (${topSimilarity.toFixed(3)} < ${relevanceThreshold}), proceeding to parseIntent`);
+      logger.debug(`⏭️  [NODE:CHECK_SCREEN_CACHE] Low similarity (${topSimilarity.toFixed(3)} < ${relevanceThreshold}), proceeding to parseIntent`);
       return state;
     }
     
   } catch (error) {
-    console.warn('⚠️  [NODE:CHECK_SCREEN_CACHE] Semantic search failed:', error.message);
+    logger.warn('⚠️  [NODE:CHECK_SCREEN_CACHE] Semantic search failed:', error.message);
     return state;
   }
 };

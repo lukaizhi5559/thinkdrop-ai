@@ -4,6 +4,7 @@
  */
 
 const path = require('path');
+const logger = require('./../../logger.cjs');
 const fs = require('fs').promises;
 
 const AGENT_FORMAT = {
@@ -44,12 +45,12 @@ const AGENT_FORMAT = {
     try {
       // Prevent concurrent bootstrapping
       if (AGENT_FORMAT.initialized) {
-        console.log('🔄 ConversationSessionAgent already initialized');
+        logger.debug('🔄 ConversationSessionAgent already initialized');
         return { success: true };
       }
       
       if (AGENT_FORMAT.bootstrapping) {
-        console.log('⏳ ConversationSessionAgent bootstrap in progress, waiting...');
+        logger.debug('⏳ ConversationSessionAgent bootstrap in progress, waiting...');
         // Wait for existing bootstrap to complete
         while (AGENT_FORMAT.bootstrapping && !AGENT_FORMAT.initialized) {
           await new Promise(resolve => setTimeout(resolve, 100));
@@ -69,11 +70,11 @@ const AGENT_FORMAT = {
       AGENT_FORMAT.initialized = true;
       AGENT_FORMAT.bootstrapping = false;
       
-      console.log('✅ ConversationSessionAgent initialized successfully');
+      logger.debug('✅ ConversationSessionAgent initialized successfully');
       return { success: true };
     } catch (error) {
       AGENT_FORMAT.bootstrapping = false;
-      console.error('❌ ConversationSessionAgent initialization failed:', error);
+      logger.error('❌ ConversationSessionAgent initialization failed:', error);
       return { success: false, error: error.message };
     }
   },
@@ -142,13 +143,13 @@ const AGENT_FORMAT = {
         const hasEmbeddingColumn = columnCheck.some(col => col.name === 'embedding');
         
         if (!hasEmbeddingColumn) {
-          console.log('🔄 Adding missing embedding column to conversation_messages table...');
+          logger.debug('🔄 Adding missing embedding column to conversation_messages table...');
           await AGENT_FORMAT.database.run(`
             ALTER TABLE conversation_messages ADD COLUMN embedding TEXT DEFAULT NULL
           `);
-          console.log('✅ Added embedding column to conversation_messages table');
+          logger.debug('✅ Added embedding column to conversation_messages table');
         } else {
-          console.log('ℹ️ Embedding column already exists');
+          logger.debug('ℹ️ Embedding column already exists');
         }
       } catch (error) {
         // Try to add the column anyway - check for both DuckDB error messages
@@ -158,9 +159,9 @@ const AGENT_FORMAT = {
           error.message.includes('already exists')
         )) {
           // Silently ignore - column already exists
-          console.log('ℹ️ Embedding column already exists');
+          logger.debug('ℹ️ Embedding column already exists');
         } else {
-          console.warn('⚠️ Failed to add embedding column:', error?.message || error);
+          logger.warn('⚠️ Failed to add embedding column:', error?.message || error);
           // Don't throw - this is non-critical
         }
       }
@@ -183,9 +184,9 @@ const AGENT_FORMAT = {
         )
       `);
 
-      console.log('✅ ConversationSessionAgent tables created successfully');
+      logger.debug('✅ ConversationSessionAgent tables created successfully');
     } catch (error) {
-      console.error('❌ Failed to create ConversationSessionAgent tables:', error);
+      logger.error('❌ Failed to create ConversationSessionAgent tables:', error);
       throw error;
     }
   },
@@ -243,7 +244,7 @@ const AGENT_FORMAT = {
           };
       }
     } catch (error) {
-      console.error(`❌ ConversationSessionAgent action '${action}' failed:`, error);
+      logger.error(`❌ ConversationSessionAgent action '${action}' failed:`, error);
       return {
         success: false,
         error: error.message,
@@ -254,7 +255,7 @@ const AGENT_FORMAT = {
   },
 
   async createSession(params, context) {
-    console.log('createSession received params:', JSON.stringify(params, null, 2));
+    logger.debug('createSession received params:', JSON.stringify(params, null, 2));
     
     // Extract the actual options from the nested structure
     const actualOptions = params.options || params;
@@ -269,7 +270,7 @@ const AGENT_FORMAT = {
       currentActivity = {}
     } = actualOptions;
     
-    console.log('Destructured values:', { sessionType, title, triggerReason, triggerConfidence });
+    logger.debug('Destructured values:', { sessionType, title, triggerReason, triggerConfidence });
 
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -298,7 +299,7 @@ const AGENT_FORMAT = {
         now // last_activity_at
       ];
 
-      console.log('Inserting session with params:', params);
+      logger.debug('Inserting session with params:', params);
 
       await AGENT_FORMAT.database.run(`
         INSERT INTO conversation_sessions (
@@ -330,7 +331,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to create session:', error);
+      logger.error('❌ Failed to create session:', error);
       return {
         success: false,
         error: error.message
@@ -356,9 +357,9 @@ const AGENT_FORMAT = {
 
       const sessions = await AGENT_FORMAT.database.query(query, [limit, offset]);
       
-      console.log('📋 Raw sessions from database:', sessions.length, 'sessions');
+      logger.debug('📋 Raw sessions from database:', sessions.length, 'sessions');
       // sessions.forEach((session, index) => {
-      //   console.log(`Session ${index}:`, {
+      //   logger.debug(`Session ${index}:`, {
       //     id: session.id,
       //     title: session.title,
       //     type: session.type,
@@ -369,7 +370,7 @@ const AGENT_FORMAT = {
       // Parse JSON fields and populate additional data
       const parsedSessions = await Promise.all(sessions.map(async (session) => {
         try {
-          // console.log(`🔍 Processing session ${session.id}...`);
+          // logger.debug(`🔍 Processing session ${session.id}...`);
           
           // Get message count for this session
           const countQuery = `
@@ -395,7 +396,7 @@ const AGENT_FORMAT = {
             if (lastMessageResult[0]) {
               lastMessage = lastMessageResult[0].text;
               lastMessageTime = lastMessageResult[0].created_at;
-              console.log(`💬 Session ${session.id}: Last message: "${lastMessage?.substring(0, 50)}..."`);
+              logger.debug(`💬 Session ${session.id}: Last message: "${lastMessage?.substring(0, 50)}..."`);
             }
           }
 
@@ -419,7 +420,7 @@ const AGENT_FORMAT = {
             unreadCount: 0
           };
           
-          // console.log(`✅ Processed session ${session.id}:`, {
+          // logger.debug(`✅ Processed session ${session.id}:`, {
           //   id: processedSession.id,
           //   title: processedSession.title,
           //   messageCount: processedSession.messageCount,
@@ -429,7 +430,7 @@ const AGENT_FORMAT = {
           
           return processedSession;
         } catch (error) {
-          console.error(`❌ Error processing session ${session.id}:`, error);
+          logger.error(`❌ Error processing session ${session.id}:`, error);
           // Return a basic session object if processing fails
           return {
             id: session.id,
@@ -453,9 +454,9 @@ const AGENT_FORMAT = {
         }
       }));
       
-      console.log('📋 Parsed sessions:', parsedSessions.length, 'sessions');
+      logger.debug('📋 Parsed sessions:', parsedSessions.length, 'sessions');
       // parsedSessions.forEach((session, index) => {
-      //   console.log(`Parsed Session ${index}:`, {
+      //   logger.debug(`Parsed Session ${index}:`, {
       //     id: session.id,
       //     title: session.title,
       //     type: session.type,
@@ -468,7 +469,7 @@ const AGENT_FORMAT = {
       // If no active session exists and we have sessions, activate the most recent one with messages
       const hasActiveSession = parsedSessions.some(s => s.isActive);
       if (!hasActiveSession && parsedSessions.length > 0) {
-        console.log('🔧 [ConversationSessionAgent] No active session found, activating most recent session with messages...');
+        logger.debug('🔧 [ConversationSessionAgent] No active session found, activating most recent session with messages...');
         
         // Find the most recent session with messages, or just the most recent session
         const sessionWithMessages = parsedSessions
@@ -478,7 +479,7 @@ const AGENT_FORMAT = {
         const sessionToActivate = sessionWithMessages || parsedSessions[0];
         
         if (sessionToActivate) {
-          console.log(`🎯 [ConversationSessionAgent] Auto-activating session: ${sessionToActivate.id} (${sessionToActivate.title})`);
+          logger.debug(`🎯 [ConversationSessionAgent] Auto-activating session: ${sessionToActivate.id} (${sessionToActivate.title})`);
           
           // Set this session as active in the database
           await AGENT_FORMAT.database.run(`
@@ -490,7 +491,7 @@ const AGENT_FORMAT = {
           // Update the session object to reflect the change
           sessionToActivate.isActive = true;
           
-          console.log(`✅ [ConversationSessionAgent] Successfully activated session: ${sessionToActivate.id}`);
+          logger.debug(`✅ [ConversationSessionAgent] Successfully activated session: ${sessionToActivate.id}`);
         }
       }
 
@@ -516,7 +517,7 @@ const AGENT_FORMAT = {
         }
       };
       
-      console.log('🔄 [ConversationSessionAgent] Returning session list result:', {
+      logger.debug('🔄 [ConversationSessionAgent] Returning session list result:', {
         success: returnData.success,
         sessionsCount: returnData.data.sessions.length,
         total: returnData.data.pagination.total
@@ -524,7 +525,7 @@ const AGENT_FORMAT = {
       
       return returnData;
     } catch (error) {
-      console.error('❌ Failed to list sessions:', error);
+      logger.error('❌ Failed to list sessions:', error);
       return {
         success: false,
         error: error.message
@@ -562,7 +563,7 @@ const AGENT_FORMAT = {
         data: parsedSession
       };
     } catch (error) {
-      console.error('❌ Failed to get session:', error);
+      logger.error('❌ Failed to get session:', error);
       return {
         success: false,
         error: error.message
@@ -571,7 +572,7 @@ const AGENT_FORMAT = {
   },
 
   async updateSession(options, context) {
-    console.log('🔧 [ConversationSessionAgent] Raw options received:', options);
+    logger.debug('🔧 [ConversationSessionAgent] Raw options received:', options);
     
     // Handle nested options structure
     const actualOptions = options.options || options;
@@ -584,7 +585,7 @@ const AGENT_FORMAT = {
       messageCount 
     } = actualOptions;
 
-    console.log('🔧 [ConversationSessionAgent] updateSession called with:', { sessionId, title, contextData, relatedMemories, currentActivity, messageCount });
+    logger.debug('🔧 [ConversationSessionAgent] updateSession called with:', { sessionId, title, contextData, relatedMemories, currentActivity, messageCount });
 
     try {
       const updates = [];
@@ -618,9 +619,9 @@ const AGENT_FORMAT = {
       values.push(sessionId);
 
       const sql = `UPDATE conversation_sessions SET ${updates.join(', ')} WHERE id = ?`;
-      console.log('🔧 [ConversationSessionAgent] SQL query:', sql);
-      console.log('🔧 [ConversationSessionAgent] Values array:', values);
-      console.log('🔧 [ConversationSessionAgent] Updates array:', updates);
+      logger.debug('🔧 [ConversationSessionAgent] SQL query:', sql);
+      logger.debug('🔧 [ConversationSessionAgent] Values array:', values);
+      logger.debug('🔧 [ConversationSessionAgent] Updates array:', updates);
 
       await AGENT_FORMAT.database.run(sql, values);
 
@@ -641,7 +642,7 @@ const AGENT_FORMAT = {
         data: { updated: true, sessionId }
       };
     } catch (error) {
-      console.error('❌ Failed to update session:', error);
+      logger.error('❌ Failed to update session:', error);
       return {
         success: false,
         error: error.message
@@ -654,7 +655,7 @@ const AGENT_FORMAT = {
 
     // Validate sessionId
     if (!sessionId || sessionId === 'undefined') {
-      console.error('❌ switchToSession: Invalid sessionId:', sessionId);
+      logger.error('❌ switchToSession: Invalid sessionId:', sessionId);
       return {
         success: false,
         error: 'Invalid or missing sessionId'
@@ -698,7 +699,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to switch session:', error);
+      logger.error('❌ Failed to switch session:', error);
       return {
         success: false,
         error: error.message
@@ -733,7 +734,7 @@ const AGENT_FORMAT = {
         data: { deleted: true, sessionId }
       };
     } catch (error) {
-      console.error('❌ Failed to delete session:', error);
+      logger.error('❌ Failed to delete session:', error);
       return {
         success: false,
         error: error.message
@@ -773,7 +774,7 @@ const AGENT_FORMAT = {
         data: { hibernated: true, sessionId }
       };
     } catch (error) {
-      console.error('❌ Failed to hibernate session:', error);
+      logger.error('❌ Failed to hibernate session:', error);
       return {
         success: false,
         error: error.message
@@ -814,7 +815,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to resume session:', error);
+      logger.error('❌ Failed to resume session:', error);
       return {
         success: false,
         error: error.message
@@ -840,7 +841,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to check context similarity:', error);
+      logger.error('❌ Failed to check context similarity:', error);
       return {
         success: false,
         error: error.message
@@ -891,7 +892,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to evaluate auto trigger:', error);
+      logger.error('❌ Failed to evaluate auto trigger:', error);
       return {
         success: false,
         error: error.message
@@ -907,33 +908,33 @@ const AGENT_FORMAT = {
 
     // Extract response text properly - handle both string and object formats
     let text = rawText;
-    console.log('🔍 [CONVERSATION_ADD_MESSAGE] Raw text type:', typeof text);
-    console.log('🔍 [CONVERSATION_ADD_MESSAGE] Raw text value:', text);
+    logger.debug('🔍 [CONVERSATION_ADD_MESSAGE] Raw text type:', typeof text);
+    logger.debug('🔍 [CONVERSATION_ADD_MESSAGE] Raw text value:', text);
     
     while (typeof text === 'object' && text !== null) {
       if (text.response) {
         text = text.response;
-        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Extracted nested response:', text);
+        logger.debug('🔧 [CONVERSATION_ADD_MESSAGE] Extracted nested response:', text);
       } else if (text.data && text.data.response) {
         text = text.data.response;
-        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Extracted data.response:', text);
+        logger.debug('🔧 [CONVERSATION_ADD_MESSAGE] Extracted data.response:', text);
       } else {
         // If it's an object but no 'response' property, stringify it
         text = JSON.stringify(text);
-        console.log('🔧 [CONVERSATION_ADD_MESSAGE] Stringified object response:', text);
+        logger.debug('🔧 [CONVERSATION_ADD_MESSAGE] Stringified object response:', text);
         break;
       }
     }
     
     // Ensure we have a plain string
     text = typeof text === 'string' ? text : String(text);
-    console.log('✅ [CONVERSATION_ADD_MESSAGE] Final extracted text:', text);
+    logger.debug('✅ [CONVERSATION_ADD_MESSAGE] Final extracted text:', text);
 
-    console.log('🔍 [DEBUG] addMessage received:', { sessionId, text, sender, metadata });
+    logger.debug('🔍 [DEBUG] addMessage received:', { sessionId, text, sender, metadata });
 
     // Validate required parameters
     if (!sessionId || !text || !sender) {
-      console.error('❌ [DEBUG] Missing required parameters:', { sessionId, text, sender });
+      logger.error('❌ [DEBUG] Missing required parameters:', { sessionId, text, sender });
       return {
         success: false,
         error: 'Missing required parameters: sessionId, text, and sender are required'
@@ -950,7 +951,7 @@ const AGENT_FORMAT = {
       `, [sessionId, text, sender, recentCutoff]);
 
       if (duplicateCheck.length > 0) {
-        console.log('⚠️ [DEBUG] Duplicate message detected, skipping insertion:', duplicateCheck[0].id);
+        logger.debug('⚠️ [DEBUG] Duplicate message detected, skipping insertion:', duplicateCheck[0].id);
         return {
           success: true,
           data: { messageId: duplicateCheck[0].id, isDuplicate: true }
@@ -960,7 +961,7 @@ const AGENT_FORMAT = {
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const timestamp = new Date().toISOString();
 
-      console.log('🔍 [DEBUG] About to insert with parameters:', [messageId, sessionId, text, sender, timestamp, JSON.stringify(metadata)]);
+      logger.debug('🔍 [DEBUG] About to insert with parameters:', [messageId, sessionId, text, sender, timestamp, JSON.stringify(metadata)]);
 
       await AGENT_FORMAT.database.run(`
         INSERT INTO conversation_messages (id, session_id, text, sender, timestamp, metadata)
@@ -979,11 +980,11 @@ const AGENT_FORMAT = {
       // Background embedding generation (non-blocking) - TWO-TIER APPROACH
       setImmediate(async () => {
         try {
-          console.log('🔄 [BACKGROUND] Generating embeddings for message and session:', messageId);
+          logger.debug('🔄 [BACKGROUND] Generating embeddings for message and session:', messageId);
           
           // Skip embedding generation for very short or system messages
           if (text.length < 10 || text.startsWith('[System') || text.match(/^(ok|thanks?|yes|no)$/i)) {
-            console.log('⚠️ [BACKGROUND] Skipping embedding for short/system message');
+            logger.debug('⚠️ [BACKGROUND] Skipping embedding for short/system message');
             return;
           }
           
@@ -1002,9 +1003,9 @@ const AGENT_FORMAT = {
                 WHERE id = ?
               `, [JSON.stringify(embeddingResult.result.embedding), messageId]);
               
-              console.log('✅ [BACKGROUND] Tier 1 - Message embedding generated:', messageId);
+              logger.debug('✅ [BACKGROUND] Tier 1 - Message embedding generated:', messageId);
             } else {
-              console.warn('⚠️ [BACKGROUND] Failed to generate message embedding:', embeddingResult.error);
+              logger.warn('⚠️ [BACKGROUND] Failed to generate message embedding:', embeddingResult.error);
             }
 
             // TIER 2: Generate/Update session-level embedding
@@ -1019,10 +1020,10 @@ const AGENT_FORMAT = {
             }
             
           } else {
-            console.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
+            logger.warn('⚠️ [BACKGROUND] executeAgent not available for embedding generation');
           }
         } catch (error) {
-          console.error('❌ [BACKGROUND] Embedding generation failed:', error);
+          logger.error('❌ [BACKGROUND] Embedding generation failed:', error);
         }
       });
 
@@ -1038,7 +1039,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to add message:', error);
+      logger.error('❌ Failed to add message:', error);
       return {
         success: false,
         error: error.message
@@ -1049,7 +1050,7 @@ const AGENT_FORMAT = {
   // TIER 4: Create memory entry from meaningful user messages (Smart Storage)
   async createMemoryFromMessage(messageId, sessionId, text, sender, timestamp, context) {
     try {
-      console.log('🧠 [BACKGROUND] Smart memory analysis for message:', messageId);
+      logger.debug('🧠 [BACKGROUND] Smart memory analysis for message:', messageId);
       
       // Only create memories for user messages with meaningful content
       if (sender !== 'user' || text.length < 15) {
@@ -1066,7 +1067,7 @@ const AGENT_FORMAT = {
       
       for (const pattern of conversationalQueryPatterns) {
         if (pattern.test(text.trim())) {
-          console.log('⚠️ [BACKGROUND] Skipping conversational query - preserving for context stages');
+          logger.debug('⚠️ [BACKGROUND] Skipping conversational query - preserving for context stages');
           return;
         }
       }
@@ -1080,7 +1081,7 @@ const AGENT_FORMAT = {
       
       for (const pattern of basicResponsePatterns) {
         if (pattern.test(text.trim())) {
-          console.log('⚠️ [BACKGROUND] Skipping basic conversational response');
+          logger.debug('⚠️ [BACKGROUND] Skipping basic conversational response');
           return;
         }
       }
@@ -1098,7 +1099,7 @@ const AGENT_FORMAT = {
       for (const pattern of learningGoalPatterns) {
         if (pattern.test(text)) {
           hasLearningGoal = true;
-          console.log('✅ [BACKGROUND] Detected learning goal pattern');
+          logger.debug('✅ [BACKGROUND] Detected learning goal pattern');
           break;
         }
       }
@@ -1113,16 +1114,16 @@ const AGENT_FORMAT = {
           }, context);
           
           if (classificationResult.success && classificationResult.result?.result?.isConversational) {
-            console.log('⚠️ [BACKGROUND] LLM classified as conversational query - preserving for context stages');
+            logger.debug('⚠️ [BACKGROUND] LLM classified as conversational query - preserving for context stages');
             return;
           }
           
-          console.log('✅ [BACKGROUND] LLM approved for memory storage');
+          logger.debug('✅ [BACKGROUND] LLM approved for memory storage');
         } catch (error) {
-          console.warn('⚠️ [BACKGROUND] LLM classification failed, using pattern-based decision:', error.message);
+          logger.warn('⚠️ [BACKGROUND] LLM classification failed, using pattern-based decision:', error.message);
           // Fall back to pattern-based decision
           if (text.length < 30 && !hasLearningGoal) {
-            console.log('⚠️ [BACKGROUND] Short text without learning goal - skipping');
+            logger.debug('⚠️ [BACKGROUND] Short text without learning goal - skipping');
             return;
           }
         }
@@ -1142,10 +1143,10 @@ const AGENT_FORMAT = {
         if (intentResult.success && intentResult.intentData?.primaryIntent) {
           extractedIntent = intentResult.intentData.primaryIntent;
           entities = intentResult.intentData.entities || [];
-          console.log('✅ [BACKGROUND] Extracted intent via Phi3:', extractedIntent, 'entities:', entities.length);
+          logger.debug('✅ [BACKGROUND] Extracted intent via Phi3:', extractedIntent, 'entities:', entities.length);
         }
       } catch (intentError) {
-        console.warn('⚠️ [BACKGROUND] Phi3 intent extraction failed, using basic intent:', intentError.message);
+        logger.warn('⚠️ [BACKGROUND] Phi3 intent extraction failed, using basic intent:', intentError.message);
       }
       
       // Create memory entry using UserMemoryAgent with extracted intent
@@ -1167,20 +1168,20 @@ const AGENT_FORMAT = {
       }, context);
       
       if (memoryResult.success) {
-        console.log('✅ [BACKGROUND] Smart memory created from message:', messageId);
+        logger.debug('✅ [BACKGROUND] Smart memory created from message:', messageId);
       } else {
-        console.warn('⚠️ [BACKGROUND] Failed to create memory from message:', memoryResult.error);
+        logger.warn('⚠️ [BACKGROUND] Failed to create memory from message:', memoryResult.error);
       }
       
     } catch (error) {
-      console.error('❌ [BACKGROUND] Smart memory creation failed:', error);
+      logger.error('❌ [BACKGROUND] Smart memory creation failed:', error);
     }
   },
 
   // TIER 2: Session-level embedding generation for Two-Tier Semantic Search
   async updateSessionEmbedding(sessionId, context) {
     try {
-      console.log('🔄 [BACKGROUND] Tier 2 - Generating session embedding for:', sessionId);
+      logger.debug('🔄 [BACKGROUND] Tier 2 - Generating session embedding for:', sessionId);
       
       // Get session details and recent messages to create session context
       const session = await AGENT_FORMAT.database.query(`
@@ -1188,7 +1189,7 @@ const AGENT_FORMAT = {
       `, [sessionId]);
       
       if (session.length === 0) {
-        console.warn('⚠️ [BACKGROUND] Session not found for embedding:', sessionId);
+        logger.warn('⚠️ [BACKGROUND] Session not found for embedding:', sessionId);
         return;
       }
       
@@ -1201,7 +1202,7 @@ const AGENT_FORMAT = {
       `, [sessionId]);
       
       if (messages.length === 0) {
-        console.log('⚠️ [BACKGROUND] No messages found for session embedding');
+        logger.debug('⚠️ [BACKGROUND] No messages found for session embedding');
         return;
       }
       
@@ -1230,7 +1231,7 @@ const AGENT_FORMAT = {
         // Ignore JSON parse errors
       }
       
-      console.log('🔍 [BACKGROUND] Session context for embedding:', sessionContext.substring(0, 200) + '...');
+      logger.debug('🔍 [BACKGROUND] Session context for embedding:', sessionContext.substring(0, 200) + '...');
       
       // Generate embedding for session context
       const embeddingResult = await context.executeAgent('SemanticEmbeddingAgent', {
@@ -1265,19 +1266,19 @@ const AGENT_FORMAT = {
           new Date().toISOString()
         ]);
         
-        console.log('✅ [BACKGROUND] Tier 2 - Session embedding generated and stored:', sessionId);
+        logger.debug('✅ [BACKGROUND] Tier 2 - Session embedding generated and stored:', sessionId);
       } else {
-        console.warn('⚠️ [BACKGROUND] Failed to generate session embedding:', embeddingResult.error);
+        logger.warn('⚠️ [BACKGROUND] Failed to generate session embedding:', embeddingResult.error);
       }
       
     } catch (error) {
-      console.error('❌ [BACKGROUND] Session embedding generation failed:', error);
+      logger.error('❌ [BACKGROUND] Session embedding generation failed:', error);
     }
   },
 
   async updateSessionChunks(sessionId, context) {
     try {
-      console.log('🔄 [BACKGROUND] Tier 3 - Updating session chunks for:', sessionId);
+      logger.debug('🔄 [BACKGROUND] Tier 3 - Updating session chunks for:', sessionId);
       
       // Get all messages for this session
       const messages = await AGENT_FORMAT.database.query(`
@@ -1287,7 +1288,7 @@ const AGENT_FORMAT = {
       `, [sessionId]);
       
       if (messages.length === 0) {
-        console.log('⚠️ [BACKGROUND] No messages found for chunk generation');
+        logger.debug('⚠️ [BACKGROUND] No messages found for chunk generation');
         return;
       }
       
@@ -1374,7 +1375,7 @@ const AGENT_FORMAT = {
           ]);
           
           chunksCreated++;
-          console.log(`✅ [BACKGROUND] Created chunk ${chunkIndex} (${chunkMessages.length} messages)`);
+          logger.debug(`✅ [BACKGROUND] Created chunk ${chunkIndex} (${chunkMessages.length} messages)`);
         }
         
         // Move to next chunk with overlap
@@ -1385,10 +1386,10 @@ const AGENT_FORMAT = {
         if (startIndex >= endIndex - CHUNK_OVERLAP) break;
       }
       
-      console.log(`✅ [BACKGROUND] Tier 3 - Created/updated ${chunksCreated} chunks for session:`, sessionId);
+      logger.debug(`✅ [BACKGROUND] Tier 3 - Created/updated ${chunksCreated} chunks for session:`, sessionId);
       
     } catch (error) {
-      console.error('❌ [BACKGROUND] Session chunk generation failed:', error);
+      logger.error('❌ [BACKGROUND] Session chunk generation failed:', error);
     }
   },
 
@@ -1397,7 +1398,7 @@ const AGENT_FORMAT = {
 
     // Validate sessionId
     if (!sessionId || sessionId === 'undefined') {
-      console.error('❌ listMessages: Invalid sessionId:', sessionId);
+      logger.error('❌ listMessages: Invalid sessionId:', sessionId);
       return {
         success: false,
         error: 'Invalid or missing sessionId',
@@ -1446,7 +1447,7 @@ const AGENT_FORMAT = {
         }
       };
       
-      // console.log(`✅ [ConversationSessionAgent] Returning result:`, {
+      // logger.debug(`✅ [ConversationSessionAgent] Returning result:`, {
       //   success: result.success,
       //   messageCount: result.data.messages.length,
       //   sessionId: result.data.sessionId
@@ -1454,7 +1455,7 @@ const AGENT_FORMAT = {
       
       return result;
     } catch (error) {
-      console.error('❌ Failed to list messages:', error);
+      logger.error('❌ Failed to list messages:', error);
       return {
         success: false,
         error: error.message
@@ -1487,7 +1488,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to get message:', error);
+      logger.error('❌ Failed to get message:', error);
       return {
         success: false,
         error: error.message
@@ -1544,7 +1545,7 @@ const AGENT_FORMAT = {
         data: { messageId, updated: true }
       };
     } catch (error) {
-      console.error('❌ Failed to update message:', error);
+      logger.error('❌ Failed to update message:', error);
       return {
         success: false,
         error: error.message
@@ -1577,7 +1578,7 @@ const AGENT_FORMAT = {
         data: { messageId, deleted: true }
       };
     } catch (error) {
-      console.error('❌ Failed to delete message:', error);
+      logger.error('❌ Failed to delete message:', error);
       return {
         success: false,
         error: error.message
@@ -1617,7 +1618,7 @@ const AGENT_FORMAT = {
       
       // If no messages with embeddings found, get recent messages anyway for fallback
       if (messages.length === 0) {
-        console.log(`⚠️ No messages with embeddings found, falling back to recent messages for session: ${sessionId}`);
+        logger.debug(`⚠️ No messages with embeddings found, falling back to recent messages for session: ${sessionId}`);
         
         let fallbackSql = `
           SELECT id, session_id, text, sender, timestamp, metadata, embedding, created_at
@@ -1637,7 +1638,7 @@ const AGENT_FORMAT = {
         messages = await AGENT_FORMAT.database.query(fallbackSql, fallbackParams);
       }
       
-      console.log(`✅ Retrieved ${messages.length} conversation messages for session: ${sessionId} (${messages.filter(m => m.embedding && m.embedding !== 'NULL').length} with embeddings)`);
+      logger.debug(`✅ Retrieved ${messages.length} conversation messages for session: ${sessionId} (${messages.filter(m => m.embedding && m.embedding !== 'NULL').length} with embeddings)`);
       
       return {
         success: true,
@@ -1649,7 +1650,7 @@ const AGENT_FORMAT = {
         }
       };
     } catch (error) {
-      console.error('❌ Failed to get conversation messages with embeddings:', error);
+      logger.error('❌ Failed to get conversation messages with embeddings:', error);
       return {
         success: false,
         error: error.message,

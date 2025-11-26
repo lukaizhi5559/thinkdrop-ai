@@ -5,11 +5,12 @@
  * (Vision, Maps, YouTube, Gemini, etc.)
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '010_add_user_settings',
   
   async migrate(db) {
-    console.log('🔄 Running migration: 010_add_user_settings');
+    logger.debug('🔄 Running migration: 010_add_user_settings');
     
     // Create user_settings table
     await db.run(`
@@ -31,10 +32,10 @@ module.exports = {
       ON user_settings(user_id, setting_key)
     `);
     
-    console.log('✅ user_settings table created');
+    logger.debug('✅ user_settings table created');
     
     // Migrate existing OAuth data from mcp_services to user_settings
-    console.log('🔄 Migrating existing Google OAuth data from vision service...');
+    logger.debug('🔄 Migrating existing Google OAuth data from vision service...');
     
     const visionService = await db.query(`
       SELECT api_key, api_key_auto_generated, api_key_service,
@@ -58,7 +59,7 @@ module.exports = {
           service.api_key,
           true
         ]);
-        console.log('✅ Migrated Google API key to user_settings');
+        logger.debug('✅ Migrated Google API key to user_settings');
       }
       
       // Migrate OAuth tokens
@@ -73,7 +74,7 @@ module.exports = {
           service.oauth_access_token,
           true
         ]);
-        console.log('✅ Migrated OAuth access token to user_settings');
+        logger.debug('✅ Migrated OAuth access token to user_settings');
       }
       
       if (service.oauth_refresh_token) {
@@ -87,7 +88,7 @@ module.exports = {
           service.oauth_refresh_token,
           true
         ]);
-        console.log('✅ Migrated OAuth refresh token to user_settings');
+        logger.debug('✅ Migrated OAuth refresh token to user_settings');
       }
       
       if (service.oauth_token_expiry) {
@@ -101,7 +102,7 @@ module.exports = {
           service.oauth_token_expiry,
           false
         ]);
-        console.log('✅ Migrated OAuth token expiry to user_settings');
+        logger.debug('✅ Migrated OAuth token expiry to user_settings');
       }
       
       if (service.oauth_scope) {
@@ -115,7 +116,7 @@ module.exports = {
           service.oauth_scope,
           false
         ]);
-        console.log('✅ Migrated OAuth scope to user_settings');
+        logger.debug('✅ Migrated OAuth scope to user_settings');
       }
       
       // Clear OAuth data from vision service (restore original MCP API key)
@@ -134,11 +135,11 @@ module.exports = {
         WHERE name = 'vision'
       `, [originalApiKey]);
       
-      console.log('✅ Restored original MCP API key and cleared OAuth data from vision service');
+      logger.debug('✅ Restored original MCP API key and cleared OAuth data from vision service');
     } else {
-      console.log('ℹ️  No Google OAuth data found to migrate');
+      logger.debug('ℹ️  No Google OAuth data found to migrate');
     }
     
-    console.log('✅ Migration 010_add_user_settings completed');
+    logger.debug('✅ Migration 010_add_user_settings completed');
   }
 };

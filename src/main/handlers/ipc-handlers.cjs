@@ -3,6 +3,7 @@
 
 const { ipcMain, BrowserWindow, screen } = require('electron');
 
+const logger = require('./../logger.cjs');
 // Initialize IPC handlers with window references and state
 function initializeIPCHandlers({
   overlayWindow,
@@ -38,7 +39,7 @@ function initializeIPCHandlers({
   
   // FAB button toggle overlay handler
   ipcMain.handle('fab:toggle-overlay', () => {
-    console.log('🎯 [FAB] Toggle overlay triggered from FAB button');
+    logger.debug('🎯 [FAB] Toggle overlay triggered from FAB button');
     toggleOverlay();
   });
   
@@ -46,7 +47,7 @@ function initializeIPCHandlers({
   const { getGuideWindow, showGuideWindow, hideGuideWindow } = require('../windows/guide-window.cjs');
   
   ipcMain.on('guide:show', (event, guideData) => {
-    console.log('📚 [GUIDE] Show guide window with data:', guideData);
+    logger.debug('📚 [GUIDE] Show guide window with data:', guideData);
     const guideWindow = getGuideWindow();
     if (guideWindow && !guideWindow.isDestroyed()) {
       // Send guide data to React-based guide window
@@ -57,7 +58,7 @@ function initializeIPCHandlers({
   });
   
   ipcMain.on('guide:execute', async (event, data) => {
-    console.log('🎯 [GUIDE] Execute guide requested:', data);
+    logger.debug('🎯 [GUIDE] Execute guide requested:', data);
     
     // Execute guide via MCP command service
     try {
@@ -76,7 +77,7 @@ function initializeIPCHandlers({
         { timeout: 300000 } // 5 minutes for execution
       );
       
-      console.log('✅ [GUIDE] Execution result:', result);
+      logger.debug('✅ [GUIDE] Execution result:', result);
       
       // Send result back to guide window
       const guideWindow = getGuideWindow();
@@ -84,7 +85,7 @@ function initializeIPCHandlers({
         guideWindow.webContents.send('guide:execution-result', result);
       }
     } catch (error) {
-      console.error('❌ [GUIDE] Execution error:', error);
+      logger.error('❌ [GUIDE] Execution error:', error);
       const guideWindow = getGuideWindow();
       if (guideWindow && !guideWindow.isDestroyed()) {
         guideWindow.webContents.send('guide:execution-result', { 
@@ -96,7 +97,7 @@ function initializeIPCHandlers({
   });
   
   ipcMain.on('guide:abort', async (event, data) => {
-    console.log('🛑 [GUIDE] Abort guide requested:', data);
+    logger.debug('🛑 [GUIDE] Abort guide requested:', data);
     
     // Abort guide via MCP command service
     try {
@@ -115,14 +116,14 @@ function initializeIPCHandlers({
         { timeout: 10000 } // 10 seconds for abort
       );
       
-      console.log('✅ [GUIDE] Abort successful');
+      logger.debug('✅ [GUIDE] Abort successful');
     } catch (error) {
-      console.error('❌ [GUIDE] Abort error:', error);
+      logger.error('❌ [GUIDE] Abort error:', error);
     }
   });
   
   ipcMain.on('guide:close', () => {
-    console.log('❌ [GUIDE] Close guide window');
+    logger.debug('❌ [GUIDE] Close guide window');
     hideGuideWindow();
   });
 
@@ -152,32 +153,32 @@ function initializeIPCHandlers({
 
   ipcMain.handle('toggle-chat', () => {
     // Chat functionality now handled by unified overlay React components
-    console.log('Chat toggle handled by unified interface');
+    logger.debug('Chat toggle handled by unified interface');
   });
 
   ipcMain.handle('show-chat', () => {
     // Chat functionality now handled by unified overlay React components
-    console.log('Show chat handled by unified interface');
+    logger.debug('Show chat handled by unified interface');
   });
 
   ipcMain.handle('hide-chat', () => {
     // Chat functionality now handled by unified overlay React components
-    console.log('Hide chat handled by unified interface');
+    logger.debug('Hide chat handled by unified interface');
   });
 
   ipcMain.handle('toggle-chat-messages', () => {
     // Chat messages functionality now handled by unified overlay React components
-    console.log('Chat messages toggle handled by unified interface');
+    logger.debug('Chat messages toggle handled by unified interface');
   });
 
   ipcMain.handle('show-chat-messages', () => {
     // Chat messages functionality now handled by unified overlay React components
-    console.log('Show chat messages handled by unified interface');
+    logger.debug('Show chat messages handled by unified interface');
   });
 
   ipcMain.handle('hide-chat-messages', () => {
     // Chat messages functionality now handled by unified overlay React components
-    console.log('Hide chat messages handled by unified interface');
+    logger.debug('Hide chat messages handled by unified interface');
   });
 
   // ========================================
@@ -186,12 +187,12 @@ function initializeIPCHandlers({
 
   ipcMain.handle('show-insight', () => {
     // Insight functionality now handled by unified overlay React components
-    console.log('Show insight handled by unified interface');
+    logger.debug('Show insight handled by unified interface');
   });
 
   ipcMain.handle('hide-insight', () => {
     // Insight functionality now handled by unified overlay React components
-    console.log('Hide insight handled by unified interface');
+    logger.debug('Hide insight handled by unified interface');
   });
 
   // ========================================
@@ -200,12 +201,12 @@ function initializeIPCHandlers({
 
   ipcMain.handle('show-memory-debugger', () => {
     // Memory debugger functionality now handled by unified overlay React components
-    console.log('Show memory debugger handled by unified interface');
+    logger.debug('Show memory debugger handled by unified interface');
   });
 
   ipcMain.handle('hide-memory-debugger', () => {
     // Memory debugger functionality now handled by unified overlay React components
-    console.log('Hide memory debugger handled by unified interface');
+    logger.debug('Hide memory debugger handled by unified interface');
   });
 
   // ========================================
@@ -215,7 +216,7 @@ function initializeIPCHandlers({
   ipcMain.handle('send-chat-message', async (event, message) => {
     // This handler is deprecated - follow-up questions now regenerate insights
     // instead of sending to chat
-    console.log('⚠️ [IPC] send-chat-message called but deprecated');
+    logger.debug('⚠️ [IPC] send-chat-message called but deprecated');
   });
 
   ipcMain.handle('adjust-chat-messages-height', (event, height) => {
@@ -248,7 +249,7 @@ function initializeIPCHandlers({
       await shell.openExternal(url);
       return { success: true };
     } catch (error) {
-      console.error('❌ Failed to open external link:', error);
+      logger.error('❌ Failed to open external link:', error);
       return { success: false, error: error.message };
     }
   });
@@ -270,7 +271,7 @@ function initializeIPCHandlers({
       
       return result;
     } catch (error) {
-      console.error('❌ Agent execution failed:', error);
+      logger.error('❌ Agent execution failed:', error);
       return { success: false, error: error.message };
     }
   });
@@ -283,18 +284,18 @@ function initializeIPCHandlers({
         return { success: false, error: 'CoreAgent not initialized' };
       }
       
-      console.log('🎯 Unified agent orchestration received:', intentPayload);
+      logger.debug('🎯 Unified agent orchestration received:', intentPayload);
       
       // Check if this is a local LLM fallback request
       if (intentPayload.intent === 'local_llm_fallback' || intentPayload.context?.source === 'local_fallback') {
-        console.log('🤖 Routing to local LLM fallback orchestration');
+        logger.debug('🤖 Routing to local LLM fallback orchestration');
         const result = await coreAgent.handleLocalOrchestration(
           intentPayload.message, 
           intentPayload.context || {},
           false // Backend is disconnected
         );
-        console.log('✅ Local LLM orchestration completed:', result);
-        console.log('🔍 [DEBUG] Orchestration result structure:', {
+        logger.debug('✅ Local LLM orchestration completed:', result);
+        logger.debug('🔍 [DEBUG] Orchestration result structure:', {
           hasResult: !!result,
           hasResponse: !!(result && result.response),
           resultKeys: result ? Object.keys(result) : 'null',
@@ -317,14 +318,14 @@ function initializeIPCHandlers({
       
       // DEPRECATED: WebSocket backend response storage (removed in Phase 3 cleanup)
       if (intentPayload.intent === 'websocket_backend_response') {
-        console.warn('⚠️ websocket_backend_response intent deprecated - handler removed in Phase 3 cleanup');
+        logger.warn('⚠️ websocket_backend_response intent deprecated - handler removed in Phase 3 cleanup');
         // TODO: Implement MCP-compatible WebSocket response storage if needed
         return { success: false, error: 'WebSocket backend response handler deprecated' };
       }
 
       // DEPRECATED: WebSocket context extraction (removed in Phase 3 cleanup)
       if (intentPayload.intent === 'extract_websocket_context') {
-        console.warn('⚠️ extract_websocket_context intent deprecated - handler removed in Phase 3 cleanup');
+        logger.warn('⚠️ extract_websocket_context intent deprecated - handler removed in Phase 3 cleanup');
         // TODO: Implement MCP-compatible context extraction if needed
         return { success: false, error: 'WebSocket context extraction handler deprecated' };
       }
@@ -336,10 +337,10 @@ function initializeIPCHandlers({
       // 3. Agent execution and result return
       const result = await coreAgent.ask(intentPayload);
       
-      console.log('✅ Unified agent orchestration completed:', result);
+      logger.debug('✅ Unified agent orchestration completed:', result);
       return { success: true, data: result };
     } catch (error) {
-      console.error('❌ Unified agent orchestration error:', error);
+      logger.error('❌ Unified agent orchestration error:', error);
       return { success: false, error: error.message };
     }
   });
@@ -354,26 +355,26 @@ function initializeIPCHandlers({
 
 // Helper functions for orchestration updates
 function broadcastOrchestrationUpdate(updateData, windows) {
-  console.log('📡 [BROADCAST-FUNC] Broadcasting to windows:', Object.keys(windows || {}));
+  logger.debug('📡 [BROADCAST-FUNC] Broadcasting to windows:', Object.keys(windows || {}));
   
   // Send to all available windows, not just overlayWindow
   const { overlayWindow } = windows;
   const windowList = [overlayWindow].filter(Boolean);
   
-  console.log('📡 [BROADCAST-FUNC] Valid windows found:', windowList.length);
+  logger.debug('📡 [BROADCAST-FUNC] Valid windows found:', windowList.length);
   
   windowList.forEach((window, index) => {
     if (window && !window.isDestroyed()) {
-      console.log(`📡 [BROADCAST-FUNC] Sending to window ${index + 1}:`, window.constructor.name);
+      logger.debug(`📡 [BROADCAST-FUNC] Sending to window ${index + 1}:`, window.constructor.name);
       window.webContents.send('orchestration-update', updateData);
-      console.log(`✅ [BROADCAST-FUNC] Successfully sent to window ${index + 1}`);
+      logger.debug(`✅ [BROADCAST-FUNC] Successfully sent to window ${index + 1}`);
     } else {
-      console.warn(`⚠️ [BROADCAST-FUNC] Window ${index + 1} is destroyed or null`);
+      logger.warn(`⚠️ [BROADCAST-FUNC] Window ${index + 1} is destroyed or null`);
     }
   });
   
   if (windowList.length === 0) {
-    console.error('❌ [BROADCAST-FUNC] No valid windows found to broadcast to!');
+    logger.error('❌ [BROADCAST-FUNC] No valid windows found to broadcast to!');
   }
 }
 

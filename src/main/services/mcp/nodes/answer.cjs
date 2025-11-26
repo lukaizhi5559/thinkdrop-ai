@@ -15,6 +15,7 @@
  * @param {string} query - User query
  * @returns {boolean} - True if multi-step action is needed
  */
+const logger = require('./../../../logger.cjs');
 function detectMultiStepQuery(query) {
   const multiStepPatterns = [
     // Find and action patterns
@@ -60,15 +61,15 @@ async function executeHybridMultiStep(query, state, mcpClient) {
   const startTime = Date.now();
   
   try {
-    console.log('🔄 [HYBRID] Starting hybrid multi-step execution');
-    console.log(`   Query: "${query}"`);
+    logger.debug('🔄 [HYBRID] Starting hybrid multi-step execution');
+    logger.debug(`   Query: "${query}"`);
     
     // Step 1: Use screen-intelligence service to find UI elements with semantic search
-    console.log('🔍 [HYBRID] Step 1: Finding UI elements with semantic search...');
+    logger.debug('🔍 [HYBRID] Step 1: Finding UI elements with semantic search...');
     
     // Extract search terms from query (simple heuristic)
     const searchTerms = extractSearchTerms(query);
-    console.log(`   Search terms: ${searchTerms.join(', ')}`);
+    logger.debug(`   Search terms: ${searchTerms.join(', ')}`);
     
     // Call screen-intelligence service via MCP to search for elements
     const foundElements = [];
@@ -85,7 +86,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
         
         if (results.length > 0) {
           const topResult = results[0];
-          console.log(`   ✅ Found "${term}": ${topResult.type} (score: ${topResult.score.toFixed(3)})`);
+          logger.debug(`   ✅ Found "${term}": ${topResult.type} (score: ${topResult.score.toFixed(3)})`);
           foundElements.push({
             searchTerm: term,
             element: topResult,
@@ -93,15 +94,15 @@ async function executeHybridMultiStep(query, state, mcpClient) {
             alternatives: results.slice(1)
           });
         } else {
-          console.warn(`   ⚠️ Not found: "${term}"`);
+          logger.warn(`   ⚠️ Not found: "${term}"`);
         }
       } catch (error) {
-        console.error(`   ❌ Error searching for "${term}":`, error.message);
+        logger.error(`   ❌ Error searching for "${term}":`, error.message);
       }
     }
     
     // Step 2: Enrich query with element coordinates for command-service
-    console.log('📝 [HYBRID] Step 2: Enriching command with element coordinates...');
+    logger.debug('📝 [HYBRID] Step 2: Enriching command with element coordinates...');
     
     const enrichedContext = {
       os: process.platform,
@@ -122,7 +123,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
     };
     
     // Step 3: Call command-service via MCP with enriched context
-    console.log('🚀 [HYBRID] Step 3: Executing via command-service MCP...');
+    logger.debug('🚀 [HYBRID] Step 3: Executing via command-service MCP...');
     
     if (!mcpClient) {
       throw new Error('MCP client not available');
@@ -136,7 +137,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
     const totalTime = Date.now() - startTime;
     
     if (result.success) {
-      console.log(`✅ [HYBRID] Workflow completed in ${totalTime}ms`);
+      logger.debug(`✅ [HYBRID] Workflow completed in ${totalTime}ms`);
       return {
         success: true,
         message: result.result || result.message,
@@ -145,7 +146,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
         metadata: result.metadata
       };
     } else {
-      console.error(`❌ [HYBRID] Workflow failed: ${result.error}`);
+      logger.error(`❌ [HYBRID] Workflow failed: ${result.error}`);
       return {
         success: false,
         error: result.error,
@@ -155,7 +156,7 @@ async function executeHybridMultiStep(query, state, mcpClient) {
     }
     
   } catch (error) {
-    console.error('❌ [HYBRID] Execution error:', error);
+    logger.error('❌ [HYBRID] Execution error:', error);
     return {
       success: false,
       error: error.message,
@@ -240,7 +241,7 @@ function detectContextSwitch(conversationHistory, currentMessage) {
   
   // If we have 4 or fewer messages total, just return all of them
   if (conversationHistory.length <= IMMEDIATE_CONTEXT_SIZE) {
-    console.log(`🔄 [CONTEXT-SWITCH] Small history (${conversationHistory.length} messages), using all`);
+    logger.debug(`🔄 [CONTEXT-SWITCH] Small history (${conversationHistory.length} messages), using all`);
     return conversationHistory;
   }
   
@@ -269,10 +270,10 @@ function detectContextSwitch(conversationHistory, currentMessage) {
   const filteredCount = olderMessagesCount - keptOlderMessages;
   
   if (filteredCount > 0) {
-    console.log(`🔄 [CONTEXT-SWITCH] Filtered out ${filteredCount} irrelevant older messages`);
-    console.log(`   Kept: ${relevantMessages.length}/${conversationHistory.length} messages (${IMMEDIATE_CONTEXT_SIZE} recent + ${keptOlderMessages} relevant older)`);
+    logger.debug(`🔄 [CONTEXT-SWITCH] Filtered out ${filteredCount} irrelevant older messages`);
+    logger.debug(`   Kept: ${relevantMessages.length}/${conversationHistory.length} messages (${IMMEDIATE_CONTEXT_SIZE} recent + ${keptOlderMessages} relevant older)`);
   } else {
-    console.log(`🔄 [CONTEXT-SWITCH] All messages relevant, kept ${relevantMessages.length}/${conversationHistory.length}`);
+    logger.debug(`🔄 [CONTEXT-SWITCH] All messages relevant, kept ${relevantMessages.length}/${conversationHistory.length}`);
   }
   
   return relevantMessages;
@@ -365,8 +366,8 @@ module.exports = async function answer(state) {
   
   // 🌐 Determine which LLM to use
   const llmMode = useOnlineMode ? 'ONLINE' : 'PRIVATE';
-  console.log(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
-  console.log(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
+  logger.debug(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
+  logger.debug(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
   
   // 🔧 Check if we need to interpret command output
   // Let phi4 handle all interpretation - no pre-processing needed
@@ -436,14 +437,14 @@ Rules:
       const requiresMultiStep = detectMultiStepQuery(queryMessage);
       
       if (requiresMultiStep) {
-        console.log('🎯 [NODE:ANSWER] Multi-step query detected, using hybrid approach');
+        logger.debug('🎯 [NODE:ANSWER] Multi-step query detected, using hybrid approach');
         
         try {
           // Execute hybrid multi-step workflow
           const result = await executeHybridMultiStep(queryMessage, state, mcpClient);
           
           if (result.success) {
-            console.log('✅ [NODE:ANSWER] Multi-step workflow completed successfully');
+            logger.debug('✅ [NODE:ANSWER] Multi-step workflow completed successfully');
             return {
               ...state,
               answer: result.message,
@@ -451,12 +452,12 @@ Rules:
               skipLLM: true // Skip LLM generation since we have the result
             };
           } else {
-            console.warn('⚠️ [NODE:ANSWER] Multi-step workflow failed, falling back to LLM');
+            logger.warn('⚠️ [NODE:ANSWER] Multi-step workflow failed, falling back to LLM');
             // Fall through to LLM generation with error context
             systemInstructions += `\n\n⚠️ Note: I attempted to execute this as a multi-step workflow but encountered an error: ${result.error}. Please provide a text-based response instead.`;
           }
         } catch (error) {
-          console.error('❌ [NODE:ANSWER] Multi-step execution error:', error);
+          logger.error('❌ [NODE:ANSWER] Multi-step execution error:', error);
           systemInstructions += `\n\n⚠️ Note: Multi-step execution failed: ${error.message}. Providing text-based response instead.`;
         }
       }
@@ -511,21 +512,21 @@ Rules:
     let finalQuery = queryMessage;
     if (state.visualContext && state.intent?.type === 'vision') {
       finalQuery = `${queryMessage}\n\n${state.visualContext}`;
-      console.log('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
+      logger.debug('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
     } else if (state.screenContext && state.intent?.type === 'screen_intelligence') {
       // Put user's request FIRST, then provide screen data as context
       // If a target entity was extracted, highlight it in the request
       let userRequest = queryMessage;
       if (state.targetEntity) {
         userRequest = `${queryMessage}\n\n🎯 TARGET: Focus on "${state.targetEntity}"`;
-        console.log(`🎯 [NODE:ANSWER] Target entity highlighted: "${state.targetEntity}"`);
+        logger.debug(`🎯 [NODE:ANSWER] Target entity highlighted: "${state.targetEntity}"`);
       }
       finalQuery = `USER REQUEST: ${userRequest}\n\nSCREEN CONTEXT (use this to fulfill the user's request):\n${state.screenContext}`;
-      console.log('🎯 [NODE:ANSWER] Added screen context AFTER query for screen_intelligence intent');
+      logger.debug('🎯 [NODE:ANSWER] Added screen context AFTER query for screen_intelligence intent');
     } else if (state.context) {
       // Generic context from other nodes
       finalQuery = `${queryMessage}\n\n${state.context}`;
-      console.log('📋 [NODE:ANSWER] Added generic context to query');
+      logger.debug('📋 [NODE:ANSWER] Added generic context to query');
     }
     
     // 🚀 Determine if we should use fast mode
@@ -537,7 +538,7 @@ Rules:
     const useFastMode = hasMinimalContext && isSimpleQuery;
     
     if (useFastMode) {
-      console.log('⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query');
+      logger.debug('⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query');
     }
     
     const payload = {
@@ -583,7 +584,7 @@ Rules:
       // ═══════════════════════════════════════════════════════════
       // 🌐 ONLINE MODE: Use backend LLM via WebSocket
       // ═══════════════════════════════════════════════════════════
-      console.log('🌐 [NODE:ANSWER] Using ONLINE MODE - Backend LLM via WebSocket');
+      logger.debug('🌐 [NODE:ANSWER] Using ONLINE MODE - Backend LLM via WebSocket');
       
       try {
         const WebSocket = require('ws');
@@ -600,7 +601,7 @@ Rules:
         url.searchParams.set('userId', userId);
         url.searchParams.set('clientId', clientId);
         
-        console.log(`🌐 [NODE:ANSWER] Connecting to backend WebSocket: ${url.toString()}`);
+        logger.debug(`🌐 [NODE:ANSWER] Connecting to backend WebSocket: ${url.toString()}`);
         
         // Create WebSocket connection with auth params
         const ws = new WebSocket(url.toString());
@@ -614,7 +615,7 @@ Rules:
           
           ws.on('open', () => {
             clearTimeout(timeout);
-            console.log('✅ [NODE:ANSWER] WebSocket connected');
+            logger.debug('✅ [NODE:ANSWER] WebSocket connected');
             resolve();
           });
           
@@ -660,7 +661,7 @@ Rules:
         };
         
         // Send request
-        console.log('📤 [NODE:ANSWER] Sending LLM request to WebSocket backend');
+        logger.debug('📤 [NODE:ANSWER] Sending LLM request to WebSocket backend');
         ws.send(JSON.stringify(llmRequest));
         
         // Handle streaming response
@@ -678,7 +679,7 @@ Rules:
               const message = JSON.parse(data.toString());
               
               if (message.type === 'llm_stream_start') {
-                console.log('🌊 [NODE:ANSWER] Stream started');
+                logger.debug('🌊 [NODE:ANSWER] Stream started');
                 streamStarted = true;
                 clearTimeout(responseTimeout);
                 
@@ -692,7 +693,7 @@ Rules:
                 }
                 
               } else if (message.type === 'llm_stream_end') {
-                console.log(`✅ [NODE:ANSWER] Stream ended (${accumulatedAnswer.length} chars)`);
+                logger.debug(`✅ [NODE:ANSWER] Stream ended (${accumulatedAnswer.length} chars)`);
                 clearTimeout(responseTimeout);
                 ws.close();
                 resolve();
@@ -703,7 +704,7 @@ Rules:
                 reject(new Error(message.payload?.message || 'WebSocket error'));
               }
             } catch (e) {
-              console.error('❌ [NODE:ANSWER] Failed to parse WebSocket message:', e);
+              logger.error('❌ [NODE:ANSWER] Failed to parse WebSocket message:', e);
             }
           });
           
@@ -729,11 +730,11 @@ Rules:
           metadata: { streaming: true, source: 'websocket' }
         };
         
-        console.log(`✅ [NODE:ANSWER] Online LLM complete (${finalAnswer.length} chars)`);
+        logger.debug(`✅ [NODE:ANSWER] Online LLM complete (${finalAnswer.length} chars)`);
         
       } catch (onlineError) {
-        console.error('❌ [NODE:ANSWER] Online LLM failed:', onlineError.message);
-        console.log('🔄 [NODE:ANSWER] Falling back to local Phi4...');
+        logger.error('❌ [NODE:ANSWER] Online LLM failed:', onlineError.message);
+        logger.debug('🔄 [NODE:ANSWER] Falling back to local Phi4...');
         
         // Fall through to private mode on error
       }
@@ -746,21 +747,21 @@ Rules:
       // ═══════════════════════════════════════════════════════════
       // 🔒 PRIVATE MODE: Use local Phi4 via MCP
       // ═══════════════════════════════════════════════════════════
-      console.log('🔒 [NODE:ANSWER] Using PRIVATE MODE - Local Phi4');
+      logger.debug('🔒 [NODE:ANSWER] Using PRIVATE MODE - Local Phi4');
       
       // Log the full payload being sent to Phi4
-      console.log('=' .repeat(80));
-      console.log('📤 PAYLOAD BEING SENT TO PHI4:');
-      console.log('Query:', payload.query.substring(0, 200));
-      console.log('System Instructions:', payload.context.systemInstructions?.substring(0, 300));
-      console.log('Conversation History:', payload.context.conversationHistory?.length || 0, 'messages');
-      console.log('Memories:', payload.context.memories?.length || 0);
-      console.log('Web Results:', payload.context.webSearchResults?.length || 0);
-      console.log('=' .repeat(80));
+      logger.debug('=' .repeat(80));
+      logger.debug('📤 PAYLOAD BEING SENT TO PHI4:');
+      logger.debug('Query:', payload.query.substring(0, 200));
+      logger.debug('System Instructions:', payload.context.systemInstructions?.substring(0, 300));
+      logger.debug('Conversation History:', payload.context.conversationHistory?.length || 0, 'messages');
+      logger.debug('Memories:', payload.context.memories?.length || 0);
+      logger.debug('Web Results:', payload.context.webSearchResults?.length || 0);
+      logger.debug('=' .repeat(80));
       
       // Use streaming if callback provided, otherwise blocking call
       if (isStreaming) {
-        console.log('🌊 [NODE:ANSWER] Using streaming mode...');
+        logger.debug('🌊 [NODE:ANSWER] Using streaming mode...');
         let accumulatedAnswer = '';
         
         try {
@@ -777,9 +778,9 @@ Rules:
             // Progress callback
             (progress) => {
               if (progress.type === 'start') {
-                console.log('🌊 [NODE:ANSWER] Stream started');
+                logger.debug('🌊 [NODE:ANSWER] Stream started');
               } else if (progress.type === 'done') {
-                console.log('🌊 [NODE:ANSWER] Stream complete');
+                logger.debug('🌊 [NODE:ANSWER] Stream complete');
               }
             }
           );
@@ -789,30 +790,30 @@ Rules:
         // CRITICAL: Check if streaming produced any content
         // If not, fall back to blocking call to get the actual answer
         if (!accumulatedAnswer || accumulatedAnswer.trim().length === 0) {
-          console.warn('⚠️ [NODE:ANSWER] Streaming produced no content (0 tokens), falling back to blocking call...');
+          logger.warn('⚠️ [NODE:ANSWER] Streaming produced no content (0 tokens), falling back to blocking call...');
           const timeout = contextDocs.length > 0 ? 60000 : 30000;
           const blockingResult = await mcpClient.callService('phi4', 'general.answer', payload, { timeout });
           answerData = blockingResult.data || blockingResult;
           finalAnswer = answerData.answer || answerData.text || 'I apologize, but I was unable to generate a response.';
           
-          console.log(`📦 [NODE:ANSWER] Fallback answer generated (${finalAnswer.length} chars)`);
+          logger.debug(`📦 [NODE:ANSWER] Fallback answer generated (${finalAnswer.length} chars)`);
           
           // IMPORTANT: Send the answer via callback so UI receives it
           if (streamCallback && typeof streamCallback === 'function') {
-            console.log('📤 [NODE:ANSWER] Sending fallback answer via callback');
+            logger.debug('📤 [NODE:ANSWER] Sending fallback answer via callback');
             streamCallback(finalAnswer);
           } else {
-            console.warn('⚠️ [NODE:ANSWER] No streamCallback available to send fallback answer!');
+            logger.warn('⚠️ [NODE:ANSWER] No streamCallback available to send fallback answer!');
           }
         } else {
           finalAnswer = accumulatedAnswer;
-          console.log(`✅ [NODE:ANSWER] Streaming successful (${finalAnswer.length} chars)`);
+          logger.debug(`✅ [NODE:ANSWER] Streaming successful (${finalAnswer.length} chars)`);
         }
         
-        console.log(`✅ [NODE:ANSWER] Answer complete (${finalAnswer.length} chars)`);
+        logger.debug(`✅ [NODE:ANSWER] Answer complete (${finalAnswer.length} chars)`);
       } catch (streamError) {
-        console.error('❌ [NODE:ANSWER] Streaming failed:', streamError.message);
-        console.log('🔄 [NODE:ANSWER] Falling back to blocking call...');
+        logger.error('❌ [NODE:ANSWER] Streaming failed:', streamError.message);
+        logger.debug('🔄 [NODE:ANSWER] Falling back to blocking call...');
         
         // Fall back to blocking call
         const timeout = contextDocs.length > 0 ? 60000 : 30000;
@@ -822,17 +823,17 @@ Rules:
         
         // Send the answer via callback
         if (streamCallback && typeof streamCallback === 'function') {
-          console.log('📤 [NODE:ANSWER] Sending fallback answer via callback');
+          logger.debug('📤 [NODE:ANSWER] Sending fallback answer via callback');
           streamCallback(finalAnswer);
         }
       }
       
     } else {
-      console.log('📦 [NODE:ANSWER] Using blocking mode...');
+      logger.debug('📦 [NODE:ANSWER] Using blocking mode...');
       // Blocking call for non-streaming
       // Use longer timeout when web results are present (large context to process)
       const timeout = contextDocs.length > 0 ? 60000 : 30000;
-      console.log(`⏱️  [NODE:ANSWER] Using ${timeout}ms timeout (${contextDocs.length} web results)`);
+      logger.debug(`⏱️  [NODE:ANSWER] Using ${timeout}ms timeout (${contextDocs.length} web results)`);
       const result = await mcpClient.callService('phi4', 'general.answer', payload, { timeout });
       
       // MCP protocol wraps response in 'data' field
@@ -840,12 +841,12 @@ Rules:
       
       // Phi4 service returns "answer" field, not "text"
       finalAnswer = answerData.answer || answerData.text || 'I apologize, but I was unable to generate a response.';
-      console.log(`✅ [NODE:ANSWER] Answer generated (${finalAnswer.length} chars)`);
+      logger.debug(`✅ [NODE:ANSWER] Answer generated (${finalAnswer.length} chars)`);
       
         // IMPORTANT: Send the final answer via streamCallback even in non-streaming mode
         // This ensures the UI receives the answer after web search retry
         if (streamCallback && typeof streamCallback === 'function') {
-          console.log('📤 [NODE:ANSWER] Sending final answer via callback (non-streaming mode)');
+          logger.debug('📤 [NODE:ANSWER] Sending final answer via callback (non-streaming mode)');
           streamCallback(finalAnswer);
         }
       }
@@ -861,7 +862,7 @@ Rules:
       }
     };
   } catch (error) {
-    console.error('❌ [NODE:ANSWER] Failed:', error.message);
+    logger.error('❌ [NODE:ANSWER] Failed:', error.message);
     throw error;
   }
 };

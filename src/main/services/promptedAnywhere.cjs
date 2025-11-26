@@ -17,6 +17,7 @@ const { screen, desktopCapturer, clipboard } = require('electron');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 
+const logger = require('./../logger.cjs');
 const execAsync = promisify(exec);
 
 class PromptedAnywhereService {
@@ -43,8 +44,8 @@ class PromptedAnywhereService {
         const heapTotalMB = (usage.heapTotal / 1024 / 1024).toFixed(2);
         
         if (usage.heapUsed / usage.heapTotal > 0.9) {
-          console.warn(`⚠️  [Prompted Anywhere] High memory usage: ${heapUsedMB}MB / ${heapTotalMB}MB`);
-          console.log('🧹 [Prompted Anywhere] Forcing garbage collection...');
+          logger.warn(`⚠️  [Prompted Anywhere] High memory usage: ${heapUsedMB}MB / ${heapTotalMB}MB`);
+          logger.debug('🧹 [Prompted Anywhere] Forcing garbage collection...');
           global.gc();
         }
       }
@@ -59,14 +60,14 @@ class PromptedAnywhereService {
     // Debounce: Prevent triggers too close together
     const now = Date.now();
     if (now - this.lastTriggerTime < this.debounceMs) {
-      console.log('⚠️  [Prompted Anywhere] Debounced - too soon after last trigger');
+      logger.debug('⚠️  [Prompted Anywhere] Debounced - too soon after last trigger');
       return;
     }
     this.lastTriggerTime = now;
 
     // Prevent multiple simultaneous triggers
     if (this.isProcessing) {
-      console.log('⚠️  [Prompted Anywhere] Already processing, ignoring trigger');
+      logger.debug('⚠️  [Prompted Anywhere] Already processing, ignoring trigger');
       return;
     }
 
@@ -74,42 +75,42 @@ class PromptedAnywhereService {
     let screenshot = null;
 
     try {
-      console.log('🔥 [Prompted Anywhere] Triggered!');
+      logger.debug('🔥 [Prompted Anywhere] Triggered!');
 
       // Step 1: Capture screenshot
-      console.log('📸 [Prompted Anywhere] Capturing screenshot...');
+      logger.debug('📸 [Prompted Anywhere] Capturing screenshot...');
       screenshot = await this.captureScreen();
       this.captureCount++;
 
       // Step 2: Capture highlighted text
-      console.log('📋 [Prompted Anywhere] Capturing highlighted text...');
+      logger.debug('📋 [Prompted Anywhere] Capturing highlighted text...');
       const highlightedText = await this.captureHighlightedText();
 
       if (highlightedText) {
-        console.log(`📝 [Prompted Anywhere] Text captured: "${highlightedText.substring(0, 50)}..."`);
+        logger.debug(`📝 [Prompted Anywhere] Text captured: "${highlightedText.substring(0, 50)}..."`);
       } else {
-        console.log('📝 [Prompted Anywhere] No text highlighted, using default prompt');
+        logger.debug('📝 [Prompted Anywhere] No text highlighted, using default prompt');
       }
 
       // Step 3: Send to MCP service
-      console.log('🚀 [Prompted Anywhere] Sending to MCP service...');
+      logger.debug('🚀 [Prompted Anywhere] Sending to MCP service...');
       const result = await this.sendToMCPService(highlightedText, screenshot);
 
       // Clear screenshot from memory immediately after sending
       screenshot = null;
 
       if (result.success) {
-        console.log('✅ [Prompted Anywhere] Completed successfully!');
-        console.log(`   Provider: ${result.metadata?.provider}`);
-        console.log(`   Used Vision: ${result.metadata?.usedVision}`);
-        console.log(`   Latency: ${result.metadata?.latencyMs}ms`);
+        logger.debug('✅ [Prompted Anywhere] Completed successfully!');
+        logger.debug(`   Provider: ${result.metadata?.provider}`);
+        logger.debug(`   Used Vision: ${result.metadata?.usedVision}`);
+        logger.debug(`   Latency: ${result.metadata?.latencyMs}ms`);
       } else {
-        console.error('❌ [Prompted Anywhere] Failed:', result.error);
+        logger.error('❌ [Prompted Anywhere] Failed:', result.error);
       }
 
       // Periodic garbage collection
       if (this.captureCount >= this.maxCapturesBeforeGC) {
-        console.log('🧹 [Prompted Anywhere] Triggering garbage collection...');
+        logger.debug('🧹 [Prompted Anywhere] Triggering garbage collection...');
         this.captureCount = 0;
         if (global.gc) {
           global.gc();
@@ -117,7 +118,7 @@ class PromptedAnywhereService {
       }
 
     } catch (error) {
-      console.error('❌ [Prompted Anywhere] Error:', error.message);
+      logger.error('❌ [Prompted Anywhere] Error:', error.message);
       // Ensure screenshot is cleared on error
       screenshot = null;
     } finally {
@@ -159,9 +160,9 @@ class PromptedAnywhereService {
       }
 
       // Debug: Log all available sources
-      console.log(`📸 [Prompted Anywhere] Available sources (${sources.length}):`);
+      logger.debug(`📸 [Prompted Anywhere] Available sources (${sources.length}):`);
       sources.slice(0, 5).forEach((s, i) => {
-        console.log(`   ${i + 1}. ${s.name} (${s.id})`);
+        logger.debug(`   ${i + 1}. ${s.name} (${s.id})`);
       });
 
       // Try to get the active window from window tracker
@@ -169,7 +170,7 @@ class PromptedAnywhereService {
       // Check if we have window tracker data
       if (global.activeWindowData) {
         const activeWindow = global.activeWindowData;
-        console.log(`📸 [Prompted Anywhere] Active window from tracker: ${activeWindow.app} - ${activeWindow.title || 'unknown'}`);
+        logger.debug(`📸 [Prompted Anywhere] Active window from tracker: ${activeWindow.app} - ${activeWindow.title || 'unknown'}`);
         
         // Try to find matching source by app name or title
         if (activeWindow.app || activeWindow.title) {
@@ -192,13 +193,13 @@ class PromptedAnywhereService {
           });
           
           if (targetSource) {
-            console.log(`📸 [Prompted Anywhere] Matched window: ${targetSource.name}`);
+            logger.debug(`📸 [Prompted Anywhere] Matched window: ${targetSource.name}`);
           } else {
-            console.log(`📸 [Prompted Anywhere] No match found for: ${activeWindow.app} - ${activeWindow.title}`);
+            logger.debug(`📸 [Prompted Anywhere] No match found for: ${activeWindow.app} - ${activeWindow.title}`);
           }
         }
       } else {
-        console.log(`📸 [Prompted Anywhere] No active window data available`);
+        logger.debug(`📸 [Prompted Anywhere] No active window data available`);
       }
       
       // Fallback: Filter out Electron windows and use first non-ThinkDrop window
@@ -216,7 +217,7 @@ class PromptedAnywhereService {
         targetSource = sources.find(s => s.id.startsWith('screen:')) || sources[0];
       }
       
-      console.log(`📸 [Prompted Anywhere] Capturing: ${targetSource.name} (${targetSource.id})`);
+      logger.debug(`📸 [Prompted Anywhere] Capturing: ${targetSource.name} (${targetSource.id})`);
       
       screenshot = targetSource.thumbnail;
 
@@ -234,7 +235,7 @@ class PromptedAnywhereService {
       // Convert to base64 PNG
       const base64 = resized.toPNG().toString('base64');
 
-      console.log(`📸 [Prompted Anywhere] Screenshot captured: ${(base64.length / 1024).toFixed(2)} KB`);
+      logger.debug(`📸 [Prompted Anywhere] Screenshot captured: ${(base64.length / 1024).toFixed(2)} KB`);
 
       // Explicit cleanup: Clear references to native image objects
       screenshot = null;
@@ -245,7 +246,7 @@ class PromptedAnywhereService {
       return base64;
 
     } catch (error) {
-      console.error('❌ [Prompted Anywhere] Screenshot capture failed:', error);
+      logger.error('❌ [Prompted Anywhere] Screenshot capture failed:', error);
       
       // Cleanup on error
       screenshot = null;
@@ -294,11 +295,11 @@ class PromptedAnywhereService {
       if (!copiedText || copiedText === marker || copiedText === previousClipboard) {
         // Nothing was highlighted - restore previous clipboard
         clipboard.writeText(previousClipboard);
-        console.log('📋 [Prompted Anywhere] No text highlighted');
+        logger.debug('📋 [Prompted Anywhere] No text highlighted');
         return null;
       }
 
-      console.log(`📋 [Prompted Anywhere] Captured text: "${copiedText.substring(0, 50)}..."`);
+      logger.debug(`📋 [Prompted Anywhere] Captured text: "${copiedText.substring(0, 50)}..."`);
 
       // Restore previous clipboard after a delay
       setTimeout(() => {
@@ -308,7 +309,7 @@ class PromptedAnywhereService {
       return copiedText;
 
     } catch (error) {
-      console.error('❌ [Prompted Anywhere] Failed to capture highlighted text:', error);
+      logger.error('❌ [Prompted Anywhere] Failed to capture highlighted text:', error);
       // Restore clipboard on error
       try {
         const previousClipboard = clipboard.readText();
@@ -330,7 +331,7 @@ class PromptedAnywhereService {
    */
   async sendToMCPService(text, screenshot) {
     try {
-      console.log('📤 [Prompted Anywhere] Sending to MCP service...');
+      logger.debug('📤 [Prompted Anywhere] Sending to MCP service...');
 
       // Send to MCP service via MCP client
       // Use callService(serviceName, action, payload)
@@ -351,7 +352,7 @@ class PromptedAnywhereService {
       return response;
 
     } catch (error) {
-      console.error('❌ [Prompted Anywhere] MCP request failed:', error);
+      logger.error('❌ [Prompted Anywhere] MCP request failed:', error);
       return {
         success: false,
         error: error.message

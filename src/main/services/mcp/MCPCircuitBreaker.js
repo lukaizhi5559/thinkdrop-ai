@@ -7,6 +7,7 @@
 
 const { MCPConfig } = require('./config.cjs');
 
+const logger = require('./../../logger.cjs');
 /**
  * Circuit Breaker States
  */
@@ -135,7 +136,7 @@ class MCPCircuitBreaker {
     this.state = newState;
     this.lastStateChange = Date.now();
 
-    console.log(`🔄 Circuit breaker for ${this.serviceName}: ${oldState} → ${newState}`);
+    logger.debug(`🔄 Circuit breaker for ${this.serviceName}: ${oldState} → ${newState}`);
 
     // Reset half-open attempts when entering half-open state
     if (newState === CircuitState.HALF_OPEN) {
@@ -156,7 +157,7 @@ class MCPCircuitBreaker {
     this.failureCount = 0;
     this.successCount = 0;
     this.halfOpenAttempts = 0;
-    console.log(`✅ Circuit breaker reset for ${this.serviceName}`);
+    logger.debug(`✅ Circuit breaker reset for ${this.serviceName}`);
   }
 
   /**
@@ -164,7 +165,7 @@ class MCPCircuitBreaker {
    */
   forceOpen() {
     this.transitionTo(CircuitState.OPEN);
-    console.log(`⚠️ Circuit breaker forced OPEN for ${this.serviceName}`);
+    logger.debug(`⚠️ Circuit breaker forced OPEN for ${this.serviceName}`);
   }
 
   /**
@@ -173,7 +174,7 @@ class MCPCircuitBreaker {
   forceClose() {
     this.transitionTo(CircuitState.CLOSED);
     this.reset();
-    console.log(`✅ Circuit breaker forced CLOSED for ${this.serviceName}`);
+    logger.debug(`✅ Circuit breaker forced CLOSED for ${this.serviceName}`);
   }
 
   /**
@@ -266,7 +267,7 @@ class CircuitBreakerManager {
       
       // Set up state change logging
       breaker.setStateChangeCallback((oldState, newState, service) => {
-        console.log(`🔔 Circuit breaker state change: ${service} (${oldState} → ${newState})`);
+        logger.debug(`🔔 Circuit breaker state change: ${service} (${oldState} → ${newState})`);
       });
       
       this.breakers.set(serviceName, breaker);
@@ -317,7 +318,7 @@ class CircuitBreakerManager {
     this.breakers.forEach(breaker => {
       breaker.forceClose();
     });
-    console.log('🔄 All circuit breakers reset');
+    logger.debug('🔄 All circuit breakers reset');
   }
 
   /**

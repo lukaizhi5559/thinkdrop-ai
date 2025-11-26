@@ -8,6 +8,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 
+const logger = require('./../logger.cjs');
 let selectionOverlayWindow = null;
 let hideTimeout = null;
 
@@ -81,7 +82,7 @@ function createSelectionOverlay() {
     selectionOverlayWindow = null;
   });
 
-  console.log('✅ Selection overlay window created');
+  logger.debug('✅ Selection overlay window created');
   return selectionOverlayWindow;
 }
 
@@ -115,7 +116,7 @@ function showSelectionButton(x, y, selectedText) {
     fullText: selectedText
   });
 
-  console.log(`🎯 [SELECTION_OVERLAY] Showing button at (${finalX}, ${finalY}) for text: "${selectedText.substring(0, 50)}..."`);
+  logger.debug(`🎯 [SELECTION_OVERLAY] Showing button at (${finalX}, ${finalY}) for text: "${selectedText.substring(0, 50)}..."`);
 
   // Auto-hide after 5 seconds unless hovered
   startHideTimeout();
@@ -140,7 +141,7 @@ function startHideTimeout() {
 function hideSelectionButton() {
   if (selectionOverlayWindow) {
     selectionOverlayWindow.hide();
-    console.log('🙈 [SELECTION_OVERLAY] Button hidden');
+    logger.debug('🙈 [SELECTION_OVERLAY] Button hidden');
   }
   
   if (hideTimeout) {
@@ -153,7 +154,7 @@ function hideSelectionButton() {
  * Handle when the ThinkDrop button is clicked
  */
 async function handleSelectionButtonClick() {
-  console.log('🎯 [SELECTION_OVERLAY] ThinkDrop button clicked!');
+  logger.debug('🎯 [SELECTION_OVERLAY] ThinkDrop button clicked!');
   
   // Hide the button immediately
   hideSelectionButton();

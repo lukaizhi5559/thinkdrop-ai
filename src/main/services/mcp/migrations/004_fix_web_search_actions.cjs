@@ -9,11 +9,12 @@
  * This caused 404 errors when calling the web-search service.
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = {
   name: '004_fix_web_search_actions',
   
   async up(db) {
-    console.log('🔄 Running migration: 004_fix_web_search_actions');
+    logger.debug('🔄 Running migration: 004_fix_web_search_actions');
     
     try {
       // Check if web-search service exists
@@ -22,7 +23,7 @@ module.exports = {
       `);
       
       if (service.length === 0) {
-        console.log('  ⏭️  Web-search service not found, skipping migration');
+        logger.debug('  ⏭️  Web-search service not found, skipping migration');
         return;
       }
       
@@ -39,18 +40,18 @@ module.exports = {
         WHERE name = 'web-search'
       `, [correctActions]);
       
-      console.log('  ✅ Updated web-search actions:');
-      console.log('     Old: search.web, search.news, content.extract');
-      console.log('     New: web.search, web.news, web.scrape');
+      logger.debug('  ✅ Updated web-search actions:');
+      logger.debug('     Old: search.web, search.news, content.extract');
+      logger.debug('     New: web.search, web.news, web.scrape');
       
     } catch (error) {
-      console.error('  ❌ Migration failed:', error.message);
+      logger.error('  ❌ Migration failed:', error.message);
       throw error;
     }
   },
   
   async down(db) {
-    console.log('🔄 Rolling back migration: 004_fix_web_search_actions');
+    logger.debug('🔄 Rolling back migration: 004_fix_web_search_actions');
     
     try {
       // Revert to old (incorrect) actions
@@ -66,10 +67,10 @@ module.exports = {
         WHERE name = 'web-search'
       `, [oldActions]);
       
-      console.log('  ✅ Reverted web-search actions to old values');
+      logger.debug('  ✅ Reverted web-search actions to old values');
       
     } catch (error) {
-      console.error('  ❌ Rollback failed:', error.message);
+      logger.error('  ❌ Rollback failed:', error.message);
       throw error;
     }
   }

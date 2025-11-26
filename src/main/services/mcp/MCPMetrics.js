@@ -7,6 +7,7 @@
 
 const { MCPConfig } = require('./config.cjs');
 
+const logger = require('./../../logger.cjs');
 class MCPMetrics {
   constructor(config = MCPConfig) {
     this.config = config.metrics;
@@ -236,10 +237,10 @@ class MCPMetrics {
     };
 
     if (this.config.logFormat === 'json') {
-      console.log(JSON.stringify(logEntry));
+      logger.debug(JSON.stringify(logEntry));
     } else {
       const prefix = `[${logEntry.timestamp}] [${level.toUpperCase()}]`;
-      console.log(`${prefix} ${message}`, data);
+      logger.debug(`${prefix} ${message}`, data);
     }
   }
 
@@ -396,7 +397,7 @@ class MCPMetrics {
       }
     };
     this.requestHistory = [];
-    console.log('🔄 MCP metrics reset');
+    logger.debug('🔄 MCP metrics reset');
   }
 
   /**
@@ -405,7 +406,7 @@ class MCPMetrics {
   startPeriodicCollection() {
     if (this.collectionInterval) return;
 
-    console.log(`📊 Starting periodic metrics collection (interval: ${this.config.collectInterval}ms)`);
+    logger.debug(`📊 Starting periodic metrics collection (interval: ${this.config.collectInterval}ms)`);
 
     this.collectionInterval = setInterval(() => {
       this.collectAndLog();
@@ -419,7 +420,7 @@ class MCPMetrics {
     if (this.collectionInterval) {
       clearInterval(this.collectionInterval);
       this.collectionInterval = null;
-      console.log('🛑 Stopped periodic metrics collection');
+      logger.debug('🛑 Stopped periodic metrics collection');
     }
   }
 

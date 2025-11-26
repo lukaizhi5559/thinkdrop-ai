@@ -9,6 +9,7 @@ import path from 'path';
 const require = createRequire(import.meta.url);
 const dbWrapper = require('./duckdb-wrapper.cjs');
 
+const logger = require('./../../logger.cjs');
 class DatabaseManager {
   constructor() {
     this.isInitialized = false;
@@ -55,14 +56,14 @@ class DatabaseManager {
     // Check for corruption before connecting
     const corruptionCheck = await this.detectCorruption(dbPath);
     if (corruptionCheck.isCorrupted) {
-      console.warn('⚠️ DatabaseManager: Corruption detected, attempting recovery...');
+      logger.warn('⚠️ DatabaseManager: Corruption detected, attempting recovery...');
       await this.handleCorruption(dbPath, corruptionCheck);
     }
     
     return new Promise((resolve, reject) => {
       dbWrapper.connect(dbPath, async (err, result) => {
         if (err) {
-          console.error('❌ DatabaseManager: Wrapper connection failed:', err);
+          logger.error('❌ DatabaseManager: Wrapper connection failed:', err);
           
           // Attempt recovery if connection fails
           const recoveryResult = await this.attemptRecovery(dbPath, err);
@@ -124,7 +125,7 @@ class DatabaseManager {
    * @returns {Promise<Object>}
    */
   async reconnect() {
-    console.log('🔄 DatabaseManager: Reconnecting via wrapper...');
+    logger.debug('🔄 DatabaseManager: Reconnecting via wrapper...');
     
     // Close existing connection
     await this.cleanup();
@@ -169,9 +170,9 @@ class DatabaseManager {
       if (this.isInitialized) {
         dbWrapper.close((err) => {
           if (err) {
-            console.error('❌ DatabaseManager: Wrapper cleanup error:', err);
+            logger.error('❌ DatabaseManager: Wrapper cleanup error:', err);
           } else {
-            console.log('✅ DatabaseManager: Wrapper cleanup completed');
+            logger.debug('✅ DatabaseManager: Wrapper cleanup completed');
           }
           this.isInitialized = false;
           resolve();
@@ -187,7 +188,7 @@ class DatabaseManager {
    * @returns {void}
    */
   initializeConnectionPool() {
-    console.log(`🔗 DatabaseManager: Initializing connection pool (max: ${this.maxConnections})`);
+    logger.debug(`🔗 DatabaseManager: Initializing connection pool (max: ${this.maxConnections})`);
     // Connection pool is managed dynamically - no pre-allocation needed for DuckDB
   }
 
@@ -272,14 +273,14 @@ class DatabaseManager {
       source: 'DatabaseManager'
     };
 
-    console.log(`📢 DatabaseManager: ${type.toUpperCase()} - ${message}`);
+    logger.debug(`📢 DatabaseManager: ${type.toUpperCase()} - ${message}`);
     
     // Send to all registered callbacks
     this.notificationCallbacks.forEach(callback => {
       try {
         callback(notification);
       } catch (error) {
-        console.error('❌ DatabaseManager: Notification callback failed:', error);
+        logger.error('❌ DatabaseManager: Notification callback failed:', error);
       }
     });
   }
@@ -319,7 +320,7 @@ class DatabaseManager {
 
       return { isCorrupted: false, reason: 'healthy' };
     } catch (error) {
-      console.error('🔍 DatabaseManager: Corruption detection error:', error);
+      logger.error('🔍 DatabaseManager: Corruption detection error:', error);
       return { isCorrupted: true, reason: 'detection_error', severity: 'unknown', error };
     }
   }
@@ -331,7 +332,7 @@ class DatabaseManager {
    * @returns {Promise<Object>} - Recovery result
    */
   async handleCorruption(dbPath, corruptionInfo) {
-    console.log(`🚨 DatabaseManager: Handling corruption - ${corruptionInfo.reason}`);
+    logger.debug(`🚨 DatabaseManager: Handling corruption - ${corruptionInfo.reason}`);
     this.metrics.corruptionEvents++;
     this.metrics.recoveryAttempts++;
     
@@ -348,13 +349,13 @@ class DatabaseManager {
       
       if (fs.existsSync(dbPath)) {
         fs.copyFileSync(dbPath, corruptedBackupPath);
-        console.log(`📁 DatabaseManager: Corrupted file backed up to ${corruptedBackupPath}`);
+        logger.debug(`📁 DatabaseManager: Corrupted file backed up to ${corruptedBackupPath}`);
       }
 
       // Attempt to restore from recent backup
       const restoreResult = await this.restoreFromBackup(dbPath);
       if (restoreResult.success) {
-        console.log('✅ DatabaseManager: Successfully restored from backup');
+        logger.debug('✅ DatabaseManager: Successfully restored from backup');
         this.notifyUsers('success', 'Database successfully restored from backup', {
           backupFile: restoreResult.backupFile
         });
@@ -362,7 +363,7 @@ class DatabaseManager {
       }
 
       // If no backup available, create fresh database
-      console.log('🔄 DatabaseManager: No backup available, creating fresh database');
+      logger.debug('🔄 DatabaseManager: No backup available, creating fresh database');
       await this.createFreshDatabase(dbPath);
       
       this.notifyUsers('info', 'Created fresh database - previous data may be lost', {
@@ -371,7 +372,7 @@ class DatabaseManager {
       
       return { success: true, method: 'fresh_database' };
     } catch (error) {
-      console.error('❌ DatabaseManager: Corruption handling failed:', error);
+      logger.error('❌ DatabaseManager: Corruption handling failed:', error);
       this.notifyUsers('error', 'Database recovery failed - manual intervention required', {
         error: error.message
       });
@@ -386,7 +387,7 @@ class DatabaseManager {
    * @returns {Promise<Object>} - Recovery result
    */
   async attemptRecovery(dbPath, originalError) {
-    console.log('🔧 DatabaseManager: Attempting database recovery...');
+    logger.debug('🔧 DatabaseManager: Attempting database recovery...');
     
     try {
       // Check if error indicates corruption
@@ -409,11 +410,11 @@ class DatabaseManager {
       }
 
       // For non-corruption errors, try simple reconnection
-      console.log('🔄 DatabaseManager: Attempting simple reconnection...');
+      logger.debug('🔄 DatabaseManager: Attempting simple reconnection...');
       return { success: false, reason: 'non_corruption_error' };
       
     } catch (error) {
-      console.error('❌ DatabaseManager: Recovery attempt failed:', error);
+      logger.error('❌ DatabaseManager: Recovery attempt failed:', error);
       return { success: false, error };
     }
   }
@@ -435,13 +436,13 @@ class DatabaseManager {
       for (const file of filesToRemove) {
         if (fs.existsSync(file)) {
           fs.unlinkSync(file);
-          console.log(`🗑️ DatabaseManager: Removed ${file}`);
+          logger.debug(`🗑️ DatabaseManager: Removed ${file}`);
         }
       }
 
-      console.log('✅ DatabaseManager: Fresh database environment prepared');
+      logger.debug('✅ DatabaseManager: Fresh database environment prepared');
     } catch (error) {
-      console.error('❌ DatabaseManager: Fresh database creation failed:', error);
+      logger.error('❌ DatabaseManager: Fresh database creation failed:', error);
       throw error;
     }
   }
@@ -470,7 +471,7 @@ class DatabaseManager {
       try {
         await this.query('PRAGMA force_checkpoint');
       } catch (checkpointError) {
-        console.warn('⚠️ DatabaseManager: WAL checkpoint failed before backup:', checkpointError.message);
+        logger.warn('⚠️ DatabaseManager: WAL checkpoint failed before backup:', checkpointError.message);
       }
 
       // Copy database file
@@ -478,7 +479,7 @@ class DatabaseManager {
       
       this.lastBackupTime = new Date();
       this.metrics.backupCount++;
-      console.log(`💾 DatabaseManager: Backup created at ${backupPath}`);
+      logger.debug(`💾 DatabaseManager: Backup created at ${backupPath}`);
       
       // Notify users of successful backup
       this.notifyUsers('info', 'Database backup completed successfully', {
@@ -491,7 +492,7 @@ class DatabaseManager {
       
       return { success: true, backupPath, timestamp };
     } catch (error) {
-      console.error('❌ DatabaseManager: Backup creation failed:', error);
+      logger.error('❌ DatabaseManager: Backup creation failed:', error);
       this.notifyUsers('warning', 'Database backup failed', {
         error: error.message
       });
@@ -532,10 +533,10 @@ class DatabaseManager {
       // Restore from backup
       fs.copyFileSync(mostRecentBackup, dbPath);
       
-      console.log(`🔄 DatabaseManager: Restored from backup ${mostRecentBackup}`);
+      logger.debug(`🔄 DatabaseManager: Restored from backup ${mostRecentBackup}`);
       return { success: true, backupFile: mostRecentBackup };
     } catch (error) {
-      console.error('❌ DatabaseManager: Backup restore failed:', error);
+      logger.error('❌ DatabaseManager: Backup restore failed:', error);
       return { success: false, error };
     }
   }
@@ -562,10 +563,10 @@ class DatabaseManager {
       
       for (const file of filesToDelete) {
         fs.unlinkSync(file.path);
-        console.log(`🗑️ DatabaseManager: Removed old backup ${file.name}`);
+        logger.debug(`🗑️ DatabaseManager: Removed old backup ${file.name}`);
       }
     } catch (error) {
-      console.error('❌ DatabaseManager: Backup cleanup failed:', error);
+      logger.error('❌ DatabaseManager: Backup cleanup failed:', error);
     }
   }
 
@@ -584,7 +585,7 @@ class DatabaseManager {
       await this.createBackup();
     }, 30 * 60 * 1000);
 
-    console.log('🔍 DatabaseManager: Health monitoring started');
+    logger.debug('🔍 DatabaseManager: Health monitoring started');
   }
 
   /**
@@ -602,7 +603,7 @@ class DatabaseManager {
       this.backupInterval = null;
     }
 
-    console.log('🛑 DatabaseManager: Health monitoring stopped');
+    logger.debug('🛑 DatabaseManager: Health monitoring stopped');
   }
 
   /**
@@ -615,7 +616,7 @@ class DatabaseManager {
       await this.performWALCheckpoint();
     }, 90 * 1000);
 
-    console.log('📝 DatabaseManager: WAL checkpoint management started (every 90 seconds)');
+    logger.debug('📝 DatabaseManager: WAL checkpoint management started (every 90 seconds)');
   }
 
   /**
@@ -628,7 +629,7 @@ class DatabaseManager {
       this.walCheckpointInterval = null;
     }
 
-    console.log('🛑 DatabaseManager: WAL checkpoint management stopped');
+    logger.debug('🛑 DatabaseManager: WAL checkpoint management stopped');
   }
 
   /**
@@ -641,14 +642,14 @@ class DatabaseManager {
       await this.query('PRAGMA force_checkpoint');
       const duration = Date.now() - startTime;
       
-      console.log(`📝 DatabaseManager: WAL checkpoint completed in ${duration}ms`);
+      logger.debug(`📝 DatabaseManager: WAL checkpoint completed in ${duration}ms`);
       
       // Update metrics
       this.updateMetrics('wal_checkpoint', duration);
       
       return { success: true, duration };
     } catch (error) {
-      console.warn('⚠️ DatabaseManager: WAL checkpoint failed:', error.message);
+      logger.warn('⚠️ DatabaseManager: WAL checkpoint failed:', error.message);
       this.metrics.totalErrors++;
       return { success: false, error };
     }
@@ -664,7 +665,7 @@ class DatabaseManager {
       this.logMetrics();
     }, 10 * 60 * 1000);
 
-    console.log('📊 DatabaseManager: Metrics collection started');
+    logger.debug('📊 DatabaseManager: Metrics collection started');
   }
 
   /**
@@ -677,7 +678,7 @@ class DatabaseManager {
       this.metricsInterval = null;
     }
 
-    console.log('🛑 DatabaseManager: Metrics collection stopped');
+    logger.debug('🛑 DatabaseManager: Metrics collection stopped');
   }
 
   /**
@@ -734,17 +735,17 @@ class DatabaseManager {
   logMetrics() {
     const metrics = this.getMetrics();
     
-    console.log('📊 DatabaseManager Metrics:');
-    console.log(`   Uptime: ${Math.floor(metrics.uptime / 3600)}h ${Math.floor((metrics.uptime % 3600) / 60)}m`);
-    console.log(`   Total Queries: ${metrics.totalQueries}`);
-    console.log(`   Queries/min: ${metrics.queriesPerMinute}`);
-    console.log(`   Error Rate: ${metrics.errorRate}%`);
-    console.log(`   Avg Query Time: ${metrics.avgQueryTime}ms`);
-    console.log(`   Active Connections: ${metrics.activeConnections}/${this.maxConnections}`);
-    console.log(`   Queued Connections: ${metrics.queuedConnections}`);
-    console.log(`   Backups Created: ${metrics.backupCount}`);
-    console.log(`   Recovery Attempts: ${metrics.recoveryAttempts}`);
-    console.log(`   Corruption Events: ${metrics.corruptionEvents}`);
+    logger.debug('📊 DatabaseManager Metrics:');
+    logger.debug(`   Uptime: ${Math.floor(metrics.uptime / 3600)}h ${Math.floor((metrics.uptime % 3600) / 60)}m`);
+    logger.debug(`   Total Queries: ${metrics.totalQueries}`);
+    logger.debug(`   Queries/min: ${metrics.queriesPerMinute}`);
+    logger.debug(`   Error Rate: ${metrics.errorRate}%`);
+    logger.debug(`   Avg Query Time: ${metrics.avgQueryTime}ms`);
+    logger.debug(`   Active Connections: ${metrics.activeConnections}/${this.maxConnections}`);
+    logger.debug(`   Queued Connections: ${metrics.queuedConnections}`);
+    logger.debug(`   Backups Created: ${metrics.backupCount}`);
+    logger.debug(`   Recovery Attempts: ${metrics.recoveryAttempts}`);
+    logger.debug(`   Corruption Events: ${metrics.corruptionEvents}`);
     
     // Send metrics notification if error rate is high
     if (metrics.errorRate > 10) {
@@ -767,7 +768,7 @@ class DatabaseManager {
       // Test basic connectivity
       const isValid = await this.isConnectionValid();
       if (!isValid) {
-        console.warn('⚠️ DatabaseManager: Health check failed - connection invalid');
+        logger.warn('⚠️ DatabaseManager: Health check failed - connection invalid');
         return { healthy: false, reason: 'connection_invalid' };
       }
 
@@ -778,7 +779,7 @@ class DatabaseManager {
       if (this.dbPath && fs.existsSync(this.dbPath)) {
         const corruptionCheck = await this.detectCorruption(this.dbPath);
         if (corruptionCheck.isCorrupted) {
-          console.warn('⚠️ DatabaseManager: Health check detected corruption');
+          logger.warn('⚠️ DatabaseManager: Health check detected corruption');
           this.corruptionDetected = true;
           return { healthy: false, reason: 'corruption_detected', details: corruptionCheck };
         }
@@ -788,7 +789,7 @@ class DatabaseManager {
       this.corruptionDetected = false;
       return { healthy: true };
     } catch (error) {
-      console.error('❌ DatabaseManager: Health check failed:', error);
+      logger.error('❌ DatabaseManager: Health check failed:', error);
       return { healthy: false, reason: 'health_check_error', error };
     }
   }
@@ -824,7 +825,7 @@ class DatabaseManager {
           this.releaseConnection();
           
           if (err && retryCount < maxRetries && this.shouldRetry(err)) {
-            console.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+            logger.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
             this.updateMetrics('query', duration, true);
             setTimeout(async () => {
               await this.query(sql, params, callback, retryCount + 1);
@@ -844,7 +845,7 @@ class DatabaseManager {
             
             if (err) {
               if (retryCount < maxRetries && this.shouldRetry(err)) {
-                console.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                logger.warn(`⚠️ DatabaseManager: Query failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
                 this.updateMetrics('query', duration, true);
                 setTimeout(async () => {
                   try {
@@ -873,7 +874,7 @@ class DatabaseManager {
       }
       
       if (retryCount < maxRetries && this.shouldRetry(error)) {
-        console.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+        logger.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
         this.updateMetrics('query', duration, true);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         return await this.query(sql, params, callback, retryCount + 1);
@@ -922,7 +923,7 @@ class DatabaseManager {
           this.releaseConnection();
           
           if (err && retryCount < maxRetries && this.shouldRetry(err)) {
-            console.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+            logger.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
             this.updateMetrics('run', duration, true);
             setTimeout(async () => {
               await this.run(sql, params, callback, retryCount + 1);
@@ -942,7 +943,7 @@ class DatabaseManager {
             
             if (err) {
               if (retryCount < maxRetries && this.shouldRetry(err)) {
-                console.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+                logger.warn(`⚠️ DatabaseManager: Run failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
                 this.updateMetrics('run', duration, true);
                 setTimeout(async () => {
                   try {
@@ -971,7 +972,7 @@ class DatabaseManager {
       }
       
       if (retryCount < maxRetries && this.shouldRetry(error)) {
-        console.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
+        logger.warn(`⚠️ DatabaseManager: Connection failed, retrying in ${retryDelay}ms (attempt ${retryCount + 1}/${maxRetries})`);
         this.updateMetrics('run', duration, true);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
         return await this.run(sql, params, callback, retryCount + 1);

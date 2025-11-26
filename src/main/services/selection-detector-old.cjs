@@ -8,6 +8,7 @@
 
 const { clipboard, systemPreferences } = require('electron');
 
+const logger = require('./../logger.cjs');
 class SelectionDetector {
   constructor() {
     this.lastClipboard = '';
@@ -27,7 +28,7 @@ class SelectionDetector {
    * AND start background selection capture on window changes
    */
   start() {
-    console.log('📋 [SELECTION_DETECTOR] Ready for Cmd+A capture');
+    logger.debug('📋 [SELECTION_DETECTOR] Ready for Cmd+A capture');
     
     // Initialize with current clipboard
     this.lastClipboard = clipboard.readText();
@@ -37,7 +38,7 @@ class SelectionDetector {
     
     // 🎯 No automatic monitoring - user triggers with Cmd+Option+A
     // This provides explicit, predictable behavior
-    console.log('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
+    logger.debug('✅ [SELECTION_DETECTOR] Use Cmd+Option+A to capture highlighted text');
   }
 
   /**
@@ -45,7 +46,7 @@ class SelectionDetector {
    * Shows floating button when text is selected
    */
   startSelectionMonitoring() {
-    console.log('👀 [SELECTION_DETECTOR] Starting nut.js-based selection monitoring');
+    logger.debug('👀 [SELECTION_DETECTOR] Starting nut.js-based selection monitoring');
     
     // Initialize mouse tracking
     this.lastMousePosition = null;
@@ -63,7 +64,7 @@ class SelectionDetector {
    * Monitor mouse events to detect text selections using nut.js
    */
   async startMouseEventMonitoring() {
-    console.log('🖱️  [SELECTION_DETECTOR] Starting nut.js mouse event monitoring for text selection');
+    logger.debug('🖱️  [SELECTION_DETECTOR] Starting nut.js mouse event monitoring for text selection');
     
     try {
       const { mouse, Button } = await import('@nut-tree-fork/nut-js');
@@ -85,7 +86,7 @@ class SelectionDetector {
       
       // Only check for selection if there was significant drag (likely text selection)
       if (dragDistance > 20) {
-        console.log(`🎯 [SELECTION_DETECTOR] Significant drag detected (${Math.round(dragDistance)}px), checking for selected text`);
+        logger.debug(`🎯 [SELECTION_DETECTOR] Significant drag detected (${Math.round(dragDistance)}px), checking for selected text`);
         
         // Try to get selected text
         const selectedText = await this.getSelectedTextViaAppleScript();
@@ -96,8 +97,8 @@ class SelectionDetector {
           const timeSinceLastShow = now - (this.lastButtonShowTime || 0);
           
           if (selectedText !== this.lastDetectedSelection && timeSinceLastShow > 1000) {
-            console.log('✨ [SELECTION_DETECTOR] Text selection detected after mouse drag!');
-            console.log(`📝 [SELECTION_DETECTOR] Selected text: "${selectedText.substring(0, 50)}..."`);
+            logger.debug('✨ [SELECTION_DETECTOR] Text selection detected after mouse drag!');
+            logger.debug(`📝 [SELECTION_DETECTOR] Selected text: "${selectedText.substring(0, 50)}..."`);
             
             this.lastDetectedSelection = selectedText;
             this.lastButtonShowTime = now;
@@ -110,7 +111,7 @@ class SelectionDetector {
             );
           }
         } else {
-          console.log('⚠️  [SELECTION_DETECTOR] No text found after drag - might not be text selection');
+          logger.debug('⚠️  [SELECTION_DETECTOR] No text found after drag - might not be text selection');
         }
       }
       
@@ -119,7 +120,7 @@ class SelectionDetector {
       this.selectionEndPos = null;
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Error handling potential selection:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Error handling potential selection:', error);
     }
   }
 
@@ -128,7 +129,7 @@ class SelectionDetector {
    * This catches selections that mouse drag detection might miss
    */
   startPeriodicSelectionCheck() {
-    console.log('⏰ [SELECTION_DETECTOR] Starting periodic selection check as backup');
+    logger.debug('⏰ [SELECTION_DETECTOR] Starting periodic selection check as backup');
     
     this.lastKnownSelection = null;
     
@@ -147,8 +148,8 @@ class SelectionDetector {
             currentSelection !== this.lastDetectedSelection &&
             timeSinceLastShow > 2000) { // Minimum 2 seconds between shows
           
-          console.log('🔍 [SELECTION_DETECTOR] New text selection detected via periodic check');
-          console.log(`📝 [SELECTION_DETECTOR] Selected text: "${currentSelection.substring(0, 50)}..."`);
+          logger.debug('🔍 [SELECTION_DETECTOR] New text selection detected via periodic check');
+          logger.debug(`📝 [SELECTION_DETECTOR] Selected text: "${currentSelection.substring(0, 50)}..."`);
           
           this.lastKnownSelection = currentSelection;
           this.lastDetectedSelection = currentSelection;
@@ -223,7 +224,7 @@ class SelectionDetector {
    * Fallback to clipboard monitoring if nut.js fails
    */
   startClipboardFallback() {
-    console.log('📋 [SELECTION_DETECTOR] Starting clipboard fallback monitoring');
+    logger.debug('📋 [SELECTION_DETECTOR] Starting clipboard fallback monitoring');
     
     this.lastClipboard = clipboard.readText();
     this.lastClipboardTime = Date.now();
@@ -242,7 +243,7 @@ class SelectionDetector {
           const timeSinceChange = now - this.lastClipboardTime;
           
           if (timeSinceChange > 100) {
-            console.log('✅ [SELECTION_DETECTOR] Selection detected via clipboard (fallback)');
+            logger.debug('✅ [SELECTION_DETECTOR] Selection detected via clipboard (fallback)');
             
             // Get mouse position for button placement
             try {
@@ -261,7 +262,7 @@ class SelectionDetector {
           this.lastClipboardTime = now;
         }
       } catch (error) {
-        console.error('❌ [SELECTION_DETECTOR] Error in clipboard fallback:', error);
+        logger.error('❌ [SELECTION_DETECTOR] Error in clipboard fallback:', error);
       }
     }, 200);
   }
@@ -272,24 +273,24 @@ class SelectionDetector {
    */
   async showFloatingButtonAtPosition(mouseX, mouseY, selectedText) {
     try {
-      console.log('🎯 [SELECTION_DETECTOR] Showing floating button at exact mouse position');
-      console.log(`🖱️  [SELECTION_DETECTOR] Mouse position: (${mouseX}, ${mouseY})`);
+      logger.debug('🎯 [SELECTION_DETECTOR] Showing floating button at exact mouse position');
+      logger.debug(`🖱️  [SELECTION_DETECTOR] Mouse position: (${mouseX}, ${mouseY})`);
       
       // Position button slightly below and to the right of mouse
       const buttonX = mouseX + 15;
       const buttonY = mouseY + 25;
       
-      console.log(`📍 [SELECTION_DETECTOR] Button position: (${buttonX}, ${buttonY})`);
+      logger.debug(`📍 [SELECTION_DETECTOR] Button position: (${buttonX}, ${buttonY})`);
       
       // Show the floating button
       const { showSelectionButton } = require('../windows/selection-overlay.cjs');
       showSelectionButton(buttonX, buttonY, selectedText);
       
-      console.log(`✅ [SELECTION_DETECTOR] Floating button shown at mouse position (${buttonX}, ${buttonY})`);
+      logger.debug(`✅ [SELECTION_DETECTOR] Floating button shown at mouse position (${buttonX}, ${buttonY})`);
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to show floating button:', error);
-      console.error('❌ [SELECTION_DETECTOR] Error details:', error.stack);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to show floating button:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Error details:', error.stack);
     }
   }
 
@@ -315,7 +316,7 @@ class SelectionDetector {
    * Captures selection when window focus changes
    */
   async startBackgroundCapture() {
-    console.log('🎯 [SELECTION_DETECTOR] Starting background selection capture');
+    logger.debug('🎯 [SELECTION_DETECTOR] Starting background selection capture');
     
     // Check active window every 300ms for fast detection
     this.selectionCaptureInterval = setInterval(async () => {
@@ -328,7 +329,7 @@ class SelectionDetector {
           return;
         }
         
-        console.log(`🔄 [SELECTION_DETECTOR] Window changed: ${this.lastActiveWindow} → ${currentWindow}`);
+        logger.debug(`🔄 [SELECTION_DETECTOR] Window changed: ${this.lastActiveWindow} → ${currentWindow}`);
         
         // If previous window was NOT Electron, capture from it
         if (this.lastActiveWindow && 
@@ -336,7 +337,7 @@ class SelectionDetector {
             !this.lastActiveWindow.startsWith('Electron-')) {
           
           const [prevApp] = this.lastActiveWindow.split('-');
-          console.log('📸 [SELECTION_DETECTOR] Capturing from previous window:', prevApp);
+          logger.debug('📸 [SELECTION_DETECTOR] Capturing from previous window:', prevApp);
           await this.captureAndStoreSelection({ 
             appName: prevApp, 
             windowTitle: '' 
@@ -360,11 +361,11 @@ class SelectionDetector {
       const { clipboard } = require('electron');
       const { keyboard, Key } = require('@nut-tree-fork/nut-js');
       
-      console.log('🎯 [NUTJS] Starting selection capture...');
+      logger.debug('🎯 [NUTJS] Starting selection capture...');
       
       // Store original clipboard FIRST
       const originalClipboard = clipboard.readText();
-      console.log('💾 [NUTJS] Stored original clipboard');
+      logger.debug('💾 [NUTJS] Stored original clipboard');
       
       // Clear clipboard to detect new content
       clipboard.writeText('__THINKDROP_TEMP__');
@@ -373,7 +374,7 @@ class SelectionDetector {
       await new Promise(resolve => setTimeout(resolve, 50));
       
       // Simulate Cmd+C using nut.js IMMEDIATELY (before window changes)
-      console.log('⌨️  [NUTJS] Simulating Cmd+C...');
+      logger.debug('⌨️  [NUTJS] Simulating Cmd+C...');
       await keyboard.pressKey(Key.LeftCmd, Key.C);
       await keyboard.releaseKey(Key.LeftCmd, Key.C);
       
@@ -385,7 +386,7 @@ class SelectionDetector {
       
       // Restore original clipboard
       clipboard.writeText(originalClipboard);
-      console.log('🔄 [NUTJS] Restored original clipboard');
+      logger.debug('🔄 [NUTJS] Restored original clipboard');
       
       // Now get window info (after capture but use a fallback since window might have changed)
       const windowInfo = await this.getActiveWindowInfo();
@@ -401,7 +402,7 @@ class SelectionDetector {
           capturedAt: Date.now()
         };
         
-        console.log('✅ [NUTJS] Captured selection:', {
+        logger.debug('✅ [NUTJS] Captured selection:', {
           preview: capturedText.substring(0, 100),
           sourceApp: sourceApp
         });
@@ -409,11 +410,11 @@ class SelectionDetector {
         // Notify renderer
         this.notifySelectionAvailable();
       } else {
-        console.log('⚠️  [NUTJS] No text selected or no change detected');
+        logger.debug('⚠️  [NUTJS] No text selected or no change detected');
       }
       
     } catch (error) {
-      console.error('❌ [NUTJS] Failed to capture selection:', error);
+      logger.error('❌ [NUTJS] Failed to capture selection:', error);
     }
   }
 
@@ -424,12 +425,12 @@ class SelectionDetector {
     if (!this.lastActiveWindow || 
         this.lastActiveWindow === 'null-undefined' ||
         this.lastActiveWindow.startsWith('Electron-')) {
-      console.log('⏭️  [SELECTION_DETECTOR] No valid previous window to capture from');
+      logger.debug('⏭️  [SELECTION_DETECTOR] No valid previous window to capture from');
       return;
     }
     
     const [prevApp] = this.lastActiveWindow.split('-');
-    console.log('🎯 [SELECTION_DETECTOR] Capturing from previous window on Thinkdrop AI focus:', prevApp);
+    logger.debug('🎯 [SELECTION_DETECTOR] Capturing from previous window on Thinkdrop AI focus:', prevApp);
     await this.captureAndStoreSelection({ 
       appName: prevApp, 
       windowTitle: '' 
@@ -441,7 +442,7 @@ class SelectionDetector {
    */
   async captureAndStoreSelection(windowInfo) {
     try {
-      console.log('📸 [SELECTION_DETECTOR] Attempting to capture selection from:', windowInfo.appName);
+      logger.debug('📸 [SELECTION_DETECTOR] Attempting to capture selection from:', windowInfo.appName);
       
       const selection = await this.captureHighlightedText();
       
@@ -453,7 +454,7 @@ class SelectionDetector {
           capturedAt: Date.now()
         };
         
-        console.log('✅ [SELECTION_DETECTOR] Stored selection:', {
+        logger.debug('✅ [SELECTION_DETECTOR] Stored selection:', {
           preview: this.storedSelection.text.substring(0, 100),
           sourceApp: this.storedSelection.sourceApp,
           age: 0
@@ -464,10 +465,10 @@ class SelectionDetector {
       } else {
         // No selection captured - but DON'T clear stored selection yet
         // It will be cleared by getStoredSelection() if too old (30s)
-        console.log('⏭️  [SELECTION_DETECTOR] No selection found this time - keeping previous stored selection');
+        logger.debug('⏭️  [SELECTION_DETECTOR] No selection found this time - keeping previous stored selection');
       }
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to capture and store:', error.message);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to capture and store:', error.message);
     }
   }
 
@@ -492,10 +493,10 @@ class SelectionDetector {
           win.webContents.send('selection:available', selectionData);
         });
         
-        console.log('📢 [SELECTION_DETECTOR] Notified renderer of available selection');
+        logger.debug('📢 [SELECTION_DETECTOR] Notified renderer of available selection');
       }
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to notify renderer:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to notify renderer:', error);
     }
   }
 
@@ -507,37 +508,37 @@ class SelectionDetector {
     if (this.clipboardCheckInterval) {
       clearInterval(this.clipboardCheckInterval);
       this.clipboardCheckInterval = null;
-      console.log('📋 [SELECTION_DETECTOR] Stopped clipboard monitor');
+      logger.debug('📋 [SELECTION_DETECTOR] Stopped clipboard monitor');
     }
     if (this.selectionCaptureInterval) {
       clearInterval(this.selectionCaptureInterval);
       this.selectionCaptureInterval = null;
-      console.log('🎯 [SELECTION_DETECTOR] Stopped background capture');
+      logger.debug('🎯 [SELECTION_DETECTOR] Stopped background capture');
     }
     if (this.selectionMonitorInterval) {
       clearInterval(this.selectionMonitorInterval);
       this.selectionMonitorInterval = null;
-      console.log('👀 [SELECTION_DETECTOR] Stopped selection monitoring');
+      logger.debug('👀 [SELECTION_DETECTOR] Stopped selection monitoring');
     }
     if (this.activeSelectionInterval) {
       clearInterval(this.activeSelectionInterval);
       this.activeSelectionInterval = null;
-      console.log('🎯 [SELECTION_DETECTOR] Stopped active selection monitoring');
+      logger.debug('🎯 [SELECTION_DETECTOR] Stopped active selection monitoring');
     }
     if (this.mouseMonitorInterval) {
       clearInterval(this.mouseMonitorInterval);
       this.mouseMonitorInterval = null;
-      console.log('🖱️  [SELECTION_DETECTOR] Stopped mouse monitoring');
+      logger.debug('🖱️  [SELECTION_DETECTOR] Stopped mouse monitoring');
     }
     if (this.clipboardFallbackInterval) {
       clearInterval(this.clipboardFallbackInterval);
       this.clipboardFallbackInterval = null;
-      console.log('📋 [SELECTION_DETECTOR] Stopped clipboard fallback monitoring');
+      logger.debug('📋 [SELECTION_DETECTOR] Stopped clipboard fallback monitoring');
     }
     if (this.periodicSelectionInterval) {
       clearInterval(this.periodicSelectionInterval);
       this.periodicSelectionInterval = null;
-      console.log('⏰ [SELECTION_DETECTOR] Stopped periodic selection check');
+      logger.debug('⏰ [SELECTION_DETECTOR] Stopped periodic selection check');
     }
   }
   
@@ -554,12 +555,12 @@ class SelectionDetector {
     const maxAge = 60000; // 30 seconds
     
     if (age > maxAge) {
-      console.log('⏰ [SELECTION_DETECTOR] Stored selection too old, discarding');
+      logger.debug('⏰ [SELECTION_DETECTOR] Stored selection too old, discarding');
       this.storedSelection = null;
       return null;
     }
     
-    console.log('✅ [SELECTION_DETECTOR] Retrieved stored selection:', {
+    logger.debug('✅ [SELECTION_DETECTOR] Retrieved stored selection:', {
       preview: this.storedSelection.text.substring(0, 100),
       age: Math.round(age / 1000) + 's'
     });
@@ -572,7 +573,7 @@ class SelectionDetector {
    */
   clearStoredSelection() {
     this.storedSelection = null;
-    console.log('🗑️  [SELECTION_DETECTOR] Cleared stored selection');
+    logger.debug('🗑️  [SELECTION_DETECTOR] Cleared stored selection');
   }
 
   /**
@@ -582,7 +583,7 @@ class SelectionDetector {
     try {
       return systemPreferences.isTrustedAccessibilityClient(false);
     } catch (error) {
-      console.warn('⚠️  [SELECTION_DETECTOR] Could not check accessibility permissions:', error);
+      logger.warn('⚠️  [SELECTION_DETECTOR] Could not check accessibility permissions:', error);
       return false;
     }
   }
@@ -594,46 +595,46 @@ class SelectionDetector {
    */
   async captureHighlightedText() {
     try {
-      console.log('📋 [SELECTION_DETECTOR] Starting capture...');
+      logger.debug('📋 [SELECTION_DETECTOR] Starting capture...');
       const { keyboard, Key } = require('@nut-tree-fork/nut-js');
       
       // 1. Save current clipboard
       const originalClipboard = clipboard.readText();
-      console.log('📋 [SELECTION_DETECTOR] Original clipboard:', originalClipboard?.substring(0, 50) || '(empty)');
+      logger.debug('📋 [SELECTION_DETECTOR] Original clipboard:', originalClipboard?.substring(0, 50) || '(empty)');
       
       // 2. Clear clipboard to detect if anything is selected
       clipboard.writeText('__THINKDROP_TEMP__');
-      console.log('📋 [SELECTION_DETECTOR] Clipboard cleared');
+      logger.debug('📋 [SELECTION_DETECTOR] Clipboard cleared');
       
       // 3. Simulate Cmd+C to copy highlighted text
       // Small delay to ensure clipboard is cleared
       await new Promise(resolve => setTimeout(resolve, 100));
       
-      console.log('📋 [SELECTION_DETECTOR] Simulating Cmd+C...');
+      logger.debug('📋 [SELECTION_DETECTOR] Simulating Cmd+C...');
       // Use nut.js for reliable key simulation (already installed!)
       await keyboard.pressKey(Key.LeftSuper); // Command key on Mac
       await keyboard.pressKey(Key.C);
       await keyboard.releaseKey(Key.C);
       await keyboard.releaseKey(Key.LeftSuper);
-      console.log('📋 [SELECTION_DETECTOR] Cmd+C simulated');
+      logger.debug('📋 [SELECTION_DETECTOR] Cmd+C simulated');
       
       // 4. Wait for clipboard to update
       await new Promise(resolve => setTimeout(resolve, 150));
       
       // 5. Read the newly copied text
       const highlightedText = clipboard.readText();
-      console.log('📋 [SELECTION_DETECTOR] New clipboard:', highlightedText?.substring(0, 50) || '(empty)');
+      logger.debug('📋 [SELECTION_DETECTOR] New clipboard:', highlightedText?.substring(0, 50) || '(empty)');
       
       // 6. Restore original clipboard immediately
       clipboard.writeText(originalClipboard);
-      console.log('📋 [SELECTION_DETECTOR] Restored original clipboard');
+      logger.debug('📋 [SELECTION_DETECTOR] Restored original clipboard');
       
       // 7. Check if we actually captured something new
       if (highlightedText && 
           highlightedText !== '' && 
           highlightedText !== '__THINKDROP_TEMP__' &&
           highlightedText !== originalClipboard) {
-        console.log('✅ [SELECTION_DETECTOR] Captured highlighted text:', highlightedText.substring(0, 100));
+        logger.debug('✅ [SELECTION_DETECTOR] Captured highlighted text:', highlightedText.substring(0, 100));
         return {
           text: highlightedText.trim(),
           timestamp: Date.now(),
@@ -642,12 +643,12 @@ class SelectionDetector {
         };
       }
       
-      console.log('⚠️  [SELECTION_DETECTOR] No highlighted text detected');
+      logger.debug('⚠️  [SELECTION_DETECTOR] No highlighted text detected');
       return null;
       
     } catch (error) {
-      console.error('❌ [SELECTION_DETECTOR] Failed to capture highlighted text:', error);
-      console.error('❌ [SELECTION_DETECTOR] Error stack:', error.stack);
+      logger.error('❌ [SELECTION_DETECTOR] Failed to capture highlighted text:', error);
+      logger.error('❌ [SELECTION_DETECTOR] Error stack:', error.stack);
       return null;
     }
   }
@@ -666,7 +667,7 @@ class SelectionDetector {
       
       // Only return if text is meaningful (not empty, not too long)
       if (text.length > 0 && text.length < 10000) {
-        console.log(`📋 [SELECTION_DETECTOR] Recent selection detected (${timeSinceClipboardChange}ms ago):`, text.substring(0, 100));
+        logger.debug(`📋 [SELECTION_DETECTOR] Recent selection detected (${timeSinceClipboardChange}ms ago):`, text.substring(0, 100));
         return {
           text,
           timestamp: this.lastClipboardTime,
@@ -710,7 +711,7 @@ class SelectionDetector {
         windowTitle: windowTitle || ''
       };
     } catch (error) {
-      console.warn('⚠️  [SELECTION_DETECTOR] Could not get active window info:', error);
+      logger.warn('⚠️  [SELECTION_DETECTOR] Could not get active window info:', error);
       return {
         appName: 'Unknown',
         windowTitle: ''
@@ -727,7 +728,7 @@ class SelectionDetector {
     let selection = this.getStoredSelection();
     
     if (selection) {
-      console.log('✅ [SELECTION_DETECTOR] Using stored selection from background capture');
+      logger.debug('✅ [SELECTION_DETECTOR] Using stored selection from background capture');
       return {
         text: selection.text,
         timestamp: selection.capturedAt,

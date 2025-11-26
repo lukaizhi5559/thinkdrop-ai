@@ -13,6 +13,7 @@
  * @param {string} text - Text that may contain HTML tags
  * @returns {string} - Clean text without HTML tags
  */
+const logger = require('./../../../logger.cjs');
 function stripHtmlTags(text) {
   if (!text) return text;
   // Remove HTML tags like <strong>, <em>, <b>, etc.
@@ -22,32 +23,32 @@ function stripHtmlTags(text) {
 module.exports = async function resolveReferences(state) {
   const { mcpClient, message, conversationHistory = [], context, intentType } = state;
 
-  console.log('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
-  console.log(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
+  logger.debug('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
+  logger.debug(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
   
   // CRITICAL FIX: If highlighted text is present, use it as fresh context instead of conversation history
   // When user highlights text, "this" refers to the highlighted content, not previous conversation
   const hasHighlightedText = context?.metadata?.hasHighlightedText === true;
   const highlightedText = state.detectedSelection?.text || context?.highlightedText;
   
-  console.log('📋 [NODE:RESOLVE_REFERENCES] Checking for highlighted text:');
-  console.log('   - hasHighlightedText flag:', hasHighlightedText);
-  console.log('   - state.detectedSelection?.text:', state.detectedSelection?.text ? `"${state.detectedSelection.text.substring(0, 50)}..."` : 'undefined');
-  console.log('   - context?.highlightedText:', context?.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
-  console.log('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
+  logger.debug('📋 [NODE:RESOLVE_REFERENCES] Checking for highlighted text:');
+  logger.debug('   - hasHighlightedText flag:', hasHighlightedText);
+  logger.debug('   - state.detectedSelection?.text:', state.detectedSelection?.text ? `"${state.detectedSelection.text.substring(0, 50)}..."` : 'undefined');
+  logger.debug('   - context?.highlightedText:', context?.highlightedText ? `"${context.highlightedText.substring(0, 50)}..."` : 'undefined');
+  logger.debug('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
   
   if (hasHighlightedText && highlightedText) {
-    console.log(`📎 [NODE:RESOLVE_REFERENCES] Highlighted text detected - using as fresh context for coreference resolution`);
-    console.log(`   Highlighted: "${highlightedText.substring(0, 100)}..."`);
+    logger.debug(`📎 [NODE:RESOLVE_REFERENCES] Highlighted text detected - using as fresh context for coreference resolution`);
+    logger.debug(`   Highlighted: "${highlightedText.substring(0, 100)}..."`);
   } else if (hasHighlightedText && !highlightedText) {
-    console.warn('⚠️ [NODE:RESOLVE_REFERENCES] hasHighlightedText is true but no highlightedText content found!');
+    logger.warn('⚠️ [NODE:RESOLVE_REFERENCES] hasHighlightedText is true but no highlightedText content found!');
   }
   
   // CRITICAL FIX: For screen_intelligence intents, don't use conversation history
   // because references like "this guy" refer to screen content, not previous conversation
   const isScreenIntent = intentType === 'screen_intelligence';
   if (isScreenIntent) {
-    console.log('🖥️  [NODE:RESOLVE_REFERENCES] Screen intelligence intent - skipping conversation history to avoid incorrect resolutions');
+    logger.debug('🖥️  [NODE:RESOLVE_REFERENCES] Screen intelligence intent - skipping conversation history to avoid incorrect resolutions');
   }
 
   // NOTE: We always run coreference resolution here, but the answer node will use the
@@ -63,7 +64,7 @@ module.exports = async function resolveReferences(state) {
   const ENABLE_COREFERENCE_SERVICE = true; // Now uses smart NER-based resolution
   
   if (!ENABLE_COREFERENCE_SERVICE) {
-    console.log('⏭️  [NODE:RESOLVE_REFERENCES] Coreference service disabled');
+    logger.debug('⏭️  [NODE:RESOLVE_REFERENCES] Coreference service disabled');
     return {
       ...state,
       message: message,
@@ -96,14 +97,14 @@ module.exports = async function resolveReferences(state) {
         }))
         .reverse(); // CRITICAL: Reverse to chronological order for coreference context
       
-      console.log(`🔄 [NODE:RESOLVE_REFERENCES] Fetched ${freshConversationHistory.length} fresh messages for coreference context`);
-      console.log(`📋 [NODE:RESOLVE_REFERENCES] Last 5 messages being sent to coreference (chronological):`);
+      logger.debug(`🔄 [NODE:RESOLVE_REFERENCES] Fetched ${freshConversationHistory.length} fresh messages for coreference context`);
+      logger.debug(`📋 [NODE:RESOLVE_REFERENCES] Last 5 messages being sent to coreference (chronological):`);
       freshConversationHistory.slice(-5).forEach((msg, i) => {
         const idx = freshConversationHistory.length - 5 + i + 1;
-        console.log(`   ${idx}. [${msg.role}] ${msg.content.substring(0, 80)}... (${msg.timestamp})`);
+        logger.debug(`   ${idx}. [${msg.role}] ${msg.content.substring(0, 80)}... (${msg.timestamp})`);
       });
     } catch (fetchError) {
-      console.warn('⚠️ [NODE:RESOLVE_REFERENCES] Failed to fetch fresh history, using cached:', fetchError.message);
+      logger.warn('⚠️ [NODE:RESOLVE_REFERENCES] Failed to fetch fresh history, using cached:', fetchError.message);
       // Fall back to cached conversationHistory from state
     }
     
@@ -124,7 +125,7 @@ module.exports = async function resolveReferences(state) {
         content: wrappedContent,
         timestamp: new Date().toISOString()
       }];
-      console.log('📎 [NODE:RESOLVE_REFERENCES] Using highlighted text as coreference context (1 synthetic message)');
+      logger.debug('📎 [NODE:RESOLVE_REFERENCES] Using highlighted text as coreference context (1 synthetic message)');
     } else if (isScreenIntent) {
       historyToUse = [];
     } else {
@@ -148,13 +149,13 @@ module.exports = async function resolveReferences(state) {
 
     // Log results
     if (replacements.length > 0) {
-      console.log(`✅ [NODE:RESOLVE_REFERENCES] Resolved ${replacements.length} reference(s) using ${method}`);
+      logger.debug(`✅ [NODE:RESOLVE_REFERENCES] Resolved ${replacements.length} reference(s) using ${method}`);
       replacements.forEach(r => {
-        console.log(`   📌 "${r.original}" → "${r.resolved}" (confidence: ${(r.confidence * 100).toFixed(1)}%)`);
+        logger.debug(`   📌 "${r.original}" → "${r.resolved}" (confidence: ${(r.confidence * 100).toFixed(1)}%)`);
       });
-      console.log(`📝 [NODE:RESOLVE_REFERENCES] Resolved message: "${resolvedMessage}"`);
+      logger.debug(`📝 [NODE:RESOLVE_REFERENCES] Resolved message: "${resolvedMessage}"`);
     } else {
-      console.log('ℹ️  [NODE:RESOLVE_REFERENCES] No references to resolve');
+      logger.debug('ℹ️  [NODE:RESOLVE_REFERENCES] No references to resolve');
     }
 
     return {
@@ -165,7 +166,7 @@ module.exports = async function resolveReferences(state) {
       coreferenceMethod: method
     };
   } catch (error) {
-    console.warn('⚠️ [NODE:RESOLVE_REFERENCES] Resolution failed, using original message:', error.message);
+    logger.warn('⚠️ [NODE:RESOLVE_REFERENCES] Resolution failed, using original message:', error.message);
     
     // Graceful fallback - continue with original message
     // This ensures the system still works even if coreference service is down

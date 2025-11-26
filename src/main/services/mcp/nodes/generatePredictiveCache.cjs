@@ -9,6 +9,7 @@
 
 const crypto = require('crypto');
 
+const logger = require('./../../../logger.cjs');
 /**
  * Hash screen content for cache key
  * @param {string} text - Screen content text
@@ -21,7 +22,7 @@ function hashScreenContent(text) {
 module.exports = async function generatePredictiveCache(state) {
   const { screenIntelligenceResult, mcpClient, message } = state;
   
-  console.log('🔮 [NODE:PREDICTIVE_CACHE] Starting predictive Q&A generation...');
+  logger.debug('🔮 [NODE:PREDICTIVE_CACHE] Starting predictive Q&A generation...');
   
   // Extract OCR text from screen analysis
   const fullTextElement = screenIntelligenceResult?.elements?.find(
@@ -30,27 +31,27 @@ module.exports = async function generatePredictiveCache(state) {
   const ocrText = fullTextElement?.value || '';
   
   if (!ocrText || ocrText.length < 100) {
-    console.log('⏭️  [NODE:PREDICTIVE_CACHE] Insufficient text for prediction (need 100+ chars)');
-    console.log(`   OCR text length: ${ocrText.length} chars`);
+    logger.debug('⏭️  [NODE:PREDICTIVE_CACHE] Insufficient text for prediction (need 100+ chars)');
+    logger.debug(`   OCR text length: ${ocrText.length} chars`);
     return state;
   }
   
-  console.log(`📝 [NODE:PREDICTIVE_CACHE] OCR text available: ${ocrText.length} chars`);
+  logger.debug(`📝 [NODE:PREDICTIVE_CACHE] OCR text available: ${ocrText.length} chars`);
   
   // Check if we already have predictions for this screen content
   const screenHash = hashScreenContent(ocrText);
   
   if (!global.predictiveCache) {
     global.predictiveCache = new Map();
-    console.log('🆕 [NODE:PREDICTIVE_CACHE] Initialized global predictive cache');
+    logger.debug('🆕 [NODE:PREDICTIVE_CACHE] Initialized global predictive cache');
   }
   
   // Check if we already have fresh predictions
   const existingCache = global.predictiveCache.get(screenHash);
   if (existingCache && Date.now() - existingCache.timestamp < 300000) {
     const age = Math.round((Date.now() - existingCache.timestamp) / 1000);
-    console.log(`✅ [NODE:PREDICTIVE_CACHE] Using existing predictions (${age}s old)`);
-    console.log(`   Cached questions: ${existingCache.predictions.predictedQuestions.length}`);
+    logger.debug(`✅ [NODE:PREDICTIVE_CACHE] Using existing predictions (${age}s old)`);
+    logger.debug(`   Cached questions: ${existingCache.predictions.predictedQuestions.length}`);
     return state;
   }
   
@@ -86,8 +87,8 @@ Format:
   ]
 }`;
 
-    console.log('🤖 [NODE:PREDICTIVE_CACHE] Calling phi4 for prediction generation...');
-    console.log(`   Prompt length: ${prompt.length} chars`);
+    logger.debug('🤖 [NODE:PREDICTIVE_CACHE] Calling phi4 for prediction generation...');
+    logger.debug(`   Prompt length: ${prompt.length} chars`);
     
     const result = await mcpClient.callService('phi4', 'chat.completions', {
       messages: [
@@ -102,16 +103,16 @@ Format:
     });
     
     const generationTime = Date.now() - startTime;
-    console.log(`⏱️  [NODE:PREDICTIVE_CACHE] LLM generation complete (${generationTime}ms)`);
+    logger.debug(`⏱️  [NODE:PREDICTIVE_CACHE] LLM generation complete (${generationTime}ms)`);
     
     // Extract response
     const responseText = result.data?.choices?.[0]?.message?.content || 
                         result.choices?.[0]?.message?.content || '';
     
-    console.log('📄 [NODE:PREDICTIVE_CACHE] Raw LLM response:');
-    console.log('=' .repeat(80));
-    console.log(responseText);
-    console.log('=' .repeat(80));
+    logger.debug('📄 [NODE:PREDICTIVE_CACHE] Raw LLM response:');
+    logger.debug('=' .repeat(80));
+    logger.debug(responseText);
+    logger.debug('=' .repeat(80));
     
     // Parse JSON response (handle markdown code blocks if present)
     let predictions;
@@ -123,16 +124,16 @@ Format:
         .trim();
       
       predictions = JSON.parse(cleanedResponse);
-      console.log('✅ [NODE:PREDICTIVE_CACHE] Successfully parsed predictions');
+      logger.debug('✅ [NODE:PREDICTIVE_CACHE] Successfully parsed predictions');
     } catch (parseError) {
-      console.error('❌ [NODE:PREDICTIVE_CACHE] Failed to parse JSON:', parseError.message);
-      console.log('   Attempted to parse:', responseText.substring(0, 200));
+      logger.error('❌ [NODE:PREDICTIVE_CACHE] Failed to parse JSON:', parseError.message);
+      logger.debug('   Attempted to parse:', responseText.substring(0, 200));
       return state;
     }
     
     // Validate predictions structure
     if (!predictions.predictedQuestions || !Array.isArray(predictions.predictedQuestions)) {
-      console.warn('⚠️  [NODE:PREDICTIVE_CACHE] Invalid predictions structure');
+      logger.warn('⚠️  [NODE:PREDICTIVE_CACHE] Invalid predictions structure');
       return state;
     }
     
@@ -144,15 +145,15 @@ Format:
       ocrTextLength: ocrText.length
     });
     
-    console.log('✅ [NODE:PREDICTIVE_CACHE] Predictions cached successfully');
-    console.log(`   Main topic: "${predictions.mainTopic}"`);
-    console.log(`   Generated ${predictions.predictedQuestions.length} predicted Q&A pairs:`);
+    logger.debug('✅ [NODE:PREDICTIVE_CACHE] Predictions cached successfully');
+    logger.debug(`   Main topic: "${predictions.mainTopic}"`);
+    logger.debug(`   Generated ${predictions.predictedQuestions.length} predicted Q&A pairs:`);
     
     // Log each predicted question for debugging
     predictions.predictedQuestions.forEach((pred, idx) => {
-      console.log(`   ${idx + 1}. [${pred.category}] "${pred.question}"`);
-      console.log(`      Answer: "${pred.answer.substring(0, 80)}..."`);
-      console.log(`      Confidence: ${pred.confidence}, Related to screen: ${pred.relatedToScreen}`);
+      logger.debug(`   ${idx + 1}. [${pred.category}] "${pred.question}"`);
+      logger.debug(`      Answer: "${pred.answer.substring(0, 80)}..."`);
+      logger.debug(`      Confidence: ${pred.confidence}, Related to screen: ${pred.relatedToScreen}`);
     });
     
     // Add to state for potential immediate use
@@ -164,8 +165,8 @@ Format:
     return state;
     
   } catch (error) {
-    console.error('❌ [NODE:PREDICTIVE_CACHE] Failed to generate predictions:', error.message);
-    console.error('   Stack:', error.stack);
+    logger.error('❌ [NODE:PREDICTIVE_CACHE] Failed to generate predictions:', error.message);
+    logger.error('   Stack:', error.stack);
     return state;
   }
 };

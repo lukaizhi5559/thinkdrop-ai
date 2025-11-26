@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 
+const logger = require('./../../logger.cjs');
 // Core services that are protected (cannot be deleted/disabled)
 const CORE_SERVICES = ['user-memory', 'phi4', 'web-search'];
 
@@ -48,7 +49,7 @@ class MCPConfigManager {
       throw new Error('Database parameter is required for MCPConfigManager initialization');
     }
 
-    console.log('🔍 MCPConfigManager: Received database:', typeof database);
+    logger.debug('🔍 MCPConfigManager: Received database:', typeof database);
     this.db = database;
     
     // Create tables if they don't exist
@@ -58,7 +59,7 @@ class MCPConfigManager {
     await this.loadFromDatabase();
     
     this.initialized = true;
-    console.log('✅ MCPConfigManager initialized');
+    logger.debug('✅ MCPConfigManager initialized');
   }
 
   /**
@@ -83,14 +84,14 @@ class MCPConfigManager {
     const quietMode = process.env.DB_QUIET_MODE === 'true';
     
     if (!quietMode) {
-      console.log(`Executing ${statements.length} SQL statements...`);
+      logger.debug(`Executing ${statements.length} SQL statements...`);
     }
     
     for (let i = 0; i < statements.length; i++) {
       const statement = statements[i];
       try {
         if (!quietMode) {
-          console.log(`  [${i+1}/${statements.length}] ${statement.substring(0, 50)}...`);
+          logger.debug(`  [${i+1}/${statements.length}] ${statement.substring(0, 50)}...`);
         }
         
         if (!this.db || !this.db.run) {
@@ -99,13 +100,13 @@ class MCPConfigManager {
         
         await this.db.run(statement, []);
       } catch (error) {
-        console.error(`Failed to execute statement ${i+1}:`, statement.substring(0, 200));
+        logger.error(`Failed to execute statement ${i+1}:`, statement.substring(0, 200));
         throw error;
       }
     }
     
     if (!quietMode) {
-      console.log('✅ MCP database tables created');
+      logger.debug('✅ MCP database tables created');
     }
   }
 
@@ -113,7 +114,7 @@ class MCPConfigManager {
    * Load services from database
    */
   async loadFromDatabase() {
-    console.log('Loading services from database...');
+    logger.debug('Loading services from database...');
     
     try {
       // DatabaseManager uses query() instead of all()
@@ -121,13 +122,13 @@ class MCPConfigManager {
         SELECT * FROM mcp_services WHERE enabled = 1
       `, []);
       
-      console.log(`Found ${services.length} services in database`);
+      logger.debug(`Found ${services.length} services in database`);
       
       this.services.clear();
       
       for (const service of services) {
       const decryptedKey = this.decryptApiKey(service.api_key);
-      console.log(`🔑 Service ${service.name}: API key ${service.api_key} || ${decryptedKey ? 'present (' + decryptedKey.substring(0, 10) + '...)' : 'MISSING'}`);
+      logger.debug(`🔑 Service ${service.name}: API key ${service.api_key} || ${decryptedKey ? 'present (' + decryptedKey.substring(0, 10) + '...)' : 'MISSING'}`);
       
       this.services.set(service.name, {
         id: service.id,
@@ -164,9 +165,9 @@ class MCPConfigManager {
       });
     }
     
-    console.log(`✅ Loaded ${services.length} MCP services from database`);
+    logger.debug(`✅ Loaded ${services.length} MCP services from database`);
     } catch (error) {
-      console.error('Failed to load services from database:', error);
+      logger.error('Failed to load services from database:', error);
       throw error;
     }
   }
@@ -286,7 +287,7 @@ class MCPConfigManager {
     // Reload from database
     await this.loadFromDatabase();
 
-    console.log(`✅ Added service: ${name}`);
+    logger.debug(`✅ Added service: ${name}`);
     return this.getService(name);
   }
 
@@ -346,7 +347,7 @@ class MCPConfigManager {
     // Reload from database
     await this.loadFromDatabase();
 
-    console.log(`✅ Updated service: ${name}`);
+    logger.debug(`✅ Updated service: ${name}`);
     return this.getService(name);
   }
 
@@ -369,7 +370,7 @@ class MCPConfigManager {
     // Remove from memory
     this.services.delete(name);
 
-    console.log(`✅ Removed service: ${name}`);
+    logger.debug(`✅ Removed service: ${name}`);
   }
 
   /**

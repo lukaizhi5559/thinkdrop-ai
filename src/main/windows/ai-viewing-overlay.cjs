@@ -1,6 +1,7 @@
 const { BrowserWindow, screen } = require('electron');
 const path = require('path');
 
+const logger = require('./../logger.cjs');
 let overlayWindow = null;
 
 /**
@@ -11,11 +12,11 @@ let overlayWindow = null;
  */
 function createAIViewingOverlay() {
   if (overlayWindow) {
-    console.log('👁️  [OVERLAY] Window already exists');
+    logger.debug('👁️  [OVERLAY] Window already exists');
     return overlayWindow;
   }
 
-  console.log('👁️  [OVERLAY] Creating combined overlay window...');
+  logger.debug('👁️  [OVERLAY] Creating combined overlay window...');
 
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
@@ -49,7 +50,7 @@ function createAIViewingOverlay() {
   overlayWindow = null;
 
   if (!overlayWindow) {
-    console.log('👁️  [OVERLAY] Window creation failed');
+    logger.debug('👁️  [OVERLAY] Window creation failed');
     return null;
   }
 
@@ -59,11 +60,11 @@ function createAIViewingOverlay() {
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
 
   // Load the React app
-  console.log('👁️  [OVERLAY] NODE_ENV:', process.env.NODE_ENV);
+  logger.debug('👁️  [OVERLAY] NODE_ENV:', process.env.NODE_ENV);
   if (process.env.NODE_ENV === 'development') {
     // Development: Load from Vite dev server
     const url = 'http://localhost:5173/src/overlay/ai-viewing-indicator.html';
-    console.log('👁️  [OVERLAY] Loading from Vite dev server:', url);
+    logger.debug('👁️  [OVERLAY] Loading from Vite dev server:', url);
     overlayWindow.loadURL(url);
     
     // Open DevTools in development
@@ -71,32 +72,32 @@ function createAIViewingOverlay() {
   } else {
     // Production: Load from built files
     const htmlPath = path.join(__dirname, '../../dist-renderer/ai-viewing-indicator.html');
-    console.log('👁️  [OVERLAY] Loading from file:', htmlPath);
+    logger.debug('👁️  [OVERLAY] Loading from file:', htmlPath);
     overlayWindow.loadFile(htmlPath);
   }
 
   // Handle load errors
   overlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
-    console.error('❌ [OVERLAY] Failed to load:', errorDescription, 'URL:', validatedURL);
+    logger.error('❌ [OVERLAY] Failed to load:', errorDescription, 'URL:', validatedURL);
   });
 
   overlayWindow.webContents.on('did-finish-load', () => {
-    console.log('✅ [OVERLAY] Content loaded successfully');
+    logger.debug('✅ [OVERLAY] Content loaded successfully');
   });
 
   // Show window (it's transparent, so only overlay content will be visible)
   overlayWindow.once('ready-to-show', () => {
     overlayWindow.showInactive();
-    console.log('👁️  [OVERLAY] Window ready and shown');
+    logger.debug('👁️  [OVERLAY] Window ready and shown');
   });
 
   // Handle window close
   overlayWindow.on('closed', () => {
     overlayWindow = null;
-    console.log('👁️  [OVERLAY] Window closed');
+    logger.debug('👁️  [OVERLAY] Window closed');
   });
 
-  console.log('👁️  [OVERLAY] Window created');
+  logger.debug('👁️  [OVERLAY] Window created');
   return overlayWindow;
 }
 
@@ -116,7 +117,7 @@ function showAIViewingOverlay() {
   } else if (!overlayWindow.isDestroyed()) {
     // Send message to renderer to show all UI elements
     overlayWindow.webContents.send('show-overlay-ui');
-    console.log('👁️  [OVERLAY] Sent show-overlay-ui to renderer');
+    logger.debug('👁️  [OVERLAY] Sent show-overlay-ui to renderer');
   }
 }
 
@@ -127,7 +128,7 @@ function hideAIViewingOverlay() {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     // Send message to renderer to hide all UI elements
     overlayWindow.webContents.send('hide-overlay-ui');
-    console.log('👻 [OVERLAY] Sent hide-overlay-ui to renderer');
+    logger.debug('👻 [OVERLAY] Sent hide-overlay-ui to renderer');
   }
 }
 
@@ -138,7 +139,7 @@ function hideAIViewingOverlay() {
 function sendActiveWindowUpdate(data) {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.webContents.send('active-window-update', data);
-    console.log('👁️  [OVERLAY] Sent active-window-update:', data.windowName || data.app);
+    logger.debug('👁️  [OVERLAY] Sent active-window-update:', data.windowName || data.app);
   }
 }
 
@@ -148,10 +149,10 @@ function sendActiveWindowUpdate(data) {
  * @param {object} options - Optional settings (if messageOrOptions is a string)
  */
 function showHotkeyToast(messageOrOptions, options = {}) {
-  console.log('🍞 [OVERLAY] showHotkeyToast called:', messageOrOptions, options);
+  logger.debug('🍞 [OVERLAY] showHotkeyToast called:', messageOrOptions, options);
 
   if (!overlayWindow) {
-    console.log('🍞 [OVERLAY] Creating window first...');
+    logger.debug('🍞 [OVERLAY] Creating window first...');
     // createAIViewingOverlay();
   }
 
@@ -171,11 +172,11 @@ function showHotkeyToast(messageOrOptions, options = {}) {
   if (overlayWindow && overlayWindow.webContents.isLoading()) {
     overlayWindow.webContents.once('did-finish-load', () => {
       overlayWindow.webContents.send('show-hotkey-toast', data);
-      console.log('🍞 [OVERLAY] Sent show-hotkey-toast (after load):', data);
+      logger.debug('🍞 [OVERLAY] Sent show-hotkey-toast (after load):', data);
     });
   } else if (overlayWindow) {
     overlayWindow.webContents.send('show-hotkey-toast', data);
-    console.log('🍞 [OVERLAY] Sent show-hotkey-toast:', data);
+    logger.debug('🍞 [OVERLAY] Sent show-hotkey-toast:', data);
   }
 }
 

@@ -13,6 +13,7 @@ const { getMetrics } = require('./MCPMetrics.js');
 const { MCPConfig, isIntentRoutedToMCP, getServiceForIntent } = require('./config.cjs');
 const { getServiceForIntent: getServiceFromIntent, getActionForIntent, determineOperation } = require('./schemas/intents.cjs');
 
+const logger = require('./../../logger.cjs');
 class MCPOrchestrator {
   constructor(config = MCPConfig) {
     this.config = config;
@@ -29,7 +30,7 @@ class MCPOrchestrator {
   async initialize() {
     if (this.isInitialized) return;
 
-    console.log('🚀 Initializing MCP Orchestrator...');
+    logger.debug('🚀 Initializing MCP Orchestrator...');
 
     // Initialize registry (registers services and starts health checks)
     await this.registry.initialize();
@@ -38,7 +39,7 @@ class MCPOrchestrator {
     this.setupCircuitBreakerCallbacks();
 
     this.isInitialized = true;
-    console.log('✅ MCP Orchestrator initialized');
+    logger.debug('✅ MCP Orchestrator initialized');
   }
 
   /**
@@ -87,12 +88,12 @@ class MCPOrchestrator {
     // Check if service is registered and healthy
     const service = this.registry.getService(serviceName);
     if (!service) {
-      console.warn(`⚠️ Service not registered: ${serviceName}`);
+      logger.warn(`⚠️ Service not registered: ${serviceName}`);
       return null; // Use local
     }
 
     if (!service.healthy) {
-      console.warn(`⚠️ Service unhealthy: ${serviceName}`);
+      logger.warn(`⚠️ Service unhealthy: ${serviceName}`);
       return null; // Use local
     }
 
@@ -100,7 +101,7 @@ class MCPOrchestrator {
     const operation = determineOperation(intent, payload);
     const mcpAction = action || getActionForIntent(intent, operation);
     if (!mcpAction) {
-      console.warn(`⚠️ No action mapping for intent: ${intent}`);
+      logger.warn(`⚠️ No action mapping for intent: ${intent}`);
       return null; // Use local
     }
 
@@ -137,7 +138,7 @@ class MCPOrchestrator {
 
       return result.data;
     } catch (error) {
-      console.warn(`⚠️ MCP request failed for ${serviceName}.${mcpAction}:`, error.message);
+      logger.warn(`⚠️ MCP request failed for ${serviceName}.${mcpAction}:`, error.message);
 
       // Record failure in registry
       this.registry.recordRequest(serviceName, false);
@@ -157,7 +158,7 @@ class MCPOrchestrator {
 
       // Try fallback if provided
       if (fallbackFn && typeof fallbackFn === 'function') {
-        console.log(`🔄 Using fallback for ${serviceName}.${mcpAction}`);
+        logger.debug(`🔄 Using fallback for ${serviceName}.${mcpAction}`);
         return await fallbackFn();
       }
 
@@ -323,7 +324,7 @@ class MCPOrchestrator {
   shutdown() {
     this.registry.shutdown();
     this.metrics.stopPeriodicCollection();
-    console.log('🛑 MCP Orchestrator shut down');
+    logger.debug('🛑 MCP Orchestrator shut down');
   }
 }
 

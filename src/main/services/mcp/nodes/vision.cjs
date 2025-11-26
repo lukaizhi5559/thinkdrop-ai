@@ -8,17 +8,18 @@
  * Adds visual context to state for LLM processing
  */
 
+const logger = require('./../../../logger.cjs');
 module.exports = async function vision(state) {
   const { mcpClient, userPreferences = {}, useOnlineMode, visionTask, visionRegion } = state;
   
-  console.log('👁️  [NODE:VISION] Processing screen content');
+  logger.debug('👁️  [NODE:VISION] Processing screen content');
   
   try {
     // Determine mode from user preferences
     // useOnlineMode: true → 'online' (Google Vision API)
     // useOnlineMode: false → 'privacy' (Local Qwen2-VL)
     const mode = useOnlineMode ? 'online' : 'privacy';
-    console.log(`🔒 [NODE:VISION] Mode: ${mode} (useOnlineMode: ${useOnlineMode})`);
+    logger.debug(`🔒 [NODE:VISION] Mode: ${mode} (useOnlineMode: ${useOnlineMode})`);
     
     // Build vision options
     const options = {
@@ -33,13 +34,13 @@ module.exports = async function vision(state) {
     }
     
     // Call vision service (API key automatically retrieved from database)
-    console.log('📸 [NODE:VISION] Capturing and analyzing screen...');
+    logger.debug('📸 [NODE:VISION] Capturing and analyzing screen...');
     const visionResult = await mcpClient.describeScreen(options);
     
     // Extract data from MCP response
     const data = visionResult.data || visionResult;
     
-    console.log('✅ [NODE:VISION] Vision processing complete', {
+    logger.debug('✅ [NODE:VISION] Vision processing complete', {
       mode: data.mode,
       latency_ms: data.latency_ms,
       cached: data.cached,
@@ -59,7 +60,7 @@ module.exports = async function vision(state) {
     // Add visual tokens if in privacy mode (for direct LLM integration)
     if (mode === 'privacy' && data.visual_tokens) {
       state.visualTokens = data.visual_tokens;
-      console.log('🎯 [NODE:VISION] Visual tokens extracted for LLM');
+      logger.debug('🎯 [NODE:VISION] Visual tokens extracted for LLM');
     }
     
     // Add to context for answer node
@@ -69,16 +70,16 @@ module.exports = async function vision(state) {
       state.context = `## Visual Context\n${visualContext}`;
     }
     
-    console.log('📝 [NODE:VISION] Visual context added to state');
-    console.log('=' .repeat(80));
-    console.log('📊 VISUAL CONTEXT BEING PASSED TO ANSWER NODE:');
-    console.log(visualContext);
-    console.log('=' .repeat(80));
+    logger.debug('📝 [NODE:VISION] Visual context added to state');
+    logger.debug('=' .repeat(80));
+    logger.debug('📊 VISUAL CONTEXT BEING PASSED TO ANSWER NODE:');
+    logger.debug(visualContext);
+    logger.debug('=' .repeat(80));
     
     return state;
     
   } catch (error) {
-    console.error('❌ [NODE:VISION] Vision processing failed:', error);
+    logger.error('❌ [NODE:VISION] Vision processing failed:', error);
     
     // Add error to state but don't fail the entire flow
     state.visionError = error.message;

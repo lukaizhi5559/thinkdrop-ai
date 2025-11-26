@@ -6,6 +6,7 @@
 const { ipcMain } = require('electron');
 const db = require('../services/utils/duckdb-wrapper.cjs');
 
+const logger = require('./../logger.cjs');
 /**
  * Promisify db.query
  */
@@ -34,7 +35,7 @@ function runAsync(sql, params = []) {
  * Setup insight history IPC handlers
  */
 function setupInsightHistoryHandlers() {
-  console.log('🔧 Setting up Insight History handlers...');
+  logger.debug('🔧 Setting up Insight History handlers...');
   
   // Get insight history list
   ipcMain.handle('insight-history:list', async (event, options = {}) => {
@@ -61,7 +62,7 @@ function setupInsightHistoryHandlers() {
       
       return { success: true, insights };
     } catch (error) {
-      console.error('❌ [INSIGHT_HISTORY] List failed:', error);
+      logger.error('❌ [INSIGHT_HISTORY] List failed:', error);
       return { success: false, error: error.message };
     }
   });
@@ -97,7 +98,7 @@ function setupInsightHistoryHandlers() {
       
       return { success: true, insight };
     } catch (error) {
-      console.error('❌ [INSIGHT_HISTORY] Get failed:', error);
+      logger.error('❌ [INSIGHT_HISTORY] Get failed:', error);
       return { success: false, error: error.message };
     }
   });
@@ -110,10 +111,10 @@ function setupInsightHistoryHandlers() {
         WHERE id = ?
       `, [insightId]);
       
-      console.log(`🗑️  [INSIGHT_HISTORY] Deleted insight: ${insightId}`);
+      logger.debug(`🗑️  [INSIGHT_HISTORY] Deleted insight: ${insightId}`);
       return { success: true };
     } catch (error) {
-      console.error('❌ [INSIGHT_HISTORY] Delete failed:', error);
+      logger.error('❌ [INSIGHT_HISTORY] Delete failed:', error);
       return { success: false, error: error.message };
     }
   });
@@ -126,10 +127,10 @@ function setupInsightHistoryHandlers() {
         WHERE user_id = ?
       `, [userId]);
       
-      console.log(`🗑️  [INSIGHT_HISTORY] Cleared all insights for user: ${userId}`);
+      logger.debug(`🗑️  [INSIGHT_HISTORY] Cleared all insights for user: ${userId}`);
       return { success: true };
     } catch (error) {
-      console.error('❌ [INSIGHT_HISTORY] Clear failed:', error);
+      logger.error('❌ [INSIGHT_HISTORY] Clear failed:', error);
       return { success: false, error: error.message };
     }
   });
@@ -167,12 +168,12 @@ function setupInsightHistoryHandlers() {
       
       return { success: true, insights };
     } catch (error) {
-      console.error('❌ [INSIGHT_HISTORY] Search failed:', error);
+      logger.error('❌ [INSIGHT_HISTORY] Search failed:', error);
       return { success: false, error: error.message };
     }
   });
   
-  console.log('✅ Insight History handlers setup complete');
+  logger.debug('✅ Insight History handlers setup complete');
 }
 
 module.exports = { setupInsightHistoryHandlers };
