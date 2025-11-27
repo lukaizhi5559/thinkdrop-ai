@@ -368,10 +368,7 @@ module.exports = async function answer(state) {
   const llmMode = useOnlineMode ? 'ONLINE' : 'PRIVATE';
   logger.debug(`💬 [NODE:ANSWER] Generating answer... (mode: ${llmMode}, streaming: ${isStreaming}, retry: ${retryCount})`);
   logger.debug(`📊 [NODE:ANSWER] Context: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
-  console.log(`📊 [NODE:ANSWER] History: ${conversationHistory} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
-  if (contextDocs && contextDocs.length > 0) {
-    console.log(`🌐 [NODE:ANSWER] Web search results:`, JSON.stringify(contextDocs.slice(0, 3), null, 2));
-  }
+  console.log(`📊 [NODE:ANSWER] History: ${conversationHistory.length} total → ${filteredHistory.length} filtered messages, ${filteredMemories.length} memories, ${contextDocs.length} web results`);
   
   // 🔧 Check if we need to interpret command output
   // Let phi4 handle all interpretation - no pre-processing needed
@@ -399,9 +396,9 @@ module.exports = async function answer(state) {
     // The LLM's ONLY job is to format the provided context into a natural response
     // All the heavy lifting (semantic search, filtering, ranking) is done by other services
     
-    let systemInstructions = `Format the provided information into a natural, helpful response.
+    let systemInstructions = `Answer using the provided context. Be direct and natural.
 
-Context provided:`;
+Context:`;
     
     // List what context is available
     const contextSources = [];
@@ -428,25 +425,32 @@ Context provided:`;
 
 Rules:`;
     
-    // Intent-specific rules
+    // Intent-specific rules (minimal - semantic search already filtered)
     if (intent?.type === 'web_search' || intent?.type === 'search' || intent?.type === 'lookup') {
       systemInstructions += `
-1. Use the web search results provided to answer the question
-2. Cite specific information from the search results
-3. If multiple sources agree, mention that
-4. Be direct and factual`;
+- Answer using the web search results
+- Be factual and direct`;
     } else if (intent?.type === 'screen_intelligence' || intent?.type === 'vision') {
       systemInstructions += `
-1. Describe what you see in the provided screen context
-2. Be specific and detailed about visible UI elements, text, and content
-3. ALWAYS provide a description even if similarity scores are low
-4. For follow-up questions, check conversation history for topic`;
+- Describe the screen content
+- Be specific about visible elements`;
+    } else if (intent?.type === 'command_execute' || intent?.type === 'command_guide') {
+      systemInstructions += `
+- Interpret the command output as human-readable information
+- Command output may include: timestamps, file listings, file paths, system info, or error messages
+- Convert technical output (like timestamps, file paths) into natural language
+- For timestamps: convert to readable time format (e.g., "4:39 PM on Tuesday, November 26, 2025")
+- For file listings: summarize the files/folders found
+- For paths: explain what the path represents
+- Be clear, concise, and helpful`;
+    } else if (intent?.type === 'memory_store' || intent?.type === 'memory_retrieve') {
+      systemInstructions += `
+- Use the provided memories
+- Be accurate and helpful`;
     } else {
       systemInstructions += `
-1. Use all provided context (memories, web results, conversation history)
-2. Be helpful and accurate
-3. If you don't have enough information, say so
-4. For follow-up questions, check conversation history for topic`;
+- Use the provided context
+- Be helpful and concise`;
     }
 
     console.log(`📋 [NODE:ANSWER] System instructions for intent '${intent?.type}':`, systemInstructions);
@@ -536,20 +540,28 @@ Rules:`;
     if (state.visualContext && state.intent?.type === 'vision') {
       finalQuery = `${queryMessage}\n\n${state.visualContext}`;
       logger.debug('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
-    } else if (state.screenContext && state.intent?.type === 'screen_intelligence') {
-      // Put user's request FIRST, then provide screen data as context
-      // If a target entity was extracted, highlight it in the request
-      let userRequest = queryMessage;
-      if (state.targetEntity) {
-        userRequest = `${queryMessage}\n\n🎯 TARGET: Focus on "${state.targetEntity}"`;
-        logger.debug(`🎯 [NODE:ANSWER] Target entity highlighted: "${state.targetEntity}"`);
-      }
-      finalQuery = `USER REQUEST: ${userRequest}\n\nSCREEN CONTEXT (use this to fulfill the user's request):\n${state.screenContext}`;
-      logger.debug('🎯 [NODE:ANSWER] Added screen context AFTER query for screen_intelligence intent');
     } else if (state.context) {
-      // Generic context from other nodes
-      finalQuery = `${queryMessage}\n\n${state.context}`;
-      logger.debug('📋 [NODE:ANSWER] Added generic context to query');
+      // Generic context from other nodes (including screen_intelligence)
+      // The screenIntelligence node already built the appropriate context
+      
+      // SAFETY: Ensure context is a string, not an object
+      const contextStr = typeof state.context === 'string' 
+        ? state.context 
+        : JSON.stringify(state.context);
+      
+      if (typeof state.context !== 'string') {
+        logger.warn('⚠️  [NODE:ANSWER] state.context is not a string, converting:', typeof state.context);
+      }
+      
+      finalQuery = `${queryMessage}\n\n${contextStr}`;
+      logger.debug('📋 [NODE:ANSWER] Added context to query');
+      
+      // Log which strategy was used
+      if (state.useSimpleContext) {
+        logger.debug('   Strategy: Simple context (llmContext)');
+      } else if (state.screenContext) {
+        logger.debug('   Strategy: Semantic search');
+      }
     }
     
     // 🚀 Determine if we should use fast mode
@@ -563,6 +575,8 @@ Rules:`;
     if (useFastMode) {
       logger.debug('⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query');
     }
+
+    console.log('🌊 [NODE:ANSWER] Processed Output:', processedOutput);
     
     const payload = {
       query: needsInterpretation && processedOutput && processedOutput.trim().length > 0
@@ -581,6 +595,7 @@ Rules:`;
         systemInstructions,
         sessionId: context.sessionId,
         userId: context.userId,
+        intent: intent?.type, // Pass intent type for better query classification
         // Add command context if interpreting
         ...(needsInterpretation && {
           commandContext: {

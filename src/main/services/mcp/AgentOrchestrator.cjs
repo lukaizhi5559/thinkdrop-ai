@@ -248,7 +248,7 @@ class AgentOrchestrator {
           }
           
           // Commands: system commands (all sub-types)
-          if (intentType === 'command' || intentType === 'command_execute' || 
+          if (intentType === 'command_execute' || 
               intentType === 'command_automate' || intentType === 'command_guide') {
             logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
             return 'executeCommand';
@@ -273,7 +273,7 @@ class AgentOrchestrator {
         }
         
         // Commands: system commands (all sub-types - works in both online and private mode)
-        if (intentType === 'command' || intentType === 'command_execute' || 
+        if (intentType === 'command_execute' || 
             intentType === 'command_automate' || intentType === 'command_guide') {
           logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
           return 'executeCommand';

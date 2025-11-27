@@ -44,26 +44,22 @@ module.exports = async function storeConversation(state) {
     
     logger.debug(`📋 [NODE:STORE_CONVERSATION] Total unique entities: ${entities.length}`, entities);
 
-    // Store in user-memory
-    await mcpClient.callService('user-memory', 'memory.store', {
-      text: storageText,
-      tags: ['conversation', 'auto_stored', intent.type],
-      entities: entities, // TOP-LEVEL: Required for memory_entities table
-      metadata: {
-        userMessage: userMessage,
-        aiResponse: answer,
-        sessionId: context.sessionId,
-        userId: context.userId,
-        source: 'conversation_auto_store',
-        intent: intent.type,
-        confidence: intent.confidence,
-        entities: entities, // Also in metadata for reference
-        timestamp: new Date().toISOString()
-      },
-      timestamp: new Date().toISOString()
-    });
-
-    logger.debug('✅ [NODE:STORE_CONVERSATION] Conversation stored for future context');
+    // IMPORTANT: Do NOT store conversations in user-memory database
+    // Conversations are already stored in conversation service (conversation.duckdb)
+    // User-memory (user_memory.duckdb) should ONLY contain explicit memories from memory_store intent
+    // 
+    // This prevents pollution of user-memory with every query/question
+    // Examples of what should NOT be in user-memory:
+    // - "do I have any appts" (question - goes to conversation history only)
+    // - "what time is it" (question - goes to conversation history only)
+    // - "what's the weather" (question - goes to conversation history only)
+    //
+    // Examples of what SHOULD be in user-memory:
+    // - "Set a reminder that I have appt. in two weeks" (memory_store intent)
+    // - "Remember my favorite coffee is oat milk latte" (memory_store intent)
+    // - "My car's VIN is ABC123" (memory_store intent)
+    
+    logger.debug('✅ [NODE:STORE_CONVERSATION] Conversation stored in conversation service (not user-memory)');
 
     return {
       ...state,

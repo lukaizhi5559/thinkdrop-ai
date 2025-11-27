@@ -4,6 +4,91 @@
  */
 
 const logger = require('./../../../logger.cjs');
+
+/**
+ * Calculate Levenshtein distance between two strings (simple text similarity)
+ * @param {string} a - First string
+ * @param {string} b - Second string
+ * @returns {number} - Edit distance
+ */
+function levenshteinDistance(a, b) {
+  const matrix = [];
+  
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+  
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // substitution
+          matrix[i][j - 1] + 1,     // insertion
+          matrix[i - 1][j] + 1      // deletion
+        );
+      }
+    }
+  }
+  
+  return matrix[b.length][a.length];
+}
+
+/**
+ * Calculate text similarity ratio (0-1) between two strings
+ * @param {string} a - First string
+ * @param {string} b - Second string
+ * @returns {number} - Similarity ratio (0 = completely different, 1 = identical)
+ */
+function textSimilarity(a, b) {
+  const distance = levenshteinDistance(a.toLowerCase(), b.toLowerCase());
+  const maxLength = Math.max(a.length, b.length);
+  return 1 - (distance / maxLength);
+}
+
+/**
+ * Deduplicate memories by removing near-duplicates
+ * Keeps the memory with highest similarity score when duplicates are found
+ * @param {Array} memories - Array of memory objects
+ * @returns {Array} - Deduplicated memories
+ */
+function deduplicateMemories(memories) {
+  if (memories.length <= 1) return memories;
+  
+  const deduplicated = [];
+  const SIMILARITY_THRESHOLD = 0.85; // 85% similar = considered duplicate
+  
+  for (const memory of memories) {
+    // Check if this memory is similar to any already added
+    const isDuplicate = deduplicated.some(existing => {
+      const similarity = textSimilarity(memory.text, existing.text);
+      
+      if (similarity >= SIMILARITY_THRESHOLD) {
+        // If new memory has higher similarity score, replace the existing one
+        if (memory.similarity > existing.similarity) {
+          const index = deduplicated.indexOf(existing);
+          deduplicated[index] = memory;
+          logger.debug(`🔄 [DEDUP] Replaced duplicate: "${existing.text}" → "${memory.text}" (${(similarity * 100).toFixed(0)}% similar)`);
+        } else {
+          logger.debug(`🚫 [DEDUP] Skipped duplicate: "${memory.text}" (${(similarity * 100).toFixed(0)}% similar to "${existing.text}")`);
+        }
+        return true; // Mark as duplicate
+      }
+      return false;
+    });
+    
+    if (!isDuplicate) {
+      deduplicated.push(memory);
+    }
+  }
+  
+  return deduplicated;
+}
 module.exports = async function retrieveMemory(state) {
   const { mcpClient, message, context, intent } = state;
 
@@ -12,21 +97,15 @@ module.exports = async function retrieveMemory(state) {
   try {
     // Parallel fetch: conversation history, session context, and memories
     const [conversationResult, sessionContextResult, memoriesResult] = await Promise.all([
-      // Conversation history - use semantic search for better context
-      mcpClient.callService('conversation', 'message.search', {
+      // Conversation history - get recent messages chronologically
+      // Note: conversation service doesn't support semantic search yet
+      mcpClient.callService('conversation', 'message.list', {
         sessionId: context.sessionId,
-        query: message,
         limit: 10,
-        minSimilarity: 0.3,
-        includeRecent: 3 // Always include 3 most recent messages
+        direction: 'DESC'
       }).catch(err => {
-        logger.warn('⚠️ [NODE:RETRIEVE_MEMORY] Semantic search failed, falling back to chronological:', err.message);
-        // Fallback to chronological if semantic search fails
-        return mcpClient.callService('conversation', 'message.list', {
-          sessionId: context.sessionId,
-          limit: 10,
-          direction: 'DESC'
-        }).catch(() => ({ messages: [] }));
+        logger.warn('⚠️ [NODE:RETRIEVE_MEMORY] Conversation history fetch failed:', err.message);
+        return { messages: [] };
       }),
 
       // Session context
@@ -69,7 +148,7 @@ module.exports = async function retrieveMemory(state) {
       .reverse(); // Reverse to chronological order (oldest → newest)
 
     // Process memories
-    const memories = (memoriesData.results || []).map(mem => ({
+    const rawMemories = (memoriesData.results || []).map(mem => ({
       id: mem.id,
       text: mem.text,
       similarity: mem.similarity,
@@ -78,7 +157,10 @@ module.exports = async function retrieveMemory(state) {
       created_at: mem.created_at
     }));
 
-    logger.debug(`✅ [NODE:RETRIEVE_MEMORY] Loaded ${conversationHistory.length} messages, ${memories.length} memories`);
+    // Deduplicate memories - remove near-duplicates based on text similarity
+    const memories = deduplicateMemories(rawMemories);
+
+    logger.debug(`✅ [NODE:RETRIEVE_MEMORY] Loaded ${conversationHistory.length} messages, ${rawMemories.length} raw memories → ${memories.length} after deduplication`);
 
     return {
       ...state,

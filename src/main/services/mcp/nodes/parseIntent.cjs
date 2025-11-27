@@ -153,35 +153,19 @@ module.exports = async function parseIntent(state) {
       };
     }
     
-    // Strong command indicators (open, close, launch, quit, exit, etc.)
-    // BUT: Exclude questions, conditionals, and statements
-    const isQuestion = /^(can|could|would|should|will|do|does|is|are|what|when|where|why|how|who)\s+/i.test(lowerMsg);
-    const isStatement = /^(i want|i need|i'd like|i would like|i'm going to|let me)\s+/i.test(lowerMsg);
-    
-    // CRITICAL: Catch guide/tutorial requests BEFORE DistilBERT
-    // Phrases like "show me how to", "teach me how to", "walk me through" are guide requests
-    if (/^(show me how|teach me|walk me through|guide me|explain how|demonstrate how)\s+/i.test(lowerMsg)) {
-      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected guide/tutorial request, forcing command_guide intent');
-      return {
-        ...state,
-        intent: {
-          type: 'command_guide',
-          confidence: 0.95,
-          entities: [],
-          requiresMemoryAccess: false
-        }
-      };
-    }
+    // ═══════════════════════════════════════════════════════════
+    // CRITICAL PRE-CHECKS (Only keep patterns that DistilBERT struggles with)
+    // ═══════════════════════════════════════════════════════════
     
     // CRITICAL: Catch "goto X and do a Y search" patterns BEFORE DistilBERT
     // These contain "search" keywords that confuse the classifier
     // Match: "goto", "go to", "go online", "navigate to", etc.
     if (/^(goto|go\s+(to|online|on)|navigate to|visit|browse to|head to|open up)\s+/i.test(lowerMsg)) {
-      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command intent');
+      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command_execute intent');
       return {
         ...state,
         intent: {
-          type: 'command',
+          type: 'command_execute',
           confidence: 0.95,
           entities: [],
           requiresMemoryAccess: false
@@ -189,12 +173,13 @@ module.exports = async function parseIntent(state) {
       };
     }
     
-    if (!isQuestion && !isStatement && /^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
-      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command intent');
+    // Imperative command verbs (open, close, etc.) - Keep for speed
+    if (/^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
+      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command_execute intent');
       return {
         ...state,
         intent: {
-          type: 'command',
+          type: 'command_execute',
           confidence: 0.95,
           entities: [],
           requiresMemoryAccess: false
@@ -237,18 +222,27 @@ module.exports = async function parseIntent(state) {
     // MCP protocol wraps response in 'data' field
     const intentData = result.data || result;
     
-    let finalIntent = intentData.intent || 'general_query';
-    let finalConfidence = intentData.confidence || 0.5;
+    const finalIntent = intentData.intent || 'general_query';
+    const finalConfidence = intentData.confidence || 0.5;
     
-    // ── SMART FALLBACK: Check if "question" or "web_search" is actually a "command" ──
-    // System queries like "what apps do I have open" or "how much memory do I have"
-    // are often misclassified as questions or web searches when they should be commands
-    // Also catches "open slack app" misclassified as web_search due to conversation context
-    if ((finalIntent === 'question' && finalConfidence < 0.7) || 
-        (finalIntent === 'web_search' && finalConfidence < 0.9)) {
-      const lowerMessage = message.toLowerCase();
-      
-      // Command indicators: system resource queries
+    // ═══════════════════════════════════════════════════════════
+    // TRUST DISTILBERT - No regex overrides
+    // ═══════════════════════════════════════════════════════════
+    // The ML model is trained on thousands of examples and should be trusted.
+    // Regex patterns create false positives and prevent the model from learning.
+    // If DistilBERT misclassifies, add more training examples instead of regex hacks.
+    
+    logger.debug(`✅ [NODE:PARSE_INTENT] DistilBERT classified as: ${finalIntent} (confidence: ${finalConfidence.toFixed(2)})`);
+    
+    // Remove old smart fallback logic - it was causing more problems than it solved
+    // Example issues:
+    // - "How do I install Node.js?" → Incorrectly forced to command_execute
+    // - "What's my IP address?" → Correctly web_search, but fallback forced to command
+    // 
+    // If you see misclassifications, add them to DistilBERT training data instead:
+    // File: mcp-services/thinkdrop-phi4-service/src/parsers/DistilBertIntentParser.cjs
+    
+    /* REMOVED: Smart fallback with 100+ regex patterns
       const commandPatterns = [
         // ── SYSTEM RESOURCE & STATUS ─────────────────────────────────────
         /what (apps?|applications?|programs?|processes?).*(open|running|active|launched)/i,
@@ -438,58 +432,12 @@ module.exports = async function parseIntent(state) {
         /print this/i,
         /save (this|page|file)/i
       ];
-      
-      const isLikelyCommand = commandPatterns.some(pattern => pattern.test(lowerMessage));
-      
-      if (isLikelyCommand) {
-        logger.debug(`🔄 [NODE:PARSE_INTENT] Smart fallback: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "command" (system query detected)`);
-        finalIntent = 'command';
-        finalConfidence = 0.75; // Boost confidence for command
-      }
-    }
- 
-    // ── SEMANTIC CONTEXT MISMATCH DETECTOR ──────────────────────────────────
-    // If query doesn't semantically match recent conversation, it's likely about screen content
-    // This catches cases like "summarize this bible chapter" when previous conversation was about code
-    if ((finalIntent === 'question' || finalIntent === 'web_search') && 
-        finalConfidence < 0.7 && 
-        recentMessages.length >= 3) {
-      
-      // Check if query has vague references (this/that/the) that could refer to screen
-      const hasVagueReference = /(^|\s)(this|that|the|it|here)\s/i.test(messageToClassify);
-      
-      if (hasVagueReference) {
-        // Get last 3-4 user messages to check semantic relevance
-        const recentUserMessages = recentMessages
-          .filter(msg => msg.role === 'user')
-          .slice(-4)
-          .map(msg => msg.content.toLowerCase());
-        
-        // Extract key nouns/topics from current query
-        const queryWords = messageToClassify.toLowerCase()
-          .replace(/\b(this|that|the|it|a|an|my|your|is|are|was|were|do|does|did|can|could|would|should|will|what|how|why|when|where|who)\b/gi, '')
-          .split(/\s+/)
-          .filter(w => w.length > 3);
-        
-        // Check if any query words appear in recent conversation
-        let matchCount = 0;
-        for (const word of queryWords) {
-          if (recentUserMessages.some(msg => msg.includes(word))) {
-            matchCount++;
-          }
-        }
-        
-        const matchRatio = queryWords.length > 0 ? matchCount / queryWords.length : 0;
-        
-        // If less than 30% of query words match recent conversation, likely referring to screen
-        if (matchRatio < 0.3 && queryWords.length >= 2) {
-          logger.debug(`🎯 [NODE:PARSE_INTENT] Semantic mismatch detected: "${finalIntent}" (${finalConfidence.toFixed(2)}) → "screen_intelligence"`);
-          logger.debug(`   📊 Query words: [${queryWords.join(', ')}] | Match ratio: ${(matchRatio * 100).toFixed(0)}% | Recent context: [${recentUserMessages.join(' | ')}]`);
-          finalIntent = 'screen_intelligence';
-          finalConfidence = 0.85;
-        }
-      }
-    }
+      ... (100+ more patterns)
+    */
+    
+    // REMOVED: Semantic context mismatch detector
+    // This was also using regex heuristics instead of trusting the ML model
+    // The screenIntelligence node already has proper context relevance scoring
 
     return {
       ...state,

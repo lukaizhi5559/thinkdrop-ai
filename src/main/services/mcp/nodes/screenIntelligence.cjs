@@ -68,6 +68,69 @@ async function captureWithoutOverlay(captureFunction) {
 }
 
 /**
+ * Determine if query needs simple LLM context or semantic search
+ * 
+ * Use simple llmContext for:
+ * - General "what's on screen" questions
+ * - Descriptive queries
+ * - Understanding/summarization requests
+ * 
+ * Use semantic search for:
+ * - Specific element queries ("find the Submit button")
+ * - Spatial queries ("what's in the top-right")
+ * - Action-oriented queries ("click X")
+ * 
+ * @param {string} message - User query
+ * @returns {Object} { useSimpleContext: boolean, reason: string }
+ */
+function shouldUseSimpleContext(message) {
+  const lower = message.toLowerCase().trim();
+  
+  // SEMANTIC SEARCH INDICATORS (need precise element locations)
+  
+  // 1. Specific element queries with action verbs
+  if (/\b(click|find|locate|highlight|show me|where is|get)\b.*\b(button|link|input|field|menu|icon|checkbox)\b/i.test(lower)) {
+    return { useSimpleContext: false, reason: 'specific element query' };
+  }
+  
+  // 2. Spatial/position queries
+  if (/\b(top|bottom|left|right|corner|center|side|upper|lower)\b/i.test(lower)) {
+    return { useSimpleContext: false, reason: 'spatial query' };
+  }
+  
+  // 3. Action commands
+  if (/^(click|press|select|choose|open|close)\b/i.test(lower)) {
+    return { useSimpleContext: false, reason: 'action command' };
+  }
+  
+  // 4. Multi-step queries
+  if (/\b(then|after|next|first|second|finally)\b/i.test(lower)) {
+    return { useSimpleContext: false, reason: 'multi-step query' };
+  }
+  
+  // SIMPLE CONTEXT INDICATORS (general understanding)
+  
+  // 1. General "what" questions
+  if (/^(what'?s?|what do|what does|what can|describe|tell me about|explain)\b/i.test(lower) && 
+      !/\b(button|link|input|field|menu|icon)\b/i.test(lower)) {
+    return { useSimpleContext: true, reason: 'general description query' };
+  }
+  
+  // 2. Summary/overview requests
+  if (/\b(summarize|overview|summary|describe|explain|understand|see)\b/i.test(lower)) {
+    return { useSimpleContext: true, reason: 'summary request' };
+  }
+  
+  // 3. Reading/content extraction
+  if (/\b(read|show|display|list|get)\b.*\b(text|content|message|email|notification|title)\b/i.test(lower)) {
+    return { useSimpleContext: true, reason: 'content reading' };
+  }
+  
+  // Default: use simple context for general queries
+  return { useSimpleContext: true, reason: 'default (general query)' };
+}
+
+/**
  * Calculate context relevance score to determine if conversation history is needed
  * 
  * Returns score 0.0-1.0:
@@ -182,6 +245,11 @@ module.exports = async function screenIntelligence(state) {
   const { mcpClient, message, context } = state;
   
   logger.debug('🎯 [NODE:SCREEN_INTELLIGENCE] Analyzing screen context');
+  
+  // Determine context strategy: simple llmContext vs semantic search
+  const contextStrategy = shouldUseSimpleContext(message);
+  logger.debug(`🎯 [NODE:SCREEN_INTELLIGENCE] Context strategy: ${contextStrategy.useSimpleContext ? 'SIMPLE (llmContext)' : 'SEMANTIC SEARCH'} - ${contextStrategy.reason}`);
+  state.useSimpleContext = contextStrategy.useSimpleContext;
   
   // Extract target entity from query
   const targetEntity = extractTargetEntity(message);
@@ -321,6 +389,7 @@ module.exports = async function screenIntelligence(state) {
             method: 'semantic',
             showOverlay: false,
             includeScreenshot: false,
+            skipEmbedding: contextStrategy.useSimpleContext, // Skip embedding generation for simple queries
             windowInfo: currentApp ? {
               appName: currentApp,
               title: currentWindowTitle
@@ -330,6 +399,30 @@ module.exports = async function screenIntelligence(state) {
         
         const captureTime = Date.now() - captureStart;
         logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Fresh capture complete (${captureTime}ms)`);
+        
+        // Extract llmContext from capture result if available
+        logger.debug('🔍 [NODE:SCREEN_INTELLIGENCE] Checking for llmContext in captureResult:', {
+          hasData: !!captureResult?.data,
+          hasLlmContext: !!(captureResult?.data?.llmContext || captureResult?.llmContext),
+          captureResultKeys: captureResult ? Object.keys(captureResult) : [],
+          dataKeys: captureResult?.data ? Object.keys(captureResult.data) : []
+        });
+        
+        if (captureResult?.data?.llmContext || captureResult?.llmContext) {
+          const llmContext = captureResult.data?.llmContext || captureResult.llmContext;
+          state.llmContext = llmContext;
+          logger.debug(`📋 [NODE:SCREEN_INTELLIGENCE] Captured llmContext:`, {
+            app: llmContext.app,
+            windowTitle: llmContext.windowTitle,
+            totalElements: llmContext.summary?.totalElements,
+            clickableCount: llmContext.summary?.clickableCount,
+            hasMenuBar: llmContext.summary?.hasMenuBar,
+            hasFullText: !!llmContext.fullText,
+            fullTextLength: llmContext.fullText?.length
+          });
+        } else {
+          logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] No llmContext found in captureResult!');
+        }
         
         // Send completion update
         if (state.onProgress) {
@@ -343,50 +436,94 @@ module.exports = async function screenIntelligence(state) {
         // Continue anyway - might have recent data in DB
       }
       
-      // Now search the freshly indexed data
-      const result = await mcpClient.callService('screen-intelligence', 'element.search', {
-        query: message,
-        k: 20, // Get more results to filter by app/window
-        minScore: 0.1, // LOWERED: Generic queries like "what do you see" need lower threshold
-        filters: {
-          app: currentApp, // Only return results from current app
-          recentOnly: true // Only search last 30 seconds of captures
+      // CONDITIONAL: Use simple context OR semantic search based on query type
+      if (contextStrategy.useSimpleContext) {
+        // SIMPLE CONTEXT MODE: Skip semantic search, use llmContext directly
+        logger.debug('📋 [NODE:SCREEN_INTELLIGENCE] Using simple context mode (no semantic search)');
+        
+        // Restore guide window if it was visible
+        if (wasGuideVisible && guideWindow) {
+          logger.debug('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
+          guideWindow.show();
         }
-      }, { timeout: 30000 }); // Increased timeout to 30s due to indexing backlog
-      
-      // Restore guide window if it was visible
-      if (wasGuideVisible && guideWindow) {
-        logger.debug('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
-        guideWindow.show();
+        
+        const analysisTime = Date.now() - startTime;
+        logger.debug(`📊 [NODE:SCREEN_INTELLIGENCE] Simple context ready (${analysisTime}ms)`);
+        
+        // llmContext is already in state from capture step above
+        // No need to build screenContext - answer node will use llmContext directly
+        data = {
+          strategy: 'simple-context',
+          fromCache: false,
+          analysisTime
+        };
+        
+      } else {
+        // SEMANTIC SEARCH MODE: Generate embeddings if needed and search
+        logger.debug('🔍 [NODE:SCREEN_INTELLIGENCE] Using semantic search mode');
+        
+        // If embeddings were skipped, generate them on-demand from cached OCR results
+        if (captureResult?.data?.screenId) {
+          const screenId = captureResult.data.screenId;
+          logger.debug(`🔍 [NODE:SCREEN_INTELLIGENCE] Checking if embeddings exist for screen ${screenId}...`);
+          
+          try {
+            // Try to generate embeddings on-demand if they don't exist
+            await mcpClient.callService('screen-intelligence', 'screen.generateEmbeddings', {
+              screenId
+            }, { timeout: 10000 });
+            logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Embeddings ready for semantic search`);
+          } catch (embeddingError) {
+            logger.warn(`⚠️  [NODE:SCREEN_INTELLIGENCE] Could not generate embeddings on-demand:`, embeddingError.message);
+            // Continue anyway - might already be in DB
+          }
+        }
+        
+        // Now search the freshly indexed data
+        const result = await mcpClient.callService('screen-intelligence', 'element.search', {
+          query: message,
+          k: 20, // Get more results to filter by app/window
+          minScore: 0.1, // LOWERED: Generic queries like "what do you see" need lower threshold
+          filters: {
+            app: currentApp, // Only return results from current app
+            recentOnly: true // Only search last 30 seconds of captures
+          }
+        }, { timeout: 30000 }); // Increased timeout to 30s due to indexing backlog
+        
+        // Restore guide window if it was visible
+        if (wasGuideVisible && guideWindow) {
+          logger.debug('👁️  [NODE:SCREEN_INTELLIGENCE] Restoring ThinkDrop AI panel...');
+          guideWindow.show();
+        }
+        
+        const analysisTime = Date.now() - startTime;
+        logger.debug(`📊 [NODE:SCREEN_INTELLIGENCE] Semantic search complete (${analysisTime}ms)`);
+        
+        // Extract semantic search results
+        semanticResults = result.data?.results || result.results || [];
+        logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
+        
+        // Log first 10 results with full details
+        logger.debug('\n🔍 [NODE:SCREEN_INTELLIGENCE] TOP 10 SEARCH RESULTS:');
+        semanticResults.slice(0, 10).forEach((r, i) => {
+          logger.debug(`\n${i + 1}. Score: ${r.score?.toFixed(3)} | App: ${r.app || 'N/A'} | Type: ${r.type}`);
+          logger.debug(`   Window: ${r.windowTitle?.substring(0, 60) || 'N/A'}`);
+          logger.debug(`   Timestamp: ${r.timestamp ? new Date(r.timestamp).toISOString() : 'N/A'}`);
+          logger.debug(`   Text: ${r.text?.substring(0, 100) || r.description?.substring(0, 100) || 'N/A'}...`);
+        });
+        logger.debug('\n');
+        
+        // Create minimal data structure for compatibility
+        data = {
+          strategy: 'semantic-search',
+          elementCount: semanticResults.length,
+          fromCache: false,
+          searchTime: analysisTime
+        };
+        
+        // Build context from semantic search results
+        screenContext = buildScreenContextFromSearch(semanticResults, message, null, data);
       }
-      
-      const analysisTime = Date.now() - startTime;
-      logger.debug(`📊 [NODE:SCREEN_INTELLIGENCE] Semantic search complete (${analysisTime}ms)`);
-      
-      // Extract semantic search results
-      semanticResults = result.data?.results || result.results || [];
-      logger.debug(`✅ [NODE:SCREEN_INTELLIGENCE] Found ${semanticResults.length} relevant elements from DuckDB`);
-      
-      // Log first 10 results with full details
-      logger.debug('\n🔍 [NODE:SCREEN_INTELLIGENCE] TOP 10 SEARCH RESULTS:');
-      semanticResults.slice(0, 10).forEach((r, i) => {
-        logger.debug(`\n${i + 1}. Score: ${r.score?.toFixed(3)} | App: ${r.app || 'N/A'} | Type: ${r.type}`);
-        logger.debug(`   Window: ${r.windowTitle?.substring(0, 60) || 'N/A'}`);
-        logger.debug(`   Timestamp: ${r.timestamp ? new Date(r.timestamp).toISOString() : 'N/A'}`);
-        logger.debug(`   Text: ${r.text?.substring(0, 100) || r.description?.substring(0, 100) || 'N/A'}...`);
-      });
-      logger.debug('\n');
-      
-      // Create minimal data structure for compatibility
-      data = {
-        strategy: 'semantic-search',
-        elementCount: semanticResults.length,
-        fromCache: false,
-        searchTime: analysisTime
-      };
-      
-      // Build context from semantic search results
-      screenContext = buildScreenContextFromSearch(semanticResults, message, null, data);
     }
     
     // TEMPORARILY DISABLED: Overlay causes focus stealing and desktop shifts
@@ -416,20 +553,72 @@ module.exports = async function screenIntelligence(state) {
     
     // Update state with screen intelligence results
     state.screenIntelligenceResult = data;
+    
+    // Build screenContext based on strategy
+    logger.debug('🏗️  [NODE:SCREEN_INTELLIGENCE] Building screenContext...', {
+      useSimpleContext: contextStrategy.useSimpleContext,
+      hasLlmContext: !!state.llmContext,
+      llmContextKeys: state.llmContext ? Object.keys(state.llmContext) : []
+    });
+    
+    if (contextStrategy.useSimpleContext && state.llmContext) {
+      // Build context from llmContext for simple queries
+      const llmCtx = state.llmContext;
+      const contextParts = [];
+      
+      contextParts.push(`📱 Application: ${llmCtx.app}`);
+      if (llmCtx.windowTitle) contextParts.push(`📄 Window: ${llmCtx.windowTitle}`);
+      
+      // Add structured elements by type
+      if (llmCtx.structured) {
+        if (llmCtx.structured.menuItems?.length > 0) {
+          contextParts.push(`\n🔹 Menu Items: ${llmCtx.structured.menuItems.join(', ')}`);
+        }
+        if (llmCtx.structured.headings?.length > 0) {
+          contextParts.push(`\n📋 Headings: ${llmCtx.structured.headings.join(', ')}`);
+        }
+        if (llmCtx.structured.buttons?.length > 0) {
+          contextParts.push(`\n🔘 Buttons: ${llmCtx.structured.buttons.join(', ')}`);
+        }
+        if (llmCtx.structured.links?.length > 0) {
+          contextParts.push(`\n🔗 Links: ${llmCtx.structured.links.slice(0, 10).join(', ')}${llmCtx.structured.links.length > 10 ? '...' : ''}`);
+        }
+      }
+      
+      // Add full text for comprehensive context
+      if (llmCtx.fullText) {
+        contextParts.push(`\n\n📝 Screen Content:\n${llmCtx.fullText}`);
+      }
+      
+      screenContext = contextParts.join('\n');
+      logger.debug('📋 [NODE:SCREEN_INTELLIGENCE] Built screenContext from llmContext', {
+        contextLength: screenContext.length,
+        contextPreview: screenContext.substring(0, 200)
+      });
+    } else {
+      logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Cannot build screenContext:', {
+        reason: !contextStrategy.useSimpleContext ? 'Not using simple context' : 'No llmContext available'
+      });
+    }
+    
     state.screenContext = screenContext;
     
     // Add to context for answer node
-    if (state.context) {
-      state.context += `\n\n## Screen Context\n${screenContext}`;
+    if (screenContext) {
+      if (state.context) {
+        state.context += `\n\n## Screen Context\n${screenContext}`;
+      } else {
+        state.context = `## Screen Context\n${screenContext}`;
+      }
+      
+      logger.debug('📝 [NODE:SCREEN_INTELLIGENCE] Screen context added to state');
+      logger.debug('=' .repeat(80));
+      logger.debug('📊 SCREEN CONTEXT BEING PASSED TO ANSWER NODE:');
+      logger.debug(screenContext.substring(0, 500) + '...');
+      logger.debug('=' .repeat(80));
     } else {
-      state.context = `## Screen Context\n${screenContext}`;
+      logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] No screen context available!');
     }
-    
-    logger.debug('📝 [NODE:SCREEN_INTELLIGENCE] Screen context added to state');
-    logger.debug('=' .repeat(80));
-    logger.debug('📊 SCREEN CONTEXT BEING PASSED TO ANSWER NODE:');
-    logger.debug(screenContext);
-    logger.debug('=' .repeat(80));
     
     // 🆕 Generate Page Insight if we have text content from semantic results
     // Extract text from semantic search results
