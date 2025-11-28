@@ -232,7 +232,7 @@ class AgentOrchestrator {
         logger.debug(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
         console.log(`🎯 [STATEGRAPH:ROUTER] Intent: ${intentType} → Routing to subgraph (Online: ${useOnlineMode})`);
         // Memory store: save information
-        if (intentType === 'memory_store' || intentType === 'store_memory' || intentType === 'remember') {
+        if (intentType === 'memory_store') {
           return 'storeMemory';
         }
         
@@ -242,14 +242,13 @@ class AgentOrchestrator {
           
           // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
           // Vision intent now routes to screen intelligence first, falls back to vision service if needed
-          if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
+          if (intentType === 'screen_intelligence') {
             logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
             return 'screenIntelligence';
           }
           
           // Commands: system commands (all sub-types)
-          if (intentType === 'command_execute' || 
-              intentType === 'command_automate' || intentType === 'command_guide') {
+          if (intentType === 'command_execute' || intentType === 'command_automate' || intentType === 'command_guide') {
             logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
             return 'executeCommand';
           }
@@ -267,7 +266,7 @@ class AgentOrchestrator {
         
         // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
         // Vision intent now routes to screen intelligence first, falls back to vision service if needed
-        if (intentType === 'vision' || intentType === 'screen_intelligence' || intentType === 'screen_analysis' || intentType === 'screen_query') {
+        if (intentType === 'screen_intelligence') {
           logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
           return 'screenIntelligence';
         }
@@ -281,8 +280,7 @@ class AgentOrchestrator {
         
         // Web search: time-sensitive queries, factual questions, and general knowledge
         // These should always try web search first, fallback to LLM if offline/no results
-        if (intentType === 'web_search' || intentType === 'search' || intentType === 'lookup' ||
-            intentType === 'question' || intentType === 'general_knowledge') {
+        if (intentType === 'web_search' || intentType === 'question' || intentType === 'general_knowledge') {
           return 'parallelWebAndMemory'; // ⚡ PARALLEL: webSearch + retrieveMemory
         }
         

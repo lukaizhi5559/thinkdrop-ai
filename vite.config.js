@@ -13,7 +13,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'src/renderer/index.html'),
-        'ai-viewing-overlay': resolve(__dirname, 'src/overlay/ai-viewing-indicator.html'),
       },
     },
   },

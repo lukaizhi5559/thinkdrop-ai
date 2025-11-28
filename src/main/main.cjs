@@ -291,18 +291,6 @@ app.whenReady().then(async () => {
       if (msg.type === 'ready') {
         global.windowTrackerReady = true;
         logger.debug('✅ Window Tracker worker ready');
-      } else if (msg.type === 'showWindowChangeToast') {
-        // Worker requesting window change toast
-        try {
-          const { showHotkeyToast } = require('./windows/ai-viewing-overlay.cjs');
-          const message = `<div style="text-align: center;">
-            <strong>${msg.app}</strong>${msg.title ? `<br><span style="opacity: 0.8;">${msg.title}</span>` : ''}
-          </div>`;
-          showHotkeyToast(message, { persistent: true, duration: 2000 });
-          logger.debug(`🍞 [MAIN] Window change toast shown: ${msg.app}`);
-        } catch (error) {
-          logger.error('❌ [MAIN] Failed to show window change toast:', error);
-        }
       } else if (msg.type === 'activeWindowUpdate') {
         // Worker notifying of active window change
         const previousWindowId = global.activeWindowId;
