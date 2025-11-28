@@ -353,9 +353,24 @@ module.exports = async function answer(state) {
     needsInterpretation = false // Flag indicating command output needs interpretation
   } = state;
   
+  // DEBUG: Log incoming message types
+  logger.debug('🔍 [NODE:ANSWER] Incoming message types:', {
+    message: typeof message,
+    resolvedMessage: typeof resolvedMessage,
+    context: typeof context,
+    messagePreview: typeof message === 'string' ? message.substring(0, 100) : JSON.stringify(message).substring(0, 100)
+  });
+  
   // For screen intelligence, use original message (coreference resolution can confuse "this" references to screen content)
   // For other intents, use resolved message (after coreference resolution)
-  const queryMessage = (intent?.type === 'screen_intelligence') ? message : (resolvedMessage || message);
+  let queryMessage = (intent?.type === 'screen_intelligence') ? message : (resolvedMessage || message);
+  
+  // SAFETY: Ensure queryMessage is always a string
+  if (typeof queryMessage !== 'string') {
+    logger.warn('⚠️  [NODE:ANSWER] queryMessage is not a string, converting:', typeof queryMessage);
+    logger.warn('   Original value:', queryMessage);
+    queryMessage = typeof queryMessage === 'object' ? JSON.stringify(queryMessage) : String(queryMessage);
+  }
 
   // 🔄 CONTEXT SWITCHING DETECTION
   // Detect if the user has switched topics and filter conversation history accordingly
@@ -535,6 +550,25 @@ Rules:`;
     // conversation history, memories, or web results
     const isCommandWithInterpretedOutput = needsInterpretation && processedOutput;
     
+    // 🎯 INTELLIGENT TOKEN ALLOCATION: Adjust maxTokens based on intent type
+    const getTokenLimitForIntent = (intentType, isFastMode) => {
+      // Intent-specific token limits (min:max for fast:normal mode)
+      const intentTokenLimits = {
+        'screen_intelligence': { fast: 200, normal: 600 },  // Detailed screen descriptions
+        'web_search': { fast: 150, normal: 500 },           // Factual answers with sources
+        'general_knowledge': { fast: 100, normal: 400 },    // Concise factual responses
+        'command_execute': { fast: 50, normal: 150 },       // Brief command confirmations
+        'command_guide': { fast: 150, normal: 500 },        // Step-by-step instructions
+        'memory_store': { fast: 30, normal: 100 },          // Quick confirmations
+        'memory_retrieve': { fast: 100, normal: 300 },      // Retrieved facts
+        'question': { fast: 100, normal: 400 },             // General Q&A
+        'greeting': { fast: 30, normal: 80 }                // Short greetings
+      };
+      
+      const limits = intentTokenLimits[intentType] || { fast: 150, normal: 500 }; // Default
+      return isFastMode ? limits.fast : limits.normal;
+    };
+    
     // Prepare the query - add context directly to query for vision/screen intents
     let finalQuery = queryMessage;
     if (state.visualContext && state.intent?.type === 'vision') {
@@ -572,8 +606,14 @@ Rules:`;
     const isSimpleQuery = queryMessage.length < 100 && !needsInterpretation;
     const useFastMode = hasMinimalContext && isSimpleQuery;
     
+    // Calculate intelligent token limit based on intent
+    const intentType = intent?.type || 'question'; // Default to 'question' if no intent
+    const maxTokens = getTokenLimitForIntent(intentType, useFastMode);
+    
     if (useFastMode) {
-      logger.debug('⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query');
+      logger.debug(`⚡ [NODE:ANSWER] Using FAST MODE - minimal context, simple query (${maxTokens} tokens for ${intentType})`);
+    } else {
+      logger.debug(`🎯 [NODE:ANSWER] Using NORMAL MODE (${maxTokens} tokens for ${intentType})`);
     }
 
     console.log('🌊 [NODE:ANSWER] Processed Output:', processedOutput);
@@ -605,12 +645,12 @@ Rules:`;
           }
         })
       },
-      // 🚀 Add performance options
+      // 🚀 Add performance options with intelligent token allocation
       options: {
         fastMode: useFastMode,           // Skip heavy system prompts in Phi4
-        maxTokens: useFastMode ? 30 : 100,  // Shorter for simple queries
+        maxTokens,                       // 🎯 Intent-based token limit (30-600 depending on intent)
         temperature: 0.1,                // Deterministic
-        contextLength: 512               // Minimal context window
+        contextLength: 2048              // Larger context window for screen content
       }
     };
 

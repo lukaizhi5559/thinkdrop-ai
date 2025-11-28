@@ -596,9 +596,23 @@ module.exports = async function screenIntelligence(state) {
         contextPreview: screenContext.substring(0, 200)
       });
     } else {
-      logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Cannot build screenContext:', {
-        reason: !contextStrategy.useSimpleContext ? 'Not using simple context' : 'No llmContext available'
-      });
+      // CRITICAL: Even if not using simple context, we need screenContext for coreference resolution
+      // Use llmContext.fullText or data.ocrText as fallback
+      if (state.llmContext?.fullText) {
+        screenContext = state.llmContext.fullText;
+        logger.debug('📋 [NODE:SCREEN_INTELLIGENCE] Built screenContext from llmContext.fullText for coreference', {
+          contextLength: screenContext.length
+        });
+      } else if (data.ocrText) {
+        screenContext = data.ocrText;
+        logger.debug('📋 [NODE:SCREEN_INTELLIGENCE] Built screenContext from ocrText for coreference', {
+          contextLength: screenContext.length
+        });
+      } else {
+        logger.warn('⚠️  [NODE:SCREEN_INTELLIGENCE] Cannot build screenContext:', {
+          reason: 'No llmContext.fullText or ocrText available'
+        });
+      }
     }
     
     state.screenContext = screenContext;

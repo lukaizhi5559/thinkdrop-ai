@@ -132,12 +132,34 @@ module.exports = async function resolveReferences(state) {
       historyToUse = freshConversationHistory.slice(-5);
     }
     
+    // CRITICAL: For screen intelligence intents, pass screen content to coreference service
+    // This allows the service to extract entities from screen (e.g., "raw()" method) and use them
+    // for pronoun resolution instead of incorrectly using entities from conversation history
+    logger.debug('🔍 [NODE:RESOLVE_REFERENCES] Checking for screen content...', {
+      isScreenIntent,
+      hasScreenContext: !!state.screenContext,
+      hasOcrText: !!state.screenIntelligenceResult?.ocrText,
+      screenContextLength: state.screenContext?.length || 0,
+      ocrTextLength: state.screenIntelligenceResult?.ocrText?.length || 0
+    });
+    
+    const screenContent = isScreenIntent ? (state.screenContext || state.screenIntelligenceResult?.ocrText) : null;
+    
+    if (screenContent && isScreenIntent) {
+      logger.debug('🖥️  [NODE:RESOLVE_REFERENCES] Passing screen content to coreference service for screen-aware resolution');
+      logger.debug(`   Screen content preview: "${screenContent.substring(0, 150)}..."`);
+    } else if (isScreenIntent) {
+      logger.warn('⚠️  [NODE:RESOLVE_REFERENCES] Screen intent detected but no screen content available!');
+    }
+    
     const result = await mcpClient.callService('coreference', 'resolve', {
       message,
       conversationHistory: historyToUse,
       options: {
         includeConfidence: true,
-        method: 'auto' // auto, neuralcoref, or rule_based
+        method: 'auto', // auto, neuralcoref, or rule_based
+        screenContent: screenContent, // Pass screen content for screen-aware resolution
+        intentType: intentType // Pass intent type to help coreference service prioritize correctly
       }
     });
 
