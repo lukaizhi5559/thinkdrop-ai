@@ -229,3 +229,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   version: process.versions.electron
 });
+
+// Also expose a simpler electron.ipcRenderer for overlay compatibility
+contextBridge.exposeInMainWorld('electron', {
+  ipcRenderer: {
+    send: (channel, ...args) => ipcRenderer.send(channel, ...args),
+    on: (channel, callback) => ipcRenderer.on(channel, (event, ...args) => callback(event, ...args)),
+    removeListener: (channel, callback) => ipcRenderer.removeListener(channel, callback),
+    removeAllListeners: (channel) => ipcRenderer.removeAllListeners(channel)
+  }
+});

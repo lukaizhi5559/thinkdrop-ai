@@ -37,6 +37,9 @@ const storeMemoryNode = require('./nodes/storeMemory.cjs');
 const executeCommandNode = require('./nodes/executeCommand.cjs');
 const visionNode = require('./nodes/vision.cjs');
 const screenIntelligenceNode = require('./nodes/screenIntelligence.cjs');
+// Overlay system nodes
+const selectOverlayVariantNode = require('./nodes/selectOverlayVariant.cjs');
+const overlayOutputNode = require('./nodes/overlayOutput.cjs');
 
 const logger = require('./../../logger.cjs');
 class AgentOrchestrator {
@@ -217,7 +220,11 @@ class AgentOrchestrator {
       // Shared answer/validate/store tail
       answer: (state) => answerNode({ ...state, mcpClient: this.mcpClient }),
       validateAnswer: validateAnswerNode,
-      storeConversation: (state) => storeConversationNode({ ...state, mcpClient: this.mcpClient })
+      storeConversation: (state) => storeConversationNode({ ...state, mcpClient: this.mcpClient }),
+      
+      // Overlay system nodes
+      selectOverlayVariant: selectOverlayVariantNode,
+      overlayOutput: overlayOutputNode
     };
 
     // Define edges with intent-based routing
@@ -375,11 +382,15 @@ class AgentOrchestrator {
         if (state.needsRetry && isStreaming) {
           logger.debug(`⏭️  [STATEGRAPH:RETRY] Skipping retry for streaming mode (would cause double response)`);
         }
-        // Otherwise, proceed to store conversation
-        return 'storeConversation';
+        // Otherwise, proceed to overlay variant selection
+        return 'selectOverlayVariant';
       },
       webSearch: 'sanitizeWeb', // After web search, sanitize and re-answer
       sanitizeWeb: 'answer', // Go back to answer with web results
+      
+      // Overlay system flow: selectVariant → overlayOutput → storeConversation → end
+      selectOverlayVariant: 'overlayOutput',
+      overlayOutput: 'storeConversation',
       storeConversation: 'end'
     };
 
@@ -428,7 +439,15 @@ class AgentOrchestrator {
           ...context // Include all other context properties (e.g., bypassConfirmation)
         },
         streamCallback: onStreamToken, // Pass streaming callback to answer node
-        useOnlineMode // 🌐 Pass online mode flag to answer node
+        useOnlineMode, // 🌐 Pass online mode flag to answer node
+        
+        // Overlay system: intent context for UI-driven workflows
+        intentContext: {
+          intent: null,      // Will be set by parseIntent node
+          slots: {},         // Data filled by graph nodes
+          uiVariant: null    // Will be set by selectOverlayVariant node
+        },
+        overlayPayload: null // Will be set by overlayOutput node
       };
 
       // Execute the graph workflow with progress callback
@@ -477,6 +496,8 @@ class AgentOrchestrator {
         guideMetadata: finalState.guideMetadata,
         elapsedMs: finalState.elapsedMs,
         trace: finalState.trace, // Full execution trace for debugging
+        // Overlay system payload
+        overlayPayload: finalState.overlayPayload || null,
         debug: {
           iterations: finalState.iterations,
           failedNode: finalState.failedNode,
@@ -573,6 +594,96 @@ class AgentOrchestrator {
   clearTraceHistory() {
     this.traceHistory = [];
     logger.debug('🧹 [ORCHESTRATOR] Trace history cleared');
+  }
+
+  /**
+   * Process overlay event (user interaction from overlay UI)
+   * Re-enters state graph with updated intent context, bypassing parseIntent
+   * @param {object} overlayEvent - Event from overlay UI
+   * @returns {Promise<object>} Orchestration result with overlay payload
+   */
+  async processOverlayEvent(overlayEvent) {
+    const { intent, slots, conversationId, bypassParseIntent } = overlayEvent;
+    
+    if (DEBUG) {
+      logger.debug(`📨 [ORCHESTRATOR:OVERLAY] Processing overlay event:`, {
+        intent,
+        uiActionId: overlayEvent.uiActionId,
+        sourceComponent: overlayEvent.sourceComponent,
+        bypassParseIntent
+      });
+    }
+
+    try {
+      // Build the graph (cached after first call)
+      const graph = this._buildStateGraph();
+
+      // Dynamically import intent registry
+      const { getIntentDescriptor } = await import('../../../intents/registry.js');
+      const descriptor = getIntentDescriptor(intent);
+      
+      if (!descriptor) {
+        throw new Error(`No descriptor found for intent: ${intent}`);
+      }
+
+      if (!descriptor.allowBypassParseIntent && bypassParseIntent) {
+        logger.warn(`⚠️  [ORCHESTRATOR:OVERLAY] Intent ${intent} does not allow bypass, but bypassParseIntent=true`);
+      }
+
+      // Create state with pre-populated intent context
+      const initialState = {
+        reqId: `req_overlay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        message: slots.subject || overlayEvent.uiActionId || 'overlay_event',
+        context: {
+          sessionId: conversationId,
+          userId: 'overlay_user',
+          timestamp: new Date().toISOString(),
+        },
+        
+        // Pre-populate intent context (bypass parseIntent)
+        intent: {
+          type: intent,
+          confidence: 1.0,
+          entities: slots.entities || [],
+          requiresMemory: false
+        },
+        intentContext: {
+          intent,
+          slots,
+          uiVariant: null
+        },
+        overlayPayload: null,
+        correlationId: overlayEvent.correlationId
+      };
+
+      // Execute from intent's entry node (bypass parseIntent)
+      const entryNode = descriptor.entryNode;
+      logger.debug(`🎯 [ORCHESTRATOR:OVERLAY] Entering graph at: ${entryNode}`);
+      
+      const finalState = await graph.execute(initialState, null, entryNode);
+
+      // Format result
+      return {
+        success: finalState.success,
+        overlayPayload: finalState.overlayPayload,
+        response: finalState.answer || null,
+        elapsedMs: finalState.elapsedMs,
+        trace: finalState.trace,
+        debug: {
+          iterations: finalState.iterations,
+          failedNode: finalState.failedNode,
+          error: finalState.error
+        }
+      };
+
+    } catch (error) {
+      logger.error(`❌ [ORCHESTRATOR:OVERLAY] Error processing overlay event:`, error.message);
+      return {
+        success: false,
+        error: error.message,
+        overlayPayload: null
+      };
+    }
   }
 }
 

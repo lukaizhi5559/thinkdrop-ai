@@ -11,10 +11,7 @@
  * 
  * This provides structured, queryable screen context to the LLM.
  */
-
-const { showHighlights } = require('../../../windows/screen-intelligence-overlay.cjs');
 const { getGuideWindow } = require('../../../windows/guide-window.cjs');
-const { getAIViewingOverlay, hideAIViewingOverlay, showAIViewingOverlay } = require('../../../windows/ai-viewing-overlay.cjs');
 
 const logger = require('./../../../logger.cjs');
 // Element color mapping by type
@@ -26,46 +23,6 @@ const ELEMENT_COLORS = {
   textarea: '#f59e0b',    // Orange - Text inputs
   default: '#6b7280'      // Gray - Other elements
 };
-
-/**
- * Temporarily hide overlay during screen capture to avoid capturing overlay UI
- * @param {Function} captureFunction - Async function that performs the capture
- * @returns {Promise<any>} Result from captureFunction
- */
-async function captureWithoutOverlay(captureFunction) {
-  const overlay = getAIViewingOverlay();
-  logger.debug('👻 [SCREEN_CAPTURE] Overlay check:', {
-    exists: !!overlay,
-    isVisible: overlay ? overlay.isVisible() : false,
-    isDestroyed: overlay ? overlay.isDestroyed() : false
-  });
-  
-  const wasVisible = overlay && !overlay.isDestroyed() && overlay.isVisible();
-  
-  try {
-    // Hide overlay if visible
-    if (wasVisible) {
-      logger.debug('👻 [SCREEN_CAPTURE] Hiding overlay for clean capture...');
-      hideAIViewingOverlay();
-      // Wait for overlay to fully hide (animation + render)
-      await new Promise(resolve => setTimeout(resolve, 500));
-      logger.debug('👻 [SCREEN_CAPTURE] Overlay should be hidden now');
-    } else {
-      logger.debug('👻 [SCREEN_CAPTURE] Overlay not visible, proceeding with capture');
-    }
-    
-    // Perform capture
-    const result = await captureFunction();
-    
-    return result;
-  } finally {
-    // Always restore overlay if it was visible
-    if (wasVisible) {
-      logger.debug('👁️  [SCREEN_CAPTURE] Restoring overlay...');
-      showAIViewingOverlay();
-    }
-  }
-}
 
 /**
  * Determine if query needs simple LLM context or semantic search
@@ -525,31 +482,6 @@ module.exports = async function screenIntelligence(state) {
         screenContext = buildScreenContextFromSearch(semanticResults, message, null, data);
       }
     }
-    
-    // TEMPORARILY DISABLED: Overlay causes focus stealing and desktop shifts
-    // Even with type: 'panel', showing the overlay window activates the Electron app
-    // and causes fullscreen apps to exit fullscreen mode
-    // TODO: Re-enable after fixing focus stealing issue
-    // if (shouldShowOverlay(message)) {
-    //   try {
-    //     const filteredElements = getFilteredElementsForOverlay(data, message);
-    //     // Filter out desktop items with invalid coordinates (x:-1, y:-1)
-    //     const validElements = filteredElements.filter(el => 
-    //       el.bounds && el.bounds.x >= 0 && el.bounds.y >= 0
-    //     );
-    //     
-    //     if (validElements.length > 0) {
-    //       logger.debug(`🎨 [NODE:SCREEN_INTELLIGENCE] Showing overlay for spatial query with ${validElements.length} elements`);
-    //       showHighlights(validElements, 10000);
-    //       state.overlayShown = true;
-    //     } else {
-    //       logger.debug(`ℹ️  [NODE:SCREEN_INTELLIGENCE] No valid elements to highlight for spatial query`);
-    //     }
-    //   } catch (overlayError) {
-    //     logger.error('⚠️  [NODE:SCREEN_INTELLIGENCE] Failed to show overlay:', overlayError);
-    //     // Don't fail the entire flow if overlay fails
-    //   }
-    // }
     
     // Update state with screen intelligence results
     state.screenIntelligenceResult = data;

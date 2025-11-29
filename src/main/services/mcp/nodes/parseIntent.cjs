@@ -439,6 +439,17 @@ module.exports = async function parseIntent(state) {
     // This was also using regex heuristics instead of trusting the ML model
     // The screenIntelligence node already has proper context relevance scoring
 
+    // Populate intentContext for overlay system
+    const intentContext = state.intentContext || { intent: null, slots: {}, uiVariant: null };
+    intentContext.intent = finalIntent;
+    
+    // Initialize slots with basic data from message and entities
+    intentContext.slots = {
+      subject: message, // Default subject is the user's message
+      entities: intentData.entities || [],
+      ...intentContext.slots // Preserve any existing slots
+    };
+    
     return {
       ...state,
       intent: {
@@ -447,7 +458,8 @@ module.exports = async function parseIntent(state) {
         entities: intentData.entities || [],
         requiresMemory: intentData.requiresMemory || false,
         suggestedResponse: intentData.suggestedResponse // Pass through for memory_store
-      }
+      },
+      intentContext // Add intentContext to state
     };
   } catch (error) {
     logger.error(' [NODE:PARSE_INTENT] Failed:', error.message);

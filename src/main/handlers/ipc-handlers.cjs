@@ -338,6 +338,18 @@ function initializeIPCHandlers({
       const result = await coreAgent.ask(intentPayload);
       
       logger.debug('✅ Unified agent orchestration completed:', result);
+      
+      // Send overlay payload if present
+      if (result && result.overlayPayload) {
+        try {
+          const { sendOverlayUpdate } = require('../ipc/overlay.cjs');
+          sendOverlayUpdate(result.overlayPayload);
+          logger.debug('📤 [IPC] Sent overlay payload to transparent overlay');
+        } catch (error) {
+          logger.warn('⚠️  [IPC] Failed to send overlay payload:', error.message);
+        }
+      }
+      
       return { success: true, data: result };
     } catch (error) {
       logger.error('❌ Unified agent orchestration error:', error);

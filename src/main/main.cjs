@@ -205,6 +205,91 @@ function createOverlayWindow() {
 // REMOVED: createInsightWindow - now handled within unified overlayWindow
 // Insight functionality is now integrated into the main overlay interface
 
+// Transparent overlay window for intent-driven UI
+let transparentOverlayWindow = null;
+
+function createTransparentOverlay() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
+  // Create a small window just for the prompt bar (60% width, centered at bottom)
+  const promptBarWidth = Math.floor(width * 0.6);
+  const promptBarHeight = 120; // Minimal height to fit content exactly
+  const x = Math.floor((width - promptBarWidth) / 2);
+  const y = height - promptBarHeight - 5; // 5px from bottom
+
+  transparentOverlayWindow = new BrowserWindow({
+    width: promptBarWidth,
+    height: promptBarHeight,
+    x,
+    y,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: false,
+    focusable: true,
+    acceptFirstMouse: true,
+    type: 'panel', // Panel type for proper macOS behavior without shadow
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  // Explicitly disable shadow to prevent invisible blocking area
+  transparentOverlayWindow.setHasShadow(false);
+  
+  // Additional shadow removal for macOS
+  if (process.platform === 'darwin') {
+    // Hide window buttons (traffic lights) which can cause shadow
+    transparentOverlayWindow.setWindowButtonVisibility(false);
+  }
+
+  // Configure window to appear on all spaces and over fullscreen apps
+  if (process.platform === 'darwin') {
+    transparentOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    transparentOverlayWindow.setAlwaysOnTop(true, 'floating', 1);
+  }
+
+  // No setIgnoreMouseEvents - this small window is fully interactive
+
+  // Load overlay HTML
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    transparentOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html');
+    // Open DevTools for debugging
+    transparentOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    transparentOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  // Debug: Log when overlay loads
+  transparentOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [OVERLAY WINDOW] Overlay HTML loaded successfully');
+  });
+
+  transparentOverlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    logger.error(`❌ [OVERLAY WINDOW] Failed to load: ${errorCode} - ${errorDescription}`);
+  });
+
+  transparentOverlayWindow.on('closed', () => {
+    transparentOverlayWindow = null;
+  });
+
+  // Make globally accessible
+  global.transparentOverlayWindow = transparentOverlayWindow;
+
+  logger.debug('✅ Transparent overlay window created');
+  return transparentOverlayWindow;
+}
+
 function toggleOverlay() {
   if (!overlayWindow) return;
   
@@ -215,12 +300,14 @@ function toggleOverlay() {
     isChatVisible = false;
     isInsightVisible = false;
     isGloballyVisible = false;
+    transparentOverlayWindow.hide();
   } else {
     // Show the unified overlay window
     overlayWindow.show();
     overlayWindow.focus();
     isOverlayVisible = true;
     isGloballyVisible = true;
+    transparentOverlayWindow.show();
   }
 }
 
@@ -240,9 +327,6 @@ app.whenReady().then(async () => {
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
     logger.debug('👁️  Creating combined overlay...');
-    // const { createAIViewingOverlay, hideAIViewingOverlay } = require('./windows/ai-viewing-overlay.cjs');
-    // createAIViewingOverlay();
-    logger.debug('✅ Combined overlay created');
     
   // Initialize core services including LocalLLMAgent
   let handlersSetup = false;
@@ -261,6 +345,17 @@ app.whenReady().then(async () => {
     if (!handlersSetup) {
       handlersSetup = true;
       await setupIPCHandlers();
+      
+      // Initialize overlay IPC handlers
+      logger.debug('🔧 Initializing overlay IPC handlers...');
+      const { initializeOverlayIPC } = require('./ipc/overlay.cjs');
+      initializeOverlayIPC(coreAgent);
+      logger.debug('✅ Overlay IPC handlers initialized');
+      
+      // Create transparent overlay window
+      logger.debug('🔧 Creating transparent overlay window...');
+      createTransparentOverlay();
+      logger.debug('✅ Transparent overlay window created');
     }
   }).catch(async error => {
     logger.error('❌ Error during initialization sequence:', error);
@@ -303,21 +398,7 @@ app.whenReady().then(async () => {
         };
         logger.debug(`🎯 [MAIN] Active window updated: ${msg.windowId}`);
         logger.debug(`   Previous: ${previousWindowId || 'none'}`);
-        
-        // 👁️  Send active window update to overlay for AI viewing indicator
-        try {
-          const { sendActiveWindowUpdate } = require('./windows/ai-viewing-overlay.cjs');
-          
-          // Title is already cleaned by virtualScreenDOM (uses AppleScript for browsers)
-          sendActiveWindowUpdate({
-            windowName: msg.title || msg.app,
-            app: msg.app,
-            url: msg.url,
-            windowId: msg.windowId
-          });
-        } catch (error) {
-          logger.warn('⚠️  [MAIN] Failed to send active-window-update:', error.message);
-        }
+         
       } else if (msg.type === 'error') {
         logger.error('❌ [MAIN] Window Tracker error:', msg.error);
       } else {

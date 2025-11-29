@@ -171,31 +171,11 @@ class SelectionDetector {
 
   /**
    * Show hotkey hint toast (only once on startup)
+   * DISABLED: hotkey-toast-overlay.cjs doesn't exist
    */
   showHotkeyHintOnce() {
-    try {
-      logger.debug('🔔 [SELECTION_DETECTOR] showHotkeyHintOnce called');
-      
-      const { showHotkeyToast } = require('../windows/hotkey-toast-overlay.cjs');
-      
-      logger.debug('🔔 [SELECTION_DETECTOR] Showing hotkey toast...');
-      showHotkeyToast(`<div class="hotkey-hint" id="hotkeyHint">
-        <div class="hint-content">
-          <span class="hint-icon"></span>
-          <span class="hint-text">Highlight anything anywhere and press to sync to prompt</span>
-        </div>
-        <br/>
-        <div class="hint-content">
-          <span class="hint-text"> <kbd>⌘</kbd> + <kbd>⌥</kbd> + <kbd>A</kbd></span>
-        </div>
-    </div>`);
-      
-      logger.debug('✅ [SELECTION_DETECTOR] Hotkey hint toast shown');
-      
-    } catch (error) {
-      logger.error('❌ [SELECTION_DETECTOR] Failed to show hotkey hint:', error);
-      logger.error('Error details:', error.stack);
-    }
+    // Disabled - hotkey toast overlay not implemented
+    logger.debug('🔔 [SELECTION_DETECTOR] Hotkey hint disabled (overlay not implemented)');
   }
 
   /**
