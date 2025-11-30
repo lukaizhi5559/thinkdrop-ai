@@ -12,37 +12,21 @@
 
 const logger = require('./../../../logger.cjs');
 
-// Dynamic import helper for ES modules
-let getIntentDescriptor = null;
-async function loadRegistry() {
-  if (!getIntentDescriptor) {
-    const registry = await import('../../../../intents/registry.js');
-    getIntentDescriptor = registry.getIntentDescriptor;
-  }
-  return getIntentDescriptor;
-}
-
 /**
  * Select appropriate UI variant for current intent
  * @param {object} state - Graph state with intentContext
  * @returns {object} Updated state with uiVariant set
  */
 module.exports = async function selectOverlayVariant(state) {
-  const intent = state.intentContext?.intent;
-  
-  if (!intent) {
-    logger.debug('⏭️  [NODE:SELECT_OVERLAY_VARIANT] No intent context, skipping');
-    return state;
-  }
-  
-  // Load intent descriptor
-  const getDescriptor = await loadRegistry();
-  const descriptor = getDescriptor(intent);
-  
-  if (!descriptor) {
-    logger.warn(`⚠️  [NODE:SELECT_OVERLAY_VARIANT] No descriptor for intent: ${intent}`);
-    return state;
-  }
+  try {
+    const intent = state.intentContext?.intent;
+    
+    if (!intent) {
+      logger.debug('⏭️  [NODE:SELECT_OVERLAY_VARIANT] No intent context, skipping');
+      return state;
+    }
+    
+    logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] Processing intent: ${intent}`);
   
   const slots = state.intentContext.slots || {};
   
@@ -74,10 +58,16 @@ module.exports = async function selectOverlayVariant(state) {
     // TODO: Add other intents (screen_intelligence, command_guide, etc.)
     
     default:
-      // Use default variant from descriptor
-      state.intentContext.uiVariant = descriptor.defaultVariant || 'results';
-      logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → ${state.intentContext.uiVariant} (default)`);
+      // Use default variant for unknown intents
+      state.intentContext.uiVariant = 'results';
+      logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (default)`);
   }
   
   return state;
+  } catch (error) {
+    logger.error('❌ [NODE:SELECT_OVERLAY_VARIANT] Error:', error);
+    logger.error('❌ [NODE:SELECT_OVERLAY_VARIANT] Stack:', error.stack);
+    // Return state unchanged on error
+    return state;
+  }
 };

@@ -9,7 +9,9 @@
 const { ipcMain, BrowserWindow } = require('electron');
 const logger = require('../logger.cjs');
 
-let overlayWindow = null;
+let ghostWindow = null;   // Full-screen click-through window for ghost mouse & visual cues
+let promptWindow = null;  // Small interactive window for prompt bar
+let intentWindow = null;  // Dynamic interactive window for intent UIs
 let orchestrator = null;
 
 /**
@@ -18,6 +20,9 @@ let orchestrator = null;
  */
 function initializeOverlayIPC(agentOrchestrator) {
   orchestrator = agentOrchestrator;
+  
+  // NOTE: Web search requests now handled by private-mode:process with overlayMode flag
+  // This eliminates duplication and reuses existing orchestrator logic
   
   // Handle overlay events (user interactions)
   ipcMain.on('overlay:event', async (event, overlayEvent) => {
@@ -46,14 +51,26 @@ function initializeOverlayIPC(agentOrchestrator) {
       }
       
     } catch (error) {
-      logger.error('❌ [OVERLAY:IPC] Error handling overlay event:', error);
+      logger.error('❌ [OVERLAY:IPC] Error handling overlay event:', error.message);
+      logger.error('❌ [OVERLAY:IPC] Stack trace:', error.stack);
     }
   });
   
-  // Handle overlay ready signal
+  // Handle overlay ready signal - determine which window
   ipcMain.on('overlay:ready', (event) => {
-    logger.debug('✅ [OVERLAY:IPC] Overlay window ready');
-    overlayWindow = BrowserWindow.fromWebContents(event.sender);
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const url = event.sender.getURL();
+    
+    if (url.includes('mode=prompt')) {
+      promptWindow = window;
+      logger.debug('✅ [OVERLAY:IPC] Prompt window ready');
+    } else if (url.includes('mode=intent')) {
+      intentWindow = window;
+      logger.debug('✅ [OVERLAY:IPC] Intent window ready');
+    } else {
+      ghostWindow = window;
+      logger.debug('✅ [OVERLAY:IPC] Ghost window ready');
+    }
   });
   
   // Handle mouse event forwarding control
@@ -64,97 +81,77 @@ function initializeOverlayIPC(agentOrchestrator) {
     }
   });
 
-  // Handle window dragging - no IPC needed, we'll enable it in window config
-  // Dragging is handled by setting the window as movable and using -webkit-app-region CSS
+  // Handle intent window positioning (animate to highlighted item)
+  ipcMain.on('overlay:position-intent', (event, { x, y, width, height, animate = true }) => {
+    if (!intentWindow || intentWindow.isDestroyed()) {
+      logger.warn('⚠️  [OVERLAY:IPC] No intent window to position');
+      return;
+    }
 
-  // Handle dynamic window height resize when textarea expands
-  ipcMain.on('overlay:resize-height', (event, newHeight) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (window && !window.isDestroyed()) {
-      const { screen } = require('electron');
-      const display = screen.getPrimaryDisplay();
-      const { width, height } = display.workAreaSize;
-      
-      // Cap max window height at 50% of screen height
-      const maxWindowHeight = Math.floor(height * 0.5);
-      const constrainedHeight = Math.min(newHeight, maxWindowHeight);
-      
-      const currentBounds = window.getBounds();
-      const heightDiff = constrainedHeight - currentBounds.height;
-      
-      // Adjust y position to keep window anchored at bottom
-      const newY = Math.max(10, currentBounds.y - heightDiff); // Don't go above 10px from top
-      
-      window.setBounds({ 
-        x: currentBounds.x, 
-        y: newY, 
-        width: currentBounds.width, 
-        height: constrainedHeight 
-      }, true);
+    logger.debug('📍 [OVERLAY:IPC] Positioning intent window:', { x, y, width, height, animate });
+
+    // Resize if dimensions provided
+    if (width && height) {
+      intentWindow.setSize(width, height, animate);
+    }
+
+    // Reposition if coordinates provided
+    if (x !== undefined && y !== undefined) {
+      intentWindow.setPosition(x, y, animate);
+    }
+
+    // Show if hidden
+    if (!intentWindow.isVisible()) {
+      intentWindow.show();
     }
   });
 
-  // Handle prompt bar expand/collapse - move window position and set click-through
-  ipcMain.on('overlay:set-expanded', (event, isExpanded) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (window && !window.isDestroyed()) {
-      const { screen } = require('electron');
-      const display = screen.getPrimaryDisplay();
-      const { width, height } = display.workAreaSize;
-      
-      const promptBarWidth = Math.floor(width * 0.6); // 60% width
-      const x = Math.floor((width - promptBarWidth) / 2);
-      
-      if (isExpanded) {
-        // Expanded: show full prompt bar (120px height - exact fit)
-        const promptBarHeight = 120;
-        const y = height - promptBarHeight - 5;
-        
-        // Animate the window resize with smooth transition
-        window.setBounds({ x, y, width: promptBarWidth, height: promptBarHeight }, true);
-        
-        // Disable click-through - entire window is interactive
-        window.setIgnoreMouseEvents(false);
-      } else {
-        // Collapsed: only show arrow button (60px height, positioned at very bottom)
-        const collapsedHeight = 60;
-        const y = height - collapsedHeight;
-        
-        // Animate the window resize with smooth transition
-        window.setBounds({ x, y, width: promptBarWidth, height: collapsedHeight }, true);
-        
-        // Enable click-through with forward, but we'll use setIgnoreMouseEvents with a region
-        // to keep only the arrow button clickable
-        window.setIgnoreMouseEvents(true, { forward: true });
-      }
-      
-      logger.debug(`📍 [OVERLAY] Window ${isExpanded ? 'expanded' : 'collapsed'}`);
+  // Handle prompt window resize (for textarea expansion)
+  ipcMain.on('overlay:resize-prompt', (event, { width, height, animate = false }) => {
+    if (!promptWindow || promptWindow.isDestroyed()) {
+      logger.warn('⚠️  [OVERLAY:IPC] No prompt window to resize');
+      return;
     }
+
+    logger.debug('📏 [OVERLAY:IPC] Resizing prompt window:', { width, height });
+    
+    // Keep width the same, only adjust height
+    const currentBounds = promptWindow.getBounds();
+    const newWidth = width || currentBounds.width;
+    const newHeight = height;
+    
+    // Calculate the bottom edge of the current window
+    const currentBottom = currentBounds.y + currentBounds.height;
+    
+    // Keep the bottom edge at the same position, adjust Y to accommodate new height
+    const newY = currentBottom - newHeight;
+    
+    promptWindow.setBounds({
+      x: currentBounds.x,
+      y: newY,
+      width: newWidth,
+      height: newHeight
+    }, animate);
   });
-  
-  // Handle clickable region updates
-  ipcMain.on('overlay:update-clickable-regions', (event, regions) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (window && !window.isDestroyed()) {
-      logger.debug(`📍 [OVERLAY:IPC] Updating ${regions.length} clickable regions`);
-      
-      if (regions.length > 0) {
-        // Create a shape that defines clickable areas
-        // Everything outside these regions will be click-through
-        const { screen } = require('electron');
-        const display = screen.getPrimaryDisplay();
-        const { width, height } = display.workAreaSize;
-        
-        // For now, if we have regions, disable click-through entirely
-        // and let CSS pointer-events handle it
-        window.setIgnoreMouseEvents(false);
-        
-        // Store regions for potential future use
-        window._clickableRegions = regions;
-      } else {
-        // No regions, enable full click-through
-        window.setIgnoreMouseEvents(true, { forward: true });
-      }
+
+  // Handle intent window resize (for dynamic UI cards, dropdowns, etc.)
+  ipcMain.on('overlay:resize-intent', (event, { width, height, animate = true }) => {
+    if (!intentWindow || intentWindow.isDestroyed()) {
+      logger.warn('⚠️  [OVERLAY:IPC] No intent window to resize');
+      return;
+    }
+
+    logger.debug('📏 [OVERLAY:IPC] Resizing intent window:', { width, height });
+    intentWindow.setSize(width, height, animate);
+  });
+
+  // Handle ghost window hover data (highlighted items)
+  ipcMain.on('overlay:ghost-hover', (event, hoverData) => {
+    logger.debug('👻 [OVERLAY:IPC] Ghost hover data:', hoverData);
+    
+    // Forward hover data to intent window so it can animate to the highlighted item
+    if (intentWindow && !intentWindow.isDestroyed()) {
+      intentWindow.webContents.send('overlay:ghost-hover-data', hoverData);
     }
   });
   
@@ -162,30 +159,38 @@ function initializeOverlayIPC(agentOrchestrator) {
 }
 
 /**
- * Send overlay payload to overlay window
+ * Send overlay payload to intent window (for interactive results display)
  * @param {object} payload - Overlay payload from graph
  */
 function sendOverlayUpdate(payload) {
-  if (!overlayWindow || overlayWindow.isDestroyed()) {
-    logger.warn('⚠️  [OVERLAY:IPC] No overlay window available for update');
+  if (!intentWindow || intentWindow.isDestroyed()) {
+    logger.warn('⚠️  [OVERLAY:IPC] No intent window available for update');
     return;
   }
   
-  logger.debug('📤 [OVERLAY:IPC] Sending overlay update:', {
+  logger.debug('📤 [OVERLAY:IPC] Sending overlay update to intent window:', {
     intent: payload.intent,
     uiVariant: payload.uiVariant,
     conversationId: payload.conversationId
   });
   
-  overlayWindow.webContents.send('overlay:update', payload);
+  // Show the intent window when sending payload
+  if (!intentWindow.isVisible()) {
+    intentWindow.show();
+    logger.debug('👁️  [OVERLAY:IPC] Showing intent window');
+  }
+  
+  intentWindow.webContents.send('overlay:update', payload);
 }
 
 /**
- * Check if overlay window exists and is ready
+ * Check if overlay windows exist and are ready
  * @returns {boolean}
  */
 function isOverlayReady() {
-  return overlayWindow !== null && !overlayWindow.isDestroyed();
+  return (ghostWindow !== null && !ghostWindow.isDestroyed()) ||
+         (promptWindow !== null && !promptWindow.isDestroyed()) ||
+         (intentWindow !== null && !intentWindow.isDestroyed());
 }
 
 module.exports = {

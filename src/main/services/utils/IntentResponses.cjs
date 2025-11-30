@@ -346,24 +346,10 @@ const IntentResponses = {
     return "Executing command...";
   },
 
-  _getQuestionResponse(message, _entities) {
-    const lowerMessage = message.toLowerCase();
-
-    if (lowerMessage.startsWith('what')) {
-      return "Let me explain that for you...";
-    } else if (lowerMessage.startsWith('how')) {
-      return "Here's how that works...";
-    } else if (lowerMessage.startsWith('why')) {
-      return "The reason is...";
-    } else if (lowerMessage.startsWith('when')) {
-      return "Let me check the timing...";
-    } else if (lowerMessage.startsWith('where')) {
-      return "Let me find that location...";
-    } else if (lowerMessage.startsWith('who')) {
-      return "Let me tell you about that...";
-    }
-
-    return "Let me answer that for you...";
+  _getQuestionResponse(_message, _entities) {
+    // Use random question response for variety
+    const randomIndex = Math.floor(Math.random() * questionResponses.length);
+    return questionResponses[randomIndex];
   },
 
   _getGreetingResponse(_message) {

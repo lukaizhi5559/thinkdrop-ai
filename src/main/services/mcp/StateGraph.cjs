@@ -172,6 +172,7 @@ class StateGraph {
 
       } catch (error) {
         logger.error(`❌ [STATEGRAPH] Node ${currentNode} failed:`, error.message);
+        logger.error(`❌ [STATEGRAPH] Error stack:`, error.stack);
 
         // Record error in trace
         state.trace.push({
@@ -179,6 +180,7 @@ class StateGraph {
           duration: Date.now() - nodeStartTime,
           timestamp: new Date().toISOString(),
           error: error.message,
+          stack: error.stack,
           success: false
         });
 

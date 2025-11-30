@@ -8,7 +8,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Droplet, Unplug, Send, Monitor, ChevronUp, X } from 'lucide-react';
+import { Droplet, Unplug, Send, ChevronUp, X } from 'lucide-react';
 
 interface PromptBarProps {
   onSubmit: (message: string) => void;
@@ -21,6 +21,7 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isInputHovered, setIsInputHovered] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -28,8 +29,20 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
     if (message.trim()) {
       onSubmit(message.trim());
       setMessage('');
-      if (textareaRef.current) {
+      
+      // Reset textarea height and window size
+      if (textareaRef.current && ipcRenderer) {
         textareaRef.current.style.height = 'auto';
+        const resetHeight = textareaRef.current.scrollHeight;
+        textareaRef.current.style.height = resetHeight + 'px';
+        
+        // Resize window to fit reset textarea
+        const baseHeight = 100;
+        const totalHeight = baseHeight + resetHeight;
+        ipcRenderer.send('overlay:resize-prompt', {
+          height: totalHeight,
+          animate: true
+        });
       }
     }
   };
@@ -55,13 +68,17 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
     const newHeight = Math.min(e.target.scrollHeight, maxTextareaHeight);
     e.target.style.height = newHeight + 'px';
     
-    // Notify main process to resize window based on textarea height
+    // Resize the prompt window to accommodate the textarea
     if (ipcRenderer) {
-      // Base height (110px) + additional height from textarea expansion
-      // Reduced from 120px to account for actual content height
-      const textareaExtraHeight = Math.max(0, newHeight - 24); // 24px is min height
-      const totalWindowHeight = 110 + textareaExtraHeight;
-      ipcRenderer.send('overlay:resize-height', totalWindowHeight);
+      // Calculate total prompt bar height: padding + header + input area + margins
+      const baseHeight = 100; // Base UI height (p-3=24px + header py-1 mb-1=12px + input=40px + status=24px)
+      const totalHeight = baseHeight + newHeight;
+      
+      // Resize the prompt window
+      ipcRenderer.send('overlay:resize-prompt', {
+        height: totalHeight,
+        animate: false // No animation for smooth typing experience
+      });
     }
   };
 
@@ -79,6 +96,25 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
       ipcRenderer.send('overlay:set-expanded', isExpanded);
     }
   }, [isExpanded]);
+
+  // Initialize textarea height and window size on mount
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      const initialHeight = textareaRef.current.scrollHeight;
+      textareaRef.current.style.height = initialHeight + 'px';
+      
+      // Resize window to fit initial content
+      if (ipcRenderer) {
+        const baseHeight = 100; // Base UI height
+        const totalHeight = baseHeight + initialHeight;
+        ipcRenderer.send('overlay:resize-prompt', {
+          height: totalHeight,
+          animate: false
+        });
+      }
+    }
+  }, []);
 
   // Handle mouse events for click-through when collapsed
   useEffect(() => {
@@ -101,14 +137,14 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
   // No JavaScript needed!
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 flex items-end justify-center transition-all duration-500 ease-out pointer-events-none">
+    <div className="w-full flex items-end justify-center pointer-events-none">
       {/* Expand/Collapse Button (always visible when collapsed) */}
       {!isExpanded && (
-        <div className="flex justify-center pb-2 animate-in fade-in slide-in-from-bottom-4 duration-500 pointer-events-auto">
+        <div className="flex items-end pointer-events-auto mb-1">
           <button
             onClick={toggleExpanded}
             className="
-              bg-gray-800/80 backdrop-blur-xl p-3 rounded-full
+              bg-gray-800/80 backdrop-blur-xl p-2 rounded-full
               border border-white/10
               hover:bg-gray-700/80 hover:scale-110 
               transition-all duration-300 ease-out
@@ -116,7 +152,7 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
             "
             title="Expand prompt bar"
           >
-            <ChevronUp className="w-6 h-6 text-white" />
+            <ChevronUp className="w-5 h-5 text-white" />
           </button>
         </div>
       )}
@@ -124,25 +160,29 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
       {/* Main Prompt Bar */}
       {isExpanded && (
         <div 
-          className="
-            w-full rounded-xl bg-gray-800/60 backdrop-blur-xl p-3
+          className={`
+            w-full rounded-xl backdrop-blur-xl p-3
             border border-white/10 click-active
             pointer-events-auto
-          "
-          style={{ transitionProperty: 'background-color, opacity, transform', transitionDuration: '300ms' } as any}
+            animate-in fade-in slide-in-from-bottom-4 
+            transition-colors duration-300
+            ${isInputHovered ? 'bg-gray-800/90' : 'bg-gray-800/50'}
+          `}
+          onMouseEnter={() => setIsInputHovered(true)}
+          onMouseLeave={() => setIsInputHovered(false)}
         >
         {/* Header with drag handle and close button */}
-        <div 
-          className="flex items-center justify-between mb-2 cursor-move drag-handle"
+        {/* <div 
+          className="flex items-center justify-between mb-1 py-1 cursor-move drag-handle"
           style={{ WebkitAppRegion: 'drag' } as any}
         >
-          <div className="text-xs text-white/60 select-none">
+          <div className="text-xs text-white/60 text-center select-none">
             {isConnected ? 'Live Mode On' : 'Private Mode On'}
           </div>
           <button
             onClick={toggleExpanded}
             className="
-              p-1 rounded-lg hover:bg-white/10 transition-colors
+              p-1.5 rounded-lg hover:bg-white/10 transition-colors
               click-active
             "
             style={{ WebkitAppRegion: 'no-drag' } as any}
@@ -150,10 +190,14 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
           >
             <X className="w-4 h-4 text-white/60" />
           </button>
-        </div>
+        </div> */}
 
         {/* Input Area */}
-        <div className="flex items-center space-x-3 click-active">
+        <div 
+          className="flex items-center space-x-3 click-active"
+          onMouseEnter={() => setIsInputHovered(true)}
+          onMouseLeave={() => setIsInputHovered(false)}
+        >
           {/* Connection Toggle Button */}
           <div 
             className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
@@ -182,17 +226,39 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
             placeholder={isReady ? "Ask anything..." : "Initializing..."}
             disabled={!isReady}
             className="
-              flex-1 text-sm bg-white/5 text-white placeholder-white/50 
-              resize-none min-h-[24px] py-2 px-3 rounded-lg 
+              flex-1 text-sm bg-transparent text-white placeholder-white/50 
+              resize-none min-h-[24px] max-h-[400px] py-2 px-3 rounded-lg 
               border border-white/10 focus:border-teal-400/50 
               focus:outline-none transition-colors click-active
               disabled:opacity-50 disabled:cursor-not-allowed
+              overflow-y-auto
             "
             rows={1}
-            style={{ outline: 'none', boxShadow: 'none' }}
+            style={{ border: 'none', outline: 'none', boxShadow: 'none', height: 'auto' }}
           />
           
           {/* Send Button */}
+          <button
+            onClick={toggleExpanded}
+            className="
+              p-1.5 rounded-lg hover:bg-white/10 transition-colors
+              click-active
+            "
+            style={{ WebkitAppRegion: 'no-drag' } as any}
+            title="Collapse (ESC)"
+          >
+            <X className="w-4 h-4 text-white/60" />
+          </button>
+        </div>
+        
+        {/* Bottom Status Bar */}
+        <div className="flex items-center justify-between mt-2 text-xs text-white/60 space-x-3">
+          <div className="text-xs text-white/60 text-center select-none">
+            {isConnected ? 'Live Mode' : 'Private Mode'}
+          </div>
+          <div className="text-center">
+            Thinkdrop can make mistakes. Check important info.
+          </div>
           <button
             onClick={handleSubmit}
             disabled={!isReady || !message.trim()}
@@ -208,13 +274,6 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
           >
             <Send className="w-3 h-3" />
           </button>
-        </div>
-        
-        {/* Bottom Status Bar */}
-        <div className="flex items-center justify-center mt-2 text-xs text-white/60 space-x-3">
-          <div className="text-center">
-            Thinkdrop can make mistakes. Check important info.
-          </div>
         </div>
         </div>
       )}

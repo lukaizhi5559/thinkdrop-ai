@@ -205,24 +205,24 @@ function createOverlayWindow() {
 // REMOVED: createInsightWindow - now handled within unified overlayWindow
 // Insight functionality is now integrated into the main overlay interface
 
-// Transparent overlay window for intent-driven UI
-let transparentOverlayWindow = null;
+// Three-window overlay system
+let ghostOverlayWindow = null;      // Full-screen, click-through for ghost mouse & visual cues
+let promptOverlayWindow = null;     // Small, interactive for prompt bar
+let intentOverlayWindow = null;     // Dynamic, interactive for intent UIs (results, guides, etc.)
 
-function createTransparentOverlay() {
+/**
+ * Create ghost overlay window - full-screen, click-through
+ * Used for: visual overlays, highlights, ghost pointer, web search results
+ */
+function createGhostOverlay() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
 
-  // Create a small window just for the prompt bar (60% width, centered at bottom)
-  const promptBarWidth = Math.floor(width * 0.6);
-  const promptBarHeight = 120; // Minimal height to fit content exactly
-  const x = Math.floor((width - promptBarWidth) / 2);
-  const y = height - promptBarHeight - 5; // 5px from bottom
-
-  transparentOverlayWindow = new BrowserWindow({
-    width: promptBarWidth,
-    height: promptBarHeight,
-    x,
-    y,
+  ghostOverlayWindow = new BrowserWindow({
+    width,
+    height,
+    x: 0,
+    y: 0,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -233,9 +233,8 @@ function createTransparentOverlay() {
     maximizable: false,
     closable: true,
     hasShadow: false,
-    focusable: true,
-    acceptFirstMouse: true,
-    type: 'panel', // Panel type for proper macOS behavior without shadow
+    focusable: false, // Ghost layer doesn't need focus
+    type: 'panel',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -243,51 +242,188 @@ function createTransparentOverlay() {
     },
   });
 
-  // Explicitly disable shadow to prevent invisible blocking area
-  transparentOverlayWindow.setHasShadow(false);
+  // Explicitly disable shadow
+  ghostOverlayWindow.setHasShadow(false);
   
-  // Additional shadow removal for macOS
   if (process.platform === 'darwin') {
-    // Hide window buttons (traffic lights) which can cause shadow
-    transparentOverlayWindow.setWindowButtonVisibility(false);
+    ghostOverlayWindow.setWindowButtonVisibility(false);
+    ghostOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    ghostOverlayWindow.setAlwaysOnTop(true, 'floating', 1);
   }
 
-  // Configure window to appear on all spaces and over fullscreen apps
-  if (process.platform === 'darwin') {
-    transparentOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    transparentOverlayWindow.setAlwaysOnTop(true, 'floating', 1);
+  // CRITICAL: Enable click-through with mouse event forwarding
+  // This requires accessibility permission on macOS
+  try {
+    ghostOverlayWindow.setIgnoreMouseEvents(true, { forward: true });
+    logger.debug('✅ [GHOST OVERLAY] Click-through enabled');
+  } catch (error) {
+    logger.warn('⚠️  [GHOST OVERLAY] Could not enable click-through (accessibility permission needed):', error.message);
   }
 
-  // No setIgnoreMouseEvents - this small window is fully interactive
-
-  // Load overlay HTML
+  // Load ghost overlay HTML (for results, highlights, etc.)
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
-    transparentOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html');
-    // Open DevTools for debugging
-    transparentOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+    ghostOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html');
+    ghostOverlayWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    transparentOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+    ghostOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
   }
 
-  // Debug: Log when overlay loads
-  transparentOverlayWindow.webContents.on('did-finish-load', () => {
-    logger.debug('✅ [OVERLAY WINDOW] Overlay HTML loaded successfully');
+  ghostOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [GHOST OVERLAY] Ghost overlay loaded');
   });
 
-  transparentOverlayWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
-    logger.error(`❌ [OVERLAY WINDOW] Failed to load: ${errorCode} - ${errorDescription}`);
+  ghostOverlayWindow.on('closed', () => {
+    ghostOverlayWindow = null;
   });
 
-  transparentOverlayWindow.on('closed', () => {
-    transparentOverlayWindow = null;
+  global.ghostOverlayWindow = ghostOverlayWindow;
+  logger.debug('✅ Ghost overlay window created (click-through)');
+  return ghostOverlayWindow;
+}
+
+/**
+ * Create prompt overlay window - small, interactive
+ * Used for: prompt bar, user input
+ */
+function createPromptOverlay() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
+  const promptWidth = Math.floor(width * 0.6); // 60% of screen width
+  const promptHeight = 100; // Compact height to match actual content (p-3 + header py-1 mb-1 + input + status)
+  const x = Math.floor((width - promptWidth) / 2);
+  const y = height - promptHeight; // Flush to bottom, no margin
+
+  promptOverlayWindow = new BrowserWindow({
+    width: promptWidth,
+    height: promptHeight,
+    minHeight: 80,
+    maxHeight: Math.floor(height * 0.5), // Max 50% of screen height
+    x,
+    y,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false, // Keep fixed size to prevent blocking
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: false,
+    focusable: true, // Prompt window needs focus for input
+    acceptFirstMouse: true,
+    type: 'panel',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
   });
 
-  // Make globally accessible
-  global.transparentOverlayWindow = transparentOverlayWindow;
+  promptOverlayWindow.setHasShadow(false);
+  
+  if (process.platform === 'darwin') {
+    promptOverlayWindow.setWindowButtonVisibility(false);
+    promptOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    promptOverlayWindow.setAlwaysOnTop(true, 'floating', 2); // Higher than ghost layer
+  }
 
-  logger.debug('✅ Transparent overlay window created');
-  return transparentOverlayWindow;
+  // NO setIgnoreMouseEvents - this window is interactive!
+
+  // Load prompt HTML
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    promptOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=prompt');
+    promptOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    promptOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  promptOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [PROMPT OVERLAY] Prompt overlay loaded');
+  });
+
+  promptOverlayWindow.on('closed', () => {
+    promptOverlayWindow = null;
+  });
+
+  global.promptOverlayWindow = promptOverlayWindow;
+  logger.debug('✅ Prompt overlay window created (interactive)');
+  return promptOverlayWindow;
+}
+
+/**
+ * Create intent overlay window - dynamic, interactive
+ * Used for: web search results, command guides, any intent UI with interaction
+ * This window is DYNAMIC - can resize and reposition based on context
+ */
+function createIntentOverlay() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
+  // Start with default size, but can be resized dynamically
+  intentOverlayWindow = new BrowserWindow({
+    width: Math.floor(width * 0.6), // Default: 60% of screen width (matches prompt bar)
+    height: Math.floor(height * 0.4), // Default: 40% of screen height
+    minWidth: 200, // Minimum for small UI cards
+    minHeight: 100,
+    maxWidth: Math.floor(width * 0.9), // Max 90% of screen
+    maxHeight: Math.floor(height * 0.9),
+    x: Math.floor(width * 0.2), // Centered for 60% width
+    y: Math.floor(height * 0.3),
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true, // CRITICAL: Allow dynamic resizing
+    movable: true, // CRITICAL: Allow repositioning to follow ghost mouse
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: false,
+    focusable: true, // Intent window needs focus for interaction
+    acceptFirstMouse: true,
+    show: false, // Start hidden
+    type: 'panel',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  intentOverlayWindow.setHasShadow(false);
+  
+  if (process.platform === 'darwin') {
+    intentOverlayWindow.setWindowButtonVisibility(false);
+    intentOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    intentOverlayWindow.setAlwaysOnTop(true, 'floating', 3); // Highest layer
+  }
+
+  // NO setIgnoreMouseEvents - this window is interactive!
+
+  // Load intent HTML
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    intentOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=intent');
+    intentOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    intentOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  intentOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [INTENT OVERLAY] Intent overlay loaded');
+  });
+
+  intentOverlayWindow.on('closed', () => {
+    intentOverlayWindow = null;
+  });
+
+  global.intentOverlayWindow = intentOverlayWindow;
+  logger.debug('✅ Intent overlay window created (interactive, hidden)');
+  return intentOverlayWindow;
 }
 
 function toggleOverlay() {
@@ -322,7 +458,7 @@ app.whenReady().then(async () => {
     // Step 2: Setup IPC handlers AFTER services are ready
     logger.debug('🔧 Step 2: Setting up IPC handlers...');
 
-    createOverlayWindow();
+    // createOverlayWindow();
     logger.debug('✅ Step 3: Overlay window created');
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
@@ -352,10 +488,15 @@ app.whenReady().then(async () => {
       initializeOverlayIPC(coreAgent);
       logger.debug('✅ Overlay IPC handlers initialized');
       
-      // Create transparent overlay window
-      logger.debug('🔧 Creating transparent overlay window...');
-      createTransparentOverlay();
-      logger.debug('✅ Transparent overlay window created');
+      // Create three-window overlay system
+      logger.debug('🔧 Creating ghost overlay window (click-through)...');
+      createGhostOverlay();
+      
+      logger.debug('🔧 Creating prompt overlay window (interactive)...');
+      createPromptOverlay();
+      
+      logger.debug('🔧 Creating intent overlay window (interactive, hidden)...');
+      createIntentOverlay();
     }
   }).catch(async error => {
     logger.error('❌ Error during initialization sequence:', error);
@@ -631,7 +772,7 @@ app.whenReady().then(async () => {
   
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      createOverlayWindow();
+      // createOverlayWindow();
     } else if (overlayWindow) {
       overlayWindow.show();
       isOverlayVisible = true;

@@ -7,6 +7,7 @@
 
 const { ipcMain } = require('electron');
 const AgentOrchestrator = require('../services/mcp/AgentOrchestrator.cjs');
+const { sendOverlayUpdate } = require('../ipc/overlay.cjs');
 
 const logger = require('./../logger.cjs');
 // Orchestrator instance
@@ -67,6 +68,23 @@ function registerPrivateModeHandlers() {
         }
       }
       
+      // Detect overlay mode from context
+      const isOverlayMode = context.overlayMode === true;
+      
+      // Overlay mode: Send initial "Thinking..." loading state
+      if (isOverlayMode) {
+        sendOverlayUpdate({
+          intent: 'web_search',
+          uiVariant: 'loading',
+          slots: {
+            subject: message,
+            loadingMessage: 'Thinking...'
+          },
+          conversationId: context.conversationId || `overlay_${Date.now()}`,
+          correlationId: context.correlationId || `overlay_${Date.now()}`
+        });
+      }
+      
       logger.debug(`\n🔒 [PRIVATE-MODE] Processing: "${augmentedMessage.substring(0, 200)}..."`);
       
       const orch = getOrchestrator();
@@ -78,24 +96,42 @@ function registerPrivateModeHandlers() {
           // Handle early intent response (Phase 1 optimization)
           if (status === 'early' && nodeName === 'earlyResponse') {
             logger.debug('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
-            event.sender.send('private-mode:early-response', {
-              message: state.earlyMessage,
-              intentType: state.intentType,
-              timestamp: new Date().toISOString()
-            });
+            
+            // Overlay mode: Send updated loading message to intent window
+            if (isOverlayMode) {
+              sendOverlayUpdate({
+                intent: state.intentType || 'web_search',
+                uiVariant: 'loading',
+                slots: {
+                  subject: message,
+                  loadingMessage: state.earlyMessage
+                },
+                conversationId: context.conversationId || `overlay_${Date.now()}`,
+                correlationId: context.correlationId || `overlay_${Date.now()}`
+              });
+            } else {
+              // Chat mode: Send early response
+              event.sender.send('private-mode:early-response', {
+                message: state.earlyMessage,
+                intentType: state.intentType,
+                timestamp: new Date().toISOString()
+              });
+            }
             return;
           }
           
-          // Send regular progress update to renderer
-          event.sender.send('private-mode:progress', {
-            node: nodeName,
-            status: status, // 'started', 'completed', or 'early'
-            duration: duration,
-            timestamp: new Date().toISOString(),
-            hasAnswer: !!state.answer,
-            contextDocsCount: state.contextDocs?.length || 0,
-            intentType: state.intent?.type
-          });
+          // Send regular progress update to renderer (chat mode only)
+          if (!isOverlayMode) {
+            event.sender.send('private-mode:progress', {
+              node: nodeName,
+              status: status, // 'started', 'completed', or 'early'
+              duration: duration,
+              timestamp: new Date().toISOString(),
+              hasAnswer: !!state.answer,
+              contextDocsCount: state.contextDocs?.length || 0,
+              intentType: state.intent?.type
+            });
+          }
         } catch (err) {
           logger.warn('⚠️ [PRIVATE-MODE] Failed to send progress update:', err.message);
         }
@@ -132,6 +168,7 @@ function registerPrivateModeHandlers() {
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
         useOnlineMode, // 🌐 Pass online mode flag
+        overlayMode: isOverlayMode, // 🎯 Request overlay payload if in overlay mode
         hasSelection: !!selectionContext, // 📋 Flag for selection-aware routing
         selectionContext: selectionContext, // 📋 Full selection context
         originalMessage: message, // 📋 Original message without selection
@@ -152,6 +189,12 @@ function registerPrivateModeHandlers() {
         result.trace.forEach((step, i) => {
           logger.debug(`  ${i + 1}. ${step.success ? '✅' : '❌'} ${step.node} (${step.duration}ms)`);
         });
+      }
+      
+      // Overlay mode: Send final overlay payload to intent window
+      if (isOverlayMode && result.overlayPayload) {
+        logger.debug('📤 [PRIVATE-MODE] Sending overlay payload to intent window');
+        sendOverlayUpdate(result.overlayPayload);
       }
       
       logger.debug('📤 [PRIVATE-MODE] Returning result:', JSON.stringify(result, null, 2));

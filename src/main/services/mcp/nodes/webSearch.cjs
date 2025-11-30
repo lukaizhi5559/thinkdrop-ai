@@ -30,8 +30,21 @@ module.exports = async function webSearch(state) {
     
     logger.debug(`✅ [NODE:WEB_SEARCH] Found ${searchResults.length} results`);
 
+    // Populate intentContext.slots for overlay system
+    const intentContext = state.intentContext || { intent: 'web_search', slots: {}, uiVariant: null };
+    intentContext.slots = {
+      ...intentContext.slots,
+      results: searchResults.map(r => ({
+        title: r.title,
+        snippet: r.snippet || r.description || '',
+        url: r.url || r.link
+      })),
+      subject: query
+    };
+
     return {
       ...state,
+      intentContext,
       searchResults,
       contextDocs: searchResults.map(r => ({
         id: r.url || r.link,
