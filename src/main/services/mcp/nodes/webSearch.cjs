@@ -31,7 +31,8 @@ module.exports = async function webSearch(state) {
     logger.debug(`✅ [NODE:WEB_SEARCH] Found ${searchResults.length} results`);
 
     // Populate intentContext.slots for overlay system
-    const intentContext = state.intentContext || { intent: 'web_search', slots: {}, uiVariant: null };
+    // Preserve existing intent (could be 'web_search', 'question', or 'general_knowledge')
+    const intentContext = state.intentContext || { intent: intent?.type || 'web_search', slots: {}, uiVariant: null };
     intentContext.slots = {
       ...intentContext.slots,
       results: searchResults.map(r => ({

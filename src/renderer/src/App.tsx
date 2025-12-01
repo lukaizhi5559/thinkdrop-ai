@@ -13,7 +13,7 @@ import { GuideWindowContent } from './components/GuideWindowContent';
 
 import { initializeConversationSignals } from './signals/init';
 import './types/electronAPI'; // Import Electron API types
-import { ViewType } from '@/types/view';
+import { ViewType } from './types/view';
 
 // Initialize signals immediately when module loads (before React mounts)
 // Initializing conversation signals

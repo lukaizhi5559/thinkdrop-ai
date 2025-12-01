@@ -162,20 +162,6 @@ class AgentOrchestrator {
           'this page', 'the page', 'this website', 'the website',
           'this email', 'the email', 'this message', 'the message',
           'this text', 'the text', 'this document', 'the document',
-          'this form', 'the form', 'this field', 'the field',
-          'this section', 'the section', 'this paragraph', 'the paragraph',
-          'this line', 'the line', 'these lines', 'the lines',
-          
-          // UI references
-          'this button', 'the button', 'this link', 'the link',
-          'this menu', 'the menu', 'this dialog', 'the dialog',
-          'this popup', 'the popup', 'this modal', 'the modal',
-          'this window', 'the window', 'this tab', 'the tab',
-          'this panel', 'the panel', 'this sidebar', 'the sidebar',
-          
-          // Demonstrative pronouns (very common in screen queries)
-          'here', 'right here', 'over here',
-          'above', 'below', 'next to',
           
           // Action verbs that imply screen content
           'debug this', 'fix this', 'correct this', 'improve this',
@@ -186,15 +172,16 @@ class AgentOrchestrator {
           'what does this', 'what is this', 'what are these',
           'why does this', 'why is this', 'why are these',
           'how does this', 'how is this', 'how are these',
-          'where is this', 'where are these',
-          
-          // Possessive references
-          'in my', 'in this', 'in the',
-          'with my', 'with this', 'with the',
-          'from my', 'from this', 'from the'
+          'where is this', 'where are these'
         ];
         
-        const needsScreenContext = screenKeywords.some(keyword => queryLower.includes(keyword));
+        // More specific check: must match keyword AND be at start of sentence or after punctuation
+        // This prevents false positives like "in the world" matching "in the"
+        const needsScreenContext = screenKeywords.some(keyword => {
+          // Check if keyword appears as a distinct phrase (not part of a larger phrase)
+          const regex = new RegExp(`(^|[.!?]\\s+)${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i');
+          return regex.test(queryLower);
+        });
         
         if (needsScreenContext && state.intent?.type === 'question') {
           logger.debug('🎯 [NODE:PARALLEL] Question mentions screen content - capturing screen context first...');

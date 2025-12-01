@@ -164,7 +164,7 @@ function registerPrivateModeHandlers() {
       logger.debug('   - Final highlightedText:', highlightedText ? `"${highlightedText.substring(0, 50)}..."` : 'undefined');
       
       const result = await orch.processMessageWithGraph(augmentedMessage, {
-        sessionId: context.sessionId,
+        sessionId: context.sessionId || 'default_session', // Default session if not provided
         userId: context.userId || 'default_user',
         timestamp: new Date().toISOString(),
         useOnlineMode, // 🌐 Pass online mode flag

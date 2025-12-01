@@ -5,10 +5,11 @@
  * - 50% screen width, centered
  * - Slide up/down animation
  * - Expand/collapse with arrow button
+ * 
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Droplet, Unplug, Send, ChevronUp, X } from 'lucide-react';
+import { Droplet, Unplug, ArrowUp, ChevronUp, X, FileSearch, MessageCircle } from 'lucide-react';
 
 interface PromptBarProps {
   onSubmit: (message: string) => void;
@@ -17,12 +18,62 @@ interface PromptBarProps {
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
-export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
+export default function PromptBar({ 
+  onSubmit, 
+  isReady
+}: PromptBarProps) {
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
   const [isInputHovered, setIsInputHovered] = useState(false);
+  const [textareaHeight, setTextareaHeight] = useState<number | null>(null);
+  const [hasResults, setHasResults] = useState(false);
+  const [isResultsVisible, setIsResultsVisible] = useState(false);
+  const [isChatVisible, setIsChatVisible] = useState(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Listen for web search results availability
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleWebSearchState = (_event: any, state: { hasResults: boolean; isVisible: boolean }) => {
+      setHasResults(state.hasResults);
+      setIsResultsVisible(state.isVisible);
+    };
+
+    const handleChatWindowState = (_event: any, state: { isVisible: boolean }) => {
+      setIsChatVisible(state.isVisible);
+    };
+
+    ipcRenderer.on('web-search:state', handleWebSearchState);
+    ipcRenderer.on('chat-window:state', handleChatWindowState);
+    
+    // Get initial chat window state
+    ipcRenderer.invoke('chat-window:get-state').then((state: { isVisible: boolean }) => {
+      setIsChatVisible(state.isVisible);
+    }).catch(() => {
+      // Ignore errors, default to visible
+    });
+    
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('web-search:state', handleWebSearchState);
+        ipcRenderer.removeListener('chat-window:state', handleChatWindowState);
+      }
+    };
+  }, []);
+
+  const handleToggleWebSearch = () => {
+    if (ipcRenderer) {
+      ipcRenderer.send('web-search:toggle');
+    }
+  };
+
+  const handleToggleChatWindow = () => {
+    if (ipcRenderer) {
+      ipcRenderer.send('chat-window:toggle');
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,19 +81,27 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
       onSubmit(message.trim());
       setMessage('');
       
-      // Reset textarea height and window size
+      // Reset textarea height and window size after React updates
       if (textareaRef.current && ipcRenderer) {
-        textareaRef.current.style.height = 'auto';
-        const resetHeight = textareaRef.current.scrollHeight;
-        textareaRef.current.style.height = resetHeight + 'px';
-        
-        // Resize window to fit reset textarea
-        const baseHeight = 100;
-        const totalHeight = baseHeight + resetHeight;
-        ipcRenderer.send('overlay:resize-prompt', {
-          height: totalHeight,
-          animate: true
-        });
+        // Wait for React to update the textarea value to empty
+        setTimeout(() => {
+          if (textareaRef.current) {
+            textareaRef.current.style.height = 'auto';
+            const resetHeight = textareaRef.current.scrollHeight;
+            textareaRef.current.style.height = resetHeight + 'px';
+            
+            // Update saved height state to the reset height
+            setTextareaHeight(resetHeight);
+            
+            // Resize window to fit reset textarea
+            const baseHeight = 66;
+            const totalHeight = baseHeight + resetHeight;
+            ipcRenderer.send('overlay:resize-prompt', {
+              height: totalHeight,
+              animate: true
+            });
+          }
+        }, 0);
       }
     }
   };
@@ -68,10 +127,15 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
     const newHeight = Math.min(e.target.scrollHeight, maxTextareaHeight);
     e.target.style.height = newHeight + 'px';
     
+    // Save textarea height to state so it persists on collapse/expand
+    setTextareaHeight(newHeight);
+    
     // Resize the prompt window to accommodate the textarea
     if (ipcRenderer) {
-      // Calculate total prompt bar height: padding + header + input area + margins
-      const baseHeight = 100; // Base UI height (p-3=24px + header py-1 mb-1=12px + input=40px + status=24px)
+      // Calculate total prompt bar height: padding + input area + status bar
+      // p-3 (24px) + icon (32px) + textarea py-2 (16px) + mt-2 (8px) + status (16px) + border (2px) = 98px
+      // But textarea height already includes its padding, so: 24 + 32 + 8 + 16 + 2 = 82px base
+      const baseHeight = 66; // Base UI height without textarea content
       const totalHeight = baseHeight + newHeight;
       
       // Resize the prompt window
@@ -90,31 +154,46 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
     setIsExpanded(!isExpanded);
   };
 
-  // Notify main process when expanded state changes
+  // Notify main process when expanded state changes and resize window
   useEffect(() => {
     if (ipcRenderer) {
       ipcRenderer.send('overlay:set-expanded', isExpanded);
-    }
-  }, [isExpanded]);
-
-  // Initialize textarea height and window size on mount
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto';
-      const initialHeight = textareaRef.current.scrollHeight;
-      textareaRef.current.style.height = initialHeight + 'px';
       
-      // Resize window to fit initial content
-      if (ipcRenderer) {
-        const baseHeight = 100; // Base UI height
-        const totalHeight = baseHeight + initialHeight;
+      // Resize window when expanding/collapsing
+      if (isExpanded) {
+        // When expanding, resize to fit saved textarea height
+        const baseHeight = 66;
+        const currentTextareaHeight = textareaHeight || 24; // Use saved height or min height
+        const totalHeight = baseHeight + currentTextareaHeight;
+        
         ipcRenderer.send('overlay:resize-prompt', {
           height: totalHeight,
-          animate: false
+          animate: true
+        });
+      } else {
+        // When collapsing, resize to just the button
+        ipcRenderer.send('overlay:resize-prompt', {
+          height: 55,
+          animate: true
         });
       }
     }
-  }, []);
+  }, [isExpanded, textareaHeight]);
+
+  // Initialize textarea height and restore saved height when expanding
+  useEffect(() => {
+    if (textareaRef.current && isExpanded) {
+      // Restore saved height or calculate from content
+      if (textareaHeight) {
+        textareaRef.current.style.height = textareaHeight + 'px';
+      } else {
+        textareaRef.current.style.height = 'auto';
+        const initialHeight = textareaRef.current.scrollHeight;
+        textareaRef.current.style.height = initialHeight + 'px';
+        setTextareaHeight(initialHeight);
+      }
+    }
+  }, [isExpanded]);
 
   // Handle mouse events for click-through when collapsed
   useEffect(() => {
@@ -137,10 +216,13 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
   // No JavaScript needed!
 
   return (
-    <div className="w-full flex items-end justify-center pointer-events-none">
+    <div className="w-full h-full flex justify-center pointer-events-none"
+      onMouseEnter={() => setIsInputHovered(true)}
+      onMouseLeave={() => setIsInputHovered(false)}
+    >
       {/* Expand/Collapse Button (always visible when collapsed) */}
       {!isExpanded && (
-        <div className="flex items-end pointer-events-auto mb-1">
+        <div className="flex items-end pointer-events-auto mb-6">
           <button
             onClick={toggleExpanded}
             className="
@@ -168,8 +250,6 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
             transition-colors duration-300
             ${isInputHovered ? 'bg-gray-800/90' : 'bg-gray-800/50'}
           `}
-          onMouseEnter={() => setIsInputHovered(true)}
-          onMouseLeave={() => setIsInputHovered(false)}
         >
         {/* Header with drag handle and close button */}
         {/* <div 
@@ -195,27 +275,8 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
         {/* Input Area */}
         <div 
           className="flex items-center space-x-3 click-active"
-          onMouseEnter={() => setIsInputHovered(true)}
-          onMouseLeave={() => setIsInputHovered(false)}
         >
-          {/* Connection Toggle Button */}
-          <div 
-            className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
-              isConnected 
-                ? 'from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
-                : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
-            }`}
-            onClick={toggleConnection}
-            title={isConnected ? 'Live Mode' : 'Private Mode'}
-          >
-            {isConnected ? <Droplet className="w-4 h-4 text-white" /> : <Unplug className="w-4 h-4 text-white" />}
-            {/* Status Indicator */}
-            <div 
-              className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${
-                isConnected ? 'bg-green-400' : 'bg-red-400'
-              }`}
-            />
-          </div>
+          
           
           {/* Textarea Input */}
           <textarea
@@ -253,8 +314,70 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
         
         {/* Bottom Status Bar */}
         <div className="flex items-center justify-between mt-2 text-xs text-white/60 space-x-3">
-          <div className="text-xs text-white/60 text-center select-none">
-            {isConnected ? 'Live Mode' : 'Private Mode'}
+          
+          {/* Toggle Button */}
+          <div className="flex items-center space-x-2">
+            {/* Chat Window Toggle Button */}
+            <div 
+              className={`rounded-lg p-0.5 transition-all duration-200 ${
+                isChatVisible ? 'bg-blue-500/20' : ''
+              }`}
+            >
+              <div 
+                className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
+                  isChatVisible
+                    ? 'from-blue-400 to-indigo-500 hover:from-blue-300 hover:to-indigo-400' 
+                    : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+                }`}
+                onClick={handleToggleChatWindow}
+                title={isChatVisible ? 'Hide Chat Window' : 'Show Chat Window'}
+              >
+                <MessageCircle className="w-4 h-4 text-white" />
+                {/* Status indicator */}
+                <div className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${
+                  isChatVisible ? 'bg-green-400' : 'bg-gray-400'
+                }`} />
+              </div>
+            </div>
+            
+            {/* Web Search Toggle Button */}
+            {hasResults && (
+              <div 
+                className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
+                  isResultsVisible
+                    ? 'from-purple-400 to-pink-500 hover:from-purple-300 hover:to-pink-400' 
+                    : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+                }`}
+                onClick={handleToggleWebSearch}
+                title={isResultsVisible ? 'Hide Search Results' : 'Show Search Results'}
+              >
+                <FileSearch className="w-4 h-4 text-white" />
+                {/* Indicator dot when results available */}
+                <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-400" />
+              </div>
+            )}
+
+            {/* Connection Toggle Button */}
+            <div 
+              className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
+                isConnected 
+                  ? 'from-teal-400 to-blue-500 hover:from-teal-300 hover:to-blue-400' 
+                  : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+              }`}
+              onClick={toggleConnection}
+              title={isConnected ? 'Live Mode' : 'Private Mode'}
+            >
+              {isConnected ? <Droplet className="w-4 h-4 text-white" /> : <Unplug className="w-4 h-4 text-white" />}
+              {/* Status Indicator */}
+              <div 
+                className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${
+                  isConnected ? 'bg-green-400' : 'bg-red-400'
+                }`}
+              />
+            </div>
+            <div className="text-xs text-white/60 text-center select-none">
+                {isConnected ? 'Live Mode' : 'Private Mode'}
+            </div>
           </div>
           <div className="text-center">
             Thinkdrop can make mistakes. Check important info.
@@ -272,7 +395,7 @@ export default function PromptBar({ onSubmit, isReady }: PromptBarProps) {
             "
             title="Send message"
           >
-            <Send className="w-3 h-3" />
+            <ArrowUp className="w-6 h-6" />
           </button>
         </div>
         </div>

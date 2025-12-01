@@ -23,6 +23,8 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
   const renderComponent = () => {
     switch (intent) {
       case 'web_search':
+      case 'question':
+        // Both web_search and question intents use the same UI components
         switch (uiVariant) {
           case 'choice':
             return <WebSearchChoice payload={payload} onEvent={onEvent} />;
@@ -33,7 +35,7 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
           case 'error':
             return <WebSearchError payload={payload} onEvent={onEvent} />;
           default:
-            console.warn(`Unknown web_search variant: ${uiVariant}`);
+            console.warn(`Unknown ${intent} variant: ${uiVariant}`);
             return null;
         }
 

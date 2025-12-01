@@ -24,8 +24,7 @@ import MCPPanel from './MCPPanel';
 import VisionPanel from './VisionPanel';
 import { CommandConfirmation } from './CommandConfirmation';
 import { useConversationSignals } from '../hooks/useConversationSignals';
-import { useGuide } from '../contexts/GuideContext';
-import { ViewType } from '@/types/view';
+import { ViewType } from '../types/view';
 interface UnifiedInterfaceProps {
   isListening: boolean;
   toggleListening: () => void;
@@ -89,9 +88,13 @@ const UnifiedInterface: React.FC<UnifiedInterfaceProps> = ({
     setCurrentView('chat');
   };
 
-  // Handle close/minimize
+  // Handle close/minimize - now hides instead of closing
   const handleClose = async () => {
     setShowMenu(false);
+    // Send IPC message to hide the chat window
+    if (window.electronAPI?.send) {
+      window.electronAPI.send('chat-window:toggle');
+    }
   };
 
   // Command confirmation handlers

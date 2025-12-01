@@ -30,28 +30,40 @@ module.exports = async function selectOverlayVariant(state) {
   
   const slots = state.intentContext.slots || {};
   
+  // Debug: Log what's in slots
+  logger.debug(`🔍 [NODE:SELECT_OVERLAY_VARIANT] Slots keys: ${Object.keys(slots).join(', ')}`);
+  logger.debug(`🔍 [NODE:SELECT_OVERLAY_VARIANT] Has results: ${!!slots.results}, Is array: ${Array.isArray(slots.results)}, Length: ${slots.results?.length || 0}`);
+  
+  // Add answer to slots if available (for display in UI)
+  if (state.answer) {
+    slots.answer = state.answer;
+    logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] Added answer to slots: "${state.answer.substring(0, 100)}..."`);
+  }
+  
   // Intent-specific variant selection logic
   switch (intent) {
     case 'web_search':
+    case 'question':
+      // Both web_search and question intents can have web search results
       // Check for error state first
       if (slots.error || slots.errorMessage) {
         state.intentContext.uiVariant = 'error';
-        logger.debug('🎨 [NODE:SELECT_OVERLAY_VARIANT] web_search → error (has error)');
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
       }
       // Multiple channels available → show choice
       else if (slots.candidateChannels && Array.isArray(slots.candidateChannels) && slots.candidateChannels.length > 1) {
         state.intentContext.uiVariant = 'choice';
-        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] web_search → choice (${slots.candidateChannels.length} channels)`);
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → choice (${slots.candidateChannels.length} channels)`);
       }
       // Has results → show results card
       else if (slots.results && Array.isArray(slots.results) && slots.results.length > 0) {
         state.intentContext.uiVariant = 'results';
-        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] web_search → results (${slots.results.length} items)`);
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (${slots.results.length} items)`);
       }
       // Still loading
       else {
         state.intentContext.uiVariant = 'loading';
-        logger.debug('🎨 [NODE:SELECT_OVERLAY_VARIANT] web_search → loading');
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → loading`);
       }
       break;
       

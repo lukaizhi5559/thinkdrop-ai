@@ -12,14 +12,33 @@ const logger = require('../logger.cjs');
 let ghostWindow = null;   // Full-screen click-through window for ghost mouse & visual cues
 let promptWindow = null;  // Small interactive window for prompt bar
 let intentWindow = null;  // Dynamic interactive window for intent UIs
+let chatWindow = null;    // Main chat window (overlayWindow)
 let orchestrator = null;
+
+// Web search state
+let webSearchState = {
+  hasResults: false,
+  isVisible: true
+};
+
+// Chat window state
+let chatWindowState = {
+  isVisible: true
+};
 
 /**
  * Initialize overlay IPC handlers
  * @param {AgentOrchestrator} agentOrchestrator - The orchestrator instance
+ * @param {object} windows - Window references { ghost, prompt, intent }
  */
-function initializeOverlayIPC(agentOrchestrator) {
+function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   orchestrator = agentOrchestrator;
+  
+  // Store window references
+  if (windows.ghost) ghostWindow = windows.ghost;
+  if (windows.prompt) promptWindow = windows.prompt;
+  if (windows.intent) intentWindow = windows.intent;
+  if (windows.chat) chatWindow = windows.chat;
   
   // NOTE: Web search requests now handled by private-mode:process with overlayMode flag
   // This eliminates duplication and reuses existing orchestrator logic
@@ -34,8 +53,19 @@ function initializeOverlayIPC(agentOrchestrator) {
     });
     
     try {
+      // Check if orchestrator exists
+      if (!orchestrator || typeof orchestrator.processOverlayEvent !== 'function') {
+        logger.warn('⚠️  [OVERLAY:IPC] Orchestrator not available, ignoring event');
+        return;
+      }
+      
       // Process event through orchestrator
       const result = await orchestrator.processOverlayEvent(overlayEvent);
+      
+      if (!result) {
+        logger.warn('⚠️  [OVERLAY:IPC] No result from orchestrator');
+        return;
+      }
       
       if (!result.success) {
         logger.error('❌ [OVERLAY:IPC] Overlay event processing failed:', result.error);
@@ -53,6 +83,7 @@ function initializeOverlayIPC(agentOrchestrator) {
     } catch (error) {
       logger.error('❌ [OVERLAY:IPC] Error handling overlay event:', error.message);
       logger.error('❌ [OVERLAY:IPC] Stack trace:', error.stack);
+      // Don't crash, just log the error
     }
   });
   
@@ -113,18 +144,19 @@ function initializeOverlayIPC(agentOrchestrator) {
       return;
     }
 
-    logger.debug('📏 [OVERLAY:IPC] Resizing prompt window:', { width, height });
+    // logger.debug('📏 [OVERLAY:IPC] Resizing prompt window:', { width, height });
     
     // Keep width the same, only adjust height
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const screenHeight = primaryDisplay.workAreaSize.height;
+    
     const currentBounds = promptWindow.getBounds();
     const newWidth = width || currentBounds.width;
     const newHeight = height;
     
-    // Calculate the bottom edge of the current window
-    const currentBottom = currentBounds.y + currentBounds.height;
-    
-    // Keep the bottom edge at the same position, adjust Y to accommodate new height
-    const newY = currentBottom - newHeight;
+    // Keep the bottom edge flush to the bottom of the screen
+    const newY = screenHeight - newHeight;
     
     promptWindow.setBounds({
       x: currentBounds.x,
@@ -174,6 +206,11 @@ function sendOverlayUpdate(payload) {
     conversationId: payload.conversationId
   });
   
+  // If this is a web search or question result, notify PromptBar
+  if ((payload.intent === 'web_search' || payload.intent === 'question') && payload.uiVariant === 'results') {
+    notifyWebSearchResults();
+  }
+  
   // Show the intent window when sending payload
   if (!intentWindow.isVisible()) {
     intentWindow.show();
@@ -182,6 +219,97 @@ function sendOverlayUpdate(payload) {
   
   intentWindow.webContents.send('overlay:update', payload);
 }
+
+/**
+ * Handle setting intent window mouse ignore state
+ * Allows window to be click-through except when hovering over content
+ */
+ipcMain.on('intent-window:set-ignore-mouse', (event, shouldIgnore) => {
+  if (!intentWindow || intentWindow.isDestroyed()) {
+    return;
+  }
+  
+  intentWindow.setIgnoreMouseEvents(shouldIgnore, { forward: true });
+});
+
+/**
+ * Handle web search toggle from PromptBar or WebSearchResults
+ */
+ipcMain.on('web-search:toggle', (event) => {
+  logger.debug('🔄 [OVERLAY:IPC] Web search toggle requested');
+  
+  // Toggle visibility
+  webSearchState.isVisible = !webSearchState.isVisible;
+  
+  logger.debug(`📊 [OVERLAY:IPC] Web search visibility: ${webSearchState.isVisible}`);
+  
+  // Notify PromptBar of state change
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('web-search:state', webSearchState);
+  }
+  
+  // Notify Intent window of visibility change
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('web-search:set-visibility', webSearchState.isVisible);
+    
+    // Hide or show the window
+    if (webSearchState.isVisible) {
+      intentWindow.show();
+    } else {
+      intentWindow.hide();
+    }
+  }
+});
+
+/**
+ * Notify that web search results are available
+ * Called when sending overlay update with web search results
+ */
+function notifyWebSearchResults() {
+  webSearchState.hasResults = true;
+  webSearchState.isVisible = true;
+  
+  logger.debug('📊 [OVERLAY:IPC] Web search results available, notifying PromptBar');
+  
+  // Notify PromptBar that results are available
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('web-search:state', webSearchState);
+  }
+}
+
+/**
+ * Handle chat window toggle from PromptBar or UnifiedInterface
+ */
+ipcMain.on('chat-window:toggle', (event) => {
+  logger.debug('🔄 [OVERLAY:IPC] Chat window toggle requested');
+  
+  // Toggle visibility
+  chatWindowState.isVisible = !chatWindowState.isVisible;
+  
+  logger.debug(`📊 [OVERLAY:IPC] Chat window visibility: ${chatWindowState.isVisible}`);
+  
+  // Notify PromptBar of state change
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('chat-window:state', chatWindowState);
+  }
+  
+  // Hide or show the window
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    if (chatWindowState.isVisible) {
+      chatWindow.show();
+      chatWindow.focus();
+    } else {
+      chatWindow.hide();
+    }
+  }
+});
+
+/**
+ * Get current chat window state
+ */
+ipcMain.handle('chat-window:get-state', () => {
+  return chatWindowState;
+});
 
 /**
  * Check if overlay windows exist and are ready
@@ -196,5 +324,6 @@ function isOverlayReady() {
 module.exports = {
   initializeOverlayIPC,
   sendOverlayUpdate,
+  notifyWebSearchResults,
   isOverlayReady
 };

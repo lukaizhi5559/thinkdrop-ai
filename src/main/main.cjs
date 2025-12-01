@@ -363,16 +363,20 @@ function createIntentOverlay() {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
 
-  // Start with default size, but can be resized dynamically
+  // Start with compact size for loading indicator, will resize dynamically for results
+  const initialWidth = Math.floor(width * 0.6); // 60% of screen width
+  // const initialWidth = 400; // Compact for loading message
+  const initialHeight = 120; // Just enough for loading indicator
+  
   intentOverlayWindow = new BrowserWindow({
-    width: Math.floor(width * 0.6), // Default: 60% of screen width (matches prompt bar)
-    height: Math.floor(height * 0.4), // Default: 40% of screen height
+    width: initialWidth,
+    height: initialHeight,
     minWidth: 200, // Minimum for small UI cards
-    minHeight: 100,
+    minHeight: 200,
     maxWidth: Math.floor(width * 0.9), // Max 90% of screen
     maxHeight: Math.floor(height * 0.9),
-    x: Math.floor(width * 0.2), // Centered for 60% width
-    y: Math.floor(height * 0.3),
+    x: Math.floor((width - initialWidth) / 2), // Center horizontally
+    y: Math.floor((height - initialHeight) / 2), // Center vertically - component will reposition as needed
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -458,7 +462,7 @@ app.whenReady().then(async () => {
     // Step 2: Setup IPC handlers AFTER services are ready
     logger.debug('🔧 Step 2: Setting up IPC handlers...');
 
-    // createOverlayWindow();
+    createOverlayWindow();
     logger.debug('✅ Step 3: Overlay window created');
     
     // Create combined overlay (AI viewing indicator + hotkey toast)
@@ -482,13 +486,7 @@ app.whenReady().then(async () => {
       handlersSetup = true;
       await setupIPCHandlers();
       
-      // Initialize overlay IPC handlers
-      logger.debug('🔧 Initializing overlay IPC handlers...');
-      const { initializeOverlayIPC } = require('./ipc/overlay.cjs');
-      initializeOverlayIPC(coreAgent);
-      logger.debug('✅ Overlay IPC handlers initialized');
-      
-      // Create three-window overlay system
+      // Create three-window overlay system first
       logger.debug('🔧 Creating ghost overlay window (click-through)...');
       createGhostOverlay();
       
@@ -497,6 +495,17 @@ app.whenReady().then(async () => {
       
       logger.debug('🔧 Creating intent overlay window (interactive, hidden)...');
       createIntentOverlay();
+      
+      // Initialize overlay IPC handlers with window references
+      logger.debug('🔧 Initializing overlay IPC handlers...');
+      const { initializeOverlayIPC } = require('./ipc/overlay.cjs');
+      initializeOverlayIPC(coreAgent, {
+        ghost: ghostOverlayWindow,
+        prompt: promptOverlayWindow,
+        intent: intentOverlayWindow,
+        chat: overlayWindow
+      });
+      logger.debug('✅ Overlay IPC handlers initialized');
     }
   }).catch(async error => {
     logger.error('❌ Error during initialization sequence:', error);
@@ -772,7 +781,7 @@ app.whenReady().then(async () => {
   
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      // createOverlayWindow();
+      createOverlayWindow();
     } else if (overlayWindow) {
       overlayWindow.show();
       isOverlayVisible = true;
