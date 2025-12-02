@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Droplet, Unplug, ArrowUp, ChevronUp, X, FileSearch, MessageCircle } from 'lucide-react';
+import { Droplet, Unplug, ArrowUp, ChevronUp, X, FileSearch, MessageCircle, Scan } from 'lucide-react';
 
 interface PromptBarProps {
   onSubmit: (message: string) => void;
@@ -31,6 +31,8 @@ export default function PromptBar({
   const [textareaHeight, setTextareaHeight] = useState<number | null>(null);
   const [hasResults, setHasResults] = useState(false);
   const [isResultsVisible, setIsResultsVisible] = useState(false);
+  const [hasScreenResults, setHasScreenResults] = useState(false);
+  const [isScreenResultsVisible, setIsScreenResultsVisible] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(true);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -43,11 +45,17 @@ export default function PromptBar({
       setIsResultsVisible(state.isVisible);
     };
 
+    const handleScreenIntelligenceState = (_event: any, state: { hasResults: boolean; isVisible: boolean }) => {
+      setHasScreenResults(state.hasResults);
+      setIsScreenResultsVisible(state.isVisible);
+    };
+
     const handleChatWindowState = (_event: any, state: { isVisible: boolean }) => {
       setIsChatVisible(state.isVisible);
     };
 
     ipcRenderer.on('web-search:state', handleWebSearchState);
+    ipcRenderer.on('screen-intelligence:state', handleScreenIntelligenceState);
     ipcRenderer.on('chat-window:state', handleChatWindowState);
     
     // Get initial chat window state
@@ -60,6 +68,7 @@ export default function PromptBar({
     return () => {
       if (ipcRenderer.removeListener) {
         ipcRenderer.removeListener('web-search:state', handleWebSearchState);
+        ipcRenderer.removeListener('screen-intelligence:state', handleScreenIntelligenceState);
         ipcRenderer.removeListener('chat-window:state', handleChatWindowState);
       }
     };
@@ -68,6 +77,12 @@ export default function PromptBar({
   const handleToggleWebSearch = () => {
     if (ipcRenderer) {
       ipcRenderer.send('web-search:toggle');
+    }
+  };
+
+  const handleToggleScreenIntelligence = () => {
+    if (ipcRenderer) {
+      ipcRenderer.send('screen-intelligence:toggle');
     }
   };
 
@@ -360,6 +375,23 @@ export default function PromptBar({
                 <FileSearch className="w-4 h-4 text-white" />
                 {/* Indicator dot when results available */}
                 <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-400" />
+              </div>
+            )}
+
+            {/* Screen Intelligence Toggle Button */}
+            {hasScreenResults && (
+              <div 
+                className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
+                  isScreenResultsVisible
+                    ? 'from-cyan-400 to-teal-500 hover:from-cyan-300 hover:to-teal-400' 
+                    : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+                }`}
+                onClick={handleToggleScreenIntelligence}
+                title={isScreenResultsVisible ? 'Hide Screen Analysis' : 'Show Screen Analysis'}
+              >
+                <Scan className="w-4 h-4 text-white" />
+                {/* Indicator dot when results available */}
+                <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400" />
               </div>
             )}
 

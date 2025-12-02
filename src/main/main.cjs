@@ -434,20 +434,31 @@ function toggleOverlay() {
   if (!overlayWindow) return;
   
   if (isGloballyVisible) {
-    // Hide the unified overlay window
+    // Hide the unified overlay window and three-window overlay system
     overlayWindow.hide();
     isOverlayVisible = false;
     isChatVisible = false;
     isInsightVisible = false;
     isGloballyVisible = false;
-    transparentOverlayWindow.hide();
+    
+    // Hide three-window overlay system
+    if (ghostOverlayWindow) ghostOverlayWindow.hide();
+    if (promptOverlayWindow) promptOverlayWindow.hide();
+    if (intentOverlayWindow) intentOverlayWindow.hide();
   } else {
-    // Show the unified overlay window
+    // Show the unified overlay window and three-window overlay system
     overlayWindow.show();
     overlayWindow.focus();
     isOverlayVisible = true;
     isGloballyVisible = true;
-    transparentOverlayWindow.show();
+    
+    // Show three-window overlay system
+    if (ghostOverlayWindow) ghostOverlayWindow.show();
+    if (promptOverlayWindow) {
+      promptOverlayWindow.show();
+      promptOverlayWindow.focus();
+    }
+    // intentOverlayWindow stays hidden until needed
   }
 }
 

@@ -21,6 +21,12 @@ let webSearchState = {
   isVisible: true
 };
 
+// Screen intelligence state
+let screenIntelligenceState = {
+  hasResults: false,
+  isVisible: true
+};
+
 // Chat window state
 let chatWindowState = {
   isVisible: true
@@ -211,6 +217,11 @@ function sendOverlayUpdate(payload) {
     notifyWebSearchResults();
   }
   
+  // If this is a screen intelligence result, notify PromptBar
+  if (payload.intent === 'screen_intelligence' && payload.uiVariant === 'results') {
+    notifyScreenIntelligenceResults();
+  }
+  
   // Show the intent window when sending payload
   if (!intentWindow.isVisible()) {
     intentWindow.show();
@@ -278,6 +289,51 @@ function notifyWebSearchResults() {
 }
 
 /**
+ * Handle screen intelligence toggle from PromptBar or ScreenIntelligenceResults
+ */
+ipcMain.on('screen-intelligence:toggle', (event) => {
+  logger.debug('🔄 [OVERLAY:IPC] Screen intelligence toggle requested');
+  
+  // Toggle visibility
+  screenIntelligenceState.isVisible = !screenIntelligenceState.isVisible;
+  
+  logger.debug(`📊 [OVERLAY:IPC] Screen intelligence visibility: ${screenIntelligenceState.isVisible}`);
+  
+  // Notify PromptBar of state change
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+  }
+  
+  // Notify Intent window of visibility change
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('screen-intelligence:set-visibility', screenIntelligenceState.isVisible);
+    
+    // Hide or show the window
+    if (screenIntelligenceState.isVisible) {
+      intentWindow.show();
+    } else {
+      intentWindow.hide();
+    }
+  }
+});
+
+/**
+ * Notify that screen intelligence results are available
+ * Called when sending overlay update with screen intelligence results
+ */
+function notifyScreenIntelligenceResults() {
+  screenIntelligenceState.hasResults = true;
+  screenIntelligenceState.isVisible = true;
+  
+  logger.debug('📊 [OVERLAY:IPC] Screen intelligence results available, notifying PromptBar');
+  
+  // Notify PromptBar that results are available
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+  }
+}
+
+/**
  * Handle chat window toggle from PromptBar or UnifiedInterface
  */
 ipcMain.on('chat-window:toggle', (event) => {
@@ -325,5 +381,6 @@ module.exports = {
   initializeOverlayIPC,
   sendOverlayUpdate,
   notifyWebSearchResults,
+  notifyScreenIntelligenceResults,
   isOverlayReady
 };

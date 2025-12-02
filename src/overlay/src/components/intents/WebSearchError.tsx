@@ -55,18 +55,18 @@ export default function WebSearchError({ payload, onEvent }: WebSearchErrorProps
   if (isDismissed) return null;
 
   return (
-    <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 slide-up">
-      <div className="glass-dark rounded-2xl shadow-2xl p-6 min-w-[400px] max-w-[500px]">
-        {/* Error Icon & Message */}
-        <div className="flex items-start gap-4 mb-6">
-          <div className="p-2 rounded-lg bg-red-500/20">
+    <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 slide-up max-h-[calc(100vh-200px)]">
+      <div className="glass-dark rounded-2xl shadow-2xl p-6 min-w-[400px] max-w-[500px] flex flex-col max-h-full">
+        {/* Error Icon & Message - Scrollable */}
+        <div className="flex items-start gap-4 mb-6 overflow-y-auto flex-1">
+          <div className="p-2 rounded-lg bg-red-500/20 flex-shrink-0">
             <AlertCircle className="w-6 h-6 text-red-400" />
           </div>
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <h3 className="text-lg font-semibold text-white mb-1">
               {subject}
             </h3>
-            <p className="text-white/70 text-sm">
+            <p className="text-white/70 text-sm whitespace-pre-wrap">
               {errorMessage}
             </p>
           </div>

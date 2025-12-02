@@ -574,21 +574,11 @@ Rules:`;
     if (state.visualContext && state.intent?.type === 'vision') {
       finalQuery = `${queryMessage}\n\n${state.visualContext}`;
       logger.debug('👁️  [NODE:ANSWER] Added visual context directly to query for vision intent');
-    } else if (state.context) {
-      // Generic context from other nodes (including screen_intelligence)
-      // The screenIntelligence node already built the appropriate context
-      
-      // SAFETY: Ensure context is a string, not an object
-      const contextStr = typeof state.context === 'string' 
-        ? state.context 
-        : JSON.stringify(state.context);
-      
-      if (typeof state.context !== 'string') {
-        logger.warn('⚠️  [NODE:ANSWER] state.context is not a string, converting:', typeof state.context);
-      }
-      
-      finalQuery = `${queryMessage}\n\n${contextStr}`;
-      logger.debug('📋 [NODE:ANSWER] Added context to query');
+    } else if (state.context && typeof state.context === 'string') {
+      // Only append context if it's a string (e.g., visual context, screen description)
+      // Do NOT append if it's an object (session metadata) - that goes in payload.context
+      finalQuery = `${queryMessage}\n\n${state.context}`;
+      logger.debug('📋 [NODE:ANSWER] Added string context to query');
       
       // Log which strategy was used
       if (state.useSimpleContext) {
@@ -596,6 +586,9 @@ Rules:`;
       } else if (state.screenContext) {
         logger.debug('   Strategy: Semantic search');
       }
+    } else if (state.context && typeof state.context === 'object') {
+      // Context is an object (session metadata) - don't append to query
+      logger.debug('📋 [NODE:ANSWER] Context is object (session metadata), passing in payload.context only');
     }
     
     // 🚀 Determine if we should use fast mode

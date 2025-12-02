@@ -256,8 +256,11 @@ module.exports = async function screenIntelligence(state) {
       logger.debug('🌐 [NODE:SCREEN_INTELLIGENCE] Online mode - using backend vision API');
       
       try {
+        // Use non-streaming mode for now - streaming requires WebSocket support
         const result = await mcpClient.callService('screen-intelligence', 'screen.analyze-vision', {
-          query: message
+          query: message,
+          stream: false, // Disable streaming to get JSON response
+          speedMode: 'balanced',
         }, { timeout: 60000 }); // 60s timeout for vision API
         
         const resultData = result.data || result;
@@ -289,16 +292,33 @@ module.exports = async function screenIntelligence(state) {
         
       } catch (visionError) {
         logger.error('❌ [NODE:SCREEN_INTELLIGENCE] Backend vision API failed:', visionError.message);
+        logger.debug('🔍 [NODE:SCREEN_INTELLIGENCE] Error details:', visionError);
         
-        // Set error state
+        // Set error state with user-friendly message
         const intentContext = state.intentContext || { intent: 'screen_intelligence', slots: {}, uiVariant: null };
+        
+        // Create a user-friendly error message
+        let userMessage = 'Unable to analyze screen content.';
+        if (visionError.message.includes('json')) {
+          userMessage = 'Screen analysis service returned an invalid response. Please try again.';
+        } else if (visionError.message.includes('timeout')) {
+          userMessage = 'Screen analysis timed out. Please try again.';
+        } else if (visionError.message.includes('401') || visionError.message.includes('403')) {
+          userMessage = 'Screen analysis service authentication failed. Please check your API configuration.';
+        }
+        
         intentContext.slots = {
           ...intentContext.slots,
           error: 'vision_api_failed',
-          errorMessage: visionError.message
+          errorMessage: userMessage,
+          technicalError: visionError.message // Keep technical details for debugging
         };
         state.intentContext = intentContext;
-        state.screenIntelligenceError = visionError.message;
+        state.screenIntelligenceError = userMessage;
+        
+        // CRITICAL: Set state.answer to prevent the answer node from calling the LLM
+        // This stops the flow from continuing to the backend WebSocket which would trigger web search
+        state.answer = userMessage;
         
         return state;
       }

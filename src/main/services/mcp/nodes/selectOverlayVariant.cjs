@@ -60,6 +60,11 @@ module.exports = async function selectOverlayVariant(state) {
         state.intentContext.uiVariant = 'results';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (${slots.results.length} items)`);
       }
+      // Has answer (e.g., from online LLM without web search) → show as results
+      else if (state.answer || slots.answer) {
+        state.intentContext.uiVariant = 'results';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (has answer, no web results)`);
+      }
       // Still loading
       else {
         state.intentContext.uiVariant = 'loading';

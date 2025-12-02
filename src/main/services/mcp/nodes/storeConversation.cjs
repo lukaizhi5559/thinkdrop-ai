@@ -215,7 +215,7 @@ module.exports = async function storeConversation(state) {
     if (shouldAutoStore) {
       logger.debug(`💎 [NODE:STORE_CONVERSATION] Auto-storing ${intentType} to user-memory (valuable content detected)`);
       try {
-        await mcpClient.callService('memory', 'memory.store', {
+        await mcpClient.callService('user-memory', 'memory.store', {
           text: storageText,
           entities: entities,
           userId: context?.userId,
