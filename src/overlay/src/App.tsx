@@ -19,6 +19,7 @@ const ipcRenderer = (window as any).electron?.ipcRenderer;
 function App() {
   const [overlayPayload, setOverlayPayload] = useState<OverlayPayload | null>(null);
   const [isReady, setIsReady] = useState(false);
+  const [isOnlineMode, setIsOnlineMode] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
   // Detect which window mode we're in
@@ -61,6 +62,7 @@ function App() {
 
   const handlePromptSubmit = async (message: string) => {
     console.log('📤 [OVERLAY] Prompt submitted:', message);
+    console.log('🌐 [OVERLAY] Online mode:', isOnlineMode);
     
     if (ipcRenderer) {
       // Use private-mode handler with overlay mode enabled
@@ -74,7 +76,7 @@ function App() {
             correlationId: `overlay_${Date.now()}`,
             userId: 'default_user',
             timestamp: new Date().toISOString(),
-            useOnlineMode: false
+            useOnlineMode: isOnlineMode
           }
         });
         console.log('✅ [OVERLAY] Private mode processing complete:', result);
@@ -101,6 +103,7 @@ function App() {
         <PromptBar 
           onSubmit={handlePromptSubmit}
           isReady={isReady}
+          onConnectionChange={setIsOnlineMode}
         />
       </div>
     );

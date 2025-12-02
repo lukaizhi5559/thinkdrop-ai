@@ -67,7 +67,26 @@ module.exports = async function selectOverlayVariant(state) {
       }
       break;
       
-    // TODO: Add other intents (screen_intelligence, command_guide, etc.)
+    case 'screen_intelligence':
+      // Screen intelligence intent - show analysis results
+      // Check for error state first
+      if (slots.error || slots.errorMessage) {
+        state.intentContext.uiVariant = 'error';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] screen_intelligence → error (has error)`);
+      }
+      // Has analysis or text → show results
+      else if (slots.analysis || slots.text || state.answer) {
+        state.intentContext.uiVariant = 'results';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] screen_intelligence → results (has analysis)`);
+      }
+      // Still loading
+      else {
+        state.intentContext.uiVariant = 'loading';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] screen_intelligence → loading`);
+      }
+      break;
+      
+    // TODO: Add other intents (command_guide, command_execute, etc.)
     
     default:
       // Use default variant for unknown intents

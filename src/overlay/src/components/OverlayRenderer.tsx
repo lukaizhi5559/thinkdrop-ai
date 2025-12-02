@@ -10,6 +10,7 @@ import WebSearchChoice from './intents/WebSearchChoice';
 import WebSearchResults from './intents/WebSearchResults';
 import WebSearchLoading from './intents/WebSearchLoading';
 import WebSearchError from './intents/WebSearchError';
+import ScreenIntelligenceResults from './intents/ScreenIntelligenceResults';
 
 interface OverlayRendererProps {
   payload: OverlayPayload;
@@ -39,8 +40,21 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
             return null;
         }
 
-      // Screen intelligence and command execution intents
+      // Screen intelligence intent
       case 'screen_intelligence':
+        switch (uiVariant) {
+          case 'loading':
+            return <WebSearchLoading payload={payload} />;
+          case 'results':
+            return <ScreenIntelligenceResults payload={payload} onEvent={onEvent} />;
+          case 'error':
+            return <WebSearchError payload={payload} onEvent={onEvent} />;
+          default:
+            console.warn(`Unknown screen_intelligence variant: ${uiVariant}`);
+            return null;
+        }
+
+      // Command execution intents
       case 'command_guide':
       case 'command_execute':
       case 'command_automate':

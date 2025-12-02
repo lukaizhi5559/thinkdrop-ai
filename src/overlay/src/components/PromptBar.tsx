@@ -14,13 +14,15 @@ import { Droplet, Unplug, ArrowUp, ChevronUp, X, FileSearch, MessageCircle } fro
 interface PromptBarProps {
   onSubmit: (message: string) => void;
   isReady: boolean;
+  onConnectionChange?: (isConnected: boolean) => void;
 }
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
 export default function PromptBar({ 
   onSubmit, 
-  isReady
+  isReady,
+  onConnectionChange
 }: PromptBarProps) {
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
@@ -147,7 +149,11 @@ export default function PromptBar({
   };
 
   const toggleConnection = () => {
-    setIsConnected(!isConnected);
+    const newState = !isConnected;
+    setIsConnected(newState);
+    if (onConnectionChange) {
+      onConnectionChange(newState);
+    }
   };
 
   const toggleExpanded = () => {

@@ -287,16 +287,17 @@ class AgentOrchestrator {
         // Screen Intelligence: Requires online mode for optimal performance
         if (intentType === 'screen_intelligence') {
           logger.warn('🔒 [STATEGRAPH:ROUTER] Screen intelligence requires online mode - blocking in private mode');
-          // Set error state and skip to end
+          // Set error state and route to overlay system
           state.answer = '🔒 **Screen Intelligence is only available in Online Mode**\n\nThis feature requires real-time screen analysis capabilities that work best with online services. Please switch to Online Mode to use screen intelligence features.';
           state.intentContext = state.intentContext || {};
           state.intentContext.intent = 'screen_intelligence';
           state.intentContext.uiVariant = 'error';
           state.intentContext.slots = {
             error: 'private_mode_blocked',
-            errorMessage: 'Screen intelligence requires online mode'
+            errorMessage: 'Screen intelligence requires online mode',
+            query: state.message
           };
-          return 'end'; // Skip all processing, return error message
+          return 'selectOverlayVariant'; // Route to overlay system to display error
         }
         
         // Commands: Requires online mode for execution safety and interpretation

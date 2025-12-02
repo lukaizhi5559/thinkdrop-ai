@@ -251,6 +251,62 @@ module.exports = async function screenIntelligence(state) {
   }
   
   try {
+    // 🌐 ONLINE MODE: Use backend vision API (Claude/OpenAI/Grok)
+    if (state.useOnlineMode) {
+      logger.debug('🌐 [NODE:SCREEN_INTELLIGENCE] Online mode - using backend vision API');
+      
+      try {
+        const result = await mcpClient.callService('screen-intelligence', 'screen.analyze-vision', {
+          query: message
+        }, { timeout: 60000 }); // 60s timeout for vision API
+        
+        const resultData = result.data || result;
+        
+        logger.debug('✅ [NODE:SCREEN_INTELLIGENCE] Backend vision analysis complete', {
+          provider: resultData.provider,
+          latencyMs: resultData.latencyMs,
+          analysisLength: resultData.analysis?.length || 0
+        });
+        
+        // Populate intentContext.slots for overlay system
+        const intentContext = state.intentContext || { intent: 'screen_intelligence', slots: {}, uiVariant: null };
+        intentContext.slots = {
+          ...intentContext.slots,
+          query: message,
+          analysis: resultData.analysis || resultData.text || '',
+          provider: resultData.provider || 'unknown',
+          latencyMs: resultData.latencyMs || 0,
+          timestamp: resultData.timestamp || new Date().toISOString()
+        };
+        state.intentContext = intentContext;
+        
+        // Set answer for display
+        state.answer = resultData.analysis || resultData.text || '';
+        
+        logger.debug('📦 [NODE:SCREEN_INTELLIGENCE] Populated intentContext.slots for overlay');
+        
+        return state;
+        
+      } catch (visionError) {
+        logger.error('❌ [NODE:SCREEN_INTELLIGENCE] Backend vision API failed:', visionError.message);
+        
+        // Set error state
+        const intentContext = state.intentContext || { intent: 'screen_intelligence', slots: {}, uiVariant: null };
+        intentContext.slots = {
+          ...intentContext.slots,
+          error: 'vision_api_failed',
+          errorMessage: visionError.message
+        };
+        state.intentContext = intentContext;
+        state.screenIntelligenceError = visionError.message;
+        
+        return state;
+      }
+    }
+    
+    // 🔒 PRIVATE MODE: Use local analysis (existing code below)
+    logger.debug('🔒 [NODE:SCREEN_INTELLIGENCE] Private mode - using local analysis');
+    
     // 1️⃣ Check Worker Thread cache first (instant lookup)
     let data;
     let fromCache = false;
