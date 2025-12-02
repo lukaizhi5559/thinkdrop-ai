@@ -13,6 +13,7 @@
 export type IntentLabel =
   | 'screen_intelligence'
   | 'command_execute'
+  | 'command_automate'
   | 'command_guide'
   | 'memory_store'
   | 'memory_retrieve'

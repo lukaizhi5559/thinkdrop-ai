@@ -39,11 +39,17 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
             return null;
         }
 
-      // TODO: Add other intents
+      // Screen intelligence and command execution intents
       case 'screen_intelligence':
       case 'command_guide':
       case 'command_execute':
-        console.warn(`Intent ${intent} not yet implemented`);
+      case 'command_automate':
+        // For now, only handle error variant (private mode blocking)
+        // Full implementation coming soon
+        if (uiVariant === 'error') {
+          return <WebSearchError payload={payload} onEvent={onEvent} />;
+        }
+        console.warn(`Intent ${intent} variant ${uiVariant} not yet implemented`);
         return null;
 
       default:

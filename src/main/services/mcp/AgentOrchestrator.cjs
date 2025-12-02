@@ -203,6 +203,26 @@ class AgentOrchestrator {
         logger.debug('🔄 [NODE:PARALLEL] Running sanitizeWeb + filterMemory in parallel...');
         return await this.stateGraph.executeParallel(['sanitizeWeb', 'filterMemory'], state);
       },
+      parallelScreenAndMemory: async (state) => {
+        logger.debug('🔄 [NODE:PARALLEL] Running screenIntelligence + retrieveMemory in parallel...');
+        return await this.stateGraph.executeParallel(['screenIntelligence', 'retrieveMemory'], state);
+      },
+      parallelCommandAndMemory: async (state) => {
+        logger.debug('🔄 [NODE:PARALLEL] Running executeCommand + retrieveMemory in parallel...');
+        return await this.stateGraph.executeParallel(['executeCommand', 'retrieveMemory'], state);
+      },
+      parallelScreenFilterMemory: async (state) => {
+        logger.debug('🔄 [NODE:PARALLEL] Running filterMemory + resolveReferences after screen intelligence...');
+        // Filter memory results, then resolve references
+        const filteredState = await filterMemoryNode({ ...state, mcpClient: this.mcpClient });
+        return await resolveReferencesNode({ ...filteredState, mcpClient: this.mcpClient });
+      },
+      parallelCommandFilterMemory: async (state) => {
+        logger.debug('🔄 [NODE:PARALLEL] Running filterMemory + resolveReferences after command execution...');
+        // Filter memory results, then resolve references
+        const filteredState = await filterMemoryNode({ ...state, mcpClient: this.mcpClient });
+        return await resolveReferencesNode({ ...filteredState, mcpClient: this.mcpClient });
+      },
       
       // Shared answer/validate/store tail
       answer: (state) => answerNode({ ...state, mcpClient: this.mcpClient }),
@@ -234,15 +254,21 @@ class AgentOrchestrator {
         if (useOnlineMode) {
           logger.debug('🌐 [STATEGRAPH:ROUTER] Online mode active - skipping web search, using online LLM');
           
-          // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
+          // Screen Intelligence: Primary screen analysis with memory context
           // Vision intent now routes to screen intelligence first, falls back to vision service if needed
           if (intentType === 'screen_intelligence') {
-            logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
-            return 'screenIntelligence';
+            logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - running with memory context');
+            return 'parallelScreenAndMemory'; // ⚡ PARALLEL: screenIntelligence + retrieveMemory
           }
           
-          // Commands: system commands (all sub-types)
-          if (intentType === 'command_execute' || intentType === 'command_automate' || intentType === 'command_guide') {
+          // Command Automate: Complex UI automation with memory context for personalization
+          if (intentType === 'command_automate') {
+            logger.debug('🤖 [STATEGRAPH:ROUTER] Command automation intent detected - running with memory context');
+            return 'parallelCommandAndMemory'; // ⚡ PARALLEL: executeCommand + retrieveMemory
+          }
+          
+          // Simple Commands: Direct execution without memory (faster)
+          if (intentType === 'command_execute' || intentType === 'command_guide') {
             logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
             return 'executeCommand';
           }
@@ -258,18 +284,35 @@ class AgentOrchestrator {
         
         // 🔒 PRIVATE MODE: Use web search for time-sensitive queries
         
-        // Screen Intelligence: Primary screen analysis (handles both vision and screen_intelligence intents)
-        // Vision intent now routes to screen intelligence first, falls back to vision service if needed
+        // Screen Intelligence: Requires online mode for optimal performance
         if (intentType === 'screen_intelligence') {
-          logger.debug('🎯 [STATEGRAPH:ROUTER] Screen analysis intent detected - using fast DuckDB search');
-          return 'screenIntelligence';
+          logger.warn('🔒 [STATEGRAPH:ROUTER] Screen intelligence requires online mode - blocking in private mode');
+          // Set error state and skip to end
+          state.answer = '🔒 **Screen Intelligence is only available in Online Mode**\n\nThis feature requires real-time screen analysis capabilities that work best with online services. Please switch to Online Mode to use screen intelligence features.';
+          state.intentContext = state.intentContext || {};
+          state.intentContext.intent = 'screen_intelligence';
+          state.intentContext.uiVariant = 'error';
+          state.intentContext.slots = {
+            error: 'private_mode_blocked',
+            errorMessage: 'Screen intelligence requires online mode'
+          };
+          return 'end'; // Skip all processing, return error message
         }
         
-        // Commands: system commands (all sub-types - works in both online and private mode)
+        // Commands: Requires online mode for execution safety and interpretation
         if (intentType === 'command_execute' || 
             intentType === 'command_automate' || intentType === 'command_guide') {
-          logger.debug(`⚡ [STATEGRAPH:ROUTER] Command intent detected (${intentType}) - routing to executeCommand`);
-          return 'executeCommand';
+          logger.warn(`🔒 [STATEGRAPH:ROUTER] Command execution requires online mode - blocking in private mode (${intentType})`);
+          // Set error state and skip to end
+          state.answer = '🔒 **Command Execution is only available in Online Mode**\n\nFor security and optimal performance, command execution features require online mode. Please switch to Online Mode to execute system commands.';
+          state.intentContext = state.intentContext || {};
+          state.intentContext.intent = intentType;
+          state.intentContext.uiVariant = 'error';
+          state.intentContext.slots = {
+            error: 'private_mode_blocked',
+            errorMessage: 'Command execution requires online mode'
+          };
+          return 'end'; // Skip all processing, return error message
         }
         
         // Web search: time-sensitive queries, factual questions, and general knowledge
@@ -331,6 +374,14 @@ class AgentOrchestrator {
       // Web search subgraph with parallel execution
       parallelWebAndMemory: 'parallelSanitizeAndFilter', // ⚡ PARALLEL: sanitizeWeb + filterMemory
       parallelSanitizeAndFilter: 'resolveReferences',
+      
+      // Screen intelligence subgraph with parallel memory retrieval
+      parallelScreenAndMemory: 'parallelScreenFilterMemory', // ⚡ PARALLEL: screenIntelligence + retrieveMemory
+      parallelScreenFilterMemory: 'answer',
+      
+      // Command automation subgraph with parallel memory retrieval
+      parallelCommandAndMemory: 'parallelCommandFilterMemory', // ⚡ PARALLEL: executeCommand + retrieveMemory
+      parallelCommandFilterMemory: 'answer',
       
       // Memory retrieve / general query subgraph (sequential)
       retrieveMemory: 'filterMemory',
