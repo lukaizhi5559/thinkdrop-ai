@@ -206,6 +206,24 @@ module.exports = async function executeCommand(state) {
     logger.debug('📊 [NODE:EXECUTE_COMMAND] Output length:', result.output?.length || 0);
     logger.debug('🔍 [NODE:EXECUTE_COMMAND] Interpretation source:', result.outputInterpretationSource || 'raw');
     
+    // Populate intentContext.slots for overlay system
+    const intentContext = state.intentContext || { intent: intent.type, slots: {}, uiVariant: null };
+    intentContext.slots = {
+      ...intentContext.slots,
+      originalCommand: commandMessage,
+      shellCommand: result.executedCommand || result.interpretedCommand,
+      output: result.output || result.rawOutput || '',
+      success: result.success,
+      method: result.method || 'unknown',
+      confidence: result.confidence || 0,
+      executionTime: result.executionTime || 0,
+      category: result.category || 'general',
+      timestamp: new Date().toISOString()
+    };
+    state.intentContext = intentContext;
+    
+    logger.debug('📦 [NODE:EXECUTE_COMMAND] Populated intentContext.slots for overlay');
+    
     // Only skip answer node if Gemini (online mode) interpreted it
     // Ollama interpretation in command service is just pre-processing, still needs answer node
     const isGeminiInterpreted = result.outputInterpretationSource === 'gemini';

@@ -91,7 +91,26 @@ module.exports = async function selectOverlayVariant(state) {
       }
       break;
       
-    // TODO: Add other intents (command_guide, command_execute, etc.)
+    case 'command_execute':
+    case 'command_guide':
+    case 'command_automate':
+      // Command execution intents - show execution results
+      // Check for error state first
+      if (slots.error || slots.errorMessage || state.commandError) {
+        state.intentContext.uiVariant = 'error';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
+      }
+      // Has command output or answer → show results
+      else if (state.commandExecuted || state.answer || slots.output) {
+        state.intentContext.uiVariant = 'results';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (command executed)`);
+      }
+      // Still loading
+      else {
+        state.intentContext.uiVariant = 'loading';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → loading`);
+      }
+      break;
     
     default:
       // Use default variant for unknown intents

@@ -11,6 +11,7 @@
 
 import { useState, useEffect } from 'react';
 import { sendGhostHoverData } from '../utils/overlayPosition';
+import { AlertCircle, X } from 'lucide-react';
 
 interface HighlightedItem {
   id: string;
@@ -22,10 +23,19 @@ interface HighlightedItem {
   content?: string;
 }
 
+interface BannerNotification {
+  id: string;
+  feature: string;
+  message: string;
+}
+
+const ipcRenderer = (window as any).electron?.ipcRenderer;
+
 export default function GhostOverlay() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [highlightedItems, setHighlightedItems] = useState<HighlightedItem[]>([]);
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
+  const [banner, setBanner] = useState<BannerNotification | null>(null);
 
   // Track mouse position
   useEffect(() => {
@@ -61,36 +71,107 @@ export default function GhostOverlay() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [highlightedItems, hoveredItem]);
 
-  // Demo: Add some sample highlighted items
+  // Listen for private mode error notifications
   useEffect(() => {
-    // In real implementation, these would come from OCR/screen analysis
-    // Uncomment below to enable demo highlights:
-    
-    // const demoItems: HighlightedItem[] = [
-    //   {
-    //     id: 'demo-1',
-    //     x: 100,
-    //     y: 100,
-    //     width: 200,
-    //     height: 50,
-    //     type: 'text',
-    //     content: 'Sample Text',
-    //   },
-    //   {
-    //     id: 'demo-2',
-    //     x: 400,
-    //     y: 300,
-    //     width: 150,
-    //     height: 150,
-    //     type: 'image',
-    //     content: 'Sample Image',
-    //   },
-    // ];
-    // setHighlightedItems(demoItems);
+    if (!ipcRenderer) return;
+
+    const handlePrivateModeError = (_event: any, data: { feature: string; query: string }) => {
+      setBanner({
+        id: `banner-${Date.now()}`,
+        feature: data.feature,
+        message: `${data.feature} requires Live Mode to be enabled. Toggle Live Mode in the prompt bar below.`
+      });
+      
+      // Disable click-through when banner is shown
+      ipcRenderer.send('ghost-overlay:set-clickthrough', false);
+    };
+
+    ipcRenderer.on('overlay:private-mode-error', handlePrivateModeError);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('overlay:private-mode-error', handlePrivateModeError);
+      }
+    };
   }, []);
+
+  const handleCloseBanner = () => {
+    console.log('[GhostOverlay] Close banner clicked');
+    setBanner(null);
+    
+    // Re-enable click-through when banner is closed
+    if (ipcRenderer) {
+      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
+    }
+  };
+
+  const handleEnableLiveMode = () => {
+    console.log('[GhostOverlay] Enable live mode clicked');
+    // Close the banner
+    setBanner(null);
+    
+    // Re-enable click-through when banner is closed
+    if (ipcRenderer) {
+      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
+      
+      // Emit event to prompt bar to toggle connection
+      console.log('[GhostOverlay] Sending banner:enable-live-mode IPC event');
+      ipcRenderer.send('banner:enable-live-mode');
+    }
+  };
 
   return (
     <div className="w-full h-full pointer-events-none">
+      {/* Banner Notification */}
+      {banner && (
+        <div 
+          className="fixed top-0 left-0 right-0 z-50 flex justify-center p-4 pointer-events-auto animate-in slide-in-from-top duration-300"
+          style={{ zIndex: 9999 }}
+        >
+          <div 
+            className="max-w-2xl w-full rounded-lg shadow-2xl"
+            style={{
+              background: 'linear-gradient(to right, #f97316, #f59e0b)',
+              border: '2px solid #fb923c',
+            }}
+          >
+            <div className="flex items-start gap-3 p-4">
+              <AlertCircle className="w-6 h-6 flex-shrink-0 mt-0.5" style={{ color: '#ffffff' }} />
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-bold mb-1" style={{ color: '#ffffff' }}>
+                  {banner.feature} Requires Live Mode
+                </h3>
+                <p className="text-sm" style={{ color: '#ffffff' }}>
+                  {banner.message}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <button
+                  onClick={handleEnableLiveMode}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg cursor-pointer"
+                  style={{
+                    backgroundColor: '#ffffff',
+                    color: '#ea580c',
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  Enable Live Mode
+                </button>
+                <button
+                  onClick={handleCloseBanner}
+                  className="p-2 rounded-lg transition-colors hover:bg-white/20 cursor-pointer"
+                  style={{
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  <X className="w-5 h-5" style={{ color: '#ffffff' }} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Ghost mouse cursor */}
       <div
         className="fixed w-6 h-6 bg-blue-500/50 rounded-full border-2 border-blue-400 pointer-events-none transition-transform duration-75"

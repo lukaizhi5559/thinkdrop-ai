@@ -36,7 +36,7 @@ export default function WebSearchChoice({ payload, onEvent }: WebSearchChoicePro
   };
 
   return (
-    <div className="fixed bottom-32 left-1/2 transform -translate-x-1/2 slide-up">
+    <div className="fixed inset-0 flex items-center justify-center">
       <div className="glass-dark rounded-2xl shadow-2xl p-6 min-w-[400px] max-w-[600px]">
         {/* Title */}
         <div className="mb-4">

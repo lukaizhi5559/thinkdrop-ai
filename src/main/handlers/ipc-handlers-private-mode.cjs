@@ -7,7 +7,7 @@
 
 const { ipcMain } = require('electron');
 const AgentOrchestrator = require('../services/mcp/AgentOrchestrator.cjs');
-const { sendOverlayUpdate } = require('../ipc/overlay.cjs');
+const { sendOverlayUpdate, isChatWindowVisible } = require('../ipc/overlay.cjs');
 
 const logger = require('./../logger.cjs');
 // Orchestrator instance
@@ -71,8 +71,13 @@ function registerPrivateModeHandlers() {
       // Detect overlay mode from context
       const isOverlayMode = context.overlayMode === true;
       
-      // Overlay mode: Send initial "Thinking..." loading state
-      if (isOverlayMode) {
+      // Check if chat window is visible
+      const chatIsVisible = isChatWindowVisible();
+      logger.debug(`💬 [PRIVATE-MODE] Chat window visible: ${chatIsVisible}`);
+      
+      // Overlay mode: Send initial "Thinking..." loading state ONLY if chat is NOT visible
+      if (isOverlayMode && !chatIsVisible) {
+        logger.debug('📤 [PRIVATE-MODE] Chat closed - sending loading state to intent window');
         sendOverlayUpdate({
           intent: 'web_search',
           uiVariant: 'loading',
@@ -83,6 +88,8 @@ function registerPrivateModeHandlers() {
           conversationId: context.conversationId || `overlay_${Date.now()}`,
           correlationId: context.correlationId || `overlay_${Date.now()}`
         });
+      } else if (isOverlayMode && chatIsVisible) {
+        logger.debug('💬 [PRIVATE-MODE] Chat open - skipping intent overlay, results will stay in chat');
       }
       
       logger.debug(`\n🔒 [PRIVATE-MODE] Processing: "${augmentedMessage.substring(0, 200)}..."`);
@@ -97,8 +104,8 @@ function registerPrivateModeHandlers() {
           if (status === 'early' && nodeName === 'earlyResponse') {
             logger.debug('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
             
-            // Overlay mode: Send updated loading message to intent window
-            if (isOverlayMode) {
+            // Overlay mode: Send updated loading message to intent window ONLY if chat is NOT visible
+            if (isOverlayMode && !chatIsVisible) {
               sendOverlayUpdate({
                 intent: state.intentType || 'web_search',
                 uiVariant: 'loading',
@@ -109,7 +116,7 @@ function registerPrivateModeHandlers() {
                 conversationId: context.conversationId || `overlay_${Date.now()}`,
                 correlationId: context.correlationId || `overlay_${Date.now()}`
               });
-            } else {
+            } else if (!isOverlayMode) {
               // Chat mode: Send early response
               event.sender.send('private-mode:early-response', {
                 message: state.earlyMessage,
@@ -191,10 +198,12 @@ function registerPrivateModeHandlers() {
         });
       }
       
-      // Overlay mode: Send final overlay payload to intent window
-      if (isOverlayMode && result.overlayPayload) {
-        logger.debug('📤 [PRIVATE-MODE] Sending overlay payload to intent window');
+      // Overlay mode: Send final overlay payload to intent window ONLY if chat is NOT visible
+      if (isOverlayMode && result.overlayPayload && !chatIsVisible) {
+        logger.debug('📤 [PRIVATE-MODE] Chat closed - sending final results to intent window');
         sendOverlayUpdate(result.overlayPayload);
+      } else if (isOverlayMode && result.overlayPayload && chatIsVisible) {
+        logger.debug('💬 [PRIVATE-MODE] Chat open - skipping intent overlay, results already in chat');
       }
       
       logger.debug('📤 [PRIVATE-MODE] Returning result:', JSON.stringify(result, null, 2));

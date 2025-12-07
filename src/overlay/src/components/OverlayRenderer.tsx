@@ -11,6 +11,7 @@ import WebSearchResults from './intents/WebSearchResults';
 import WebSearchLoading from './intents/WebSearchLoading';
 import WebSearchError from './intents/WebSearchError';
 import ScreenIntelligenceResults from './intents/ScreenIntelligenceResults';
+import CommandExecuteResults from './intents/CommandExecuteResults';
 
 interface OverlayRendererProps {
   payload: OverlayPayload;
@@ -48,7 +49,7 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
           case 'results':
             return <ScreenIntelligenceResults payload={payload} onEvent={onEvent} />;
           case 'error':
-            return <WebSearchError payload={payload} onEvent={onEvent} />;
+            return <ScreenIntelligenceResults payload={payload} onEvent={onEvent} />;
           default:
             console.warn(`Unknown screen_intelligence variant: ${uiVariant}`);
             return null;
@@ -58,13 +59,17 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
       case 'command_guide':
       case 'command_execute':
       case 'command_automate':
-        // For now, only handle error variant (private mode blocking)
-        // Full implementation coming soon
-        if (uiVariant === 'error') {
-          return <WebSearchError payload={payload} onEvent={onEvent} />;
+        switch (uiVariant) {
+          case 'loading':
+            return <WebSearchLoading payload={payload} />;
+          case 'results':
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
+          case 'error':
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
+          default:
+            console.warn(`Unknown ${intent} variant: ${uiVariant}`);
+            return null;
         }
-        console.warn(`Intent ${intent} variant ${uiVariant} not yet implemented`);
-        return null;
 
       default:
         console.warn(`Unknown intent: ${intent}`);
@@ -72,9 +77,5 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
     }
   };
 
-  return (
-    <div className="overlay-content fade-in">
-      {renderComponent()}
-    </div>
-  );
+  return (renderComponent());
 }

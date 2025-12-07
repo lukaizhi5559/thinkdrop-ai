@@ -259,8 +259,7 @@ module.exports = async function screenIntelligence(state) {
         // Use non-streaming mode for now - streaming requires WebSocket support
         const result = await mcpClient.callService('screen-intelligence', 'screen.analyze-vision', {
           query: message,
-          stream: false, // Disable streaming to get JSON response
-          speedMode: 'balanced',
+          stream: false, // Disable streaming to get JSON response          
         }, { timeout: 60000 }); // 60s timeout for vision API
         
         const resultData = result.data || result;
@@ -273,6 +272,8 @@ module.exports = async function screenIntelligence(state) {
         
         // Populate intentContext.slots for overlay system
         const intentContext = state.intentContext || { intent: 'screen_intelligence', slots: {}, uiVariant: null };
+        intentContext.intent = 'screen_intelligence'; // Always set intent explicitly
+        intentContext.uiVariant = 'results'; // Set variant for overlay rendering
         intentContext.slots = {
           ...intentContext.slots,
           query: message,

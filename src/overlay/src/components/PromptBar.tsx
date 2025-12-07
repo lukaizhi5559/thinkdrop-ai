@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Droplet, Unplug, ArrowUp, ChevronUp, X, FileSearch, MessageCircle, Scan } from 'lucide-react';
+import { Droplet, Unplug, ArrowUp, ChevronUp, X, Globe, MessageCircle, Monitor } from 'lucide-react';
 
 interface PromptBarProps {
   onSubmit: (message: string) => void;
@@ -33,7 +33,7 @@ export default function PromptBar({
   const [isResultsVisible, setIsResultsVisible] = useState(false);
   const [hasScreenResults, setHasScreenResults] = useState(false);
   const [isScreenResultsVisible, setIsScreenResultsVisible] = useState(false);
-  const [isChatVisible, setIsChatVisible] = useState(true);
+  const [isChatVisible, setIsChatVisible] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Listen for web search results availability
@@ -74,23 +74,67 @@ export default function PromptBar({
     };
   }, []);
 
+  // Listen for banner enable live mode event
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleEnableLiveMode = () => {
+      if (!isConnected) {
+        toggleConnection();
+      }
+    };
+
+    ipcRenderer.on('banner:enable-live-mode', handleEnableLiveMode);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('banner:enable-live-mode', handleEnableLiveMode);
+      }
+    };
+  }, [isConnected]);
+
   const handleToggleWebSearch = () => {
     if (ipcRenderer) {
+      // Close other overlays first (one window at a time rule)
+      if (isChatVisible) {
+        ipcRenderer.send('chat-window:toggle');
+      }
+      if (isScreenResultsVisible) {
+        ipcRenderer.send('screen-intelligence:toggle');
+      }
+      // Then toggle web search
       ipcRenderer.send('web-search:toggle');
     }
   };
 
   const handleToggleScreenIntelligence = () => {
     if (ipcRenderer) {
+      // Close other overlays first (one window at a time rule)
+      if (isChatVisible) {
+        ipcRenderer.send('chat-window:toggle');
+      }
+      if (isResultsVisible) {
+        ipcRenderer.send('web-search:toggle');
+      }
+      // Then toggle screen intelligence
       ipcRenderer.send('screen-intelligence:toggle');
     }
   };
 
   const handleToggleChatWindow = () => {
     if (ipcRenderer) {
+      // Close other overlays first (one window at a time rule)
+      if (isResultsVisible) {
+        ipcRenderer.send('web-search:toggle');
+      }
+      if (isScreenResultsVisible) {
+        ipcRenderer.send('screen-intelligence:toggle');
+      }
+      // Then toggle chat window
       ipcRenderer.send('chat-window:toggle');
     }
   };
+
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -237,11 +281,12 @@ export default function PromptBar({
   // No JavaScript needed!
 
   return (
-    <div className="w-full h-full flex justify-center pointer-events-none"
+    <div 
+      className="w-full h-full flex justify-center pointer-events-none"
       onMouseEnter={() => setIsInputHovered(true)}
       onMouseLeave={() => setIsInputHovered(false)}
     >
-      {/* Expand/Collapse Button (always visible when collapsed) */}
+        {/* Expand/Collapse Button (always visible when collapsed) */}
       {!isExpanded && (
         <div className="flex items-end pointer-events-auto mb-6">
           <button
@@ -372,7 +417,7 @@ export default function PromptBar({
                 onClick={handleToggleWebSearch}
                 title={isResultsVisible ? 'Hide Search Results' : 'Show Search Results'}
               >
-                <FileSearch className="w-4 h-4 text-white" />
+                <Globe className="w-4 h-4 text-white" />
                 {/* Indicator dot when results available */}
                 <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-400" />
               </div>
@@ -389,7 +434,7 @@ export default function PromptBar({
                 onClick={handleToggleScreenIntelligence}
                 title={isScreenResultsVisible ? 'Hide Screen Analysis' : 'Show Screen Analysis'}
               >
-                <Scan className="w-4 h-4 text-white" />
+                <Monitor className="w-4 h-4 text-white" />
                 {/* Indicator dot when results available */}
                 <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400" />
               </div>

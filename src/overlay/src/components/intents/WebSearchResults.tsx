@@ -6,7 +6,7 @@
  */
 
 import { OverlayPayload } from '../../../../types/overlay-intents';
-import { ExternalLink, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { ExternalLink, X, ChevronDown, ChevronUp, Globe } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 
 interface WebSearchResultsProps {
@@ -67,6 +67,28 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
     return () => document.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
+  // Handle click outside to close modal
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const element = cardRef.current;
+      if (!element) return;
+
+      const rect = element.getBoundingClientRect();
+      const isOutsideCard = 
+        e.clientX < rect.left ||
+        e.clientX > rect.right ||
+        e.clientY < rect.top ||
+        e.clientY > rect.bottom;
+
+      if (isOutsideCard) {
+        handleClose();
+      }
+    };
+
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
+
   // Extract unique domains for favicon display
   const getDomain = (url: string) => {
     try {
@@ -82,44 +104,32 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
     return `https://www.google.com/s2/favicons?domain=${domain}&sz=32`;
   };
 
-  // Position window on mount - fixed 70% screen height
+  // Position window to match PromptBar centering (60% width, centered)
   useEffect(() => {
-    console.log('🚀 [WebSearchResults] Component mounted, attempting to resize window...');
     const ipcRenderer = (window as any).electron?.ipcRenderer;
-    if (!ipcRenderer) {
-      console.error('❌ [WebSearchResults] IPC Renderer not available!');
-      return;
-    }
-    console.log('✅ [WebSearchResults] IPC Renderer available, scheduling resize...');
+    if (!ipcRenderer) return;
 
-    // Wait a bit for window to be ready
     const timer = setTimeout(() => {
-      // Get screen dimensions
       const screenWidth = window.screen.availWidth;
       const screenHeight = window.screen.availHeight;
       
-      // Fixed window size: 60% width, 70% height
-      const windowWidth = Math.floor(screenWidth * 0.6);
-      const windowHeight = Math.floor(screenHeight * 0.7);
+      // Match PromptBar sizing: 60% width, centered
+      const cardWidth = Math.floor(screenWidth * 0.6);
+      const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
+      const x = Math.floor((screenWidth - cardWidth) / 2);
+      const y = Math.floor((screenHeight - cardHeight) / 2);
       
-      // Calculate position - centered horizontally, at the very top vertically
-      const centerX = Math.floor((screenWidth - windowWidth) / 2);
-      const topY = 0; // Flush to top of screen
-      
-      console.log(`📏 [WebSearchResults] Positioning window at (${centerX}, ${topY}) with size ${windowWidth}x${windowHeight}`);
-      
-      // Position and size window
       ipcRenderer.send('overlay:position-intent', {
-        x: centerX,
-        y: topY,
-        width: windowWidth,
-        height: windowHeight,
-        animate: false // No animation on initial mount
+        x,
+        y,
+        width: cardWidth,
+        height: cardHeight,
+        animate: false
       });
-    }, 100); // Wait 100ms for window to be ready
+    }, 100);
 
     return () => clearTimeout(timer);
-  }, []); // Only run on mount
+  }, []);
 
   const handleClose = () => {
     // Send IPC to hide the window
@@ -157,19 +167,20 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
   return (
     <div 
       ref={cardRef}
-      className={`bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col m-4 
-        animate-in fade-in slide-in-from-top-4`}
-      style={{ 
-        width: 'calc(100% - 32px)', // Account for margin
-        maxHeight: 'calc(100vh - 32px)'
-      }}
+      className="w-full bg-gray-800 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
+        animate-in fade-in slide-in-from-top-4"
     >
         {/* Header with Close Button */}
         <div className="px-6 py-4 flex items-start justify-between flex-shrink-0">
           <div className="flex-1">
-            <h3 className="text-lg font-semibold text-white mb-2">
-              {query}
-            </h3>
+            <div className="flex items-center gap-3 mb-2">
+              <div className="p-2 bg-teal-500/20 rounded-lg">
+                <Globe className="w-5 h-5 text-teal-400" />
+              </div>
+              <h3 className="text-lg font-semibold text-white">
+                {query}
+              </h3>
+            </div>
             {answer && (
               <p className="text-sm text-white/80 leading-relaxed">
                 {answer}

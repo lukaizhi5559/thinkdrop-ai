@@ -94,8 +94,12 @@ let coreAgent = null; // AgentOrchestrator instance
 let localLLMAgent = null; // Local LLM agent instance
 let conversationAgent = null; // ConversationSessionAgent instance (MCP mode)
 
+// COMMENTED OUT: Old renderer window - using new overlay system instead
 function createOverlayWindow() {
-  const primaryDisplay = screen.getPrimaryDisplay();
+  logger.debug('⏭️  Skipping old renderer window - using overlay system');
+  return;
+  
+  /* const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
   
   // Create a unified window that can expand to show different content
@@ -193,7 +197,7 @@ function createOverlayWindow() {
   // Development: Open DevTools
   if (process.env.NODE_ENV === 'development') {
     overlayWindow.webContents.openDevTools({ mode: 'detach' });
-  }
+  } */
 }
 
 // REMOVED: createChatMessagesWindow - now handled within unified overlayWindow
@@ -209,6 +213,7 @@ function createOverlayWindow() {
 let ghostOverlayWindow = null;      // Full-screen, click-through for ghost mouse & visual cues
 let promptOverlayWindow = null;     // Small, interactive for prompt bar
 let intentOverlayWindow = null;     // Dynamic, interactive for intent UIs (results, guides, etc.)
+let chatOverlayWindow = null;       // Chat window for conversation history
 
 /**
  * Create ghost overlay window - full-screen, click-through
@@ -430,6 +435,80 @@ function createIntentOverlay() {
   return intentOverlayWindow;
 }
 
+/**
+ * Create chat overlay window - conversation history
+ * Used for: viewing conversation transcript, managing conversations
+ * Positioned above PromptBar, same width, fills remaining height
+ */
+function createChatOverlay() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width, height } = primaryDisplay.workAreaSize;
+
+  // Calculate dimensions to match PromptBar width and position above it
+  const promptWidth = Math.floor(width * 0.6); // Match PromptBar 60% width
+  const promptHeight = 80; // PromptBar height
+  const chatHeight = height - promptHeight - 100; // Leave 100px space at bottom for prompt bar
+  const x = Math.floor((width - promptWidth) / 2); // Center horizontally
+  const y = 10; // Small margin from top
+  
+  chatOverlayWindow = new BrowserWindow({
+    width: promptWidth,
+    height: chatHeight,
+    minWidth: 400,
+    minHeight: 300,
+    x,
+    y,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true, // Allow resizing
+    movable: true, // Allow dragging
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: false,
+    focusable: true,
+    acceptFirstMouse: true,
+    show: false, // Start hidden
+    type: 'panel',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  chatOverlayWindow.setHasShadow(false);
+  
+  if (process.platform === 'darwin') {
+    chatOverlayWindow.setWindowButtonVisibility(false);
+    chatOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    chatOverlayWindow.setAlwaysOnTop(true, 'floating', 2); // Below intent window
+  }
+
+  // Load chat HTML
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    chatOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=chat');
+    chatOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    chatOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  chatOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [CHAT OVERLAY] Chat overlay loaded');
+  });
+
+  chatOverlayWindow.on('closed', () => {
+    chatOverlayWindow = null;
+  });
+
+  global.chatOverlayWindow = chatOverlayWindow;
+  logger.debug('✅ Chat overlay window created (interactive, hidden)');
+  return chatOverlayWindow;
+}
+
 function toggleOverlay() {
   if (!overlayWindow) return;
   
@@ -507,6 +586,9 @@ app.whenReady().then(async () => {
       logger.debug('🔧 Creating intent overlay window (interactive, hidden)...');
       createIntentOverlay();
       
+      logger.debug('🔧 Creating chat overlay window (interactive, hidden)...');
+      createChatOverlay();
+      
       // Initialize overlay IPC handlers with window references
       logger.debug('🔧 Initializing overlay IPC handlers...');
       const { initializeOverlayIPC } = require('./ipc/overlay.cjs');
@@ -514,9 +596,21 @@ app.whenReady().then(async () => {
         ghost: ghostOverlayWindow,
         prompt: promptOverlayWindow,
         intent: intentOverlayWindow,
-        chat: overlayWindow
+        chat: chatOverlayWindow
       });
       logger.debug('✅ Overlay IPC handlers initialized');
+      
+      // Show overlay windows by default (since we commented out old renderer)
+      logger.debug('🔧 Showing overlay windows...');
+      if (ghostOverlayWindow) {
+        ghostOverlayWindow.show();
+        logger.debug('✅ Ghost overlay shown');
+      }
+      if (promptOverlayWindow) {
+        promptOverlayWindow.show();
+        promptOverlayWindow.focus();
+        logger.debug('✅ Prompt overlay shown');
+      }
     }
   }).catch(async error => {
     logger.error('❌ Error during initialization sequence:', error);

@@ -160,32 +160,34 @@ module.exports = async function parseIntent(state) {
     // CRITICAL: Catch "goto X and do a Y search" patterns BEFORE DistilBERT
     // These contain "search" keywords that confuse the classifier
     // Match: "goto", "go to", "go online", "navigate to", etc.
-    if (/^(goto|go\s+(to|online|on)|navigate to|visit|browse to|head to|open up)\s+/i.test(lowerMsg)) {
-      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command_execute intent');
-      return {
-        ...state,
-        intent: {
-          type: 'command_execute',
-          confidence: 0.95,
-          entities: [],
-          requiresMemoryAccess: false
-        }
-      };
-    }
     
-    // Imperative command verbs (open, close, etc.) - Keep for speed
-    if (/^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
-      logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command_execute intent');
-      return {
-        ...state,
-        intent: {
-          type: 'command_execute',
-          confidence: 0.95,
-          entities: [],
-          requiresMemoryAccess: false
-        }
-      };
-    }
+    // Disable All command_execute prechecks intents for now
+    // if (/^(goto|go\s+(to|online|on)|navigate to|visit|browse to|head to|open up)\s+/i.test(lowerMsg)) {
+    //   logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected GOTO/navigation command, forcing command_execute intent');
+    //   return {
+    //     ...state,
+    //     intent: {
+    //       type: 'command_execute',
+    //       confidence: 0.95,
+    //       entities: [],
+    //       requiresMemoryAccess: false
+    //     }
+    //   };
+    // }
+    
+    // // Imperative command verbs (open, close, etc.) - Keep for speed
+    // if (/^(open|launch|start|run|close|quit|exit|kill|stop)\s+/i.test(lowerMsg)) {
+    //   logger.debug('🔄 [NODE:PARSE_INTENT] Pre-check: Detected imperative command verb, forcing command_execute intent');
+    //   return {
+    //     ...state,
+    //     intent: {
+    //       type: 'command_execute',
+    //       confidence: 0.95,
+    //       entities: [],
+    //       requiresMemoryAccess: false
+    //     }
+    //   };
+    // }
     
     // 🎯 CONTEXT-AWARE INTENT: Include previous exchange for better classification
     // This helps with elliptical messages like "nothing next week" after "do I have any appts"
@@ -222,8 +224,103 @@ module.exports = async function parseIntent(state) {
     // MCP protocol wraps response in 'data' field
     const intentData = result.data || result;
     
-    const finalIntent = intentData.intent || 'general_query';
-    const finalConfidence = intentData.confidence || 0.5;
+    let finalIntent = intentData.intent || 'general_query';
+    let finalConfidence = intentData.confidence || 0.5;
+    
+    // ═══════════════════════════════════════════════════════════
+    // CONFIDENCE THRESHOLD VALIDATION
+    // ═══════════════════════════════════════════════════════════
+    // Intent-specific confidence thresholds to prevent misclassifications
+    const CONFIDENCE_THRESHOLDS = {
+      web_search: 0.6,
+      general_knowledge: 0.6,
+      memory_store: 0.65,
+      memory_retrieve: 0.65,
+      command_automate: 0.7, // Higher threshold due to security implications
+      screen_intelligence: 0.65,
+      question: 0.5,
+      greeting: 0.6
+    };
+    
+    const threshold = CONFIDENCE_THRESHOLDS[finalIntent] || 0.6;
+    
+    logger.debug(`✅ [NODE:PARSE_INTENT] DistilBERT classified as: ${finalIntent} (confidence: ${finalConfidence.toFixed(2)}, threshold: ${threshold})`);
+    
+    // Apply confidence threshold with smart fallback
+    if (finalConfidence < threshold) {
+      logger.warn(`⚠️  [NODE:PARSE_INTENT] Low confidence (${finalConfidence.toFixed(2)} < ${threshold}) for intent: ${finalIntent}`);
+      
+      // Get all scores sorted by confidence
+      const scores = intentData.metadata?.scores || {};
+      const sortedIntents = Object.entries(scores)
+        .sort(([, a], [, b]) => b - a)
+        .filter(([intent]) => intent !== finalIntent); // Exclude current intent
+      
+      logger.debug(`📊 [NODE:PARSE_INTENT] Alternative intents: ${sortedIntents.slice(0, 3).map(([i, s]) => `${i}(${s.toFixed(2)})`).join(', ')}`);
+      
+      // Smart fallback logic based on intent type
+      if (finalIntent === 'command_automate') {
+        // Command automation has high security implications
+        // If confidence is low, it's likely a question that should be web search
+        logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back command_automate → web_search due to low confidence`);
+        finalIntent = 'web_search';
+        finalConfidence = 0.6; // Set to minimum web_search threshold
+      } else if (finalIntent === 'screen_intelligence' && finalConfidence < 0.5) {
+        // Very low confidence screen intelligence → likely general question
+        logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back screen_intelligence → general_knowledge due to very low confidence`);
+        finalIntent = 'general_knowledge';
+        finalConfidence = 0.5;
+      } else if (finalIntent === 'web_search' && finalConfidence < 0.55) {
+        // Low confidence web_search - check if general_knowledge or question is close
+        const generalKnowledgeScore = scores.general_knowledge || 0;
+        const questionScore = scores.question || 0;
+        const greetingScore = scores.greeting || 0;
+        
+        // If general_knowledge or question is within 0.15 of web_search, prefer them
+        if (generalKnowledgeScore > 0.35 && (finalConfidence - generalKnowledgeScore) < 0.15) {
+          logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back web_search → general_knowledge (scores close: ${finalConfidence.toFixed(2)} vs ${generalKnowledgeScore.toFixed(2)})`);
+          finalIntent = 'general_knowledge';
+          finalConfidence = generalKnowledgeScore;
+        } else if (questionScore > 0.35 && (finalConfidence - questionScore) < 0.15) {
+          logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back web_search → question (scores close: ${finalConfidence.toFixed(2)} vs ${questionScore.toFixed(2)})`);
+          finalIntent = 'question';
+          finalConfidence = questionScore;
+        } else if (greetingScore > 0.35 && (finalConfidence - greetingScore) < 0.15) {
+          logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back web_search → greeting (scores close: ${finalConfidence.toFixed(2)} vs ${greetingScore.toFixed(2)})`);
+          finalIntent = 'greeting';
+          finalConfidence = greetingScore;
+        } else {
+          // Keep web_search but log that it's low confidence
+          logger.debug(`✅ [NODE:PARSE_INTENT] Keeping web_search despite low confidence (no close alternatives)`);
+        }
+      } else if (finalConfidence < 0.5) {
+        // General fallback for ANY low-confidence intent (< 0.5)
+        // Check if general_knowledge, question, or greeting are viable alternatives
+        const generalKnowledgeScore = scores.general_knowledge || 0;
+        const questionScore = scores.question || 0;
+        const greetingScore = scores.greeting || 0;
+        
+        // Find the best alternative among general intents
+        const alternatives = [
+          { intent: 'general_knowledge', score: generalKnowledgeScore },
+          { intent: 'question', score: questionScore },
+          { intent: 'greeting', score: greetingScore }
+        ].sort((a, b) => b.score - a.score);
+        
+        const bestAlt = alternatives[0];
+        
+        // If best alternative is within 0.25 of current intent and > 0.2, use it
+        // Lower thresholds for identity questions like "What's your name"
+        if (bestAlt.score > 0.2 && (finalConfidence - bestAlt.score) < 0.25) {
+          logger.debug(`🔄 [NODE:PARSE_INTENT] Falling back ${finalIntent} → ${bestAlt.intent} (scores: ${finalConfidence.toFixed(2)} vs ${bestAlt.score.toFixed(2)})`);
+          finalIntent = bestAlt.intent;
+          finalConfidence = bestAlt.score;
+        } else {
+          logger.debug(`✅ [NODE:PARSE_INTENT] Keeping ${finalIntent} despite low confidence (no viable alternatives)`);
+        }
+      }
+      // Otherwise, trust the classification but log the warning
+    }
     
     // ═══════════════════════════════════════════════════════════
     // TRUST DISTILBERT - No regex overrides
@@ -231,8 +328,6 @@ module.exports = async function parseIntent(state) {
     // The ML model is trained on thousands of examples and should be trusted.
     // Regex patterns create false positives and prevent the model from learning.
     // If DistilBERT misclassifies, add more training examples instead of regex hacks.
-    
-    logger.debug(`✅ [NODE:PARSE_INTENT] DistilBERT classified as: ${finalIntent} (confidence: ${finalConfidence.toFixed(2)})`);
     
     // Remove old smart fallback logic - it was causing more problems than it solved
     // Example issues:

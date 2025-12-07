@@ -4,6 +4,7 @@
  */
 
 const logger = require('./../../../logger.cjs');
+const { BrowserWindow } = require('electron');
 
 /**
  * Determine if a screen_intelligence or command_automate interaction should be stored to user-memory
@@ -232,6 +233,55 @@ module.exports = async function storeConversation(state) {
       }
     } else {
       logger.debug('✅ [NODE:STORE_CONVERSATION] Conversation stored in conversation service only (not user-memory)');
+    }
+
+    // 💾 Store AI response message to conversation service
+    try {
+      const sessionId = context?.sessionId || 'default_session';
+      logger.debug('💾 [NODE:STORE_CONVERSATION] Storing AI response to conversation service, session:', sessionId);
+      
+      await mcpClient.callService('conversation', 'message.add', {
+        sessionId,
+        text: answer,
+        sender: 'ai',
+        metadata: {
+          intentType: intent?.type,
+          entities: entities.slice(0, 10) // Include first 10 entities
+        }
+      });
+      
+      logger.debug('✅ [NODE:STORE_CONVERSATION] AI response stored successfully');
+    } catch (storeError) {
+      logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to store AI response:', storeError.message);
+    }
+
+    // 📤 Notify chat window to reload messages (AI response is now stored)
+    try {
+      // Try multiple sources for session ID - use context from destructured state
+      const notifySessionId = context?.sessionId || context?.conversationId || 'default_session';
+      
+      logger.debug('🔍 [NODE:STORE_CONVERSATION] Session ID for notification:', {
+        'context.sessionId': context?.sessionId,
+        'context.conversationId': context?.conversationId,
+        'notifySessionId': notifySessionId
+      });
+      
+      if (notifySessionId) {
+        const windows = BrowserWindow.getAllWindows();
+        const chatWindow = windows.find(w => w.webContents.getURL().includes('mode=chat'));
+        
+        if (chatWindow && !chatWindow.isDestroyed()) {
+          logger.debug('📤 [NODE:STORE_CONVERSATION] Notifying chat window to reload messages for session:', notifySessionId);
+          chatWindow.webContents.send('conversation:message-added', { sessionId: notifySessionId });
+          logger.debug('✅ [NODE:STORE_CONVERSATION] Notification sent with sessionId:', notifySessionId);
+        } else {
+          logger.warn('⚠️ [NODE:STORE_CONVERSATION] Chat window not found or destroyed');
+        }
+      } else {
+        logger.warn('⚠️ [NODE:STORE_CONVERSATION] No session ID found in context, cannot notify chat window');
+      }
+    } catch (notifyError) {
+      logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to notify chat window:', notifyError.message);
     }
 
     return {

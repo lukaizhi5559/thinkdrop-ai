@@ -50,8 +50,10 @@ export default function WebSearchLoading({ payload }: WebSearchLoadingProps) {
   }, []);
 
   return (
-    <div ref={containerRef} className="w-full h-full flex items-center justify-center animate-in slide-in-from-bottom-4 fade-in duration-500">
-      <div className="flex items-center gap-3">
+    <div ref={containerRef} className="fixed inset-0 flex items-center justify-center z-50 animate-in fade-in duration-300">
+    
+      {/* Loading Card */}
+      <div className="relative flex items-center gap-3 animate-in fade-in zoom-in-95 duration-300">
         {/* ThinkDrop AI Avatar */}
         <div className="w-8 h-8 bg-gradient-to-br from-teal-400 to-blue-500 rounded-lg flex items-center justify-center flex-shrink-0 animate-pulse">
           <Droplet className="w-4 h-4 text-white" />

@@ -27,9 +27,15 @@ let screenIntelligenceState = {
   isVisible: true
 };
 
+// Command execute state
+let commandExecuteState = {
+  hasResults: false,
+  isVisible: true
+};
+
 // Chat window state
 let chatWindowState = {
-  isVisible: true
+  isVisible: false
 };
 
 /**
@@ -110,12 +116,49 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     }
   });
   
+  // Handle private mode error from intent window and forward to ghost window for banner
+  ipcMain.on('overlay:private-mode-error', (event, data) => {
+    logger.debug('🚨 [OVERLAY:IPC] Private mode error received from intent window:', data);
+    
+    // Forward to ghost window where banner is rendered
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      ghostWindow.webContents.send('overlay:private-mode-error', data);
+      logger.debug('✅ [OVERLAY:IPC] Forwarded private mode error to ghost window for banner');
+    } else {
+      logger.warn('⚠️  [OVERLAY:IPC] Ghost window not available to show banner');
+    }
+  });
+  
+  // Handle enable live mode from banner and forward to prompt window
+  ipcMain.on('banner:enable-live-mode', (event) => {
+    logger.debug('🔄 [OVERLAY:IPC] Enable live mode requested from banner');
+    
+    // Forward to prompt window where connection toggle is
+    if (promptWindow && !promptWindow.isDestroyed()) {
+      promptWindow.webContents.send('banner:enable-live-mode');
+      logger.debug('✅ [OVERLAY:IPC] Forwarded enable live mode to prompt window');
+    } else {
+      logger.warn('⚠️  [OVERLAY:IPC] Prompt window not available to toggle connection');
+    }
+  });
+  
   // Handle mouse event forwarding control
   ipcMain.on('overlay:set-ignore-mouse-events', (event, ignore, options) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window && !window.isDestroyed()) {
       window.setIgnoreMouseEvents(ignore, options || { forward: true });
     }
+  });
+  
+  // Handle ghost overlay click-through toggle (for banner interaction)
+  ipcMain.on('ghost-overlay:set-clickthrough', (event, clickthrough) => {
+    if (!ghostWindow || ghostWindow.isDestroyed()) {
+      logger.warn('⚠️  [OVERLAY:IPC] Ghost window not available');
+      return;
+    }
+    
+    logger.debug(`🖱️  [OVERLAY:IPC] Setting ghost window click-through: ${clickthrough}`);
+    ghostWindow.setIgnoreMouseEvents(clickthrough, { forward: true });
   });
 
   // Handle intent window positioning (animate to highlighted item)
@@ -222,6 +265,11 @@ function sendOverlayUpdate(payload) {
     notifyScreenIntelligenceResults();
   }
   
+  // If this is a command execution result, notify PromptBar
+  if ((payload.intent === 'command_execute' || payload.intent === 'command_guide' || payload.intent === 'command_automate') && payload.uiVariant === 'results') {
+    notifyCommandExecuteResults();
+  }
+  
   // Show the intent window when sending payload
   if (!intentWindow.isVisible()) {
     intentWindow.show();
@@ -278,13 +326,32 @@ ipcMain.on('web-search:toggle', (event) => {
  */
 function notifyWebSearchResults() {
   webSearchState.hasResults = true;
-  webSearchState.isVisible = true;
   
   logger.debug('📊 [OVERLAY:IPC] Web search results available, notifying PromptBar');
   
-  // Notify PromptBar that results are available
+  // 🎯 CONDITIONAL DISPLAY: Only show intent window if chat window is NOT visible
+  if (chatWindowState.isVisible) {
+    logger.debug('💬 [OVERLAY:IPC] Chat window is open - keeping results in chat, not showing intent overlay');
+    webSearchState.isVisible = false;
+  } else {
+    logger.debug('🚫 [OVERLAY:IPC] Chat window closed - showing web search intent overlay');
+    webSearchState.isVisible = true;
+    screenIntelligenceState.isVisible = false;
+    commandExecuteState.isVisible = false;
+  }
+  
+  // Notify prompt window of all state changes
   if (promptWindow && !promptWindow.isDestroyed()) {
     promptWindow.webContents.send('web-search:state', webSearchState);
+    promptWindow.webContents.send('chat-window:state', chatWindowState);
+    promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+    promptWindow.webContents.send('command-execute:state', commandExecuteState);
+  }
+  
+  // Notify intent window to hide other intent components
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+    intentWindow.webContents.send('command-execute:state', commandExecuteState);
   }
 }
 
@@ -323,13 +390,67 @@ ipcMain.on('screen-intelligence:toggle', (event) => {
  */
 function notifyScreenIntelligenceResults() {
   screenIntelligenceState.hasResults = true;
-  screenIntelligenceState.isVisible = true;
   
   logger.debug('📊 [OVERLAY:IPC] Screen intelligence results available, notifying PromptBar');
   
-  // Notify PromptBar that results are available
+  // 🎯 CONDITIONAL DISPLAY: Only show intent window if chat window is NOT visible
+  if (chatWindowState.isVisible) {
+    logger.debug('💬 [OVERLAY:IPC] Chat window is open - keeping results in chat, not showing intent overlay');
+    screenIntelligenceState.isVisible = false;
+  } else {
+    logger.debug('🚫 [OVERLAY:IPC] Chat window closed - showing screen intelligence intent overlay');
+    screenIntelligenceState.isVisible = true;
+    webSearchState.isVisible = false;
+    commandExecuteState.isVisible = false;
+  }
+  
+  // Notify prompt window of all state changes
   if (promptWindow && !promptWindow.isDestroyed()) {
     promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+    promptWindow.webContents.send('chat-window:state', chatWindowState);
+    promptWindow.webContents.send('web-search:state', webSearchState);
+    promptWindow.webContents.send('command-execute:state', commandExecuteState);
+  }
+  
+  // Notify intent window to hide other intent components
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('web-search:state', webSearchState);
+    intentWindow.webContents.send('command-execute:state', commandExecuteState);
+  }
+}
+
+/**
+ * Notify that command execute results are available
+ * Called when sending overlay update with command execution results
+ */
+function notifyCommandExecuteResults() {
+  commandExecuteState.hasResults = true;
+  
+  logger.debug('📊 [OVERLAY:IPC] Command execute results available, notifying PromptBar');
+  
+  // 🎯 CONDITIONAL DISPLAY: Only show intent window if chat window is NOT visible
+  if (chatWindowState.isVisible) {
+    logger.debug('💬 [OVERLAY:IPC] Chat window is open - keeping results in chat, not showing intent overlay');
+    commandExecuteState.isVisible = false;
+  } else {
+    logger.debug('🚫 [OVERLAY:IPC] Chat window closed - showing command execute intent overlay');
+    commandExecuteState.isVisible = true;
+    webSearchState.isVisible = false;
+    screenIntelligenceState.isVisible = false;
+  }
+  
+  // Notify prompt window of all state changes
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('command-execute:state', commandExecuteState);
+    promptWindow.webContents.send('chat-window:state', chatWindowState);
+    promptWindow.webContents.send('web-search:state', webSearchState);
+    promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+  }
+  
+  // Notify intent window to hide other intent components
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('web-search:state', webSearchState);
+    intentWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
   }
 }
 
@@ -344,9 +465,29 @@ ipcMain.on('chat-window:toggle', (event) => {
   
   logger.debug(`📊 [OVERLAY:IPC] Chat window visibility: ${chatWindowState.isVisible}`);
   
+  // 🎯 MUTUAL EXCLUSION: If chat window is opening, hide all intent windows
+  if (chatWindowState.isVisible) {
+    logger.debug('🚫 [OVERLAY:IPC] Chat window opening - hiding all intent windows');
+    webSearchState.isVisible = false;
+    screenIntelligenceState.isVisible = false;
+    commandExecuteState.isVisible = false;
+    
+    // Notify intent window to hide all intent components
+    if (intentWindow && !intentWindow.isDestroyed()) {
+      intentWindow.webContents.send('web-search:state', webSearchState);
+      intentWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+      intentWindow.webContents.send('command-execute:state', commandExecuteState);
+    }
+  }
+  
   // Notify PromptBar of state change
   if (promptWindow && !promptWindow.isDestroyed()) {
     promptWindow.webContents.send('chat-window:state', chatWindowState);
+  }
+  
+  // Notify ChatWindow component of state change
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('chat-window:state', chatWindowState);
   }
   
   // Hide or show the window
@@ -368,6 +509,45 @@ ipcMain.handle('chat-window:get-state', () => {
 });
 
 /**
+ * Handle message added notification - forward to chat window
+ */
+ipcMain.on('conversation:message-added', (event, data) => {
+  logger.debug('📨 [OVERLAY:IPC] Message added notification:', data);
+  
+  // Forward to chat window to reload messages
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('conversation:message-added', data);
+    logger.debug('✅ [OVERLAY:IPC] Forwarded message-added to chat window');
+  }
+});
+
+/**
+ * Handle processing started notification - forward to chat window
+ */
+ipcMain.on('conversation:processing-started', (event, data) => {
+  logger.debug('💭 [OVERLAY:IPC] Processing started notification:', data);
+  
+  // Forward to chat window to show thinking indicator
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('conversation:processing-started', data);
+    logger.debug('✅ [OVERLAY:IPC] Forwarded processing-started to chat window');
+  }
+});
+
+/**
+ * Handle processing complete notification - forward to chat window
+ */
+ipcMain.on('conversation:processing-complete', (event, data) => {
+  logger.debug('✅ [OVERLAY:IPC] Processing complete notification:', data);
+  
+  // Forward to chat window to hide thinking indicator
+  if (chatWindow && !chatWindow.isDestroyed()) {
+    chatWindow.webContents.send('conversation:processing-complete', data);
+    logger.debug('✅ [OVERLAY:IPC] Forwarded processing-complete to chat window');
+  }
+});
+
+/**
  * Check if overlay windows exist and are ready
  * @returns {boolean}
  */
@@ -377,10 +557,20 @@ function isOverlayReady() {
          (intentWindow !== null && !intentWindow.isDestroyed());
 }
 
+/**
+ * Check if chat window is currently visible
+ * @returns {boolean}
+ */
+function isChatWindowVisible() {
+  return chatWindowState.isVisible;
+}
+
 module.exports = {
   initializeOverlayIPC,
   sendOverlayUpdate,
   notifyWebSearchResults,
   notifyScreenIntelligenceResults,
-  isOverlayReady
+  notifyCommandExecuteResults,
+  isOverlayReady,
+  isChatWindowVisible
 };
