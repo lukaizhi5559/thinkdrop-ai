@@ -44,17 +44,9 @@ module.exports = async function resolveReferences(state) {
     logger.warn('⚠️ [NODE:RESOLVE_REFERENCES] hasHighlightedText is true but no highlightedText content found!');
   }
   
-  // CRITICAL FIX: For screen_intelligence intents, don't use conversation history
-  // because references like "this guy" refer to screen content, not previous conversation
+  // Always use conversation history - the coreference service is smart enough to prioritize
+  // screen content entities over conversation entities when both are present
   const isScreenIntent = intentType === 'screen_intelligence';
-  if (isScreenIntent) {
-    logger.debug('🖥️  [NODE:RESOLVE_REFERENCES] Screen intelligence intent - skipping conversation history to avoid incorrect resolutions');
-  }
-
-  // NOTE: We always run coreference resolution here, but the answer node will use the
-  // original message (not the resolved one) for screen_intelligence intent.
-  // This allows coreference to work for other intents while preserving "this" references
-  // to screen content for screen intelligence requests.
 
   // Use intelligent coreference service with spaCy NER
   // The Python service now uses Named Entity Recognition to smartly resolve:
@@ -110,8 +102,8 @@ module.exports = async function resolveReferences(state) {
     
     // Call coreference service with appropriate context:
     // 1. If highlighted text present → Use highlighted text as fresh context (single message)
-    // 2. If screen intent → Use empty history (references point to screen)
-    // 3. Otherwise → Use conversation history (last 5 messages)
+    // 2. Otherwise → Use conversation history (last 5 messages)
+    // The service will prioritize screen content entities when screen content is provided
     let historyToUse;
     
     if (hasHighlightedText && highlightedText) {
@@ -126,10 +118,10 @@ module.exports = async function resolveReferences(state) {
         timestamp: new Date().toISOString()
       }];
       logger.debug('📎 [NODE:RESOLVE_REFERENCES] Using highlighted text as coreference context (1 synthetic message)');
-    } else if (isScreenIntent) {
-      historyToUse = [];
     } else {
+      // Always use conversation history - let coreference service handle prioritization
       historyToUse = freshConversationHistory.slice(-5);
+      logger.debug(`🔄 [NODE:RESOLVE_REFERENCES] Using ${historyToUse.length} conversation messages for coreference context`);
     }
     
     // CRITICAL: For screen intelligence intents, pass screen content to coreference service
@@ -168,6 +160,7 @@ module.exports = async function resolveReferences(state) {
     const resolvedMessage = data.resolvedMessage || message;
     const replacements = data.replacements || [];
     const method = data.method || 'unknown';
+    const needsContext = data.needsContext !== undefined ? data.needsContext : true; // Default to true for safety
 
     // Log results
     if (replacements.length > 0) {
@@ -179,13 +172,16 @@ module.exports = async function resolveReferences(state) {
     } else {
       logger.debug('ℹ️  [NODE:RESOLVE_REFERENCES] No references to resolve');
     }
+    
+    logger.debug(`🔗 [NODE:RESOLVE_REFERENCES] needsContext: ${needsContext}`);
 
     return {
       ...state,
       resolvedMessage: resolvedMessage, // Set resolved message for downstream nodes
       originalMessage: message, // Keep original for debugging
       coreferenceReplacements: replacements,
-      coreferenceMethod: method
+      coreferenceMethod: method,
+      coreferenceNeedsContext: needsContext // NEW: Pass needsContext flag to downstream nodes
     };
   } catch (error) {
     logger.warn('⚠️ [NODE:RESOLVE_REFERENCES] Resolution failed, using original message:', error.message);

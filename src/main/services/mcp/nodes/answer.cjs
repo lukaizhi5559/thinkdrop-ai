@@ -338,6 +338,7 @@ module.exports = async function answer(state) {
     mcpClient, 
     message, 
     resolvedMessage, // Use resolved message if available
+    coreferenceNeedsContext = true, // Flag from coreference service indicating if context is needed
     context, 
     intent,
     conversationHistory = [],
@@ -361,9 +362,9 @@ module.exports = async function answer(state) {
     messagePreview: typeof message === 'string' ? message.substring(0, 100) : JSON.stringify(message).substring(0, 100)
   });
   
-  // For screen intelligence, use original message (coreference resolution can confuse "this" references to screen content)
-  // For other intents, use resolved message (after coreference resolution)
-  let queryMessage = (intent?.type === 'screen_intelligence') ? message : (resolvedMessage || message);
+  // Always use resolved message - coreference service is smart enough to handle screen content
+  // It prioritizes screen entities over conversation entities when screen content is provided
+  let queryMessage = resolvedMessage || message;
   
   // SAFETY: Ensure queryMessage is always a string
   if (typeof queryMessage !== 'string') {
@@ -373,8 +374,17 @@ module.exports = async function answer(state) {
   }
 
   // 🔄 CONTEXT SWITCHING DETECTION
-  // Detect if the user has switched topics and filter conversation history accordingly
-  const filteredHistory = detectContextSwitch(conversationHistory, queryMessage);
+  // Use coreference service's needsContext flag to decide whether to filter history
+  // If coreference detected that context is needed (elliptical refs, pronouns, etc.), keep all history
+  // Otherwise, apply context switching detection to filter irrelevant messages
+  let filteredHistory;
+  if (coreferenceNeedsContext) {
+    logger.debug('🔗 [NODE:ANSWER] Coreference service indicates context needed - keeping full conversation history');
+    filteredHistory = conversationHistory;
+  } else {
+    logger.debug('🔄 [NODE:ANSWER] Applying context switching detection to filter history');
+    filteredHistory = detectContextSwitch(conversationHistory, queryMessage);
+  }
 
   // Only stream on first attempt, not on retries (prevents double responses)
   const isStreaming = typeof streamCallback === 'function' && retryCount === 0;

@@ -67,28 +67,6 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
     return () => document.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
-  // Handle click outside to close modal
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      const element = cardRef.current;
-      if (!element) return;
-
-      const rect = element.getBoundingClientRect();
-      const isOutsideCard = 
-        e.clientX < rect.left ||
-        e.clientX > rect.right ||
-        e.clientY < rect.top ||
-        e.clientY > rect.bottom;
-
-      if (isOutsideCard) {
-        handleClose();
-      }
-    };
-
-    document.addEventListener('click', handleClickOutside);
-    return () => document.removeEventListener('click', handleClickOutside);
-  }, []);
-
   // Extract unique domains for favicon display
   const getDomain = (url: string) => {
     try {
