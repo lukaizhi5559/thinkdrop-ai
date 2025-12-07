@@ -8,7 +8,7 @@ import {
   TooltipProvider,
 } from './ui/tooltip';
 import useWebSocket from '../hooks/useWebSocket';
-import { ThinkingIndicator } from './AnalyzingIndicator';
+import { ThinkingIndicator } from './AnalyzingIndicator'; 
 import { RichContentRenderer } from './rich-content';
 import { useConversationSignals } from '../hooks/useConversationSignals';
 import { useGlobalToast } from '../contexts/ToastContext';
@@ -1178,19 +1178,15 @@ export default function ChatMessages({
     
     // Listen for chat window visibility changes
     const handleChatWindowState = async (_: any, state: { isVisible: boolean }) => {
-      // Use signals.activeSessionId.value to get the CURRENT value, not the captured one
-      const currentSessionId = signals.activeSessionId.value;
+      // No need to reload messages on visibility change since component stays mounted
+      // Messages are already loaded and will be updated via conversation:message-added events
       console.log('👁️  [CHATMESSAGES] Chat window visibility changed:', state.isVisible);
-      console.log('👁️  [CHATMESSAGES] Current activeSessionId from signals:', currentSessionId);
       
-      if (state.isVisible && currentSessionId) {
-        console.log('🔄 [CHATMESSAGES] Window became visible, reloading messages');
-        await signalsLoadMessages(currentSessionId, {
-          limit: 50,
-          offset: 0,
-          direction: 'DESC'
-        });
-      }
+      // Removed reload logic to prevent flickering - component now stays mounted with CSS hidden
+      // if (state.isVisible && currentSessionId) {
+      //   console.log('🔄 [CHATMESSAGES] Window became visible, reloading messages');
+      //   await signalsLoadMessages(currentSessionId, { limit: 50, offset: 0, direction: 'DESC' });
+      // }
     };
     
     if ((window as any).electron?.ipcRenderer) {
@@ -1204,24 +1200,15 @@ export default function ChatMessages({
       console.log('💭 [CHATMESSAGES] Processing started for session:', data.sessionId);
       console.log('💭 [CHATMESSAGES] Current activeSessionId from signals:', currentSessionId);
       
-      // Always show thinking indicator regardless of session match
-      // This ensures the user sees feedback even if sessions are out of sync
-      console.log('💭 [CHATMESSAGES] Setting isLoading to true');
-      setIsLoading(true);
-      setInitialThinkingMessage('Thinking');
-      
-      // If session doesn't match, switch to the correct session
-      if (data.sessionId !== currentSessionId) {
-        console.log('🔄 [CHATMESSAGES] Session mismatch - switching to session:', data.sessionId);
-        signals.activeSessionId.value = data.sessionId;
-        
-        // Also reload messages for the new session
-        console.log('🔄 [CHATMESSAGES] Loading messages for switched session');
-        signalsLoadMessages(data.sessionId, {
-          limit: 50,
-          offset: 0,
-          direction: 'DESC'
-        });
+      // Only show thinking indicator if the session matches the current active session
+      // This prevents the UI from jumping to a different conversation
+      if (data.sessionId === currentSessionId) {
+        console.log('💭 [CHATMESSAGES] Session matches - setting isLoading to true');
+        setIsLoading(true);
+        setInitialThinkingMessage('Thinking');
+      } else {
+        console.log('⏭️  [CHATMESSAGES] Session mismatch - ignoring processing-started event');
+        console.log('   Expected:', currentSessionId, 'Got:', data.sessionId);
       }
     };
     
@@ -1673,7 +1660,10 @@ export default function ChatMessages({
         {/* Thinking indicator - show when loading and not streaming */}
         {!isStreamingResponse && (isLoading || isProcessingLocally) && (
           <div className="flex justify-start">
-            <div className="bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2">
+            {initialThinkingMessage && (
+            <ThinkingIndicator isVisible={initialThinkingMessage !== ''} message={initialThinkingMessage} />
+            )}
+            {/* <div className="bg-white/10 text-white/90 border border-white/10 rounded-xl px-4 py-2">
               <div className="flex items-center space-x-2">
                 <div className="w-2 h-2 bg-white/60 rounded-full animate-pulse"></div>
                 <div className="w-2 h-2 bg-white/60 rounded-full animate-pulse" style={{ animationDelay: '0.2s' }}></div>
@@ -1682,7 +1672,7 @@ export default function ChatMessages({
                   <span className="ml-2 text-xs text-white/60">{initialThinkingMessage}</span>
                 )}
               </div>
-            </div>
+            </div> */}
           </div>
         )}
         

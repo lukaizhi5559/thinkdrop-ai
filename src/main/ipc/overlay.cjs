@@ -38,6 +38,9 @@ let chatWindowState = {
   isVisible: false
 };
 
+// Toggle lock to prevent rapid successive toggles
+let chatToggleLock = false;
+
 /**
  * Initialize overlay IPC handlers
  * @param {AgentOrchestrator} agentOrchestrator - The orchestrator instance
@@ -458,15 +461,27 @@ function notifyCommandExecuteResults() {
  * Handle chat window toggle from PromptBar or UnifiedInterface
  */
 ipcMain.on('chat-window:toggle', (event) => {
+  // Prevent rapid successive toggles (debounce 300ms)
+  if (chatToggleLock) {
+    logger.debug('⏭️  [OVERLAY:IPC] Chat window toggle ignored (locked)');
+    return;
+  }
+  
+  chatToggleLock = true;
+  setTimeout(() => { chatToggleLock = false; }, 300);
+  
   logger.debug('🔄 [OVERLAY:IPC] Chat window toggle requested');
+  
+  // Get current window visibility state before toggling
+  const wasVisible = chatWindowState.isVisible;
   
   // Toggle visibility
   chatWindowState.isVisible = !chatWindowState.isVisible;
   
-  logger.debug(`📊 [OVERLAY:IPC] Chat window visibility: ${chatWindowState.isVisible}`);
+  logger.debug(`📊 [OVERLAY:IPC] Chat window visibility: ${wasVisible} → ${chatWindowState.isVisible}`);
   
   // 🎯 MUTUAL EXCLUSION: If chat window is opening, hide all intent windows
-  if (chatWindowState.isVisible) {
+  if (chatWindowState.isVisible && !wasVisible) {
     logger.debug('🚫 [OVERLAY:IPC] Chat window opening - hiding all intent windows');
     webSearchState.isVisible = false;
     screenIntelligenceState.isVisible = false;
@@ -485,18 +500,26 @@ ipcMain.on('chat-window:toggle', (event) => {
     promptWindow.webContents.send('chat-window:state', chatWindowState);
   }
   
-  // Notify ChatWindow component of state change
-  if (chatWindow && !chatWindow.isDestroyed()) {
+  // Notify ChatWindow component of state change (only if state actually changed)
+  if (chatWindow && !chatWindow.isDestroyed() && wasVisible !== chatWindowState.isVisible) {
     chatWindow.webContents.send('chat-window:state', chatWindowState);
   }
   
-  // Hide or show the window
+  // Hide or show the window (only if state actually changed)
   if (chatWindow && !chatWindow.isDestroyed()) {
-    if (chatWindowState.isVisible) {
+    const isCurrentlyVisible = chatWindow.isVisible();
+    
+    if (chatWindowState.isVisible && !isCurrentlyVisible) {
+      // Only show/focus if window is actually hidden
+      logger.debug('👁️  [OVERLAY:IPC] Showing chat window (was hidden)');
       chatWindow.show();
       chatWindow.focus();
-    } else {
+    } else if (!chatWindowState.isVisible && isCurrentlyVisible) {
+      // Only hide if window is actually visible
+      logger.debug('🙈 [OVERLAY:IPC] Hiding chat window (was visible)');
       chatWindow.hide();
+    } else {
+      logger.debug(`⏭️  [OVERLAY:IPC] Chat window already in desired state (visible: ${isCurrentlyVisible}), skipping show/hide`);
     }
   }
 });

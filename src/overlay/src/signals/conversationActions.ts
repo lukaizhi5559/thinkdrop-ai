@@ -159,10 +159,21 @@ export const createSession = async (sessionType: 'user-initiated' | 'ai-initiate
   }
 };
 
+// Guards to prevent concurrent loads
+let isLoadingSessions = false;
+const loadingMessages = new Set<string>(); // Track which sessions are currently loading
+
 export const loadSessions = async (retryCount = 0): Promise<void> => {
+  // Skip if already loading to prevent duplicate calls
+  if (isLoadingSessions) {
+    console.log('⏭️  [SIGNALS] Skipping loadSessions - already in progress');
+    return;
+  }
+  
   console.log('📋 [SIGNALS] Loading sessions via MCP... (attempt', retryCount + 1, ')');
   
   try {
+    isLoadingSessions = true;
     isLoading.value = true;
     error.value = null;
     
@@ -181,7 +192,8 @@ export const loadSessions = async (retryCount = 0): Promise<void> => {
         action: 'session.list',
         payload: {
           limit: 50,
-          offset: 0
+          offset: 0,
+          includeHibernated: true // Show all conversations including hibernated ones
         }
       });
     } catch (err: any) {
@@ -249,6 +261,7 @@ export const loadSessions = async (retryCount = 0): Promise<void> => {
     error.value = err instanceof Error ? err.message : 'Failed to load sessions';
   } finally {
     isLoading.value = false;
+    isLoadingSessions = false; // Reset guard flag
   }
 };
 
@@ -257,9 +270,16 @@ export const loadMessages = async (sessionId: string, options?: {
   offset?: number;
   direction?: 'ASC' | 'DESC';
 }) => {
+  // Skip if already loading this session's messages
+  if (loadingMessages.has(sessionId)) {
+    console.log('⏭️  [SIGNALS] Skipping loadMessages - already loading for session:', sessionId);
+    return;
+  }
+  
   console.log(' [SIGNALS] Loading messages for session:', sessionId, options);
   
   try {
+    loadingMessages.add(sessionId);
     isLoading.value = true;
     if ((window.electronAPI as any)?.mcpCall) {
       const result = await (window.electronAPI as any).mcpCall({
@@ -304,6 +324,7 @@ export const loadMessages = async (sessionId: string, options?: {
     console.error(' [SIGNALS] Failed to load messages:', err);
   } finally {
     isLoading.value = false;
+    loadingMessages.delete(sessionId); // Reset guard flag for this session
   }
   return [];
 };

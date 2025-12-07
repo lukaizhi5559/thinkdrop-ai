@@ -79,9 +79,15 @@ function App() {
     console.log('🌐 [OVERLAY] Online mode:', isOnlineMode);
     
     if (ipcRenderer) {
+      // Check if chat window is open - if so, use its active session
+      // This prevents creating a new session when the user is already viewing a conversation
+      const chatWindowState = await ipcRenderer.invoke('chat-window:get-state');
+      const isChatOpen = chatWindowState?.isVisible;
+      
       // Ensure we have an active session - use signals.activeSessionId.value to get CURRENT value
       let sessionId = signals.activeSessionId.value;
       console.log('🔍 [OVERLAY] Current activeSessionId from signals:', sessionId);
+      console.log('🔍 [OVERLAY] Chat window open:', isChatOpen);
       
       if (!sessionId) {
         console.log('🆕 [OVERLAY] No active session, creating new one');
@@ -92,7 +98,7 @@ function App() {
       }
       
       console.log('💬 [OVERLAY] Using session ID:', sessionId);
-      console.log('📤 [OVERLAY] Notifying chat window to switch to this session:', sessionId);
+      console.log('📤 [OVERLAY] Sending message to session:', sessionId);
       
       // 🚀 CRITICAL: Add user message to backend FIRST so chat window can load it
       // This MUST complete before we start MCP processing to ensure conversation history includes the new message

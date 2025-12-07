@@ -51,12 +51,13 @@ export default function ChatWindow() {
     // TODO: Implement window resize via IPC
   };
 
-  if (!isVisible) return null;
+  // Don't unmount - just hide with CSS to prevent re-fetching data
+  // if (!isVisible) return null;
 
   return (
     <ToastProvider>
       <GuideProvider>
-        <div className="w-full h-full bg-gray-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col overflow-hidden">
+        <div className={`w-full h-full bg-gray-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col overflow-hidden ${!isVisible ? 'hidden' : ''}`}>
       {/* Header */}
       <div 
         className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-gray-800/50"
