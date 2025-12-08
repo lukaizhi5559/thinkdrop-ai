@@ -367,6 +367,7 @@ export default function ChatMessages({
 
   // Message sending functionality from ChatWindow
   const handleSendMessage = useCallback(async () => {
+    console.log('🚨🚨🚨 [SEND] CODE VERSION: 2024-12-08-01:30 - NEW CODE IS RUNNING! 🚨🚨🚨');
     const currentMsg = currentMessageRef.current;
     const textareaValue = textareaRef.current?.value || '';
     
@@ -411,6 +412,7 @@ export default function ChatMessages({
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
     logDebugState(); // Debug current signals state
     
+    console.log('🔍 [SEND] signals.isLoading.value:', signals.isLoading.value);
     // Check if context is still loading
     if (signals.isLoading.value) {
       return;
@@ -418,6 +420,8 @@ export default function ChatMessages({
     
     // 🎯 CRITICAL: Use signals.activeSessionId.value for always-fresh value
     let currentSessionId = signals.activeSessionId.value;
+    console.log('🔍 [SEND] Current activeSessionId from signals:', currentSessionId);
+    console.log('🔍 [SEND] All sessions:', signals.sessions.value.map(s => ({ id: s.id, title: s.title, isActive: s.isActive })));
     
     // Check for selection from localStorage (needed for metadata AND content)
     let hasSelection = !!detectedSelection;
@@ -458,6 +462,7 @@ export default function ChatMessages({
       try {
         // Use signals sendMessage - this handles session creation AND message sending
         currentSessionId = await signalsSendMessage(messageText);
+        console.log('✅ [SEND] Created new session and sent message, sessionId:', currentSessionId);
         
         // Clear optimistic message once real message is added
         setOptimisticMessage(null);
@@ -470,12 +475,18 @@ export default function ChatMessages({
       }
     } else {
       // For existing sessions, we need to manually add the user message
+      console.log('📝 [SEND] Adding message to existing session:', currentSessionId);
       if (signalsAddMessage) {
         try {
-          await signalsAddMessage(currentSessionId, {
+          // 🔒 CRITICAL: Re-read activeSessionId to ensure we're using the correct session
+          // This prevents race conditions where the session was just switched
+          const latestSessionId = signals.activeSessionId.value || currentSessionId;
+          console.log('🔒 [SEND] Session ID check before adding message - currentSessionId:', currentSessionId, 'latest:', latestSessionId);
+          
+          await signalsAddMessage(latestSessionId, {
             text: messageText,
             sender: 'user',
-            sessionId: currentSessionId,
+            sessionId: latestSessionId,
             metadata: {
               hasHighlightedText: hasSelection
             }
@@ -483,7 +494,7 @@ export default function ChatMessages({
           
           // Reload messages to ensure UI is updated
           console.log('🔄 [SEND] Reloading messages after adding user message...');
-          await signalsLoadMessages(currentSessionId, {
+          await signalsLoadMessages(latestSessionId, {
             limit: 50,
             offset: 0,
             direction: 'DESC'
@@ -626,10 +637,15 @@ export default function ChatMessages({
           return;
         }
         
+        // 🔒 CRITICAL: Re-read activeSessionId right before sending to ensure we have the latest value
+        // This prevents race conditions where the session was switched but we're using a stale value
+        const finalSessionId = signals.activeSessionId.value || currentSessionId;
+        console.log('🔒 [SEND] Final session ID check - currentSessionId:', currentSessionId, 'signals.activeSessionId.value:', signals.activeSessionId.value, 'using:', finalSessionId);
+        
         const result = await window.electronAPI.privateModeProcess({
           message: messageText,
           context: {
-            sessionId: currentSessionId,
+            sessionId: finalSessionId,
             userId: 'default_user',
             timestamp: new Date().toISOString(),
             conversationHistory: [], // StateGraph nodes fetch context via MCP

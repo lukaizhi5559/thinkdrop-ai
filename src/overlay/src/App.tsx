@@ -84,10 +84,37 @@ function App() {
       const chatWindowState = await ipcRenderer.invoke('chat-window:get-state');
       const isChatOpen = chatWindowState?.isVisible;
       
-      // Ensure we have an active session - use signals.activeSessionId.value to get CURRENT value
-      let sessionId = signals.activeSessionId.value;
-      console.log('🔍 [OVERLAY] Current activeSessionId from signals:', sessionId);
-      console.log('🔍 [OVERLAY] Chat window open:', isChatOpen);
+      // 🔒 CRITICAL: Get the CURRENT active session from backend (source of truth)
+      // Don't rely on signals which might be stale due to async updates
+      let sessionId: string | null = null;
+      
+      try {
+        console.log('🔍 [OVERLAY] Calling session.getActive...');
+        const sessionResult = await (window as any).electronAPI.mcpCall({
+          serviceName: 'conversation',
+          action: 'session.getActive',
+          payload: {}
+        });
+        
+        console.log('📦 [OVERLAY] session.getActive response:', sessionResult);
+        
+        if (sessionResult.success && sessionResult.data?.data?.sessionId) {
+          sessionId = sessionResult.data.data.sessionId;
+          console.log('✅ [OVERLAY] Got active session from backend:', sessionId);
+        } else {
+          console.warn('⚠️  [OVERLAY] session.getActive returned no sessionId:', sessionResult);
+        }
+      } catch (error) {
+        console.error('❌ [OVERLAY] Failed to get active session from backend:', error);
+      }
+      
+      // Fallback to signals if backend call failed
+      if (!sessionId) {
+        sessionId = signals.activeSessionId.value;
+        console.log('🔍 [OVERLAY] Using activeSessionId from signals (fallback):', sessionId);
+      }
+      
+      console.log('� [OVERLAY] Chat window open:', isChatOpen);
       
       if (!sessionId) {
         console.log('🆕 [OVERLAY] No active session, creating new one');
@@ -126,11 +153,11 @@ function App() {
         // Notify chat window to reload messages immediately
         if ((window as any).electron?.ipcRenderer) {
           console.log('📤 [OVERLAY] Notifying chat window to reload messages (user message added)');
-          (window as any).electron.ipcRenderer.send('conversation:message-added', { sessionId });
+          (window as any).electron.ipcRenderer.send('conversation:message-added', { sessionId: sessionId });
           
           // Notify chat window to show thinking indicator
           console.log('📤 [OVERLAY] Notifying chat window to show thinking indicator');
-          (window as any).electron.ipcRenderer.send('conversation:processing-started', { sessionId });
+          (window as any).electron.ipcRenderer.send('conversation:processing-started', { sessionId: sessionId });
         }
       } catch (error) {
         console.error('❌ [OVERLAY] Failed to add message to backend:', error);
@@ -158,7 +185,7 @@ function App() {
         // Notify chat window that processing is complete
         if ((window as any).electron?.ipcRenderer) {
           console.log('📤 [OVERLAY] Notifying chat window that processing is complete');
-          (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId });
+          (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId: sessionId });
         }
         
         // Note: Chat window will be notified automatically by the backend's storeConversation node
