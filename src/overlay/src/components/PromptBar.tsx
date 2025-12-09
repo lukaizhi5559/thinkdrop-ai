@@ -411,7 +411,7 @@ export default function PromptBar({
               <div 
                 className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
                   isResultsVisible
-                    ? 'from-purple-400 to-pink-500 hover:from-purple-300 hover:to-pink-400' 
+                    ? 'from-teal-500 to-teal-600 hover:from-teal-400 hover:to-teal-500' 
                     : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
                 }`}
                 onClick={handleToggleWebSearch}
@@ -419,7 +419,7 @@ export default function PromptBar({
               >
                 <Globe className="w-4 h-4 text-white" />
                 {/* Indicator dot when results available */}
-                <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-purple-400" />
+                <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-teal-500" />
               </div>
             )}
 

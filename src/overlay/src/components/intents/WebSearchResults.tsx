@@ -145,11 +145,11 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
   return (
     <div 
       ref={cardRef}
-      className="w-full bg-gray-800 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
-        animate-in fade-in slide-in-from-top-4"
+      className="w-full h-[calc(100vh-180px)] max-h-[600px] bg-gray-800 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
+        animate-in fade-in slide-in-from-top-4 overflow-hidden"
     >
         {/* Header with Close Button */}
-        <div className="px-6 py-4 flex items-start justify-between flex-shrink-0">
+        <div className="px-6 py-4 flex items-start justify-between flex-shrink-0 overflow-y-auto max-h-[40vh]">
           <div className="flex-1">
             <div className="flex items-center gap-3 mb-2">
               <div className="p-2 bg-teal-500/20 rounded-lg">

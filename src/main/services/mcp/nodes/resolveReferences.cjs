@@ -120,7 +120,8 @@ module.exports = async function resolveReferences(state) {
       logger.debug('📎 [NODE:RESOLVE_REFERENCES] Using highlighted text as coreference context (1 synthetic message)');
     } else {
       // Always use conversation history - let coreference service handle prioritization
-      historyToUse = freshConversationHistory.slice(-5);
+      // Use last 10 messages to maintain context for longer conversations
+      historyToUse = freshConversationHistory.slice(-10);
       logger.debug(`🔄 [NODE:RESOLVE_REFERENCES] Using ${historyToUse.length} conversation messages for coreference context`);
     }
     

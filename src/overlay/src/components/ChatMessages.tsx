@@ -363,6 +363,40 @@ export default function ChatMessages({
     return converted;
   }, [activeSessionId, signals.activeMessages.value, totalMessageCount, optimisticMessage]);
   
+  // Auto-scroll when new messages are added - track the actual messages array, not just length
+  useEffect(() => {
+    if (displayMessages.length > 0) {
+      const container = messagesContainerRef.current;
+      if (container) {
+        // Direct scroll to bottom when messages change
+        const directScroll = () => {
+          container.scrollTop = container.scrollHeight;
+          console.log('📜 [AUTO-SCROLL] Scrolled to bottom - scrollTop:', container.scrollTop, 'scrollHeight:', container.scrollHeight);
+        };
+        
+        // Check if user is near bottom BEFORE the new message
+        const isNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 200;
+        
+        // Check if the last message is from the user (just sent)
+        const lastMessage = displayMessages[displayMessages.length - 1];
+        const isUserMessage = lastMessage?.sender === 'user';
+        
+        console.log('🔍 [AUTO-SCROLL] Check - isNearBottom:', isNearBottom, 'isUserMessage:', isUserMessage, 'lastSender:', lastMessage?.sender);
+        
+        // ALWAYS scroll if user just sent a message, otherwise only if near bottom
+        if (isUserMessage || isNearBottom) {
+          setIsUserScrolling(false);
+          isProgrammaticScrolling.current = false;
+          
+          // Multiple scroll attempts to ensure it works
+          requestAnimationFrame(directScroll);
+          setTimeout(directScroll, 100);
+          setTimeout(directScroll, 300);
+        }
+      }
+    }
+  }, [displayMessages]);
+  
   // Note: handleWebSocketMessage removed - all streaming now handled by MCP pipeline
 
   // Message sending functionality from ChatWindow
@@ -404,10 +438,25 @@ export default function ChatMessages({
     
     setOptimisticMessage(tempMessage);
     
-    // Scroll to show the new message immediately
-    setTimeout(() => {
-      scrollToBottom({ smooth: true, force: true });
-    }, 0);
+    // Reset user scrolling flag - user just sent a message, they want to see it!
+    setIsUserScrolling(false);
+    isProgrammaticScrolling.current = false;
+    
+    // DIRECT SCROLL: Just scroll the container to the bottom immediately
+    const directScroll = () => {
+      const container = messagesContainerRef.current;
+      if (container) {
+        container.scrollTop = container.scrollHeight;
+        console.log('📜 [SCROLL] Direct scroll executed - scrollTop:', container.scrollTop, 'scrollHeight:', container.scrollHeight);
+      }
+    };
+    
+    // Multiple scroll attempts with direct scrolling
+    requestAnimationFrame(directScroll);
+    setTimeout(directScroll, 50);
+    setTimeout(directScroll, 150);
+    setTimeout(directScroll, 300);
+    setTimeout(directScroll, 500);
     
     // 🚀 NEW: Use signals for session management (eliminates race conditions!)
     logDebugState(); // Debug current signals state
@@ -1316,9 +1365,14 @@ export default function ChatMessages({
     // Show scroll button when not near bottom and there are messages
     setShowScrollButton(!isNearBottom && displayMessages.length > 0);
     
-    // Track user scrolling
+    // Track user scrolling - if user scrolls up, mark as user scrolling
     if (!isProgrammaticScrolling.current) {
       setIsUserScrolling(!isNearBottom);
+      
+      // Reset programmatic flag after a short delay
+      setTimeout(() => {
+        isProgrammaticScrolling.current = false;
+      }, 100);
     }
   }, [displayMessages.length, hasMoreMessages, loadingOlder, loadOlderMessages]);
 

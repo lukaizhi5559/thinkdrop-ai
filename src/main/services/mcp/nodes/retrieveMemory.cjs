@@ -117,11 +117,11 @@ module.exports = async function retrieveMemory(state) {
       }),
 
       // Long-term memories (only if not a meta-question)
+      // NOTE: No sessionId - memories are user-scoped and accessible across all sessions
       intent.type !== 'context_query' 
         ? mcpClient.callService('user-memory', 'memory.search', {
             query: message,
             limit: 5,
-            sessionId: context.sessionId,
             userId: context.userId,
             minSimilarity: 0.35 // Lowered to capture appointment queries (38% similarity)
           }).catch(err => {

@@ -336,8 +336,8 @@ class AgentOrchestrator {
         return 'retrieveMemory';
       },
       
-      // Memory store subgraph (direct to end, already has answer)
-      storeMemory: 'end',
+      // Memory store subgraph (route through overlay system to display answer)
+      storeMemory: 'selectOverlayVariant',
       
       // Screen intelligence subgraph (primary screen analysis - now uses fast DuckDB queries)
       screenIntelligence: (state) => {
