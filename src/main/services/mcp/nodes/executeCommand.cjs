@@ -33,107 +33,80 @@ module.exports = async function executeCommand(state) {
     }
     
     if (intent.type === 'command_automate') {
-      logger.debug('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected');
-      
-      // Hide ThinkDrop AI window during automation to prevent focus interference
-      try {
-        if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
-          global.overlayWindow.hide();
-          logger.debug('🙈 [NODE:EXECUTE_COMMAND] Hidden overlay window for automation');
-        } else {
-          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Overlay window not available');
-        }
-      } catch (hideError) {
-        logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not hide window:', hideError.message);
-      }
+      logger.debug('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected - generating plan');
       
       try {
-        // Use Nut.js automation for complex UI interactions
-        const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '300000');
+        // Call command.automate which now returns a plan instead of executing
+        const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '60000');
         const result = await mcpClient.callService(
           'command',
           'command.automate',
           {
             command: commandMessage,
+            intent: 'command_automate',
             context: {
               os: process.platform,
               userId: context.userId,
               sessionId: context.sessionId
             }
           },
-          { timeout: commandTimeout } // 5 minutes for code generation + execution
+          { timeout: commandTimeout }
         );
         
-        // Restore window after automation completes
-        try {
-          if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
-            global.overlayWindow.show();
-            logger.debug('👁️ [NODE:EXECUTE_COMMAND] Restored overlay window after automation');
-          }
-        } catch (showError) {
-          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not restore window:', showError.message);
-        }
-      
-      if (!result.success) {
-        // Check if this is an uncertain result (task may have completed but couldn't verify)
-        if (result.uncertainResult) {
-          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation result uncertain:', result.warning || result.error);
+        if (!result.success || !result.plan) {
+          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Plan generation failed:', result.error);
           
-          // Use the warning message from the backend, or provide a default
-          const uncertainMessage = result.warning || 
-            `I attempted to complete that task, but couldn't fully verify the result. **Please check if your task was completed successfully.**\n\n` +
-            `If it didn't work as expected, please submit a ticket at **ticket.thinkdrop.ai** and our team will help improve the automation.`;
+          const userFriendlyMessage = `I couldn't generate an automation plan for that task.\n\n` +
+            `Error: ${result.error || 'Unknown error'}\n\n` +
+            `If you need assistance, please submit a ticket at **ticket.thinkdrop.ai**.`;
           
           return {
             ...state,
-            answer: uncertainMessage,
-            commandExecuted: true, // Task was attempted
-            automationUsed: true,
-            uncertainResult: true,
-            automationMetadata: result.metadata,
-            planFailure: result.planFailure // Include plan failure details if available
+            answer: userFriendlyMessage,
+            commandExecuted: false,
+            commandError: result.error
           };
         }
         
-        // True failure - task didn't execute at all
-        logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Automation failed:', result.error);
+        logger.debug('✅ [NODE:EXECUTE_COMMAND] Automation plan generated');
+        logger.debug('📊 [NODE:EXECUTE_COMMAND] Plan ID:', result.plan.planId);
+        logger.debug('📊 [NODE:EXECUTE_COMMAND] Steps:', result.plan.steps.length);
+        logger.debug('📊 [NODE:EXECUTE_COMMAND] Provider:', result.plan.metadata?.provider);
         
-        const userFriendlyMessage = `I attempted to help with that task. Please check if the results are what you expected.\n\n` +
-          `If you need further assistance, feel free to submit a ticket at **ticket.thinkdrop.ai** and our team will help improve this.`;
+        // Log automation plan for debugging
+        logger.logAutomationPlan(result.plan, resolvedMessage || message);
+        
+        // Populate intentContext.slots for overlay system
+        const intentContext = state.intentContext || { intent: intent.type, slots: {}, uiVariant: null };
+        intentContext.slots = {
+          ...intentContext.slots,
+          automationPlan: result.plan,
+          planId: result.plan.planId,
+          steps: result.plan.steps,
+          totalSteps: result.plan.steps.length,
+          currentStep: 0,
+          goal: result.plan.goal,
+          metadata: result.plan.metadata
+        };
+        state.intentContext = intentContext;
+        
+        logger.debug('📦 [NODE:EXECUTE_COMMAND] Populated intentContext.slots for overlay');
+        
+        // Return state without answer - will route to overlay system
+        return state;
+        
+      } catch (error) {
+        logger.error('❌ [NODE:EXECUTE_COMMAND] Error generating plan:', error.message);
+        
+        const userFriendlyMessage = `I ran into an issue generating an automation plan for that task.\n\n` +
+          `If this keeps happening, please submit a ticket at **ticket.thinkdrop.ai**.`;
         
         return {
           ...state,
           answer: userFriendlyMessage,
           commandExecuted: false,
-          commandError: result.error,
-          automationAttempted: true
+          error: error.message
         };
-      }
-      
-        logger.debug('✅ [NODE:EXECUTE_COMMAND] Automation completed successfully');
-        logger.debug('📊 [NODE:EXECUTE_COMMAND] Provider:', result.metadata?.provider);
-        logger.debug('⏱️ [NODE:EXECUTE_COMMAND] Total time:', result.metadata?.totalTime, 'ms');
-        
-        return {
-          ...state,
-          answer: result.result || 'Automation completed successfully',
-          commandExecuted: true,
-          automationUsed: true,
-          automationMetadata: result.metadata
-        };
-      } catch (automationError) {
-        // Ensure window is restored even if automation fails
-        try {
-          if (global.overlayWindow && !global.overlayWindow.isDestroyed()) {
-            global.overlayWindow.show();
-            logger.debug('👁️ [NODE:EXECUTE_COMMAND] Restored overlay window after automation error');
-          }
-        } catch (showError) {
-          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Could not restore window after error:', showError.message);
-        }
-        
-        // Re-throw to be handled by outer catch
-        throw automationError;
       }
     }
     

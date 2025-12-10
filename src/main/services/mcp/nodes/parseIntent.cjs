@@ -202,8 +202,29 @@ module.exports = async function parseIntent(state) {
       // Only enhance if message is ≤3 words (very short and potentially ambiguous)
       const wordCount = messageToClassify.split(/\s+/).length;
       if (wordCount <= 3 && lastUserMsg && lastAiMsg) {
-        enhancedMessage = `[Previous question: "${lastUserMsg.content}"] [AI response: "${lastAiMsg.content.substring(0, 100)}..."] [Current: "${messageToClassify}"]`;
-        logger.debug(`🔗 [NODE:PARSE_INTENT] Enhanced short message (${wordCount} words) with context for better classification`);
+        // Check if message starts with an action verb (imperative command)
+        // These are complete commands and shouldn't be enhanced with context
+        const actionVerbs = [
+          'open', 'close', 'start', 'stop', 'launch', 'quit', 'exit',
+          'search', 'find', 'look', 'show', 'display', 'hide',
+          'create', 'make', 'build', 'delete', 'remove',
+          'go', 'navigate', 'visit', 'browse',
+          'play', 'pause', 'resume', 'skip',
+          'send', 'email', 'message', 'call',
+          'save', 'export', 'download', 'upload',
+          'copy', 'paste', 'cut', 'move',
+          'click', 'type', 'press', 'select'
+        ];
+        
+        const firstWord = messageToClassify.toLowerCase().split(/\s+/)[0];
+        const isImperativeCommand = actionVerbs.includes(firstWord);
+        
+        if (!isImperativeCommand) {
+          enhancedMessage = `[Previous question: "${lastUserMsg.content}"] [AI response: "${lastAiMsg.content.substring(0, 100)}..."] [Current: "${messageToClassify}"]`;
+          logger.debug(`🔗 [NODE:PARSE_INTENT] Enhanced short message (${wordCount} words) with context for better classification`);
+        } else {
+          logger.debug(`🎯 [NODE:PARSE_INTENT] Skipping context enhancement for imperative command: "${firstWord}"`);
+        }
       }
     }
     

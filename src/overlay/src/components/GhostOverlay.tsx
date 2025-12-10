@@ -33,14 +33,45 @@ const ipcRenderer = (window as any).electron?.ipcRenderer;
 
 export default function GhostOverlay() {
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-  const [highlightedItems, setHighlightedItems] = useState<HighlightedItem[]>([]);
+  const [targetPos, setTargetPos] = useState({ x: 0, y: 0 });
+  const [isAutomating, setIsAutomating] = useState(false);
+  const [isClicking, setIsClicking] = useState(false);
+  const [highlightedItems] = useState<HighlightedItem[]>([]); // For future use
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [banner, setBanner] = useState<BannerNotification | null>(null);
+
+  // Smooth animation to target position during automation
+  useEffect(() => {
+    if (!isAutomating) return;
+
+    const animate = () => {
+      setMousePos((prev) => {
+        const dx = targetPos.x - prev.x;
+        const dy = targetPos.y - prev.y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+
+        if (distance < 1) return targetPos;
+
+        // Smooth easing
+        const speed = 0.15;
+        return {
+          x: prev.x + dx * speed,
+          y: prev.y + dy * speed,
+        };
+      });
+    };
+
+    const interval = setInterval(animate, 16); // 60fps
+    return () => clearInterval(interval);
+  }, [isAutomating, targetPos]);
 
   // Track mouse position
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      setMousePos({ x: e.clientX, y: e.clientY });
+      if (!isAutomating) {
+        setMousePos({ x: e.clientX, y: e.clientY });
+        setTargetPos({ x: e.clientX, y: e.clientY });
+      }
       
       // Check if hovering over any highlighted item
       const item = highlightedItems.find(
@@ -70,6 +101,47 @@ export default function GhostOverlay() {
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [highlightedItems, hoveredItem]);
+
+  // Listen for automation events
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleAutomationStart = () => {
+      console.log('🤖 [GHOST] Automation started');
+      setIsAutomating(true);
+    };
+
+    const handleAutomationEnd = () => {
+      console.log('✅ [GHOST] Automation ended');
+      setIsAutomating(false);
+    };
+
+    const handleMouseMove = (_event: any, data: { x: number; y: number }) => {
+      console.log('🖱️  [GHOST] Mouse move to:', data);
+      setTargetPos({ x: data.x, y: data.y });
+    };
+
+    const handleMouseClick = (_event: any, data: { x: number; y: number }) => {
+      console.log('🖱️  [GHOST] Mouse click at:', data);
+      setTargetPos({ x: data.x, y: data.y });
+      setIsClicking(true);
+      setTimeout(() => setIsClicking(false), 300);
+    };
+
+    ipcRenderer.on('automation:started', handleAutomationStart);
+    ipcRenderer.on('automation:ended', handleAutomationEnd);
+    ipcRenderer.on('ghost:mouse-move', handleMouseMove);
+    ipcRenderer.on('ghost:mouse-click', handleMouseClick);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('automation:started', handleAutomationStart);
+        ipcRenderer.removeListener('automation:ended', handleAutomationEnd);
+        ipcRenderer.removeListener('ghost:mouse-move', handleMouseMove);
+        ipcRenderer.removeListener('ghost:mouse-click', handleMouseClick);
+      }
+    };
+  }, []);
 
   // Listen for private mode error notifications
   useEffect(() => {
@@ -172,17 +244,53 @@ export default function GhostOverlay() {
         </div>
       )}
 
-      {/* Ghost mouse cursor */}
-      <div
-        className="fixed w-6 h-6 bg-blue-500/50 rounded-full border-2 border-blue-400 pointer-events-none transition-transform duration-75"
-        style={{
-          left: mousePos.x - 12,
-          top: mousePos.y - 12,
-          transform: 'scale(1)',
-        }}
-      >
-        <div className="absolute inset-0 bg-blue-400/30 rounded-full animate-ping" />
-      </div>
+      {/* Animated Ghost Mouse Cursor */}
+      {isAutomating && (
+        <div
+          className="fixed pointer-events-none transition-all duration-100"
+          style={{
+            left: mousePos.x,
+            top: mousePos.y,
+            zIndex: 10000,
+          }}
+        >
+          {/* Mouse Pointer SVG */}
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className={`drop-shadow-lg transition-transform ${isClicking ? 'scale-90' : 'scale-100'}`}
+          >
+            {/* Pointer shape */}
+            <path
+              d="M5 3L19 12L12 13L9 20L5 3Z"
+              fill="#3B82F6"
+              stroke="#1E40AF"
+              strokeWidth="1.5"
+              strokeLinejoin="round"
+            />
+            {/* Inner highlight */}
+            <path
+              d="M7 6L16 12.5L12 13.5L10 17L7 6Z"
+              fill="#60A5FA"
+              opacity="0.6"
+            />
+          </svg>
+
+          {/* Ripple effect on click */}
+          {isClicking && (
+            <div className="absolute top-0 left-0 w-12 h-12 -translate-x-1/2 -translate-y-1/2">
+              <div className="absolute inset-0 bg-blue-500/30 rounded-full animate-ping" />
+              <div className="absolute inset-0 bg-blue-400/20 rounded-full animate-pulse" />
+            </div>
+          )}
+
+          {/* Glow trail effect */}
+          <div className="absolute top-0 left-0 w-8 h-8 -translate-x-1/2 -translate-y-1/2 bg-blue-500/20 rounded-full blur-xl animate-pulse" />
+        </div>
+      )}
 
       {/* Highlighted items borders */}
       {highlightedItems.map((item) => (

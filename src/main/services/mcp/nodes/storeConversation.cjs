@@ -169,14 +169,18 @@ module.exports = async function storeConversation(state) {
 
     // Extract entities from AI response (contains rich information like names, dates, places)
     let responseEntities = [];
-    try {
-      const extractResult = await mcpClient.callService('phi4', 'entity.extract', {
-        text: answer
-      });
-      responseEntities = extractResult.data?.entities || extractResult.entities || [];
-      logger.debug(`📋 [NODE:STORE_CONVERSATION] AI response entities: ${responseEntities.length}`, responseEntities);
-    } catch (error) {
-      logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to extract entities from response:', error.message);
+    if (answer && typeof answer === 'string' && answer.trim().length > 0) {
+      try {
+        const extractResult = await mcpClient.callService('phi4', 'entity.extract', {
+          text: answer
+        });
+        responseEntities = extractResult.data?.entities || extractResult.entities || [];
+        logger.debug(`📋 [NODE:STORE_CONVERSATION] AI response entities: ${responseEntities.length}`, responseEntities);
+      } catch (error) {
+        logger.warn('⚠️ [NODE:STORE_CONVERSATION] Failed to extract entities from response:', error.message);
+      }
+    } else {
+      logger.debug('⚠️ [NODE:STORE_CONVERSATION] Skipping entity extraction - empty or invalid response');
     }
 
     // Combine entities from both user message and AI response

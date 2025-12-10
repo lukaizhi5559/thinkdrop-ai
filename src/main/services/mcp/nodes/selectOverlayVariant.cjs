@@ -92,20 +92,47 @@ module.exports = async function selectOverlayVariant(state) {
       break;
       
     case 'command_execute':
-    case 'command_guide':
-    case 'command_automate':
-      // Command execution intents - show execution results
-      // Check for error state first
+      // Simple command execution - show results
       if (slots.error || slots.errorMessage || state.commandError) {
         state.intentContext.uiVariant = 'error';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
       }
-      // Has command output or answer → show results
       else if (state.commandExecuted || state.answer || slots.output) {
         state.intentContext.uiVariant = 'results';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (command executed)`);
       }
-      // Still loading
+      else {
+        state.intentContext.uiVariant = 'loading';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → loading`);
+      }
+      break;
+    
+    case 'command_automate':
+      // Automation with structured plan - show progress UI
+      if (slots.error || slots.errorMessage) {
+        state.intentContext.uiVariant = 'error';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
+      }
+      else if (slots.automationPlan && slots.steps) {
+        state.intentContext.uiVariant = 'automation_progress';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (${slots.totalSteps} steps)`);
+      }
+      else {
+        state.intentContext.uiVariant = 'loading';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → loading`);
+      }
+      break;
+    
+    case 'command_guide':
+      // Interactive guide mode - show guide renderer
+      if (slots.error || slots.errorMessage) {
+        state.intentContext.uiVariant = 'error';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
+      }
+      else if (slots.guideId && slots.steps) {
+        state.intentContext.uiVariant = 'guide_renderer';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → guide_renderer (${slots.totalSteps} steps)`);
+      }
       else {
         state.intentContext.uiVariant = 'loading';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → loading`);

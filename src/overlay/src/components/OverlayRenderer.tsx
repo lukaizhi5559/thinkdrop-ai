@@ -12,6 +12,7 @@ import WebSearchLoading from './intents/WebSearchLoading';
 import WebSearchError from './intents/WebSearchError';
 import ScreenIntelligenceResults from './intents/ScreenIntelligenceResults';
 import CommandExecuteResults from './intents/CommandExecuteResults';
+import CommandAutomateProgress from './intents/CommandAutomateProgress';
 
 interface OverlayRendererProps {
   payload: OverlayPayload;
@@ -19,7 +20,7 @@ interface OverlayRendererProps {
 }
 
 export default function OverlayRenderer({ payload, onEvent }: OverlayRendererProps) {
-  const { intent, uiVariant, slots } = payload;
+  const { intent, uiVariant } = payload;
 
   // Route to appropriate component based on intent + variant
   const renderComponent = () => {
@@ -55,14 +56,41 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
             return null;
         }
 
-      // Command execution intents
-      case 'command_guide':
+      // Command execution intent
       case 'command_execute':
-      case 'command_automate':
         switch (uiVariant) {
           case 'loading':
             return <WebSearchLoading payload={payload} />;
           case 'results':
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
+          case 'error':
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
+          default:
+            console.warn(`Unknown ${intent} variant: ${uiVariant}`);
+            return null;
+        }
+
+      // Command automation intent (structured plan execution)
+      case 'command_automate':
+        switch (uiVariant) {
+          case 'loading':
+            return <WebSearchLoading payload={payload} />;
+          case 'automation_progress':
+            return <CommandAutomateProgress payload={payload} onEvent={onEvent} />;
+          case 'error':
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
+          default:
+            console.warn(`Unknown ${intent} variant: ${uiVariant}`);
+            return null;
+        }
+
+      // Command guide intent (interactive guide mode)
+      case 'command_guide':
+        switch (uiVariant) {
+          case 'loading':
+            return <WebSearchLoading payload={payload} />;
+          case 'guide_renderer':
+            // TODO: Create CommandGuideRenderer component in Phase 4
             return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
           case 'error':
             return <CommandExecuteResults payload={payload} onEvent={onEvent} />;

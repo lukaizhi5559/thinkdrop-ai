@@ -16,7 +16,7 @@ interface CommandExecuteResultsProps {
   onEvent: (event: any) => void;
 }
 
-export default function CommandExecuteResults({ payload }: CommandExecuteResultsProps) {
+export default function CommandExecuteResults({ payload, onEvent: _onEvent }: CommandExecuteResultsProps) {
   const { slots } = payload;
   const [isVisible, setIsVisible] = useState(true);
   const [showBanner, setShowBanner] = useState(true);
@@ -160,10 +160,11 @@ export default function CommandExecuteResults({ payload }: CommandExecuteResults
   }, []);
 
   const handleClose = () => {
-    // Send IPC to hide the window
+    // Hide the intent window
     const electronAPI = (window as any).electron;
     if (electronAPI?.ipcRenderer) {
-      electronAPI.ipcRenderer.send('command-execute:toggle');
+      // Hide the intent window by sending a generic hide command
+      electronAPI.ipcRenderer.send('intent-window:hide');
     }
   };
 

@@ -164,6 +164,33 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     ghostWindow.setIgnoreMouseEvents(clickthrough, { forward: true });
   });
 
+  // Forward automation events to ghost window for visual effects
+  ipcMain.on('automation:started', () => {
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      logger.debug('🤖 [OVERLAY:IPC] Forwarding automation:started to ghost window');
+      ghostWindow.webContents.send('automation:started');
+    }
+  });
+
+  ipcMain.on('automation:ended', () => {
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      logger.debug('✅ [OVERLAY:IPC] Forwarding automation:ended to ghost window');
+      ghostWindow.webContents.send('automation:ended');
+    }
+  });
+
+  ipcMain.on('ghost:mouse-move', (event, data) => {
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      ghostWindow.webContents.send('ghost:mouse-move', data);
+    }
+  });
+
+  ipcMain.on('ghost:mouse-click', (event, data) => {
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      ghostWindow.webContents.send('ghost:mouse-click', data);
+    }
+  });
+
   // Handle intent window positioning (animate to highlighted item)
   ipcMain.on('overlay:position-intent', (event, { x, y, width, height, animate = true }) => {
     if (!intentWindow || intentWindow.isDestroyed()) {
@@ -292,6 +319,22 @@ ipcMain.on('intent-window:set-ignore-mouse', (event, shouldIgnore) => {
   }
   
   intentWindow.setIgnoreMouseEvents(shouldIgnore, { forward: true });
+});
+
+/**
+ * Handle intent window hide request
+ * Hides the intent window when user clicks close button
+ */
+ipcMain.on('intent-window:hide', (event) => {
+  logger.debug('👻 [OVERLAY:IPC] Intent window hide requested');
+  
+  if (!intentWindow || intentWindow.isDestroyed()) {
+    logger.warn('⚠️  [OVERLAY:IPC] Intent window not available');
+    return;
+  }
+  
+  intentWindow.hide();
+  logger.debug('✅ [OVERLAY:IPC] Intent window hidden');
 });
 
 /**

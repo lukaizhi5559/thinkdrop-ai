@@ -17,6 +17,7 @@ const migration011 = require('./migrations/011_add_screen_intelligence_service.c
 const migration012 = require('./migrations/012_add_insight_history.cjs');
 const migration013 = require('./migrations/013_add_screen_vision_action.cjs');
 const migration014 = require('./migrations/014_add_session_getActive.cjs');
+const migration015 = require('./migrations/015_add_automation_primitives.cjs');
 
 const logger = require('./../../logger.cjs');
 /**
@@ -77,7 +78,8 @@ async function runMigrations(database) {
     { name: '011_add_screen_intelligence_service', module: migration011 },
     { name: '012_add_insight_history', module: migration012 },
     { name: '013_add_screen_vision_action', module: migration013 },
-    { name: '014_add_session_getActive', module: migration014 }
+    { name: '014_add_session_getActive', module: migration014 },
+    { name: '015_add_automation_primitives', module: migration015 }
   ];
 
   for (const migration of migrations) {

@@ -73,6 +73,7 @@ const { setupVisionOAuthHandlers } = require('./handlers/ipc-handlers-vision-oau
 const { registerScreenIntelligenceHandlers } = require('./handlers/ipc-handlers-screen-intelligence.cjs');
 const { registerInsightHandlers } = require('./handlers/ipc-handlers-insight.cjs');
 const { setupInsightHistoryHandlers } = require('./handlers/ipc-handlers-insight-history.cjs');
+const { registerAutomationHandlers } = require('./handlers/ipc-handlers-automation.cjs');
 
 const logger = require('./logger.cjs');
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
@@ -1214,6 +1215,11 @@ async function setupIPCHandlers() {
     logger.debug('📚 Setting up Insight History handlers...');
     setupInsightHistoryHandlers();
     logger.debug('✅ Insight History handlers setup complete');
+    
+    // Initialize Automation handlers
+    logger.debug('🤖 Setting up Automation handlers...');
+    registerAutomationHandlers(mcpClient);
+    logger.debug('✅ Automation handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
     logger.debug('🔧 Setting up MCP Private Mode handlers...');

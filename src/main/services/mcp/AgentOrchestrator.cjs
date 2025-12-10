@@ -374,6 +374,11 @@ class AgentOrchestrator {
         if (state.requiresConfirmation) {
           return 'end'; // Don't generate answer, just return confirmation details
         }
+        // If command_automate generated a plan, route to overlay system
+        if (state.intent?.type === 'command_automate' && state.intentContext?.slots?.automationPlan) {
+          logger.debug('🤖 [STATEGRAPH:COMMAND] Automation plan generated, routing to overlay system');
+          return 'selectOverlayVariant';
+        }
         // If command service already interpreted output, skip answer node
         if (state.answer) {
           return 'validateAnswer'; // Go straight to validation
@@ -407,7 +412,19 @@ class AgentOrchestrator {
       
       // Command automation subgraph with parallel memory retrieval
       parallelCommandAndMemory: 'parallelCommandFilterMemory', // ⚡ PARALLEL: executeCommand + retrieveMemory
-      parallelCommandFilterMemory: 'answer',
+      parallelCommandFilterMemory: (state) => {
+        // If command_automate generated a plan, route to overlay system
+        if (state.intent?.type === 'command_automate' && state.intentContext?.slots?.automationPlan) {
+          logger.debug('🤖 [STATEGRAPH:PARALLEL_COMMAND] Automation plan generated, routing to overlay system');
+          return 'selectOverlayVariant';
+        }
+        // If command already has an answer, skip LLM
+        if (state.answer) {
+          logger.debug('✅ [STATEGRAPH:PARALLEL_COMMAND] Answer already generated, skipping LLM');
+          return 'selectOverlayVariant';
+        }
+        return 'answer';
+      },
       
       // Memory retrieve / general query subgraph (sequential)
       retrieveMemory: 'filterMemory',
