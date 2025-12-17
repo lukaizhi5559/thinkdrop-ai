@@ -25,6 +25,11 @@ module.exports = async function resolveReferences(state) {
 
   logger.debug('🔍 [NODE:RESOLVE_REFERENCES] Resolving coreferences...');
   logger.debug(`📝 [NODE:RESOLVE_REFERENCES] Original message: "${message}"`);
+  logger.debug(`📝 [NODE:RESOLVE_REFERENCES] Intent type: ${intentType || 'not yet classified'}`);
+  
+  // NOTE: Coreference service now handles automation commands intelligently
+  // It will skip resolution for imperative commands with 2+ automation indicators
+  // No need for pre-filtering here - let the service decide
   
   // CRITICAL FIX: If highlighted text is present, use it as fresh context instead of conversation history
   // When user highlights text, "this" refers to the highlighted content, not previous conversation

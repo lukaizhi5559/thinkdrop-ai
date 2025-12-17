@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Droplet, Unplug, ArrowUp, ChevronUp, X, Globe, MessageCircle, Monitor } from 'lucide-react';
+import { Droplet, Unplug, ArrowUp, ChevronUp, X, Globe, MessageCircle, Monitor, Zap, AlertCircle, Play, Square } from 'lucide-react';
 
 interface PromptBarProps {
   onSubmit: (message: string) => void;
@@ -34,6 +34,16 @@ export default function PromptBar({
   const [hasScreenResults, setHasScreenResults] = useState(false);
   const [isScreenResultsVisible, setIsScreenResultsVisible] = useState(false);
   const [isChatVisible, setIsChatVisible] = useState(false);
+  const [hasAutomation, setHasAutomation] = useState(false);
+  const [isAutomationVisible, setIsAutomationVisible] = useState(false);
+  const [isAutomationRunning, setIsAutomationRunning] = useState(false);
+  const [clarificationMode, setClarificationMode] = useState<{
+    active: boolean;
+    question: string;
+    stepDescription: string;
+    stepIndex: number;
+    questionId?: string;
+  } | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Listen for web search results availability
@@ -54,9 +64,42 @@ export default function PromptBar({
       setIsChatVisible(state.isVisible);
     };
 
+    const handleAutomationState = (_event: any, state: { hasAutomation: boolean; isVisible: boolean; isRunning?: boolean }) => {
+      setHasAutomation(state.hasAutomation);
+      setIsAutomationVisible(state.isVisible);
+      if (state.isRunning !== undefined) {
+        setIsAutomationRunning(state.isRunning);
+      }
+    };
+
+    const handleClarificationRequest = (_event: any, data: {
+      question: string;
+      stepDescription: string;
+      stepIndex: number;
+      questionId?: string;
+    }) => {
+      console.log('❓ [PROMPT_BAR] Clarification requested:', data);
+      setClarificationMode({
+        active: true,
+        question: data.question,
+        stepDescription: data.stepDescription,
+        stepIndex: data.stepIndex,
+        questionId: data.questionId
+      });
+      setIsExpanded(true);
+      setMessage(''); // Clear any existing message
+      
+      // Focus the textarea
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 100);
+    };
+
     ipcRenderer.on('web-search:state', handleWebSearchState);
     ipcRenderer.on('screen-intelligence:state', handleScreenIntelligenceState);
     ipcRenderer.on('chat-window:state', handleChatWindowState);
+    ipcRenderer.on('automation:state', handleAutomationState);
+    ipcRenderer.on('prompt-bar:request-clarification', handleClarificationRequest);
     
     // Get initial chat window state
     ipcRenderer.invoke('chat-window:get-state').then((state: { isVisible: boolean }) => {
@@ -70,6 +113,8 @@ export default function PromptBar({
         ipcRenderer.removeListener('web-search:state', handleWebSearchState);
         ipcRenderer.removeListener('screen-intelligence:state', handleScreenIntelligenceState);
         ipcRenderer.removeListener('chat-window:state', handleChatWindowState);
+        ipcRenderer.removeListener('automation:state', handleAutomationState);
+        ipcRenderer.removeListener('prompt-bar:request-clarification', handleClarificationRequest);
       }
     };
   }, []);
@@ -130,8 +175,45 @@ export default function PromptBar({
       if (isScreenResultsVisible) {
         ipcRenderer.send('screen-intelligence:toggle');
       }
+      if (isAutomationVisible) {
+        ipcRenderer.send('automation:toggle');
+      }
       // Then toggle chat window
       ipcRenderer.send('chat-window:toggle');
+    }
+  };
+
+  const handleToggleAutomation = () => {
+    if (!ipcRenderer) return;
+    
+    // If automation is running (window hidden), send stop command to pause and show window
+    if (isAutomationRunning) {
+      console.log('⏸️  [PROMPT_BAR] Stopping automation');
+      ipcRenderer.send('automation:stop');
+      setIsAutomationRunning(false);
+      setIsAutomationVisible(true);
+    } 
+    // If automation is paused (window visible), send play command to resume and hide window
+    else if (isAutomationVisible) {
+      console.log('▶️  [PROMPT_BAR] Playing automation');
+      ipcRenderer.send('automation:play');
+      setIsAutomationRunning(true);
+      setIsAutomationVisible(false);
+    }
+    // If automation window is not visible and not running, just show it
+    else {
+      // Close other overlays first (one window at a time rule)
+      if (isChatVisible) {
+        ipcRenderer.send('chat-window:toggle');
+      }
+      if (isResultsVisible) {
+        ipcRenderer.send('web-search:toggle');
+      }
+      if (isScreenResultsVisible) {
+        ipcRenderer.send('screen-intelligence:toggle');
+      }
+      // Then show automation
+      ipcRenderer.send('automation:toggle');
     }
   };
 
@@ -139,6 +221,48 @@ export default function PromptBar({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim()) {
+      // Check if we're in clarification mode
+      if (clarificationMode?.active) {
+        console.log('✅ [PROMPT_BAR] Submitting clarification answer:', message.trim());
+        
+        // Send clarification answer via IPC
+        if (ipcRenderer) {
+          ipcRenderer.send('prompt-bar:clarification-answer', {
+            answer: message.trim(),
+            questionId: clarificationMode.questionId,
+            stepIndex: clarificationMode.stepIndex
+          });
+        }
+        
+        // Clear clarification mode
+        setClarificationMode(null);
+        setMessage('');
+        
+        // Reset textarea height
+        if (textareaRef.current) {
+          setTimeout(() => {
+            if (textareaRef.current) {
+              textareaRef.current.style.height = 'auto';
+              const resetHeight = textareaRef.current.scrollHeight;
+              textareaRef.current.style.height = resetHeight + 'px';
+              setTextareaHeight(resetHeight);
+              
+              if (ipcRenderer) {
+                const baseHeight = 66;
+                const totalHeight = baseHeight + resetHeight;
+                ipcRenderer.send('overlay:resize-prompt', {
+                  height: totalHeight,
+                  animate: true
+                });
+              }
+            }
+          }, 0);
+        }
+        
+        return;
+      }
+      
+      // Normal message submission
       onSubmit(message.trim());
       setMessage('');
       
@@ -338,6 +462,35 @@ export default function PromptBar({
           </button>
         </div> */}
 
+        {/* Clarification Question Banner */}
+        {clarificationMode?.active && (
+          <div className="mb-3 p-3 bg-orange-500/10 border border-orange-500/30 rounded-lg">
+            <div className="flex items-start space-x-2">
+              <AlertCircle className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="text-xs text-orange-400 font-medium mb-1">
+                  Step {clarificationMode.stepIndex + 1}: {clarificationMode.stepDescription}
+                </div>
+                <div className="text-sm text-white">
+                  {clarificationMode.question}
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setClarificationMode(null);
+                  if (ipcRenderer) {
+                    ipcRenderer.send('prompt-bar:clarification-cancelled');
+                  }
+                }}
+                className="p-1 rounded hover:bg-white/10 transition-colors click-active"
+                title="Cancel"
+              >
+                <X className="w-4 h-4 text-white/60" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Input Area */}
         <div 
           className="flex items-center space-x-3 click-active"
@@ -350,8 +503,12 @@ export default function PromptBar({
             value={message}
             onChange={handleTextareaChange}
             onKeyDown={handleKeyDown}
-            placeholder={isReady ? "Ask anything..." : "Initializing..."}
-            disabled={!isReady}
+            placeholder={
+              clarificationMode?.active 
+                ? "Type your answer..." 
+                : (isReady ? "Ask anything..." : "Initializing...")
+            }
+            disabled={!isReady && !clarificationMode?.active}
             className="
               flex-1 text-sm bg-transparent text-white placeholder-white/50 
               resize-none min-h-[24px] max-h-[400px] py-2 px-3 rounded-lg 
@@ -437,6 +594,39 @@ export default function PromptBar({
                 <Monitor className="w-4 h-4 text-white" />
                 {/* Indicator dot when results available */}
                 <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-cyan-400" />
+              </div>
+            )}
+
+            {/* Automation Play/Stop Button */}
+            {hasAutomation && (
+              <div 
+                className={`w-8 h-8 bg-gradient-to-br rounded-lg flex items-center justify-center flex-shrink-0 relative cursor-pointer transition-all duration-200 click-active ${
+                  isAutomationRunning
+                    ? 'from-red-500 to-red-600 hover:from-red-400 hover:to-red-500' 
+                    : isAutomationVisible
+                    ? 'from-green-500 to-green-600 hover:from-green-400 hover:to-green-500'
+                    : 'from-gray-500 to-gray-600 hover:from-gray-400 hover:to-gray-500'
+                }`}
+                onClick={handleToggleAutomation}
+                title={
+                  isAutomationRunning 
+                    ? 'Stop Automation (Show Debug Window)' 
+                    : isAutomationVisible 
+                    ? 'Play Automation (Hide Window)' 
+                    : 'Show Automation'
+                }
+              >
+                {isAutomationRunning ? (
+                  <Square className="w-4 h-4 text-white" />
+                ) : isAutomationVisible ? (
+                  <Play className="w-4 h-4 text-white" />
+                ) : (
+                  <Zap className="w-4 h-4 text-white" />
+                )}
+                {/* Indicator dot when automation available */}
+                <div className={`absolute -top-1 -right-1 w-3 h-3 rounded-full ${
+                  isAutomationRunning ? 'bg-red-400 animate-pulse' : 'bg-orange-400'
+                }`} />
               </div>
             )}
 

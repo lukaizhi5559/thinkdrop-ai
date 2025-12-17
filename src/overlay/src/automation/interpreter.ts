@@ -27,9 +27,18 @@ interface AutomationStep {
   kind: StepKind;
   waitAfter?: number;
   verify?: boolean;
+  status?: string;
+  dependsOn?: string[];
+  retry?: {
+    maxAttempts: number;
+    delayMs?: number;
+  };
   onError?: {
-    strategy: 'continue' | 'fail_plan' | 'retry';
+    strategy: 'continue' | 'fail_plan' | 'retry' | 'replan' | 'ask_user' | 'skip_step';
     maxRetries?: number;
+    reason?: string;
+    questionId?: string;
+    message?: string;
   };
 }
 
@@ -39,12 +48,15 @@ type StepKind =
   | { type: 'typeText'; text: string; submit?: boolean }
   | { type: 'hotkey'; keys: string[] }
   | { type: 'click'; x?: number; y?: number }
+  | { type: 'scroll'; amount?: number; direction?: 'down' | 'up' }
   | { type: 'pause'; ms: number }
   | { type: 'apiAction'; skill: string; params: Record<string, any> }
   | { type: 'waitForElement'; locator: { description: string; roleHint?: string; strategy?: string }; timeoutMs?: number }
   | { type: 'screenshot'; tag?: string; analyzeWithVision?: boolean; speedMode?: string }
   | { type: 'findAndClick'; locator: { description: string; strategy?: string }; timeoutMs?: number }
-  | { type: 'log'; level: string; message: string };
+  | { type: 'log'; level: string; message: string }
+  | { type: 'pressKey'; key: string }
+  | { type: 'end'; reason?: string };
 
 interface ExecutionCallbacks {
   onStepStart?: (step: AutomationStep, index: number) => void;
@@ -53,6 +65,19 @@ interface ExecutionCallbacks {
   onComplete?: () => void;
   onPause?: () => void;
   onResume?: () => void;
+  onReplanNeeded?: (context: {
+    failedStep: AutomationStep;
+    stepIndex: number;
+    error: string;
+    screenshot?: string;
+    previousPlan: AutomationPlan;
+  }) => void;
+  onUserInputNeeded?: (context: {
+    questionId?: string;
+    message: string;
+    step: AutomationStep;
+    stepIndex: number;
+  }) => void;
 }
 
 export class PlanInterpreter {
@@ -88,26 +113,304 @@ export class PlanInterpreter {
       console.log(`🤖 [INTERPRETER] Starting step ${i + 1}/${this.plan.steps.length}:`, step.description);
       callbacks.onStepStart?.(step, i);
 
-      try {
-        await this.executeStep(step);
+      // Retry logic - trigger replan on first failure
+      const maxAttempts = step.retry?.maxAttempts || 1;
+      let lastError: Error | null = null;
+      let attemptNumber = 0;
 
-        console.log(`✅ [INTERPRETER] Completed step ${i + 1}:`, step.description);
-        callbacks.onStepComplete?.(step, i);
+      for (attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber++) {
+        try {
+          await this.executeStep(step);
 
-        // Wait after step if specified
-        if (step.waitAfter) {
-          await capabilities.wait(step.waitAfter);
+          // Verify critical steps that need validation
+          const needsVerification = this.shouldVerifyStep(step);
+          if (needsVerification) {
+            console.log(`🔍 [INTERPRETER] Verifying step ${i + 1}...`);
+            
+            const verification = await capabilities.verifyStepWithVision(
+              this.getExpectedState(step),
+              step.description
+            );
+            
+            if (!verification.verified) {
+              const errorMsg = `Step verification failed: ${verification.reasoning} (confidence: ${verification.confidence})`;
+              const errorStrategy = step.onError?.strategy || 'fail_plan';
+              
+              // Check if any downstream steps depend on this one
+              const hasDownstreamDependents = this.plan.steps.some((s, idx) => 
+                idx > i && s.dependsOn?.includes(step.id)
+              );
+              
+              // If skip_step but has dependents, we should replan instead of continuing blindly
+              if (errorStrategy === 'skip_step' && hasDownstreamDependents) {
+                console.warn(`⚠️  [INTERPRETER] ${errorMsg} - strategy is skip_step but downstream steps depend on this, triggering replan`);
+                throw new Error(errorMsg);
+              } else if (errorStrategy === 'skip_step') {
+                console.warn(`⚠️  [INTERPRETER] ${errorMsg} - strategy is skip_step and no dependents, continuing...`);
+              } else {
+                // For replan or fail_plan strategies, throw error to trigger replan
+                console.error(`❌ [INTERPRETER] ${errorMsg}`);
+                throw new Error(errorMsg);
+              }
+            } else {
+              console.log(`✅ [INTERPRETER] Step verified (confidence: ${verification.confidence})`);
+            }
+          }
+
+          console.log(`✅ [INTERPRETER] Completed step ${i + 1}:`, step.description);
+          callbacks.onStepComplete?.(step, i);
+
+          // Wait after step if specified
+          if (step.waitAfter) {
+            await capabilities.wait(step.waitAfter);
+          }
+
+          // Success - break out of retry loop
+          lastError = null;
+          break;
+        } catch (error: any) {
+          lastError = error;
+          console.error(`❌ [INTERPRETER] Step ${i + 1} attempt ${attemptNumber}/${maxAttempts} failed:`, error.message);
+          
+          // Trigger replan on FIRST failure - ALL strategies trigger replan
+          if (attemptNumber === 1) {
+            console.log(`🔄 [INTERPRETER] First attempt failed - capturing screenshot for replan`);
+            try {
+              const screenshot = await capabilities.captureScreenshot();
+              console.log(`📸 [INTERPRETER] Screenshot captured for replan context`);
+              
+              const errorStrategy = step.onError?.strategy || 'fail_plan';
+              console.log(`🔄 [INTERPRETER] Triggering replan with screenshot (strategy: ${errorStrategy})`);
+              
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onReplanNeeded?.({
+                failedStep: step,
+                stepIndex: i,
+                error: error.message,
+                screenshot: screenshot,
+                previousPlan: this.plan
+              });
+              throw error; // Stop execution, wait for replan
+            } catch (screenshotError) {
+              console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
+              // If screenshot fails, still throw to stop execution
+              throw error;
+            }
+          }
+          
+          // If this was the last attempt, handle error strategy
+          if (attemptNumber >= maxAttempts) {
+            console.error(`🛑 [INTERPRETER] All ${maxAttempts} attempts exhausted for step ${i + 1}`);
+            
+            // Check error strategy
+            const errorStrategy = step.onError?.strategy || 'fail_plan';
+            console.log(`📋 [INTERPRETER] Error strategy: ${errorStrategy}`);
+            
+            if (errorStrategy === 'replan') {
+              // Trigger replanning
+              console.log(`🔄 [INTERPRETER] Triggering replanning due to step failure`);
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onReplanNeeded?.({
+                failedStep: step,
+                stepIndex: i,
+                error: error.message,
+                screenshot: (step as any)._retryScreenshot,
+                previousPlan: this.plan
+              });
+              throw error;
+            } else if (errorStrategy === 'ask_user') {
+              // Ask user for guidance
+              console.log(`❓ [INTERPRETER] Asking user for guidance`);
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onUserInputNeeded?.({
+                questionId: step.onError?.questionId,
+                message: step.onError?.message || error.message,
+                step: step,
+                stepIndex: i
+              });
+              throw error;
+            } else {
+              // fail_plan or skip_step
+              callbacks.onStepFailed?.(step, i, error.message);
+              throw error;
+            }
+          }
+          // Continue to next retry attempt
         }
-      } catch (error: any) {
-        console.error(`❌ [INTERPRETER] Step ${i + 1} failed:`, error.message, error);
-        callbacks.onStepFailed?.(step, i, error.message);
+      }
 
-        // Handle error based on strategy
-        const strategy = step.onError?.strategy || 'fail_plan';
-        if (strategy === 'fail_plan') {
-          throw error;
+      // If we still have an error after all retries, throw it
+      if (lastError) {
+        throw lastError;
+      }
+    }
+
+    callbacks.onComplete?.();
+  }
+
+  /**
+   * Resume execution from a specific step index
+   * Used for continuing after replanning or fixing a failed step
+   * @param startIndex - Step index to resume from (0-based)
+   * @param callbacks - Execution callbacks
+   */
+  async resumeFrom(startIndex: number, callbacks: ExecutionCallbacks): Promise<void> {
+    console.log(`▶️  [INTERPRETER] Resuming execution from step ${startIndex + 1}/${this.plan.steps.length}`);
+    
+    // Validate start index
+    if (startIndex < 0 || startIndex >= this.plan.steps.length) {
+      throw new Error(`Invalid start index: ${startIndex}. Plan has ${this.plan.steps.length} steps.`);
+    }
+    
+    // Execute from startIndex to end
+    for (let i = startIndex; i < this.plan.steps.length; i++) {
+      // Check if cancelled
+      if (this.isCancelled) {
+        throw new Error('Automation cancelled by user');
+      }
+
+      // Wait if paused
+      while (this.isPaused) {
+        await capabilities.wait(100);
+        if (this.isCancelled) {
+          throw new Error('Automation cancelled by user');
         }
-        // For 'continue' strategy, just move to next step
+      }
+
+      const step = this.plan.steps[i];
+
+      console.log(`🤖 [INTERPRETER] Starting step ${i + 1}/${this.plan.steps.length}:`, step.description);
+      callbacks.onStepStart?.(step, i);
+
+      // Retry logic - trigger replan on first failure
+      const maxAttempts = step.retry?.maxAttempts || 1;
+      let lastError: Error | null = null;
+      let attemptNumber = 0;
+
+      for (attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber++) {
+        try {
+          await this.executeStep(step);
+
+          // Verify critical steps that need validation
+          const needsVerification = this.shouldVerifyStep(step);
+          if (needsVerification) {
+            console.log(`🔍 [INTERPRETER] Verifying step ${i + 1}...`);
+            
+            const verification = await capabilities.verifyStepWithVision(
+              this.getExpectedState(step),
+              step.description
+            );
+            
+            if (!verification.verified) {
+              const errorMsg = `Step verification failed: ${verification.reasoning} (confidence: ${verification.confidence})`;
+              const errorStrategy = step.onError?.strategy || 'fail_plan';
+              
+              // Check if any downstream steps depend on this one
+              const hasDownstreamDependents = this.plan.steps.some((s, idx) => 
+                idx > i && s.dependsOn?.includes(step.id)
+              );
+              
+              // If skip_step but has dependents, we should replan instead of continuing blindly
+              if (errorStrategy === 'skip_step' && hasDownstreamDependents) {
+                console.warn(`⚠️  [INTERPRETER] ${errorMsg} - strategy is skip_step but downstream steps depend on this, triggering replan`);
+                throw new Error(errorMsg);
+              } else if (errorStrategy === 'skip_step') {
+                console.warn(`⚠️  [INTERPRETER] ${errorMsg} - strategy is skip_step and no dependents, continuing...`);
+              } else {
+                // For replan or fail_plan strategies, throw error to trigger replan
+                console.error(`❌ [INTERPRETER] ${errorMsg}`);
+                throw new Error(errorMsg);
+              }
+            } else {
+              console.log(`✅ [INTERPRETER] Step verified (confidence: ${verification.confidence})`);
+            }
+          }
+
+          console.log(`✅ [INTERPRETER] Completed step ${i + 1}:`, step.description);
+          callbacks.onStepComplete?.(step, i);
+
+          // Wait after step if specified
+          if (step.waitAfter) {
+            await capabilities.wait(step.waitAfter);
+          }
+
+          // Success - break out of retry loop
+          lastError = null;
+          break;
+        } catch (error: any) {
+          lastError = error;
+          console.error(`❌ [INTERPRETER] Step ${i + 1} attempt ${attemptNumber}/${maxAttempts} failed:`, error.message);
+          
+          // Trigger replan on FIRST failure - ALL strategies trigger replan
+          if (attemptNumber === 1) {
+            console.log(`🔄 [INTERPRETER] First attempt failed - capturing screenshot for replan`);
+            try {
+              const screenshot = await capabilities.captureScreenshot();
+              console.log(`📸 [INTERPRETER] Screenshot captured for replan context`);
+              
+              const errorStrategy = step.onError?.strategy || 'fail_plan';
+              console.log(`🔄 [INTERPRETER] Triggering replan with screenshot (strategy: ${errorStrategy})`);
+              
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onReplanNeeded?.({
+                failedStep: step,
+                stepIndex: i,
+                error: error.message,
+                screenshot: screenshot,
+                previousPlan: this.plan
+              });
+              throw error; // Stop execution, wait for replan
+            } catch (screenshotError) {
+              console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
+              // If screenshot fails, still throw to stop execution
+              throw error;
+            }
+          }
+          
+          // If this was the last attempt, handle error strategy
+          if (attemptNumber >= maxAttempts) {
+            console.error(`🛑 [INTERPRETER] All ${maxAttempts} attempts exhausted for step ${i + 1}`);
+            
+            // Check error strategy
+            const errorStrategy = step.onError?.strategy || 'fail_plan';
+            console.log(`📋 [INTERPRETER] Error strategy: ${errorStrategy}`);
+            
+            if (errorStrategy === 'replan') {
+              // Trigger replanning
+              console.log(`🔄 [INTERPRETER] Triggering replanning due to step failure`);
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onReplanNeeded?.({
+                failedStep: step,
+                stepIndex: i,
+                error: error.message,
+                screenshot: (step as any)._retryScreenshot,
+                previousPlan: this.plan
+              });
+              throw error;
+            } else if (errorStrategy === 'ask_user') {
+              // Ask user for guidance
+              console.log(`❓ [INTERPRETER] Asking user for guidance`);
+              callbacks.onStepFailed?.(step, i, error.message);
+              callbacks.onUserInputNeeded?.({
+                questionId: step.onError?.questionId,
+                message: step.onError?.message || error.message,
+                step: step,
+                stepIndex: i
+              });
+              throw error;
+            } else {
+              // fail_plan or skip_step
+              callbacks.onStepFailed?.(step, i, error.message);
+              throw error;
+            }
+          }
+          // Continue to next retry attempt
+        }
+      }
+
+      // If we still have an error after all retries, throw it
+      if (lastError) {
+        throw lastError;
       }
     }
 
@@ -117,7 +420,7 @@ export class PlanInterpreter {
   /**
    * Execute a single automation step
    */
-  private async executeStep(step: AutomationStep): Promise<void> {
+  async executeStep(step: AutomationStep): Promise<void> {
     const { kind } = step;
 
     console.log(`🔧 [INTERPRETER] Executing step type: ${kind.type}`, kind);
@@ -139,12 +442,33 @@ export class PlanInterpreter {
 
       case 'click':
         if (kind.x !== undefined && kind.y !== undefined) {
+          // Send ghost mouse move event for visual feedback
+          capabilities.sendGhostMouseMove(kind.x, kind.y);
+          await capabilities.wait(500); // Wait for ghost animation
+          
+          // Send ghost click event
+          capabilities.sendGhostMouseClick(kind.x, kind.y);
+          
+          // Perform actual click
           await capabilities.clickAt(kind.x, kind.y);
         } else if (this.lastCoordinates) {
+          // Send ghost mouse move event for visual feedback
+          capabilities.sendGhostMouseMove(this.lastCoordinates.x, this.lastCoordinates.y);
+          await capabilities.wait(500); // Wait for ghost animation
+          
+          // Send ghost click event
+          capabilities.sendGhostMouseClick(this.lastCoordinates.x, this.lastCoordinates.y);
+          
+          // Perform actual click
           await capabilities.clickAt(this.lastCoordinates.x, this.lastCoordinates.y);
         } else {
           throw new Error('No coordinates available for click');
         }
+        break;
+
+      case 'scroll':
+        console.log(`🖱️  [INTERPRETER] Scrolling ${kind.direction || 'down'} by ${kind.amount || 5} steps`);
+        await capabilities.scroll(kind.amount || 5, kind.direction || 'down');
         break;
 
       case 'pause':
@@ -171,8 +495,37 @@ export class PlanInterpreter {
       case 'findAndClick':
         // Find element using vision and click it
         console.log(`🔍 [INTERPRETER] Finding and clicking: ${kind.locator.description}`);
-        // For now, just wait - will implement vision-based clicking in Phase 2
-        await capabilities.wait(500);
+        
+        try {
+          // Use Vision API to find the element
+          const coords = await capabilities.findElementWithVision(
+            kind.locator.description,
+            kind.locator.strategy
+          );
+          
+          console.log(`✅ [INTERPRETER] Found element at (${coords.x}, ${coords.y})`);
+          
+          // Store coordinates for potential retry
+          this.lastCoordinates = coords;
+          
+          // Send ghost mouse move event for visual feedback
+          console.log(`👻 [INTERPRETER] Sending ghost mouse move to (${coords.x}, ${coords.y})`);
+          capabilities.sendGhostMouseMove(coords.x, coords.y);
+          await capabilities.wait(800); // Wait for ghost animation to reach target
+          
+          // Send ghost click event
+          console.log(`👻 [INTERPRETER] Sending ghost mouse click at (${coords.x}, ${coords.y})`);
+          capabilities.sendGhostMouseClick(coords.x, coords.y);
+          await capabilities.wait(200);
+          
+          // Perform actual click
+          await capabilities.clickAt(coords.x, coords.y);
+          
+          console.log(`🖱️  [INTERPRETER] Clicked at (${coords.x}, ${coords.y})`);
+        } catch (error: any) {
+          console.error(`❌ [INTERPRETER] Failed to find/click element:`, error.message);
+          throw new Error(`Could not find element: ${kind.locator.description}`);
+        }
         break;
 
       case 'typeText':
@@ -190,8 +543,80 @@ export class PlanInterpreter {
         console.log(`📝 [INTERPRETER] ${kind.level.toUpperCase()}: ${kind.message}`);
         break;
 
+      case 'pressKey':
+        // Press a single key or key combination with modifiers
+        if ((kind as any).modifiers && (kind as any).modifiers.length > 0) {
+          // Has modifiers like Cmd+A, Cmd+C
+          const keys = [...(kind as any).modifiers, kind.key];
+          console.log(`⌨️  [INTERPRETER] Pressing hotkey: ${keys.join('+')}`);
+          await capabilities.pressHotkey(keys);
+        } else {
+          // Single key press
+          console.log(`⌨️  [INTERPRETER] Pressing key: ${kind.key}`);
+          await capabilities.pressHotkey([kind.key]);
+        }
+        break;
+
+      case 'end':
+        // End of automation plan
+        console.log(`🏁 [INTERPRETER] Plan completed: ${kind.reason || 'success'}`);
+        break;
+
       default:
         throw new Error(`Unknown step type: ${(kind as any).type}`);
+    }
+  }
+
+  /**
+   * Determine if a step needs verification
+   */
+  private shouldVerifyStep(step: AutomationStep): boolean {
+    const { kind } = step;
+    
+    // Verify steps that interact with UI or change state
+    const verifiableTypes = [
+      'findAndClick',  // Did we actually click the right element?
+      'click',         // Did the click at coordinates have an effect?
+      'openUrl',       // Did the URL load?
+      'focusApp',      // Is the app actually focused?
+      'typeText',      // Was the text typed correctly?
+      'waitForElement' // Did the element appear?
+    ];
+    
+    return verifiableTypes.includes(kind.type);
+  }
+
+  /**
+   * Get expected state description for verification
+   */
+  private getExpectedState(step: AutomationStep): string {
+    const { kind, description } = step;
+    
+    switch (kind.type) {
+      case 'findAndClick':
+        return `Element "${kind.locator.description}" should be clicked and any resulting action should be visible`;
+      
+      case 'click':
+        return `Click at coordinates (${kind.x}, ${kind.y}) should have triggered a visible action or state change`;
+      
+      case 'openUrl':
+        return `Browser should show the page at ${kind.url}`;
+      
+      case 'focusApp':
+        return `${kind.appName} application should be in focus and visible`;
+      
+      case 'typeText':
+        // For long text, provide a summary instead of truncating mid-sentence
+        if (kind.text.length > 100) {
+          return `Text input field should contain the typed content (${kind.text.length} characters starting with "${kind.text.substring(0, 40)}...")`;
+        }
+        return `Text "${kind.text}" should be visible in the focused input field`;
+      
+      case 'waitForElement':
+        return `Element "${kind.locator.description}" should be visible on screen`;
+      
+      default:
+        return description || 'Step should be completed successfully';
     }
   }
 

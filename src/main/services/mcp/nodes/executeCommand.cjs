@@ -7,7 +7,7 @@
 
 const logger = require('./../../../logger.cjs');
 module.exports = async function executeCommand(state) {
-  const { message, resolvedMessage, intent, context, mcpClient } = state;
+  const { message, resolvedMessage, intent, context, mcpClient, conversationHistory = [] } = state;
   
   // Handle all command sub-types
   const commandTypes = ['command_execute', 'command_automate', 'command_guide'];
@@ -17,6 +17,25 @@ module.exports = async function executeCommand(state) {
   
   // Use resolved message if available (after coreference resolution), otherwise use original
   const commandMessage = resolvedMessage || message;
+  
+  // Check if this is a follow-up to a clarification request
+  // Look for the most recent assistant message with needsClarification
+  let previousClarificationContext = null;
+  for (let i = conversationHistory.length - 1; i >= 0; i--) {
+    const msg = conversationHistory[i];
+    if (msg.role === 'assistant' && msg.metadata?.needsClarification) {
+      previousClarificationContext = {
+        originalCommand: msg.metadata.originalCommand,
+        clarificationQuestions: msg.metadata.clarificationQuestions,
+        timestamp: msg.timestamp
+      };
+      logger.debug('🔄 [NODE:EXECUTE_COMMAND] Detected follow-up to clarification request', {
+        originalCommand: previousClarificationContext.originalCommand,
+        questionCount: previousClarificationContext.clarificationQuestions?.length || 0
+      });
+      break;
+    }
+  }
   
   try {
     logger.debug(`⚡ [NODE:EXECUTE_COMMAND] Executing ${intent.type} via MCP:`, commandMessage);
@@ -36,22 +55,74 @@ module.exports = async function executeCommand(state) {
       logger.debug('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected - generating plan');
       
       try {
+        // Prepare request payload
+        const requestPayload = {
+          command: commandMessage,
+          intent: 'command_automate',
+          context: {
+            os: process.platform,
+            userId: context.userId,
+            sessionId: context.sessionId
+          }
+        };
+        
+        // If this is a follow-up to a clarification request, include clarification context
+        if (previousClarificationContext) {
+          logger.info('🔄 [NODE:EXECUTE_COMMAND] Including clarification context for replanning');
+          
+          // Use the original command that needed clarification
+          requestPayload.command = previousClarificationContext.originalCommand;
+          
+          // Include the user's clarification answer as feedback
+          requestPayload.clarificationAnswers = {
+            userResponse: commandMessage, // The current message is the clarification answer
+            questions: previousClarificationContext.clarificationQuestions
+          };
+          
+          logger.debug('📝 [NODE:EXECUTE_COMMAND] Replanning with:', {
+            originalCommand: requestPayload.command,
+            clarificationAnswer: commandMessage
+          });
+        }
+        
         // Call command.automate which now returns a plan instead of executing
         const commandTimeout = parseInt(process.env.MCP_COMMAND_TIMEOUT || '60000');
         const result = await mcpClient.callService(
           'command',
           'command.automate',
-          {
-            command: commandMessage,
-            intent: 'command_automate',
-            context: {
-              os: process.platform,
-              userId: context.userId,
-              sessionId: context.sessionId
-            }
-          },
+          requestPayload,
           { timeout: commandTimeout }
         );
+        
+        // Handle clarification needed
+        if (result.success && result.needsClarification) {
+          logger.info('🤔 [NODE:EXECUTE_COMMAND] Backend needs clarification');
+          
+          const questions = result.clarificationQuestions || [];
+          const questionText = questions.map((q, i) => `${i + 1}. ${q.question || q.text || q}`).join('\n');
+          
+          const userFriendlyMessage = `I need some clarification before I can automate this task:\n\n` +
+            `${questionText}\n\n` +
+            `Please provide more details and try again.`;
+          
+          // Populate intentContext.slots for overlay system
+          const intentContext = state.intentContext || { intent: intent.type, slots: {}, uiVariant: null };
+          intentContext.slots = {
+            ...intentContext.slots,
+            needsClarification: true,
+            clarificationQuestions: questions,
+            subject: resolvedMessage || message
+          };
+          
+          return {
+            ...state,
+            answer: userFriendlyMessage,
+            commandExecuted: false,
+            needsClarification: true,
+            clarificationQuestions: questions,
+            intentContext: intentContext
+          };
+        }
         
         if (!result.success || !result.plan) {
           logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Plan generation failed:', result.error);

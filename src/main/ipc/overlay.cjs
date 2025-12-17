@@ -38,6 +38,12 @@ let chatWindowState = {
   isVisible: false
 };
 
+// Automation state
+let automationState = {
+  hasAutomation: false,
+  isVisible: true
+};
+
 // Toggle lock to prevent rapid successive toggles
 let chatToggleLock = false;
 
@@ -300,6 +306,11 @@ function sendOverlayUpdate(payload) {
     notifyCommandExecuteResults();
   }
   
+  // If this is an automation progress, notify PromptBar
+  if (payload.intent === 'command_automate' && payload.uiVariant === 'automation_progress') {
+    notifyAutomationProgress();
+  }
+  
   // Show the intent window when sending payload
   if (!intentWindow.isVisible()) {
     intentWindow.show();
@@ -400,6 +411,73 @@ function notifyWebSearchResults() {
     intentWindow.webContents.send('command-execute:state', commandExecuteState);
   }
 }
+
+/**
+ * Notify that automation is in progress
+ * Called when sending overlay update with automation_progress
+ */
+function notifyAutomationProgress() {
+  automationState.hasAutomation = true;
+  
+  logger.debug('📊 [OVERLAY:IPC] Automation in progress, notifying PromptBar');
+  
+  // 🎯 CONDITIONAL DISPLAY: Only show intent window if chat window is NOT visible
+  if (chatWindowState.isVisible) {
+    logger.debug('💬 [OVERLAY:IPC] Chat window is open - keeping automation in chat, not showing intent overlay');
+    automationState.isVisible = false;
+  } else {
+    logger.debug('🚫 [OVERLAY:IPC] Chat window closed - showing automation intent overlay');
+    automationState.isVisible = true;
+    webSearchState.isVisible = false;
+    screenIntelligenceState.isVisible = false;
+    commandExecuteState.isVisible = false;
+  }
+  
+  // Notify prompt window of all state changes
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('automation:state', automationState);
+    promptWindow.webContents.send('chat-window:state', chatWindowState);
+    promptWindow.webContents.send('web-search:state', webSearchState);
+    promptWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+    promptWindow.webContents.send('command-execute:state', commandExecuteState);
+  }
+  
+  // Notify intent window to hide other intent components
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('web-search:state', webSearchState);
+    intentWindow.webContents.send('screen-intelligence:state', screenIntelligenceState);
+    intentWindow.webContents.send('command-execute:state', commandExecuteState);
+  }
+}
+
+/**
+ * Handle automation toggle from PromptBar
+ */
+ipcMain.on('automation:toggle', (event) => {
+  logger.debug('🔄 [OVERLAY:IPC] Automation toggle requested');
+  
+  // Toggle visibility
+  automationState.isVisible = !automationState.isVisible;
+  
+  logger.debug(`📊 [OVERLAY:IPC] Automation visibility: ${automationState.isVisible}`);
+  
+  // Notify PromptBar of state change
+  if (promptWindow && !promptWindow.isDestroyed()) {
+    promptWindow.webContents.send('automation:state', automationState);
+  }
+  
+  // Notify Intent window of visibility change
+  if (intentWindow && !intentWindow.isDestroyed()) {
+    intentWindow.webContents.send('automation:set-visibility', automationState.isVisible);
+    
+    // Hide or show the window
+    if (automationState.isVisible) {
+      intentWindow.show();
+    } else {
+      intentWindow.hide();
+    }
+  }
+});
 
 /**
  * Handle screen intelligence toggle from PromptBar or ScreenIntelligenceResults

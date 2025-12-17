@@ -77,6 +77,9 @@ export default function OverlayRenderer({ payload, onEvent }: OverlayRendererPro
             return <WebSearchLoading payload={payload} />;
           case 'automation_progress':
             return <CommandAutomateProgress payload={payload} onEvent={onEvent} />;
+          case 'results':
+            // Show clarification questions or final results
+            return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
           case 'error':
             return <CommandExecuteResults payload={payload} onEvent={onEvent} />;
           default:

@@ -113,6 +113,11 @@ module.exports = async function selectOverlayVariant(state) {
         state.intentContext.uiVariant = 'error';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
       }
+      else if (state.needsClarification || slots.needsClarification) {
+        // Backend needs clarification - show as a message/results view
+        state.intentContext.uiVariant = 'results';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (needs clarification)`);
+      }
       else if (slots.automationPlan && slots.steps) {
         state.intentContext.uiVariant = 'automation_progress';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (${slots.totalSteps} steps)`);

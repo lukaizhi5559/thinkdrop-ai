@@ -40,6 +40,12 @@ export default function GhostOverlay() {
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [banner, setBanner] = useState<BannerNotification | null>(null);
 
+  // Log component mount
+  useEffect(() => {
+    console.log('🎨 [GHOST] GhostOverlay component mounted!');
+    return () => console.log('👋 [GHOST] GhostOverlay component unmounted');
+  }, []);
+
   // Smooth animation to target position during automation
   useEffect(() => {
     if (!isAutomating) return;
@@ -104,25 +110,29 @@ export default function GhostOverlay() {
 
   // Listen for automation events
   useEffect(() => {
-    if (!ipcRenderer) return;
+    console.log('🔧 [GHOST] Setting up IPC listeners, ipcRenderer available:', !!ipcRenderer);
+    if (!ipcRenderer) {
+      console.error('❌ [GHOST] IPC renderer not available!');
+      return;
+    }
 
     const handleAutomationStart = () => {
-      console.log('🤖 [GHOST] Automation started');
+      console.log('🤖 [GHOST] ===== AUTOMATION STARTED =====');
       setIsAutomating(true);
     };
 
     const handleAutomationEnd = () => {
-      console.log('✅ [GHOST] Automation ended');
+      console.log('✅ [GHOST] ===== AUTOMATION ENDED =====');
       setIsAutomating(false);
     };
 
     const handleMouseMove = (_event: any, data: { x: number; y: number }) => {
-      console.log('🖱️  [GHOST] Mouse move to:', data);
+      console.log(`👻 [GHOST] Mouse move to: (${data.x}, ${data.y})`);
       setTargetPos({ x: data.x, y: data.y });
     };
 
     const handleMouseClick = (_event: any, data: { x: number; y: number }) => {
-      console.log('🖱️  [GHOST] Mouse click at:', data);
+      console.log(`🖱️  [GHOST] Mouse CLICK at: (${data.x}, ${data.y})`);
       setTargetPos({ x: data.x, y: data.y });
       setIsClicking(true);
       setTimeout(() => setIsClicking(false), 300);
@@ -132,8 +142,11 @@ export default function GhostOverlay() {
     ipcRenderer.on('automation:ended', handleAutomationEnd);
     ipcRenderer.on('ghost:mouse-move', handleMouseMove);
     ipcRenderer.on('ghost:mouse-click', handleMouseClick);
+    
+    console.log('✅ [GHOST] IPC listeners registered successfully');
 
     return () => {
+      console.log('🧹 [GHOST] Cleaning up IPC listeners');
       if (ipcRenderer.removeListener) {
         ipcRenderer.removeListener('automation:started', handleAutomationStart);
         ipcRenderer.removeListener('automation:ended', handleAutomationEnd);

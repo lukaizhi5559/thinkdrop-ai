@@ -65,24 +65,24 @@ const MCPPanel: React.FC<MCPPanelProps> = ({ isOpen }) => {
           }
         ]
       },
-      {
-        id: 'vision-service',
-        name: 'Vision Service',
-        description: 'Screen capture, OCR, and visual understanding with Google Vision API',
-        enabled: true,
-        connected: true,
-        toolCount: 6,
-        icon: '👁️',
-        status: 'connected',
-        requiresAuth: true,
-        authenticated: false, // Will be updated from API
-        settings: [
-          {
-            label: 'Connect to Google Vision',
-            action: () => handleVisionOAuth()
-          }
-        ]
-      },
+      // {
+      //   id: 'vision-service',
+      //   name: 'Vision Service',
+      //   description: 'Screen capture, OCR, and visual understanding with Google Vision API',
+      //   enabled: true,
+      //   connected: true,
+      //   toolCount: 6,
+      //   icon: '👁️',
+      //   status: 'connected',
+      //   requiresAuth: true,
+      //   authenticated: false, // Will be updated from API
+      //   settings: [
+      //     {
+      //       label: 'Connect to Google Vision',
+      //       action: () => handleVisionOAuth()
+      //     }
+      //   ]
+      // },
       {
         id: 'conversation-service',
         name: 'Conversation Service',

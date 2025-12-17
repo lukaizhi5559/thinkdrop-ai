@@ -244,14 +244,28 @@ module.exports = async function storeConversation(state) {
       const sessionId = context?.sessionId || 'default_session';
       logger.debug('💾 [NODE:STORE_CONVERSATION] Storing AI response to conversation service, session:', sessionId);
       
+      // Build metadata - include clarification context if present
+      const metadata = {
+        intentType: intent?.type,
+        entities: entities.slice(0, 10) // Include first 10 entities
+      };
+      
+      // If this is a clarification request, store the context for replanning
+      if (state.needsClarification) {
+        metadata.needsClarification = true;
+        metadata.originalCommand = message; // Store the original command
+        metadata.clarificationQuestions = state.clarificationQuestions || [];
+        logger.debug('🤔 [NODE:STORE_CONVERSATION] Storing clarification context for replanning', {
+          originalCommand: message,
+          questionCount: metadata.clarificationQuestions.length
+        });
+      }
+      
       await mcpClient.callService('conversation', 'message.add', {
         sessionId,
         text: answer,
         sender: 'ai',
-        metadata: {
-          intentType: intent?.type,
-          entities: entities.slice(0, 10) // Include first 10 entities
-        }
+        metadata
       });
       
       logger.debug('✅ [NODE:STORE_CONVERSATION] AI response stored successfully');

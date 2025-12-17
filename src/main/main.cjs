@@ -1218,7 +1218,18 @@ async function setupIPCHandlers() {
     
     // Initialize Automation handlers
     logger.debug('🤖 Setting up Automation handlers...');
-    registerAutomationHandlers(mcpClient);
+    // Create overlay manager object to pass to automation handlers
+    const overlayManager = {
+      intentOverlay: intentOverlayWindow,
+      promptOverlay: promptOverlayWindow,
+      ghostOverlay: ghostOverlayWindow,
+      sendToIntent: (channel, data) => {
+        if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+          intentOverlayWindow.webContents.send(channel, data);
+        }
+      }
+    };
+    registerAutomationHandlers(mcpClient, overlayManager);
     logger.debug('✅ Automation handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
