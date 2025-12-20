@@ -54,9 +54,6 @@ try {
     format: winston.format.combine(
       winston.format.timestamp(),
       winston.format.printf(({ timestamp, planId, command, stepCount, provider, fullPlan }) => {
-        // Only log if this is an automation plan entry
-        if (!fullPlan) return '';
-        
         return JSON.stringify({
           timestamp,
           planId,
@@ -81,6 +78,8 @@ try {
  * @param {string} command - Original command
  */
 logger.logAutomationPlan = function(plan, command) {
+  if (!plan) return;
+  
   this.info('🤖 [AUTOMATION_PLAN]', {
     timestamp: new Date().toISOString(),
     planId: plan.planId,

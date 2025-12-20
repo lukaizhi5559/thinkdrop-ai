@@ -162,7 +162,7 @@ function createOverlayWindow() {
   
   overlayWindow.loadURL(
     process.env.NODE_ENV === 'development'
-      ? 'http://localhost:5173/src/renderer/index.html'
+      ? 'http://localhost:5173/src/overlay/index.html'
       : `file://${path.join(__dirname, '../../dist-renderer/index.html')}`
   );
 
@@ -372,7 +372,8 @@ function createIntentOverlay() {
   // Start with compact size for loading indicator, will resize dynamically for results
   const initialWidth = Math.floor(width * 0.6); // 60% of screen width
   // const initialWidth = 400; // Compact for loading message
-  const initialHeight = 120; // Just enough for loading indicator
+  const initialHeight = 400; // Just enough for loading indicator
+  const y = Math.floor(height - 420); // Small margin from top
   
   intentOverlayWindow = new BrowserWindow({
     width: initialWidth,
@@ -382,7 +383,7 @@ function createIntentOverlay() {
     maxWidth: Math.floor(width * 0.9), // Max 90% of screen
     maxHeight: Math.floor(height * 0.9),
     x: Math.floor((width - initialWidth) / 2), // Center horizontally
-    y: Math.floor((height - initialHeight) / 2), // Center vertically - component will reposition as needed
+    y, // Math.floor((height - initialHeight) / 2), // Center vertically - component will reposition as needed
     transparent: true,
     frame: false,
     alwaysOnTop: true,

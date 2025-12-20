@@ -108,7 +108,7 @@ module.exports = async function selectOverlayVariant(state) {
       break;
     
     case 'command_automate':
-      // Automation with structured plan - show progress UI
+      // Automation with structured plan or Computer Use streaming - show progress UI
       if (slots.error || slots.errorMessage) {
         state.intentContext.uiVariant = 'error';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → error (has error)`);
@@ -118,7 +118,13 @@ module.exports = async function selectOverlayVariant(state) {
         state.intentContext.uiVariant = 'results';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (needs clarification)`);
       }
+      else if (slots.mode === 'computer-use-streaming') {
+        // Computer Use streaming mode - show progress UI
+        state.intentContext.uiVariant = 'automation_progress';
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (Computer Use streaming)`);
+      }
       else if (slots.automationPlan && slots.steps) {
+        // Static plan mode - show progress UI
         state.intentContext.uiVariant = 'automation_progress';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (${slots.totalSteps} steps)`);
       }

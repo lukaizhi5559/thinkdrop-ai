@@ -9,6 +9,7 @@ import { OverlayPayload } from '../../../../types/overlay-intents';
 import { Play, Pause, X, CheckCircle, Loader2, AlertCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { PlanInterpreter } from '../../automation/interpreter';
+import { ComputerUseClient, ClarificationQuestion } from '../../automation/ComputerUseClient';
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
@@ -29,10 +30,20 @@ interface AutomationStep {
 
 export default function CommandAutomateProgress({ payload, onEvent }: CommandAutomateProgressProps) {
   const { slots } = payload;
+  
+  // Debug: Log component render and payload
+  console.log('🎬 [AUTOMATE] CommandAutomateProgress rendered', {
+    hasSlots: !!slots,
+    slotsKeys: slots ? Object.keys(slots) : [],
+    mode: slots?.mode,
+    goal: slots?.goal,
+    wsUrl: slots?.wsUrl
+  });
+  
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [status, setStatus] = useState<'running' | 'paused' | 'completed' | 'error'>('running');
   const [error, setError] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(true); // Visible initially for countdown
+  const [isVisible, setIsVisible] = useState(false); // Hidden by default in Computer Use mode
   const [showAllSteps, setShowAllSteps] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const interpreterRef = useRef<PlanInterpreter | null>(null);
@@ -47,6 +58,15 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const [replanAttempts, setReplanAttempts] = useState(0);
   const maxReplanAttempts = 3;
   const replanInFlightRef = useRef(false);
+  const computerUseClientRef = useRef<ComputerUseClient | null>(null);
+  
+  // AI Reasoning state (for Computer Use mode)
+  const [currentReasoning, setCurrentReasoning] = useState<string | null>(null);
+  const [currentActionType, setCurrentActionType] = useState<string | null>(null);
+  
+  // Clarification state
+  const [clarificationQuestions, setClarificationQuestions] = useState<ClarificationQuestion[]>([]);
+  const clarificationResolveRef = useRef<((answers: Record<string, string>) => void) | null>(null);
 
   // Get data from slots
   const steps: AutomationStep[] = slots.steps || [];
@@ -54,6 +74,21 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const goal = slots.goal || 'Automation in progress';
   const planId = slots.planId;
   const automationPlan = slots.automationPlan;
+  
+  // Check if this is Computer Use streaming mode
+  const mode = slots.mode;
+  const isComputerUseMode = mode === 'computer-use-streaming';
+  const wsUrl = slots.wsUrl;
+  const initialScreenshot = slots.screenshot;
+  const context = slots.context;
+  
+  console.log('🔍 [AUTOMATE] Mode detection:', {
+    mode,
+    isComputerUseMode,
+    wsUrl,
+    hasScreenshot: !!initialScreenshot,
+    hasContext: !!context
+  });
 
   // Function to trigger replanning
   const handleReplan = () => {
@@ -74,6 +109,32 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       requestPartialPlan: true
     });
   };
+
+  // Listen for screenshot hide/show events to prevent UI interference
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleHideForScreenshot = () => {
+      console.log('🙈 [AUTOMATE] Hiding UI for screenshot capture');
+      setIsVisible(false);
+    };
+
+    const handleShowAfterScreenshot = () => {
+      console.log('👁️ [AUTOMATE] Showing UI after screenshot capture');
+      // Only show if not in countdown or if automation is active
+      if (countdown === null || countdown <= 0) {
+        setIsVisible(true);
+      }
+    };
+
+    ipcRenderer.on('overlay:hide-for-screenshot', handleHideForScreenshot);
+    ipcRenderer.on('overlay:show-after-screenshot', handleShowAfterScreenshot);
+
+    return () => {
+      ipcRenderer.removeListener('overlay:hide-for-screenshot', handleHideForScreenshot);
+      ipcRenderer.removeListener('overlay:show-after-screenshot', handleShowAfterScreenshot);
+    };
+  }, [countdown]);
 
   // Listen for step progress events from main process
   useEffect(() => {
@@ -161,6 +222,21 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
 
   // Countdown timer before automation starts
   useEffect(() => {
+    // Computer Use mode: skip countdown and start immediately
+    if (isComputerUseMode && !automationStarted) {
+      console.log('🌐 [AUTOMATE] Computer Use mode - skipping countdown, starting immediately');
+      setIsVisible(false);
+      setAutomationStarted(true);
+      setCountdown(null);
+      
+      if (ipcRenderer) {
+        console.log('📤 [AUTOMATE] Sending automation:started to main process');
+        ipcRenderer.send('automation:started');
+      }
+      return;
+    }
+    
+    // Static plan mode: use countdown
     if (countdown === null || countdown <= 0 || automationStarted) return;
 
     const timer = setTimeout(() => {
@@ -170,35 +246,142 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       if (newCountdown === 0) {
         // Countdown finished - hide window and start automation
         console.log('⏱️  [AUTOMATE] Countdown finished - starting automation');
-        setIsVisible(false);
+        setIsVisible(false); // Hide during execution for clean screenshots
         setAutomationStarted(true);
         setCountdown(null);
         
         // Notify PromptBar that automation is now running (via main process)
         if (ipcRenderer) {
+          console.log('📤 [AUTOMATE] Sending automation:started to main process');
           ipcRenderer.send('automation:started');
         }
       }
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [countdown, automationStarted]);
+  }, [countdown, automationStarted, isComputerUseMode]);
 
-  // Execute automation plan
+  // Execute Computer Use streaming mode
+  useEffect(() => {
+    if (!isComputerUseMode || !automationStarted || !wsUrl) {
+      return;
+    }
+
+    console.log('🌐 [AUTOMATE] Starting Computer Use streaming mode');
+    
+    const client = new ComputerUseClient(wsUrl);
+    computerUseClientRef.current = client;
+
+    client.execute(goal, initialScreenshot, context, {
+      onAction: (action, iteration) => {
+        console.log(`🎬 [AUTOMATE] Executing action ${iteration}:`, action.type);
+        console.log(`💭 [AUTOMATE] AI Reasoning:`, action.reasoning);
+        
+        setCurrentStepIndex(iteration);
+        setStatus('running');
+        
+        // Capture reasoning and action type from backend
+        if (action.reasoning) {
+          setCurrentReasoning(action.reasoning);
+        }
+        setCurrentActionType(action.type);
+        
+        // Show action in UI
+        if (ipcRenderer) {
+          ipcRenderer.send('automation:step-started', {
+            planId: `computer-use-${Date.now()}`,
+            stepIndex: iteration,
+            totalSteps: 20 // Max iterations
+          });
+        }
+      },
+      onClarificationNeeded: async (questions, iteration) => {
+        console.log(`❓ [AUTOMATE] Clarification needed (iteration ${iteration}):`, questions);
+        
+        // Show clarification questions in compact card and wait for user input
+        return new Promise<Record<string, string>>((resolve) => {
+          setClarificationQuestions(questions);
+          clarificationResolveRef.current = resolve;
+          
+          // Send first question to prompt bar for user input
+          if (ipcRenderer && questions.length > 0) {
+            ipcRenderer.send('prompt-bar:request-clarification', {
+              question: questions.map((q, idx) => `Q${idx + 1}: ${q.question}`).join('\n\n'),
+              stepDescription: 'Computer Use Automation',
+              stepIndex: iteration,
+              questionId: questions[0].id
+            });
+          }
+          
+          // Keep status as running but show clarification UI
+          setStatus('running');
+        });
+      },
+      onComplete: (result) => {
+        console.log('✅ [AUTOMATE] Computer Use complete:', result);
+        setStatus('completed');
+        setIsVisible(true); // Show panel on completion
+        
+        if (ipcRenderer) {
+          ipcRenderer.send('automation:completed', { planId: `computer-use-${Date.now()}` });
+          ipcRenderer.send('automation:ended');
+        }
+      },
+      onError: (error) => {
+        console.error('❌ [AUTOMATE] Computer Use error:', error);
+        setStatus('error');
+        setError(error);
+        // Show panel only on error so user can see what went wrong
+        setIsVisible(true);
+        
+        if (ipcRenderer) {
+          ipcRenderer.send('automation:ended');
+        }
+      },
+      onStatus: (message) => {
+        console.log('ℹ️ [AUTOMATE] Status:', message);
+      }
+    }).catch((err) => {
+      console.error('❌ [AUTOMATE] Computer Use failed:', err);
+      setStatus('error');
+      setError(err.message);
+      // Show panel only on error so user can see what went wrong
+      setIsVisible(true);
+    });
+
+    return () => {
+      if (computerUseClientRef.current) {
+        computerUseClientRef.current.close();
+      }
+      
+      if (ipcRenderer) {
+        ipcRenderer.send('automation:ended');
+      }
+    };
+  }, [isComputerUseMode, automationStarted, wsUrl, goal, initialScreenshot, context]);
+
+  // Execute static automation plan
   useEffect(() => {
     console.log('🔍 [AUTOMATE] Execution useEffect triggered:', {
       hasAutomationPlan: !!automationPlan,
       stepsLength: steps.length,
       automationStarted,
-      countdown
+      countdown,
+      isComputerUseMode
     });
+    
+    // Skip if Computer Use mode
+    if (isComputerUseMode) {
+      console.log('⏸️  [AUTOMATE] Skipping static plan - using Computer Use mode');
+      return;
+    }
     
     if (!automationPlan || !steps.length || !automationStarted) {
       console.log('⏸️  [AUTOMATE] Skipping execution - conditions not met');
       return;
     }
 
-    console.log('🚀 [AUTOMATE] Starting automation execution!');
+    console.log('🚀 [AUTOMATE] Starting static plan execution!');
     
     // Create interpreter and start execution
     const interpreter = new PlanInterpreter(automationPlan);
@@ -257,11 +440,12 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       },
       onComplete: () => {
         setStatus('completed');
+        setIsVisible(true); // Keep window visible to show completion
         
         // Emit IPC event
         if (ipcRenderer) {
           ipcRenderer.send('automation:completed', { planId });
-          ipcRenderer.send('automation:ended');
+          // Don't send automation:ended - keep panel visible to show success
         }
       },
       onReplanNeeded: (context) => {
@@ -285,8 +469,14 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           return;
         }
         
-        // Mark replan as in-flight
+        // CRITICAL: Mark replan as in-flight FIRST to block all other replan attempts
         replanInFlightRef.current = true;
+        
+        // CRITICAL: Stop the interpreter immediately to prevent it from continuing execution
+        if (interpreterRef.current) {
+          console.log('🛑 [AUTOMATE] Stopping interpreter to prevent concurrent replans');
+          interpreterRef.current.stop();
+        }
         
         // Increment replan attempts
         setReplanAttempts(prev => prev + 1);
@@ -299,17 +489,23 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         setStatus('error');
         setError(`Replanning after step ${context.stepIndex + 1} failure (attempt ${replanAttempts + 1}/${maxReplanAttempts}): ${context.error}`);
         
+        console.log('🔒 [AUTOMATE] Replan lock acquired, interpreter stopped, sending replan request...');
+        
         // Emit IPC event to trigger replanning
+        // Use context.stepIndex directly, not state (state updates are async)
         if (ipcRenderer) {
           ipcRenderer.send('automation:replan-needed', {
             planId,
-            failedStepId: context.failedStep.id,
-            failedStepIndex: context.stepIndex,
-            failedStepDescription: context.failedStep.description,
-            error: context.error,
-            screenshot: context.screenshot,
             previousPlan: context.previousPlan,
-            requestPartialPlan: true  // Request only fix steps, not full plan
+            context: {
+              requestPartialPlan: true,  // Request only fix steps, not full plan
+              isReplanning: true,
+              failedStepId: context.failedStep.id,
+              failedStepIndex: context.stepIndex,  // Use direct value, not state
+              failedStepDescription: context.failedStep.description,
+              error: context.error,
+              screenshot: context.screenshot
+            }
           });
         }
       },
@@ -361,14 +557,45 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     const handleReplanResult = (_event: any, result: any) => {
       console.log('📥 [AUTOMATE] Received replan result:', result);
       
-      // Clear replan in-flight lock
-      replanInFlightRef.current = false;
+      // DO NOT clear replan lock here - it will be cleared after new plan starts executing
+      
+      // Check if backend needs clarification
+      if (result.success && result.needsClarification && result.questions) {
+        console.log('❓ [AUTOMATE] Backend needs clarification during replan:', result.questions);
+        
+        // Clear replan lock since we're waiting for user input
+        replanInFlightRef.current = false;
+        
+        // Update UI to show waiting for clarification
+        setStatus('error');
+        setError(`Waiting for your answer to: "${result.questions[0].text}"`);
+        setIsReplanning(false);
+        
+        // Questions are already forwarded to prompt bar by main process
+        // We just need to wait for the answer via handleClarificationAnswer
+        return;
+      }
       
       if (result.success && result.newPlan) {
         console.log('✅ [AUTOMATE] New plan received, merging with original plan');
         
         // Check if this is a "fix plan" (partial) or full plan
-        const isFixPlan = result.newPlan.steps.length < 10; // Heuristic: fix plans are usually short
+        // Fix plans should be explicitly marked or have metadata indicating they're partial
+        const isFixPlan = result.newPlan.isPartial || 
+                         (result.newPlan.steps.length < 5 && failedStepIndex !== null);
+        
+        // Safety check: If we've already replanned multiple times, stop
+        if (replanAttempts >= maxReplanAttempts) {
+          console.error(`❌ [AUTOMATE] Max replan attempts (${maxReplanAttempts}) reached, stopping`);
+          replanInFlightRef.current = false;
+          setStatus('error');
+          setError(`Automation failed after ${maxReplanAttempts} replan attempts`);
+          setIsVisible(true);
+          if (ipcRenderer) {
+            ipcRenderer.send('automation:ended');
+          }
+          return;
+        }
         
         if (isFixPlan && failedStepIndex !== null && automationPlan) {
           console.log(`🔧 [AUTOMATE] Detected fix plan with ${result.newPlan.steps.length} steps`);
@@ -399,6 +626,9 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           const newInterpreter = new PlanInterpreter(mergedPlan);
           interpreterRef.current = newInterpreter;
           
+          // Reset replan lock to allow future replans
+          newInterpreter.resetReplanLock();
+          
           // Reset state for continuation
           setIsReplanning(false);
           setStatus('running');
@@ -406,6 +636,10 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           
           // Resume execution from the failed step (now replaced with fix steps)
           console.log(`▶️  [AUTOMATE] Resuming execution from step ${failedStepIndex}`);
+          
+          // Clear replan in-flight lock now that new plan is starting
+          replanInFlightRef.current = false;
+          console.log('🔓 [AUTOMATE] Replan lock released - new plan executing');
           
           // Start execution from the failed step index
           newInterpreter.resumeFrom(failedStepIndex, {
@@ -465,6 +699,25 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
             onReplanNeeded: (context) => {
               // Handle nested replanning if a fix step also fails
               console.log('🔄 [AUTOMATE] Nested replanning needed:', context);
+              
+              // CRITICAL: Check if replan already in flight to prevent concurrent replans
+              if (replanInFlightRef.current) {
+                console.warn('⚠️  [AUTOMATE] Nested replan blocked - replan already in progress');
+                return;
+              }
+              
+              // Check max replan attempts
+              if (replanAttempts >= maxReplanAttempts) {
+                console.error(`❌ [AUTOMATE] Max replan attempts (${maxReplanAttempts}) reached in nested replan, stopping`);
+                setStatus('error');
+                setError(`Automation failed after ${maxReplanAttempts} replan attempts`);
+                return;
+              }
+              
+              // Mark replan as in-flight
+              replanInFlightRef.current = true;
+              console.log('🔒 [AUTOMATE] Nested replan lock acquired');
+              
               setFailedStepIndex(context.stepIndex);
               setIsReplanning(true);
               setStatus('error');
@@ -509,13 +762,35 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           });
           
         } else {
-          console.log('🔄 [AUTOMATE] Full plan replacement');
-          // Full plan replacement (fallback)
-          // This would require restarting the entire automation
+          console.error('❌ [AUTOMATE] Full plan replacement detected - this should not happen!');
+          console.error(`   Backend sent ${result.newPlan.steps.length} steps instead of partial fix`);
+          console.error(`   Failed step was: ${failedStepIndex}, plan had ${automationPlan?.steps.length || 0} steps`);
+          
+          // Clear replan lock since we're stopping
+          replanInFlightRef.current = false;
+          console.log('🔓 [AUTOMATE] Replan lock released - stopping due to full plan replacement');
+          
+          setIsReplanning(false);
+          setStatus('error');
+          setError(`Backend error: Received full plan replacement (${result.newPlan.steps.length} steps) instead of partial fix. Automation stopped to prevent infinite loop.`);
+          setIsVisible(true);
+          
+          // Stop automation completely
+          if (ipcRenderer) {
+            ipcRenderer.send('automation:ended');
+          }
+          if (interpreterRef.current) {
+            interpreterRef.current.cancel();
+          }
         }
         
       } else {
         console.error('❌ [AUTOMATE] Replanning failed:', result.error);
+        
+        // Clear replan lock on failure
+        replanInFlightRef.current = false;
+        console.log('🔓 [AUTOMATE] Replan lock released due to failure');
+        
         setIsReplanning(false);
         setStatus('error');
         setError(`Replanning failed (attempt ${replanAttempts}/${maxReplanAttempts}): ${result.error}`);
@@ -586,6 +861,39 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     };
   }, [countdown, automationStarted]);
 
+  // Listen for clarification answers from prompt bar
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleClarificationAnswer = (_event: any, data: { answer: string; questionId?: string }) => {
+      console.log('✅ [AUTOMATE] Received clarification answer:', data);
+      
+      if (clarificationResolveRef.current && clarificationQuestions.length > 0) {
+        // Build answers object with all question IDs mapped to the single answer
+        // (User provides one combined answer for all questions)
+        const answers: Record<string, string> = {};
+        clarificationQuestions.forEach((q) => {
+          answers[q.id] = data.answer;
+        });
+        
+        console.log('📤 [AUTOMATE] Resolving clarification with answers:', answers);
+        clarificationResolveRef.current(answers);
+        clarificationResolveRef.current = null;
+        
+        // Clear clarification questions
+        setClarificationQuestions([]);
+      }
+    };
+
+    ipcRenderer.on('prompt-bar:clarification-answer', handleClarificationAnswer);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('prompt-bar:clarification-answer', handleClarificationAnswer);
+      }
+    };
+  }, [clarificationQuestions]);
+
   // Hide overlay during screenshots to prevent it from appearing in vision API calls
   useEffect(() => {
     if (!ipcRenderer) return;
@@ -615,30 +923,30 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   }, [status]);
 
   // Position window based on screen dimensions
-  useEffect(() => {
-    if (!ipcRenderer) return;
+  // useEffect(() => {
+  //   if (!ipcRenderer) return;
 
-    const timer = setTimeout(() => {
-      const screenWidth = window.screen.availWidth;
-      const screenHeight = window.screen.availHeight;
+  //   const timer = setTimeout(() => {
+  //     const screenWidth = window.screen.availWidth;
+  //     const screenHeight = window.screen.availHeight;
       
-      // Use 50% width for automation progress (narrower than web search)
-      const cardWidth = Math.floor(screenWidth * 0.5);
-      const cardHeight = Math.floor(screenHeight * 0.7); // 70% height
-      const x = Math.floor((screenWidth - cardWidth) / 2);
-      const y = Math.floor((screenHeight - cardHeight) / 2);
+  //     // Use 50% width for automation progress (narrower than web search)
+  //     const cardWidth = Math.floor(screenWidth * 0.5);
+  //     const cardHeight = Math.floor(screenHeight * 0.7); // 70% height
+  //     const x = Math.floor((screenWidth - cardWidth) / 2);
+  //     const y = Math.floor((screenHeight - cardHeight) / 2);
       
-      ipcRenderer.send('overlay:position-intent', {
-        x,
-        y,
-        width: cardWidth,
-        height: cardHeight,
-        animate: false
-      });
-    }, 100);
+  //     ipcRenderer.send('overlay:position-intent', {
+  //       x,
+  //       y,
+  //       width: cardWidth,
+  //       height: cardHeight,
+  //       animate: false
+  //     });
+  //   }, 100);
 
-    return () => clearTimeout(timer);
-  }, []);
+  //   return () => clearTimeout(timer);
+  // }, []);
 
   // Handle mouse events for click-through
   useEffect(() => {
@@ -688,6 +996,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     }
     if (ipcRenderer) {
       ipcRenderer.send('automation:cancel', { planId });
+      ipcRenderer.send('intent-window:hide');
     }
     onEvent({ type: 'close' });
   };
@@ -745,13 +1054,80 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const currentStep = steps[currentStepIndex];
   const progress = totalSteps > 0 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
 
+  // Hide when not visible
+  if (!isVisible && !isComputerUseMode) {
+    return null;
+  }
+
+  // In Computer Use mode, always show compact floating card during automation
+  // Entire window is click-through for visibility only - doesn't block automation
+  if (isComputerUseMode && status !== 'completed' && status !== 'error') {
+    return (
+      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl pointer-events-none">
+        <div 
+          ref={cardRef}
+          className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300"
+        >
+          {/* Compact Header with AI Reasoning */}
+          <div className="px-4 py-3">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 mt-0.5">
+                <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  {/* <p className="text-sm font-medium text-white">
+                    {goal}
+                  </p> */}
+                  <span className="text-xs text-gray-400">
+                    Step {currentStepIndex + 1}/{totalSteps}
+                  </span>
+                </div>
+                {/* Show clarification questions if present, otherwise show reasoning */}
+                {clarificationQuestions.length > 0 ? (
+                  <div className="mt-3 space-y-3">
+                    <p className="text-xs font-medium text-yellow-300 mb-2">
+                      ⚠️ Clarification Needed
+                    </p>
+                    {clarificationQuestions.map((q, idx) => (
+                      <div key={q.id} className="bg-gray-900/50 rounded-lg p-3 border border-yellow-500/30">
+                        <p className="text-sm text-gray-200 mb-2">
+                          <span className="text-yellow-400 font-medium">Q{idx + 1}:</span> {q.question}
+                        </p>
+                        <p className="text-xs text-gray-400 italic">
+                          Type your answer in the prompt bar below and press Enter to continue
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : currentReasoning ? (
+                  <div className="mt-2">
+                    <p className="text-xs font-medium text-blue-300 mb-1">
+                      AI Thinking {currentActionType && `• ${currentActionType}`}
+                    </p>
+                    <p className="text-sm text-gray-200 leading-relaxed">
+                      {currentReasoning}
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Full panel view for non-Computer Use mode or when completed/error
   return (
     <div className={`fixed inset-0 flex items-center justify-center pointer-events-none z-50 transition-opacity duration-200 ${
       isVisible ? 'opacity-100' : 'opacity-0 pointer-events-none'
     }`}>
       <div
         ref={cardRef}
-        className="bg-gray-900/95 backdrop-blur-xl border border-gray-700/50 rounded-2xl shadow-2xl w-full h-full max-h-[80vh] pointer-events-auto flex flex-col"
+        className={`bg-gray-900/95 backdrop-blur-xl border border-gray-700/50 rounded-2xl shadow-2xl w-full h-full max-h-[80vh] flex flex-col ${
+          isVisible ? 'pointer-events-auto' : 'pointer-events-none'
+        }`}
       >
         {/* Header */}
         <div className="px-6 py-4 border-b border-gray-700/50 flex items-center justify-between flex-shrink-0">
@@ -812,6 +1188,25 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
               style={{ width: `${progress}%` }}
             />
           </div>
+          
+          {/* AI Reasoning Display (Computer Use mode) */}
+          {isComputerUseMode && currentReasoning && status === 'running' && (
+            <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg animate-in fade-in duration-200">
+              <div className="flex items-start gap-2">
+                <div className="flex-shrink-0 mt-0.5">
+                  <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-medium text-blue-300 mb-1">
+                    AI Thinking {currentActionType && `• ${currentActionType}`}
+                  </p>
+                  <p className="text-sm text-gray-300 leading-relaxed">
+                    {currentReasoning}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Steps Stepper */}

@@ -370,20 +370,23 @@ class AgentOrchestrator {
           logger.debug('🔄 [STATEGRAPH:RETRY] Command failed, retrying as screen_intelligence');
           return 'screenIntelligence';
         }
-        // If command requires confirmation, end workflow early
-        if (state.requiresConfirmation) {
+        // If command_execute already has an answer, skip LLM
+        if (state.answer) {
+          logger.debug('✅ [STATEGRAPH:COMMAND] Answer already generated, skipping LLM');
           return 'end'; // Don't generate answer, just return confirmation details
         }
-        // If command_automate generated a plan, route to overlay system
-        if (state.intent?.type === 'command_automate' && state.intentContext?.slots?.automationPlan) {
-          logger.debug('🤖 [STATEGRAPH:COMMAND] Automation plan generated, routing to overlay system');
+        // If command_automate generated a plan OR Computer Use mode, route to overlay system
+        if (state.intent?.type === 'command_automate' && 
+            (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'computer-use-streaming')) {
+          logger.debug('🤖 [STATEGRAPH:COMMAND] Automation plan/Computer Use mode detected, routing to overlay system');
           return 'selectOverlayVariant';
         }
         // If command service already interpreted output, skip answer node
         if (state.answer) {
-          return 'validateAnswer'; // Go straight to validation
+          logger.debug('✅ [STATEGRAPH:COMMAND] Answer already generated, skipping LLM');
+          return 'end';
         }
-        // Otherwise, route to answer node for interpretation
+        // Otherwise, generate answer with LLM
         return 'answer';
       },
       
@@ -413,9 +416,21 @@ class AgentOrchestrator {
       // Command automation subgraph with parallel memory retrieval
       parallelCommandAndMemory: 'parallelCommandFilterMemory', // ⚡ PARALLEL: executeCommand + retrieveMemory
       parallelCommandFilterMemory: (state) => {
-        // If command_automate generated a plan, route to overlay system
-        if (state.intent?.type === 'command_automate' && state.intentContext?.slots?.automationPlan) {
-          logger.debug('🤖 [STATEGRAPH:PARALLEL_COMMAND] Automation plan generated, routing to overlay system');
+        // Debug: Log state for troubleshooting
+        logger.debug('🔍 [STATEGRAPH:PARALLEL_COMMAND] Checking routing condition:', {
+          intentType: state.intent?.type,
+          hasIntentContext: !!state.intentContext,
+          hasSlots: !!state.intentContext?.slots,
+          slotsKeys: state.intentContext?.slots ? Object.keys(state.intentContext.slots) : [],
+          mode: state.intentContext?.slots?.mode,
+          hasAutomationPlan: !!state.intentContext?.slots?.automationPlan,
+          hasAnswer: !!state.answer
+        });
+        
+        // If command_automate generated a plan OR Computer Use mode, route to overlay system
+        if (state.intent?.type === 'command_automate' && 
+            (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'computer-use-streaming')) {
+          logger.debug('🤖 [STATEGRAPH:PARALLEL_COMMAND] Automation plan/Computer Use mode detected, routing to overlay system');
           return 'selectOverlayVariant';
         }
         // If command already has an answer, skip LLM

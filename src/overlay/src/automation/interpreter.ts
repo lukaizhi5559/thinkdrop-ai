@@ -85,9 +85,25 @@ export class PlanInterpreter {
   private isPaused: boolean = false;
   private isCancelled: boolean = false;
   private lastCoordinates: { x: number; y: number } | null = null;
+  private replanTriggered: boolean = false; // Guard to prevent multiple replan triggers
 
   constructor(plan: AutomationPlan) {
     this.plan = plan;
+  }
+
+  /**
+   * Reset replan lock (called when new plan is received)
+   */
+  resetReplanLock(): void {
+    this.replanTriggered = false;
+  }
+
+  /**
+   * Stop the interpreter immediately
+   */
+  stop(): void {
+    console.log('🛑 [INTERPRETER] Stop called - cancelling execution');
+    this.isCancelled = true;
   }
 
   /**
@@ -113,7 +129,7 @@ export class PlanInterpreter {
       console.log(`🤖 [INTERPRETER] Starting step ${i + 1}/${this.plan.steps.length}:`, step.description);
       callbacks.onStepStart?.(step, i);
 
-      // Retry logic - trigger replan on first failure
+      // Retry logic - only trigger replan AFTER exhausting all retries
       const maxAttempts = step.retry?.maxAttempts || 1;
       let lastError: Error | null = null;
       let attemptNumber = 0;
@@ -172,30 +188,11 @@ export class PlanInterpreter {
           lastError = error;
           console.error(`❌ [INTERPRETER] Step ${i + 1} attempt ${attemptNumber}/${maxAttempts} failed:`, error.message);
           
-          // Trigger replan on FIRST failure - ALL strategies trigger replan
-          if (attemptNumber === 1) {
-            console.log(`🔄 [INTERPRETER] First attempt failed - capturing screenshot for replan`);
-            try {
-              const screenshot = await capabilities.captureScreenshot();
-              console.log(`📸 [INTERPRETER] Screenshot captured for replan context`);
-              
-              const errorStrategy = step.onError?.strategy || 'fail_plan';
-              console.log(`🔄 [INTERPRETER] Triggering replan with screenshot (strategy: ${errorStrategy})`);
-              
-              callbacks.onStepFailed?.(step, i, error.message);
-              callbacks.onReplanNeeded?.({
-                failedStep: step,
-                stepIndex: i,
-                error: error.message,
-                screenshot: screenshot,
-                previousPlan: this.plan
-              });
-              throw error; // Stop execution, wait for replan
-            } catch (screenshotError) {
-              console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
-              // If screenshot fails, still throw to stop execution
-              throw error;
-            }
+          // Wait before retry (except on last attempt)
+          if (attemptNumber < maxAttempts) {
+            const retryDelay = step.retry?.delayMs || 1000;
+            console.log(`⏳ [INTERPRETER] Waiting ${retryDelay}ms before retry ${attemptNumber + 1}/${maxAttempts}`);
+            await capabilities.wait(retryDelay);
           }
           
           // If this was the last attempt, handle error strategy
@@ -207,16 +204,40 @@ export class PlanInterpreter {
             console.log(`📋 [INTERPRETER] Error strategy: ${errorStrategy}`);
             
             if (errorStrategy === 'replan') {
-              // Trigger replanning
-              console.log(`🔄 [INTERPRETER] Triggering replanning due to step failure`);
-              callbacks.onStepFailed?.(step, i, error.message);
-              callbacks.onReplanNeeded?.({
-                failedStep: step,
-                stepIndex: i,
-                error: error.message,
-                screenshot: (step as any)._retryScreenshot,
-                previousPlan: this.plan
-              });
+              // Guard: Only trigger replan once per interpreter instance
+              if (this.replanTriggered) {
+                console.warn('⚠️  [INTERPRETER] Replan already triggered, skipping duplicate');
+                throw error;
+              }
+              
+              this.replanTriggered = true;
+              // Trigger replanning AFTER exhausting all retries
+              console.log(`🔄 [INTERPRETER] Triggering replanning after exhausting ${maxAttempts} attempts`);
+              
+              // Capture screenshot for replan context
+              try {
+                const screenshot = await capabilities.captureScreenshot();
+                console.log(`📸 [INTERPRETER] Screenshot captured for replan context`);
+                
+                callbacks.onStepFailed?.(step, i, error.message);
+                callbacks.onReplanNeeded?.({
+                  failedStep: step,
+                  stepIndex: i,
+                  error: error.message,
+                  screenshot: screenshot,
+                  previousPlan: this.plan
+                });
+              } catch (screenshotError) {
+                console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
+                callbacks.onStepFailed?.(step, i, error.message);
+                callbacks.onReplanNeeded?.({
+                  failedStep: step,
+                  stepIndex: i,
+                  error: error.message,
+                  screenshot: undefined,
+                  previousPlan: this.plan
+                });
+              }
               throw error;
             } else if (errorStrategy === 'ask_user') {
               // Ask user for guidance
@@ -282,7 +303,7 @@ export class PlanInterpreter {
       console.log(`🤖 [INTERPRETER] Starting step ${i + 1}/${this.plan.steps.length}:`, step.description);
       callbacks.onStepStart?.(step, i);
 
-      // Retry logic - trigger replan on first failure
+      // Retry logic - only trigger replan AFTER exhausting all retries
       const maxAttempts = step.retry?.maxAttempts || 1;
       let lastError: Error | null = null;
       let attemptNumber = 0;
@@ -341,51 +362,56 @@ export class PlanInterpreter {
           lastError = error;
           console.error(`❌ [INTERPRETER] Step ${i + 1} attempt ${attemptNumber}/${maxAttempts} failed:`, error.message);
           
-          // Trigger replan on FIRST failure - ALL strategies trigger replan
-          if (attemptNumber === 1) {
-            console.log(`🔄 [INTERPRETER] First attempt failed - capturing screenshot for replan`);
-            try {
-              const screenshot = await capabilities.captureScreenshot();
-              console.log(`📸 [INTERPRETER] Screenshot captured for replan context`);
-              
-              const errorStrategy = step.onError?.strategy || 'fail_plan';
-              console.log(`🔄 [INTERPRETER] Triggering replan with screenshot (strategy: ${errorStrategy})`);
-              
-              callbacks.onStepFailed?.(step, i, error.message);
-              callbacks.onReplanNeeded?.({
-                failedStep: step,
-                stepIndex: i,
-                error: error.message,
-                screenshot: screenshot,
-                previousPlan: this.plan
-              });
-              throw error; // Stop execution, wait for replan
-            } catch (screenshotError) {
-              console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
-              // If screenshot fails, still throw to stop execution
-              throw error;
-            }
+          // Wait before retry (except on last attempt)
+          if (attemptNumber < maxAttempts) {
+            const retryDelay = step.retry?.delayMs || 1000;
+            console.log(`⏳ [INTERPRETER] Waiting ${retryDelay}ms before retry ${attemptNumber + 1}/${maxAttempts}`);
+            await capabilities.wait(retryDelay);
           }
           
           // If this was the last attempt, handle error strategy
           if (attemptNumber >= maxAttempts) {
-            console.error(`🛑 [INTERPRETER] All ${maxAttempts} attempts exhausted for step ${i + 1}`);
+            console.error(`� [INTERPRETER] All ${maxAttempts} attempts exhausted for step ${i + 1}`);
             
             // Check error strategy
             const errorStrategy = step.onError?.strategy || 'fail_plan';
-            console.log(`📋 [INTERPRETER] Error strategy: ${errorStrategy}`);
+            console.log(`� [INTERPRETER] Error strategy: ${errorStrategy}`);
             
             if (errorStrategy === 'replan') {
-              // Trigger replanning
-              console.log(`🔄 [INTERPRETER] Triggering replanning due to step failure`);
-              callbacks.onStepFailed?.(step, i, error.message);
-              callbacks.onReplanNeeded?.({
-                failedStep: step,
-                stepIndex: i,
-                error: error.message,
-                screenshot: (step as any)._retryScreenshot,
-                previousPlan: this.plan
-              });
+              // Guard: Only trigger replan once per interpreter instance
+              if (this.replanTriggered) {
+                console.warn('⚠️  [INTERPRETER] Replan already triggered, skipping duplicate');
+                throw error;
+              }
+              
+              this.replanTriggered = true;
+              // Trigger replanning AFTER exhausting all retries
+              console.log(`� [INTERPRETER] Triggering replanning after exhausting ${maxAttempts} attempts`);
+              
+              // Capture screenshot for replan context
+              try {
+                const screenshot = await capabilities.captureScreenshot();
+                console.log(`� [INTERPRETER] Screenshot captured for replan context`);
+                
+                callbacks.onStepFailed?.(step, i, error.message);
+                callbacks.onReplanNeeded?.({
+                  failedStep: step,
+                  stepIndex: i,
+                  error: error.message,
+                  screenshot: screenshot,
+                  previousPlan: this.plan
+                });
+              } catch (screenshotError) {
+                console.warn(`⚠️  [INTERPRETER] Failed to capture screenshot for replan:`, screenshotError);
+                callbacks.onStepFailed?.(step, i, error.message);
+                callbacks.onReplanNeeded?.({
+                  failedStep: step,
+                  stepIndex: i,
+                  error: error.message,
+                  screenshot: undefined,
+                  previousPlan: this.plan
+                });
+              }
               throw error;
             } else if (errorStrategy === 'ask_user') {
               // Ask user for guidance
@@ -424,6 +450,20 @@ export class PlanInterpreter {
     const { kind } = step;
 
     console.log(`🔧 [INTERPRETER] Executing step type: ${kind.type}`, kind);
+
+    // Validate step type before execution to catch AI hallucinations
+    const validTypes = [
+      'focusApp', 'openUrl', 'typeText', 'hotkey', 'click', 'scroll', 
+      'pause', 'apiAction', 'waitForElement', 'screenshot', 'findAndClick', 
+      'log', 'pressKey', 'end'
+    ];
+    
+    if (!validTypes.includes(kind.type)) {
+      const errorMsg = `Unknown step type: ${kind.type}. Valid types are: ${validTypes.join(', ')}. ` +
+        `This is likely an AI hallucination - the plan generator created an invalid step type.`;
+      console.error(`❌ [INTERPRETER] ${errorMsg}`);
+      throw new Error(errorMsg);
+    }
 
     switch (kind.type) {
       case 'focusApp':
@@ -467,8 +507,19 @@ export class PlanInterpreter {
         break;
 
       case 'scroll':
-        console.log(`🖱️  [INTERPRETER] Scrolling ${kind.direction || 'down'} by ${kind.amount || 5} steps`);
-        await capabilities.scroll(kind.amount || 5, kind.direction || 'down');
+        // Scroll the page/window - validate amount is a number
+        const scrollAmount = kind.amount || 3;
+        const scrollDirection = kind.direction || 'down';
+        
+        // Validate scroll amount is a positive number (catch AI hallucinations like "medium", "large", etc)
+        if (typeof scrollAmount !== 'number' || scrollAmount <= 0 || !Number.isFinite(scrollAmount)) {
+          const errorMsg = `Invalid scroll amount: ${scrollAmount} (must be a positive number)`;
+          console.error(`❌ [INTERPRETER] ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
+        
+        console.log(`🖱️  [INTERPRETER] Scrolling ${scrollDirection} by ${scrollAmount} steps`);
+        await capabilities.scroll(scrollAmount, scrollDirection);
         break;
 
       case 'pause':
@@ -563,6 +614,11 @@ export class PlanInterpreter {
         break;
 
       default:
+        // Unknown step type - log and halt
+        console.error(`❌ [INTERPRETER] UNKNOWN STEP TYPE: ${(kind as any).type}`);
+        console.error(`❌ [INTERPRETER] Step details:`, JSON.stringify(step, null, 2));
+        
+        this.isCancelled = true;
         throw new Error(`Unknown step type: ${(kind as any).type}`);
     }
   }
@@ -571,19 +627,24 @@ export class PlanInterpreter {
    * Determine if a step needs verification
    */
   private shouldVerifyStep(step: AutomationStep): boolean {
-    const { kind } = step;
+    // TEMPORARILY DISABLED: Verification is causing database pool exhaustion
+    // due to hundreds of concurrent Vision API calls when steps fail/retry.
+    // TODO: Re-enable with proper throttling/queueing mechanism
+    return false;
     
-    // Verify steps that interact with UI or change state
-    const verifiableTypes = [
-      'findAndClick',  // Did we actually click the right element?
-      'click',         // Did the click at coordinates have an effect?
-      'openUrl',       // Did the URL load?
-      'focusApp',      // Is the app actually focused?
-      'typeText',      // Was the text typed correctly?
-      'waitForElement' // Did the element appear?
-    ];
-    
-    return verifiableTypes.includes(kind.type);
+    // const { kind } = step;
+    // 
+    // // Verify steps that interact with UI or change state
+    // const verifiableTypes = [
+    //   'findAndClick',  // Did we actually click the right element?
+    //   'click',         // Did the click at coordinates have an effect?
+    //   'openUrl',       // Did the URL load?
+    //   'focusApp',      // Is the app actually focused?
+    //   'typeText',      // Was the text typed correctly?
+    //   'waitForElement' // Did the element appear?
+    // ];
+    // 
+    // return verifiableTypes.includes(kind.type);
   }
 
   /**

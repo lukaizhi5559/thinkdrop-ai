@@ -65,9 +65,11 @@ export default function PromptBar({
     };
 
     const handleAutomationState = (_event: any, state: { hasAutomation: boolean; isVisible: boolean; isRunning?: boolean }) => {
+      console.log('🎯 [PROMPT_BAR] Received automation:state', state);
       setHasAutomation(state.hasAutomation);
       setIsAutomationVisible(state.isVisible);
       if (state.isRunning !== undefined) {
+        console.log(`🔴 [PROMPT_BAR] Setting isAutomationRunning to: ${state.isRunning}`);
         setIsAutomationRunning(state.isRunning);
       }
     };
@@ -224,8 +226,11 @@ export default function PromptBar({
       // Check if we're in clarification mode
       if (clarificationMode?.active) {
         console.log('✅ [PROMPT_BAR] Submitting clarification answer:', message.trim());
+        console.log('🔄 [PROMPT_BAR] BYPASSING state graph - sending directly to backend via IPC');
         
-        // Send clarification answer via IPC
+        // CRITICAL: Send clarification answer directly via IPC, bypassing state graph
+        // We already know the intent (command_automate), so we send the response
+        // directly to CommandAutomateProgress which forwards it to the backend
         if (ipcRenderer) {
           ipcRenderer.send('prompt-bar:clarification-answer', {
             answer: message.trim(),
@@ -259,10 +264,11 @@ export default function PromptBar({
           }, 0);
         }
         
+        // RETURN EARLY - do NOT call onSubmit() which would trigger state graph
         return;
       }
       
-      // Normal message submission
+      // Normal message submission (goes through state graph)
       onSubmit(message.trim());
       setMessage('');
       
@@ -438,7 +444,7 @@ export default function PromptBar({
             pointer-events-auto
             animate-in fade-in slide-in-from-bottom-4 
             transition-colors duration-300
-            ${isInputHovered ? 'bg-gray-800/90' : 'bg-gray-800/50'}
+            bg-gray-800/90
           `}
         >
         {/* Header with drag handle and close button */}

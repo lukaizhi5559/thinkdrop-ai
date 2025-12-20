@@ -124,26 +124,26 @@ export default function ScreenIntelligenceResults({ payload }: ScreenIntelligenc
     const ipcRenderer = (window as any).electron?.ipcRenderer;
     if (!ipcRenderer) return;
 
-    const timer = setTimeout(() => {
-      const screenWidth = window.screen.availWidth;
-      const screenHeight = window.screen.availHeight;
+    // const timer = setTimeout(() => {
+    //   const screenWidth = window.screen.availWidth;
+    //   const screenHeight = window.screen.availHeight;
       
-      // Match PromptBar sizing: 60% width, centered
-      const cardWidth = Math.floor(screenWidth * 0.6);
-      const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
-      const x = Math.floor((screenWidth - cardWidth) / 2);
-      const y = Math.floor((screenHeight - cardHeight) / 2);
+    //   // Match PromptBar sizing: 60% width, centered
+    //   const cardWidth = Math.floor(screenWidth * 0.6);
+    //   const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
+    //   const x = Math.floor((screenWidth - cardWidth) / 2);
+    //   const y = Math.floor((screenHeight - cardHeight) / 2);
       
-      ipcRenderer.send('overlay:position-intent', {
-        x,
-        y,
-        width: cardWidth,
-        height: cardHeight,
-        animate: false
-      });
-    }, 100);
+    //   ipcRenderer.send('overlay:position-intent', {
+    //     x,
+    //     y,
+    //     width: cardWidth,
+    //     height: cardHeight,
+    //     animate: false
+    //   });
+    // }, 100);
 
-    return () => clearTimeout(timer);
+    // return () => clearTimeout(timer);
   }, []);
 
   const handleClose = () => {

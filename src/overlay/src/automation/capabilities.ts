@@ -16,16 +16,75 @@ export async function captureScreenshot(): Promise<string> {
     throw new Error('IPC renderer not available');
   }
 
-  return new Promise((resolve, reject) => {
-    ipcRenderer.once('screenshot:captured', (_event: any, screenshot: string) => {
-      resolve(screenshot);
-    });
+  // CRITICAL: Hide UI before screenshot to avoid interference with Computer Use analysis
+  console.log('📸 [CAPABILITIES] Hiding UI for screenshot capture');
+  ipcRenderer.send('overlay:hide-for-screenshot');
+  
+  // Wait for UI to hide (100ms for animation)
+  await new Promise(resolve => setTimeout(resolve, 100));
 
-    ipcRenderer.once('screenshot:error', (_event: any, error: string) => {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      ipcRenderer.removeAllListeners('screenshot:captured');
+      ipcRenderer.removeAllListeners('screenshot:error');
+      ipcRenderer.send('overlay:show-after-screenshot');
+      reject(new Error('Screenshot capture timeout'));
+    }, 10000);
+
+    const handleCaptured = (_event: any, screenshot: string) => {
+      clearTimeout(timeout);
+      ipcRenderer.removeAllListeners('screenshot:captured');
+      ipcRenderer.removeAllListeners('screenshot:error');
+      console.log('📸 [CAPABILITIES] Screenshot captured, showing UI');
+      ipcRenderer.send('overlay:show-after-screenshot');
+      resolve(screenshot);
+    };
+
+    const handleError = (_event: any, error: string) => {
+      clearTimeout(timeout);
+      ipcRenderer.removeAllListeners('screenshot:captured');
+      ipcRenderer.removeAllListeners('screenshot:error');
+      ipcRenderer.send('overlay:show-after-screenshot');
       reject(new Error(error));
-    });
+    };
+
+    ipcRenderer.once('screenshot:captured', handleCaptured);
+    ipcRenderer.once('screenshot:error', handleError);
 
     ipcRenderer.send('screenshot:capture');
+  });
+}
+
+/**
+ * Fullscreen the active application
+ */
+export async function fullscreen(): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('🖥️ [CAPABILITIES] Sending automation:fullscreen IPC');
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      console.error('⏱️ [CAPABILITIES] Timeout (5s) waiting for fullscreen result');
+      reject(new Error('Timeout fullscreening app'));
+    }, 5000);
+
+    ipcRenderer.once('automation:fullscreen:result', (_event: any, result: any) => {
+      clearTimeout(timeout);
+      console.log('📥 [CAPABILITIES] Received fullscreen result:', result);
+      
+      if (result.success) {
+        console.log('✅ [CAPABILITIES] Fullscreen successful');
+        resolve();
+      } else {
+        console.error('❌ [CAPABILITIES] Fullscreen failed:', result.error);
+        reject(new Error(result.error || 'Failed to fullscreen'));
+      }
+    });
+
+    ipcRenderer.send('automation:fullscreen');
   });
 }
 
@@ -137,11 +196,23 @@ export async function clickAt(x: number, y: number): Promise<void> {
     throw new Error('IPC renderer not available');
   }
 
+  console.log(`🖱️ [CAPABILITIES] Sending automation:click IPC to (${x}, ${y})`);
+
   return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      console.error(`⏱️ [CAPABILITIES] Timeout (5s) waiting for click result at (${x}, ${y})`);
+      reject(new Error(`Timeout clicking at (${x}, ${y})`));
+    }, 5000);
+
     ipcRenderer.once('automation:click:result', (_event: any, result: any) => {
+      clearTimeout(timeout);
+      console.log(`📥 [CAPABILITIES] Received click result:`, result);
+      
       if (result.success) {
+        console.log(`✅ [CAPABILITIES] Click successful at (${x}, ${y})`);
         resolve();
       } else {
+        console.error(`❌ [CAPABILITIES] Click failed:`, result.error);
         reject(new Error(result.error || 'Failed to click'));
       }
     });

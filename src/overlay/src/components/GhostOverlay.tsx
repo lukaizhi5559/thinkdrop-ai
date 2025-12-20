@@ -258,7 +258,7 @@ export default function GhostOverlay() {
       )}
 
       {/* Animated Ghost Mouse Cursor */}
-      {isAutomating && (
+      {isAutomating && mousePos.x > 0 && mousePos.y > 0 && (
         <div
           className="fixed pointer-events-none transition-all duration-100"
           style={{

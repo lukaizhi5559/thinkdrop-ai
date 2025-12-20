@@ -2,8 +2,8 @@
 export default {
     darkMode: ["class"],
     content: [
-    "./src/renderer/**/*.{js,ts,jsx,tsx}",
-    "./src/renderer/index.html",
+    "./src/overlay/**/*.{js,ts,jsx,tsx}",
+    "./src/overlay/index.html",
   ],
   theme: {
   	extend: {

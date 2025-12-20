@@ -12,7 +12,6 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'src/renderer/index.html'),
         overlay: resolve(__dirname, 'src/overlay/index.html'),
       },
     },
@@ -28,7 +27,6 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@': resolve(__dirname, 'src/renderer/src'),
       '@shared': resolve(__dirname, 'src/shared'),
       '@overlay': resolve(__dirname, 'src/overlay/src'),
       '@types': resolve(__dirname, 'src/types'),

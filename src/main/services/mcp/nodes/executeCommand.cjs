@@ -6,6 +6,27 @@
  */
 
 const logger = require('./../../../logger.cjs');
+
+/**
+ * Decide whether to use Computer Use (agentic WebSocket) or Static Plan
+ * @param {string} command - User command
+ * @param {object} context - Execution context
+ * @param {string} screenshot - Initial screenshot
+ * @returns {boolean} - True if should use Computer Use
+ */
+function shouldUseComputerUse(command, context, screenshot) {
+  // Check if explicitly disabled (fallback mode after Computer Use failure)
+  if (process.env.DISABLE_COMPUTER_USE === 'true' || context.disableComputerUse) {
+    logger.debug('📋 [DECISION] Computer Use disabled - using static plan fallback');
+    return false;
+  }
+  
+  // Default: Always use Computer Use (most human-like, adaptive)
+  // Static plan is only used as fallback when Computer Use fails
+  logger.debug('🌐 [DECISION] Using Computer Use mode (default)');
+  return true;
+}
+
 module.exports = async function executeCommand(state) {
   const { message, resolvedMessage, intent, context, mcpClient, conversationHistory = [] } = state;
   
@@ -52,9 +73,97 @@ module.exports = async function executeCommand(state) {
     }
     
     if (intent.type === 'command_automate') {
-      logger.debug('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected - generating plan');
+      logger.debug('🤖 [NODE:EXECUTE_COMMAND] UI automation mode detected');
       
       try {
+        // Capture screenshot for initial context
+        let screenshot = null;
+        try {
+          const { BrowserWindow } = require('electron');
+          const { desktopCapturer, screen } = require('electron');
+          
+          // Get primary display
+          const primaryDisplay = screen.getPrimaryDisplay();
+          const { width, height } = primaryDisplay.bounds;
+          
+          // Capture screenshot
+          const sources = await desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width, height }
+          });
+          
+          if (sources.length > 0) {
+            screenshot = sources[0].thumbnail.toDataURL();
+            logger.info('📸 [NODE:EXECUTE_COMMAND] Captured screenshot for initial context', {
+              size: screenshot.length,
+              resolution: `${width}x${height}`
+            });
+          }
+        } catch (screenshotError) {
+          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Failed to capture screenshot', {
+            error: screenshotError.message
+          });
+        }
+        
+        // Get active window information for context
+        let activeWindowInfo = null;
+        try {
+          const windowTracker = require('../../../services/windowTracker.cjs');
+          activeWindowInfo = windowTracker.getActiveWindow();
+          logger.debug('🪟 [NODE:EXECUTE_COMMAND] Active window:', {
+            app: activeWindowInfo?.app,
+            title: activeWindowInfo?.title
+          });
+        } catch (error) {
+          logger.warn('⚠️ [NODE:EXECUTE_COMMAND] Failed to get active window:', error.message);
+        }
+        
+        // Decision: Use Computer Use (agentic) or Static Plan?
+        const useComputerUse = shouldUseComputerUse(commandMessage, context, screenshot);
+        
+        if (useComputerUse) {
+          logger.info('🌐 [NODE:EXECUTE_COMMAND] Using Computer Use agentic mode (WebSocket)');
+          
+          // Get screen dimensions for pixel-accurate coordinates
+          const { screen } = require('electron');
+          const primaryDisplay = screen.getPrimaryDisplay();
+          const { width: screenWidth, height: screenHeight } = primaryDisplay.bounds;
+          
+          // Return metadata for frontend to connect WebSocket directly
+          const intentContext = state.intentContext || { intent: intent.type, slots: {}, uiVariant: null };
+          intentContext.slots = {
+            ...intentContext.slots,
+            mode: 'computer-use-streaming',
+            goal: commandMessage,
+            screenshot: screenshot,
+            backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
+            wsUrl: process.env.BACKEND_WS_URL || 'ws://localhost:4000/computer-use',
+            context: {
+              os: process.platform,
+              userId: context.userId,
+              sessionId: context.sessionId,
+              activeApp: activeWindowInfo?.app || null,
+              activeTitle: activeWindowInfo?.title || null,
+              activeUrl: activeWindowInfo?.url || null,
+              screenWidth: screenWidth,
+              screenHeight: screenHeight,
+              screenshotWidth: screenWidth,  // Same as screen for fullscreen capture
+              screenshotHeight: screenHeight
+            }
+          };
+          state.intentContext = intentContext;
+          
+          logger.debug('📦 [NODE:EXECUTE_COMMAND] Populated intentContext for Computer Use streaming', {
+            screenDimensions: `${screenWidth}x${screenHeight}`
+          });
+          
+          // Return state without answer - frontend will handle WebSocket connection
+          return state;
+        }
+        
+        // Otherwise, use static plan generation (existing flow)
+        logger.info('📋 [NODE:EXECUTE_COMMAND] Using static plan generation');
+        
         // Prepare request payload
         const requestPayload = {
           command: commandMessage,
@@ -62,7 +171,8 @@ module.exports = async function executeCommand(state) {
           context: {
             os: process.platform,
             userId: context.userId,
-            sessionId: context.sessionId
+            sessionId: context.sessionId,
+            screenshot: screenshot
           }
         };
         

@@ -41,7 +41,8 @@ let chatWindowState = {
 // Automation state
 let automationState = {
   hasAutomation: false,
-  isVisible: true
+  isVisible: true,
+  isRunning: false
 };
 
 // Toggle lock to prevent rapid successive toggles
@@ -65,7 +66,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   // This eliminates duplication and reuses existing orchestrator logic
   
   // Handle overlay events (user interactions)
-  ipcMain.on('overlay:event', async (event, overlayEvent) => {
+  ipcMain.on('overlay:event', async (_event, overlayEvent) => {
     logger.debug('📨 [OVERLAY:IPC] Received overlay event:', {
       type: overlayEvent.type,
       intent: overlayEvent.intent,
@@ -176,6 +177,21 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
       logger.debug('🤖 [OVERLAY:IPC] Forwarding automation:started to ghost window');
       ghostWindow.webContents.send('automation:started');
     }
+    
+    // Update automation state to running
+    automationState.isRunning = true;
+    logger.debug('🏃 [OVERLAY:IPC] Automation started - setting isRunning=true');
+    
+    // Notify PromptBar of state change
+    if (promptWindow && !promptWindow.isDestroyed()) {
+      promptWindow.webContents.send('automation:state', automationState);
+    }
+    
+    // Make intent window click-through during automation
+    if (intentWindow && !intentWindow.isDestroyed()) {
+      logger.debug('🖱️ [OVERLAY:IPC] Setting intent window to ignore mouse events during automation');
+      intentWindow.setIgnoreMouseEvents(true, { forward: true });
+    }
   });
 
   ipcMain.on('automation:ended', () => {
@@ -183,17 +199,38 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
       logger.debug('✅ [OVERLAY:IPC] Forwarding automation:ended to ghost window');
       ghostWindow.webContents.send('automation:ended');
     }
+    
+    // Update automation state to not running
+    automationState.isRunning = false;
+    logger.debug('🛑 [OVERLAY:IPC] Automation ended - setting isRunning=false');
+    
+    // Notify PromptBar of state change
+    if (promptWindow && !promptWindow.isDestroyed()) {
+      promptWindow.webContents.send('automation:state', automationState);
+    }
+    
+    // Restore intent window click handling after automation
+    if (intentWindow && !intentWindow.isDestroyed()) {
+      logger.debug('🖱️ [OVERLAY:IPC] Restoring intent window mouse events after automation');
+      intentWindow.setIgnoreMouseEvents(false);
+    }
   });
 
   ipcMain.on('ghost:mouse-move', (event, data) => {
     if (ghostWindow && !ghostWindow.isDestroyed()) {
+      logger.debug(`👻 [OVERLAY:IPC] Forwarding ghost:mouse-move to ghost window: (${data.x}, ${data.y})`);
       ghostWindow.webContents.send('ghost:mouse-move', data);
+    } else {
+      logger.warn('⚠️ [OVERLAY:IPC] Ghost window not available for mouse-move');
     }
   });
 
   ipcMain.on('ghost:mouse-click', (event, data) => {
     if (ghostWindow && !ghostWindow.isDestroyed()) {
+      logger.debug(`🖱️ [OVERLAY:IPC] Forwarding ghost:mouse-click to ghost window: (${data.x}, ${data.y})`);
       ghostWindow.webContents.send('ghost:mouse-click', data);
+    } else {
+      logger.warn('⚠️ [OVERLAY:IPC] Ghost window not available for mouse-click');
     }
   });
 

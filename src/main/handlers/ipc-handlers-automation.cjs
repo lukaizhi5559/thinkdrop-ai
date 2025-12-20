@@ -13,6 +13,9 @@ const logger = require('../logger.cjs');
 let mcpClient = null;
 let overlayManager = null;
 
+// Guard to prevent concurrent replan requests
+let replanInProgress = false;
+
 /**
  * Register automation IPC handlers
  * @param {Object} client - MCP client instance
@@ -183,16 +186,69 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
+   * Fullscreen the active application
+   */
+  ipcMain.on('automation:fullscreen', async (event) => {
+    logger.info('🖥️ [IPC:AUTOMATION] Fullscreen requested');
+    
+    try {
+      const platform = process.platform;
+      
+      // Windows/Linux: Use F11 for browser fullscreen
+      if (!mcpClient) {
+        logger.error('❌ [IPC:AUTOMATION] MCP client not available');
+        throw new Error('MCP client not available');
+      }
+        
+      // Use keyboard hotkey to fullscreen/presentation mode
+      // Ctrl+Cmd+F on macOS for presentation mode (fullscreen without menubar)
+      // F11 on Windows/Linux for browser fullscreen
+      const keys = platform === 'darwin' ? ['Control', 'Command', 'F'] : ['F11'];
+      
+      logger.info(`📤 [IPC:AUTOMATION] Calling MCP command service: keyboard.hotkey`, { keys });
+      
+      const result = await mcpClient.callService(
+        'command',
+        'keyboard.hotkey',
+        { keys },
+        { timeout: 5000 }
+      );
+
+      logger.info(`📥 [IPC:AUTOMATION] MCP keyboard.hotkey result:`, result);
+
+      if (result.success) {
+        logger.info(`✅ [IPC:AUTOMATION] Fullscreen successful`);
+        event.reply('automation:fullscreen:result', { success: true });
+      } else {
+        logger.error(`❌ [IPC:AUTOMATION] Fullscreen failed:`, result.error);
+        event.reply('automation:fullscreen:result', { 
+          success: false, 
+          error: result.error || 'Failed to fullscreen' 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Fullscreen error:', error.message);
+      event.reply('automation:fullscreen:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  /**
    * Click at specific coordinates
    */
   ipcMain.on('automation:click', async (event, { x, y }) => {
-    logger.debug('🖱️  [IPC:AUTOMATION] Click at:', x, y);
+    logger.info(`🖱️ [IPC:AUTOMATION] Click requested at (${x}, ${y})`);
     
     try {
       if (!mcpClient) {
+        logger.error('❌ [IPC:AUTOMATION] MCP client not available');
         throw new Error('MCP client not available');
       }
 
+      logger.info(`📤 [IPC:AUTOMATION] Calling MCP command service: mouse.click at (${x}, ${y})`);
+      
       // Call command service to execute mouse click
       const result = await mcpClient.callService(
         'command',
@@ -201,9 +257,13 @@ function registerAutomationHandlers(client, overlay = null) {
         { timeout: 5000 }
       );
 
+      logger.info(`📥 [IPC:AUTOMATION] MCP mouse.click result:`, result);
+
       if (result.success) {
+        logger.info(`✅ [IPC:AUTOMATION] Click successful at (${x}, ${y})`);
         event.reply('automation:click:result', { success: true });
       } else {
+        logger.error(`❌ [IPC:AUTOMATION] Click failed:`, result.error);
         event.reply('automation:click:result', { 
           success: false, 
           error: result.error || 'Failed to click' 
@@ -488,11 +548,32 @@ function registerAutomationHandlers(client, overlay = null) {
    * Handle replanning request after step failure
    */
   ipcMain.on('automation:replan-needed', async (event, context) => {
+    // CRITICAL: Check if replan already in progress to prevent concurrent requests
+    if (replanInProgress) {
+      logger.warn('⚠️  [IPC:AUTOMATION] Replan already in progress, blocking concurrent request');
+      event.reply('automation:replan-result', {
+        success: false,
+        error: 'Replan already in progress'
+      });
+      return;
+    }
+    
+    // Mark replan as in progress
+    replanInProgress = true;
+    logger.info('🔒 [IPC:AUTOMATION] Replan lock acquired');
+    
+    const hasScreenshot = !!context.context?.screenshot;
+    const screenshotSize = hasScreenshot && typeof context.context.screenshot === 'string' 
+      ? context.context.screenshot.length 
+      : 0;
+    
     logger.info('🔄 [IPC:AUTOMATION] Replanning needed:', {
       planId: context.planId,
-      failedStepId: context.failedStepId,
-      failedStepIndex: context.failedStepIndex,
-      error: context.error
+      failedStepId: context.context?.failedStepId,
+      failedStepIndex: context.context?.failedStepIndex,
+      error: context.context?.error,
+      hasScreenshot: hasScreenshot,
+      screenshotSize: screenshotSize
     });
     
     try {
@@ -501,6 +582,9 @@ function registerAutomationHandlers(client, overlay = null) {
       }
 
       // Call command service to generate new plan with context
+      // Note: Frontend sends { planId, previousPlan, context: {...} }
+      const replanContext = context.context || context; // Handle both nested and flat structure
+      
       const result = await mcpClient.callService(
         'command',
         'command.automate',
@@ -510,23 +594,69 @@ function registerAutomationHandlers(client, overlay = null) {
           previousPlan: context.previousPlan,
           feedback: {
             reason: 'failure',
-            message: `Step ${context.failedStepIndex + 1} failed: ${context.error}. Failed step: ${context.failedStepDescription}`,
-            stepId: context.failedStepId
+            message: `Step ${replanContext.failedStepIndex + 1} failed: ${replanContext.error}. Failed step: ${replanContext.failedStepDescription}`,
+            stepId: replanContext.failedStepId
           },
           context: {
             os: process.platform,
             isReplanning: true,
-            requestPartialPlan: context.requestPartialPlan || false,
-            failedStepIndex: context.failedStepIndex,
-            screenshot: context.screenshot
+            requestPartialPlan: replanContext.requestPartialPlan || false,
+            failedStepIndex: replanContext.failedStepIndex,
+            screenshot: replanContext.screenshot  // ← Now correctly accessing nested screenshot
           }
         },
         { timeout: 60000 }
       );
 
-      // Command service returns { success, plan } not { success, data: { automationPlan } }
-      if (result.success && result.plan) {
+      // Check if backend needs clarification (questions present)
+      if (result.success && result.questions && result.questions.length > 0) {
+        logger.info('❓ [IPC:AUTOMATION] Backend needs clarification during replan', {
+          questionCount: result.questions.length,
+          questions: result.questions
+        });
+        
+        // Release replan lock - waiting for user input
+        replanInProgress = false;
+        logger.info('🔓 [IPC:AUTOMATION] Replan lock released - waiting for clarification');
+        
+        // Forward clarification questions to prompt window
+        const { BrowserWindow } = require('electron');
+        const promptWindow = BrowserWindow.getAllWindows().find(w => w.getTitle().includes('Prompt'));
+        
+        if (promptWindow) {
+          // Send first question to prompt bar
+          const firstQuestion = result.questions[0];
+          promptWindow.webContents.send('prompt-bar:request-clarification', {
+            question: firstQuestion.text,
+            questionId: firstQuestion.id,
+            questionType: firstQuestion.type,
+            choices: firstQuestion.choices,
+            stepIndex: context.failedStepIndex,
+            stepDescription: context.failedStepDescription,
+            allQuestions: result.questions
+          });
+          
+          logger.info('✅ [IPC:AUTOMATION] Clarification questions forwarded to prompt window');
+          
+          // Notify renderer that we're waiting for clarification
+          event.reply('automation:replan-result', {
+            success: true,
+            needsClarification: true,
+            questions: result.questions
+          });
+        } else {
+          logger.error('❌ [IPC:AUTOMATION] Prompt window not found for clarification');
+          event.reply('automation:replan-result', {
+            success: false,
+            error: 'Cannot show clarification questions - prompt window not found'
+          });
+        }
+      } else if (result.success && result.plan) {
         logger.info('✅ [IPC:AUTOMATION] Replanning successful, new plan generated');
+        
+        // Release replan lock - plan generated successfully
+        replanInProgress = false;
+        logger.info('🔓 [IPC:AUTOMATION] Replan lock released - plan generated');
         
         // Send new plan back to renderer
         event.reply('automation:replan-result', {
@@ -535,6 +665,11 @@ function registerAutomationHandlers(client, overlay = null) {
         });
       } else {
         logger.error('❌ [IPC:AUTOMATION] Replanning failed:', result.error);
+        
+        // Release replan lock on failure
+        replanInProgress = false;
+        logger.info('🔓 [IPC:AUTOMATION] Replan lock released - replan failed');
+        
         event.reply('automation:replan-result', {
           success: false,
           error: result.error || 'Failed to generate new plan'
@@ -542,6 +677,11 @@ function registerAutomationHandlers(client, overlay = null) {
       }
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION] Replan error:', error.message);
+      
+      // Release replan lock on exception
+      replanInProgress = false;
+      logger.info('🔓 [IPC:AUTOMATION] Replan lock released - exception occurred');
+      
       event.reply('automation:replan-result', {
         success: false,
         error: error.message
@@ -665,11 +805,31 @@ function registerAutomationHandlers(client, overlay = null) {
     logger.debug('▶️  [IPC:AUTOMATION] Automation started, notifying PromptBar');
     
     // Forward to all overlay windows (especially PromptBar)
-    if (overlayManager?.promptOverlay && !overlayManager.promptOverlay.isDestroyed()) {
-      overlayManager.promptOverlay.webContents.send('automation:state', {
+    if (overlayManager?.promptWindow && !overlayManager.promptWindow.isDestroyed()) {
+      logger.debug('📤 [IPC:AUTOMATION] Sending automation:state to PromptBar: isRunning=true');
+      overlayManager.promptWindow.webContents.send('automation:state', {
         hasAutomation: true,
         isVisible: false,
         isRunning: true
+      });
+    } else {
+      logger.warn('⚠️ [IPC:AUTOMATION] PromptBar window not available');
+    }
+  });
+
+  /**
+   * Handle automation completed successfully - notify PromptBar
+   */
+  ipcMain.on('automation:completed', (event) => {
+    logger.debug('✅ [IPC:AUTOMATION] Automation completed successfully, notifying PromptBar');
+    
+    // Forward to all overlay windows (especially PromptBar)
+    if (overlayManager?.promptWindow && !overlayManager.promptWindow.isDestroyed()) {
+      logger.debug('📤 [IPC:AUTOMATION] Sending automation:state to PromptBar: isRunning=false');
+      overlayManager.promptWindow.webContents.send('automation:state', {
+        hasAutomation: true,
+        isVisible: true, // Keep visible to show completion
+        isRunning: false // Stop recording icon
       });
     }
   });
@@ -681,8 +841,9 @@ function registerAutomationHandlers(client, overlay = null) {
     logger.debug('⏹️  [IPC:AUTOMATION] Automation ended, notifying PromptBar');
     
     // Forward to all overlay windows (especially PromptBar)
-    if (overlayManager?.promptOverlay && !overlayManager.promptOverlay.isDestroyed()) {
-      overlayManager.promptOverlay.webContents.send('automation:state', {
+    if (overlayManager?.promptWindow && !overlayManager.promptWindow.isDestroyed()) {
+      logger.debug('📤 [IPC:AUTOMATION] Sending automation:state to PromptBar: isRunning=false');
+      overlayManager.promptWindow.webContents.send('automation:state', {
         hasAutomation: false,
         isVisible: false,
         isRunning: false

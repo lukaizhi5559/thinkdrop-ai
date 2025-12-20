@@ -83,31 +83,31 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
   };
 
   // Position window to match PromptBar centering (60% width, centered)
-  useEffect(() => {
-    const ipcRenderer = (window as any).electron?.ipcRenderer;
-    if (!ipcRenderer) return;
+  // useEffect(() => {
+  //   const ipcRenderer = (window as any).electron?.ipcRenderer;
+  //   if (!ipcRenderer) return;
 
-    const timer = setTimeout(() => {
-      const screenWidth = window.screen.availWidth;
-      const screenHeight = window.screen.availHeight;
+  //   const timer = setTimeout(() => {
+  //     const screenWidth = window.screen.availWidth;
+  //     const screenHeight = window.screen.availHeight;
       
-      // Match PromptBar sizing: 60% width, centered
-      const cardWidth = Math.floor(screenWidth * 0.6);
-      const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
-      const x = Math.floor((screenWidth - cardWidth) / 2);
-      const y = Math.floor((screenHeight - cardHeight) / 2);
+  //     // Match PromptBar sizing: 60% width, centered
+  //     const cardWidth = Math.floor(screenWidth * 0.6);
+  //     const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
+  //     const x = Math.floor((screenWidth - cardWidth) / 2);
+  //     const y = Math.floor((screenHeight - cardHeight) / 2);
       
-      ipcRenderer.send('overlay:position-intent', {
-        x,
-        y,
-        width: cardWidth,
-        height: cardHeight,
-        animate: false
-      });
-    }, 100);
+  //     ipcRenderer.send('overlay:position-intent', {
+  //       x,
+  //       y,
+  //       width: cardWidth,
+  //       height: cardHeight,
+  //       animate: false
+  //     });
+  //   }, 100);
 
-    return () => clearTimeout(timer);
-  }, []);
+  //   return () => clearTimeout(timer);
+  // }, []);
 
   const handleClose = () => {
     // Send IPC to hide the window
@@ -145,8 +145,8 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
   return (
     <div 
       ref={cardRef}
-      className="w-full h-[calc(100vh-180px)] max-h-[600px] bg-gray-800 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
-        animate-in fade-in slide-in-from-top-4 overflow-hidden"
+      className="w-full h-[calc(50vh-W180px)] max-h-[600px] bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
+        animate-in fade-in slide-in-from-bottom-4 overflow-hidden"
     >
         {/* Header with Close Button */}
         <div className="px-6 py-4 flex items-start justify-between flex-shrink-0 overflow-y-auto max-h-[40vh]">

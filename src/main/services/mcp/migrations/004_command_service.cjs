@@ -29,7 +29,12 @@ const COMMAND_SERVICE = {
     'command.guide',
     'command.guide.execute',
     'system.query',
-    'health'
+    'health',
+    // Automation primitives
+    'keyboard.type',
+    'keyboard.hotkey',
+    'mouse.click',
+    'mouse.scroll'
   ],
   version: '1.0.0',
   trusted: true,

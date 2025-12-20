@@ -20,34 +20,34 @@ export default function WebSearchLoading({ payload }: WebSearchLoadingProps) {
   const loadingMessage = slots.loadingMessage || `Searching for ${slots.subject || '...'}`;
 
   // Position loading indicator above prompt bar
-  useEffect(() => {
-    if (!containerRef.current) return;
+  // useEffect(() => {
+  //   if (!containerRef.current) return;
 
-    const timer = setTimeout(() => {
-      const ipcRenderer = (window as any).electronAPI?.ipcRenderer;
-      if (ipcRenderer) {
-        const screenWidth = window.screen.availWidth;
-        const screenHeight = window.screen.availHeight;
+  //   const timer = setTimeout(() => {
+  //     const ipcRenderer = (window as any).electronAPI?.ipcRenderer;
+  //     if (ipcRenderer) {
+  //       const screenWidth = window.screen.availWidth;
+  //       const screenHeight = window.screen.availHeight;
         
-        // Position above prompt bar (100px prompt + 40px gap)
-        const width = 400;
-        const height = 120;
-        const x = Math.floor((screenWidth - width) / 2);
-        const y = screenHeight - 160; // 100px prompt + 60px gap
+  //       // Position above prompt bar (100px prompt + 40px gap)
+  //       const width = 400;
+  //       const height = 120;
+  //       const x = Math.floor((screenWidth - width) / 2);
+  //       const y = screenHeight - 160; // 100px prompt + 60px gap
         
-        ipcRenderer.send('overlay:position-intent', {
-          x,
-          y,
-          width,
-          height,
-          animate: false
-        });
-        console.log(`📍 [WebSearchLoading] Positioned above prompt bar at (${x}, ${y})`);
-      }
-    }, 50);
+  //       ipcRenderer.send('overlay:position-intent', {
+  //         x,
+  //         y,
+  //         width,
+  //         height,
+  //         animate: false
+  //       });
+  //       console.log(`📍 [WebSearchLoading] Positioned above prompt bar at (${x}, ${y})`);
+  //     }
+  //   }, 50);
 
-    return () => clearTimeout(timer);
-  }, []);
+  //   return () => clearTimeout(timer);
+  // }, []);
 
   return (
     <div ref={containerRef} className="fixed inset-0 flex items-center justify-center z-50 animate-in fade-in duration-300">
