@@ -24,6 +24,13 @@ export interface ClarificationQuestion {
   required?: boolean;
 }
 
+export interface ComputerUseTiming {
+  llmDecisionMs?: number;
+  totalProcessingMs?: number;
+  timeSinceLastActionMs?: number;
+  timestamp?: number;
+}
+
 export interface ComputerUseMessage {
   type: 'start' | 'screenshot' | 'action' | 'complete' | 'error' | 'status' | 'clarification' | 'clarification_needed' | 'clarification_answer';
   goal?: string;
@@ -36,10 +43,11 @@ export interface ComputerUseMessage {
   context?: any;
   questions?: ClarificationQuestion[];
   answers?: Record<string, string>;
+  timing?: ComputerUseTiming;
 }
 
 export interface ComputerUseCallbacks {
-  onAction?: (action: ComputerUseAction, iteration: number) => void;
+  onAction?: (action: ComputerUseAction, iteration: number, timing?: ComputerUseTiming) => void;
   onComplete?: (result: any) => void;
   onError?: (error: string) => void;
   onStatus?: (message: string) => void;
@@ -181,7 +189,7 @@ export class ComputerUseClient {
 
     switch (message.type) {
       case 'action':
-        await this.handleAction(message.action!, message.iteration || this.iteration);
+        await this.handleAction(message.action!, message.iteration || this.iteration, message.timing);
         break;
 
       case 'clarification':
@@ -254,11 +262,21 @@ export class ComputerUseClient {
   /**
    * Handle action from backend
    */
-  private async handleAction(action: ComputerUseAction, iteration: number): Promise<void> {
+  private async handleAction(action: ComputerUseAction, iteration: number, timing?: ComputerUseTiming): Promise<void> {
     console.log(`🎬 [COMPUTER-USE] Executing action (iteration ${iteration}):`, action.type);
     
     this.iteration = iteration;
-    this.callbacks.onAction?.(action, iteration);
+    
+    // Log timing data if available
+    if (timing) {
+      console.log('⏱️ [COMPUTER-USE] Timing data:', {
+        llmDecision: timing.llmDecisionMs ? `${(timing.llmDecisionMs / 1000).toFixed(2)}s` : 'N/A',
+        totalProcessing: timing.totalProcessingMs ? `${(timing.totalProcessingMs / 1000).toFixed(2)}s` : 'N/A',
+        frontendExecution: timing.timeSinceLastActionMs ? `${(timing.timeSinceLastActionMs / 1000).toFixed(2)}s` : 'N/A'
+      });
+    }
+    
+    this.callbacks.onAction?.(action, iteration, timing);
 
     // Check if max iterations reached
     if (iteration >= this.maxIterations) {

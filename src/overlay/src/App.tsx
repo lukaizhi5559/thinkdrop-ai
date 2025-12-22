@@ -139,7 +139,10 @@ function App() {
             sessionId: sessionId,
             text: message,
             sender: 'user',
-            metadata: {}
+            metadata: {
+              isAutomationActive: false, // Will be overridden by context if automation is active
+              clarificationMode: false
+            }
           }
         });
         

@@ -35,6 +35,35 @@ module.exports = async function parseIntent(state) {
     const messagesData = messagesResult.data || messagesResult;
     const messages = messagesData.messages || [];
     
+    // ═══════════════════════════════════════════════════════════
+    // CRITICAL: CHECK FOR CLARIFICATION ANSWER
+    // ═══════════════════════════════════════════════════════════
+    // If the most recent assistant message has needsClarification flag,
+    // this user message is a clarification answer and should force command_automate
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i];
+      if (msg.sender === 'assistant' && msg.metadata?.needsClarification) {
+        logger.info('🔄 [NODE:PARSE_INTENT] CLARIFICATION ANSWER DETECTED - Forcing command_automate intent');
+        logger.debug(`📝 [NODE:PARSE_INTENT] Original command: "${msg.metadata.originalCommand}"`);
+        logger.debug(`📝 [NODE:PARSE_INTENT] User answer: "${message}"`);
+        
+        return {
+          ...state,
+          intent: 'command_automate',
+          confidence: 1.0,
+          entities: [],
+          suggestedResponse: 'Processing clarification answer...',
+          parser: 'bypass',
+          metadata: {
+            processingTimeMs: 0,
+            bypassed: true,
+            reason: 'clarification_answer',
+            originalCommand: msg.metadata.originalCommand
+          }
+        };
+      }
+    }
+    
     // Convert to format expected by phi4 (chronological order)
     recentMessages = messages.reverse().map(msg => ({
       role: msg.sender === 'user' ? 'user' : 'assistant',

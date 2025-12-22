@@ -73,6 +73,13 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const [currentReasoning, setCurrentReasoning] = useState<string | null>(null);
   const [currentActionType, setCurrentActionType] = useState<string | null>(null);
   
+  // Timing state (for Computer Use mode)
+  const [currentTiming, setCurrentTiming] = useState<{
+    llmDecisionMs?: number;
+    totalProcessingMs?: number;
+    timeSinceLastActionMs?: number;
+  } | null>(null);
+  
   // Action history for review after completion
   const [actionHistory, setActionHistory] = useState<ActionHistoryItem[]>([]);
   
@@ -297,17 +304,29 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     computerUseClientRef.current = client;
 
     client.execute(goal, initialScreenshot, context, {
-      onAction: (action, iteration) => {
-        console.log(`🎬 [AUTOMATE] Executing action ${iteration}:`, action.type);
-        console.log(`💭 [AUTOMATE] AI Reasoning:`, action.reasoning);
+      onAction: (action, iteration, timing) => {
+        console.log('🎬 [AUTOMATE] Executing action ' + currentStepIndex + ':', action.type);
+        console.log('💭 [AUTOMATE] AI Reasoning:', action.reasoning);
         
-        setCurrentStepIndex(iteration);
-        setStatus('running');
+        // Extract timing data if available
+        if (timing) {
+          console.log('⏱️ [AUTOMATE] Timing:', {
+            llmDecision: `${((timing.llmDecisionMs || 0) / 1000).toFixed(2)}s`,
+            totalProcessing: `${((timing.totalProcessingMs || 0) / 1000).toFixed(2)}s`,
+            frontendExecution: timing.timeSinceLastActionMs ? `${(timing.timeSinceLastActionMs / 1000).toFixed(2)}s` : 'N/A'
+          });
+          setCurrentTiming(timing);
+        }
+        
+        setCurrentReasoning(action.reasoning || null);
+        setCurrentActionType(action.type || null);
         
         // Capture reasoning and action type from backend
         if (action.reasoning) {
           setCurrentReasoning(action.reasoning);
         }
+        setCurrentStepIndex(iteration);
+        setStatus('running');
         setCurrentActionType(action.type);
         
         // Record action in history
@@ -1178,6 +1197,19 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
                     <p className="text-sm text-gray-200 leading-relaxed">
                       {currentReasoning}
                     </p>
+                    {currentTiming && (
+                      <div className="mt-2 flex gap-3 text-xs text-gray-400">
+                        {currentTiming.llmDecisionMs && (
+                          <span>🧠 LLM: {(currentTiming.llmDecisionMs / 1000).toFixed(2)}s</span>
+                        )}
+                        {currentTiming.totalProcessingMs && (
+                          <span>⚙️ Backend: {(currentTiming.totalProcessingMs / 1000).toFixed(2)}s</span>
+                        )}
+                        {currentTiming.timeSinceLastActionMs && (
+                          <span>⚡ Frontend: {(currentTiming.timeSinceLastActionMs / 1000).toFixed(2)}s</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ) : null}
               </div>

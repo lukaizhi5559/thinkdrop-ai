@@ -181,6 +181,20 @@ export async function findAndClickText(text: string, context?: string): Promise<
       hasWords: words.length > 0
     });
     
+    // DEBUG: Log ALL detected text with coordinates for debugging
+    console.log('📊 [NUTJS-DEBUG] All detected text with coordinates:');
+    words.forEach((word: any, idx: number) => {
+      if (word.text && word.bbox) {
+        console.log(`  [${idx}] "${word.text}" at (${word.bbox.x0}, ${word.bbox.y0}) confidence: ${word.confidence?.toFixed(2) || 'N/A'}`);
+      }
+    });
+    
+    // DEBUG: Log full OCR text for reference
+    if (result.data?.text) {
+      console.log('📄 [NUTJS-DEBUG] Full OCR text detected:');
+      console.log(result.data.text);
+    }
+    
     // Find the text in OCR results
     const searchText = text.toLowerCase();
     let foundWord = null;
