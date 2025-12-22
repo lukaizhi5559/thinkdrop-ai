@@ -5,6 +5,9 @@
  * These are called by the PlanInterpreter to execute automation steps
  */
 
+import * as nutjsDetector from './nutjs-detector';
+import type { DetectionLocator, DetectionResult } from './nutjs-detector';
+
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
 /**
@@ -16,18 +19,15 @@ export async function captureScreenshot(): Promise<string> {
     throw new Error('IPC renderer not available');
   }
 
-  // CRITICAL: Hide UI before screenshot to avoid interference with Computer Use analysis
-  console.log('📸 [CAPABILITIES] Hiding UI for screenshot capture');
-  ipcRenderer.send('overlay:hide-for-screenshot');
-  
-  // Wait for UI to hide (100ms for animation)
-  await new Promise(resolve => setTimeout(resolve, 100));
+  // Show camera icon indicator before screenshot
+  console.log('📸 [CAPABILITIES] Showing camera indicator');
+  ipcRenderer.send('screenshot:start-indicator');
 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ipcRenderer.removeAllListeners('screenshot:captured');
       ipcRenderer.removeAllListeners('screenshot:error');
-      ipcRenderer.send('overlay:show-after-screenshot');
+      ipcRenderer.send('screenshot:end-indicator');
       reject(new Error('Screenshot capture timeout'));
     }, 10000);
 
@@ -35,8 +35,8 @@ export async function captureScreenshot(): Promise<string> {
       clearTimeout(timeout);
       ipcRenderer.removeAllListeners('screenshot:captured');
       ipcRenderer.removeAllListeners('screenshot:error');
-      console.log('📸 [CAPABILITIES] Screenshot captured, showing UI');
-      ipcRenderer.send('overlay:show-after-screenshot');
+      console.log('📸 [CAPABILITIES] Screenshot captured');
+      ipcRenderer.send('screenshot:end-indicator');
       resolve(screenshot);
     };
 
@@ -44,7 +44,7 @@ export async function captureScreenshot(): Promise<string> {
       clearTimeout(timeout);
       ipcRenderer.removeAllListeners('screenshot:captured');
       ipcRenderer.removeAllListeners('screenshot:error');
-      ipcRenderer.send('overlay:show-after-screenshot');
+      ipcRenderer.send('screenshot:end-indicator');
       reject(new Error(error));
     };
 
@@ -111,6 +111,53 @@ export async function focusApp(appName: string): Promise<void> {
 }
 
 /**
+ * Check if an application is in fullscreen mode
+ * @param appName - Name of the application to check (e.g., "Slack", "Chrome")
+ * @returns Promise<boolean> - true if app is in fullscreen, false otherwise
+ */
+export async function checkFullscreen(appName: string): Promise<boolean> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  return new Promise((resolve, _reject) => {
+    ipcRenderer.once('automation:check-fullscreen:result', (_event: any, result: any) => {
+      if (result.success) {
+        resolve(result.isFullscreen || false);
+      } else {
+        // If check fails, assume not fullscreen
+        console.warn(`⚠️ [CAPABILITIES] Fullscreen check failed: ${result.error}`);
+        resolve(false);
+      }
+    });
+
+    ipcRenderer.send('automation:check-fullscreen', { appName });
+  });
+}
+
+/**
+ * Quit an application by name
+ * @param appName - Name of the application to quit (e.g., "Slack", "Chrome")
+ */
+export async function quitApp(appName: string): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  return new Promise((resolve, reject) => {
+    ipcRenderer.once('automation:quit-app:result', (_event: any, result: any) => {
+      if (result.success) {
+        resolve();
+      } else {
+        reject(new Error(result.error || 'Failed to quit app'));
+      }
+    });
+
+    ipcRenderer.send('automation:quit-app', { appName });
+  });
+}
+
+/**
  * Open a URL in the default browser
  * @param url - URL to open
  */
@@ -147,6 +194,19 @@ export async function openUrl(url: string): Promise<void> {
  * @param submit - Whether to press Enter after typing
  */
 export async function typeText(text: string, submit: boolean = false): Promise<void> {
+  // Try nut.js native typing first (faster, more reliable)
+  try {
+    console.log(`⌨️ [CAPABILITIES] Using native nut.js typing`);
+    await nutjsDetector.typeText(text);
+    if (submit) {
+      await nutjsDetector.pressKey('Return');
+    }
+    return;
+  } catch (error: any) {
+    console.warn(`⚠️ [CAPABILITIES] Native typing failed, falling back to IPC:`, error.message);
+  }
+  
+  // Fallback to IPC if nut.js fails
   if (!ipcRenderer) {
     throw new Error('IPC renderer not available');
   }
@@ -169,6 +229,18 @@ export async function typeText(text: string, submit: boolean = false): Promise<v
  * @param keys - Array of keys to press (e.g., ["Command", "Space"])
  */
 export async function pressHotkey(keys: string[]): Promise<void> {
+  // Try nut.js native key press first
+  try {
+    console.log(`⌨️ [CAPABILITIES] Using native nut.js hotkey`);
+    const modifiers = keys.slice(0, -1);
+    const mainKey = keys[keys.length - 1];
+    await nutjsDetector.pressKey(mainKey, modifiers);
+    return;
+  } catch (error: any) {
+    console.warn(`⚠️ [CAPABILITIES] Native hotkey failed, falling back to IPC:`, error.message);
+  }
+  
+  // Fallback to IPC if nut.js fails
   if (!ipcRenderer) {
     throw new Error('IPC renderer not available');
   }
@@ -306,7 +378,91 @@ export function sendGhostMouseClick(x: number, y: number): void {
 }
 
 /**
- * Find element using Vision API and return coordinates
+ * Find element using nut.js native detection (FAST) - without clicking
+ * Used for verification (waitForElement)
+ * @param locator - Detection locator with strategy and value
+ * @returns Detection result with coordinates
+ */
+export async function findElement(locator: DetectionLocator): Promise<DetectionResult> {
+  console.log(`🔍 [CAPABILITIES] Finding element (no click):`, locator);
+  
+  // Try native nut.js detection without clicking
+  const result = await nutjsDetector.detect(locator);
+  
+  if (result.success) {
+    console.log(`✅ [CAPABILITIES] Element found:`, result.coordinates);
+    return result;
+  }
+  
+  // If native detection fails, fall back to Vision API
+  const fallbackDescription = locator.description || locator.value;
+  
+  if (fallbackDescription) {
+    console.warn(`⚠️ [CAPABILITIES] Native ${locator.strategy} detection failed, trying Vision API`);
+    
+    try {
+      const coords = await findElementWithVision(fallbackDescription, 'vision');
+      return {
+        success: true,
+        coordinates: coords
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `Both native and Vision API detection failed: ${error.message}`
+      };
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Find and click element using nut.js native detection (FAST)
+ * Supports text, image, and element strategies
+ * Falls back to Vision API if native detection fails
+ * @param locator - Detection locator with strategy and value
+ * @returns Detection result with coordinates
+ */
+export async function findAndClickElement(locator: DetectionLocator): Promise<DetectionResult> {
+  console.log(`🎯 [CAPABILITIES] Finding element with native detection:`, locator);
+  
+  // Try native nut.js detection first (100x faster)
+  const result = await nutjsDetector.detectAndClick(locator);
+  
+  if (result.success) {
+    console.log(`✅ [CAPABILITIES] Native detection successful:`, result.coordinates);
+    return result;
+  }
+  
+  // If native detection fails, fall back to Vision API
+  // Use description if available, otherwise use value as description
+  const fallbackDescription = locator.description || locator.value;
+  
+  if (fallbackDescription) {
+    console.warn(`⚠️ [CAPABILITIES] Native ${locator.strategy} detection failed, falling back to Vision API`);
+    console.log(`🔍 [CAPABILITIES] Searching for: "${fallbackDescription}"`);
+    
+    try {
+      const coords = await findElementWithVision(fallbackDescription, 'vision');
+      await nutjsDetector.clickAtCoordinates(coords.x, coords.y);
+      return {
+        success: true,
+        coordinates: coords
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `Both native and Vision API detection failed: ${error.message}`
+      };
+    }
+  }
+  
+  return result;
+}
+
+/**
+ * Find element using Vision API and return coordinates (LEGACY FALLBACK)
  * @param description - Description of element to find
  * @param strategy - Vision strategy (optional)
  * @returns Coordinates of the element

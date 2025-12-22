@@ -59,7 +59,6 @@
     "@mdx-js/react": "^3.0.0",
     "@mistralai/mistralai": "^0.1.0",
     "@nerimity/active-window-listener": "^2.0.6",
-    "@nut-tree-fork/nut-js": "^4.2.6",
     "@pinecone-database/pinecone": "^1.1.0",
     "@playwright/mcp": "^0.0.36",
     "@preact/signals-react": "^3.2.1",
@@ -124,7 +123,7 @@
     "tailwind-merge": "^3.3.1",
     "tailwindcss": "^3.3.0",
     "tailwindcss-animate": "^1.0.7",
-    "tesseract.js": "^6.0.1",
+    "tesseract.js": "^7.0.0",
     "winston": "^3.11.0",
     "ws": "^8.14.0"
   },

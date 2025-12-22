@@ -8,6 +8,15 @@
 const { ipcMain, shell } = require('electron');
 const logger = require('../logger.cjs');
 
+// Try to load libnut for native automation (built from source)
+let libnut = null;
+try {
+  libnut = require('libnut');
+  logger.info('✅ [IPC:AUTOMATION] libnut loaded successfully - native automation enabled');
+} catch (error) {
+  logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, falling back to MCP:', error.message);
+}
+
 // We'll use the command service via MCP for actual NutJS execution
 // This keeps the automation logic centralized
 let mcpClient = null;
@@ -40,9 +49,46 @@ function registerAutomationHandlers(client, overlay = null) {
         const { promisify } = require('util');
         const execAsync = promisify(exec);
         
-        await execAsync(`osascript -e 'tell application "${appName}" to activate'`);
+        // First, check if the app is actually installed
+        try {
+          const { stdout: checkResult } = await execAsync(
+            `osascript -e 'tell application "System Events" to get name of every application process' | grep -i "${appName}"`
+          );
+          logger.debug(`🔍 [IPC:AUTOMATION] App check result:`, checkResult.trim());
+        } catch (checkError) {
+          // App might not be running, try to check if it exists at all
+          logger.warn(`⚠️ [IPC:AUTOMATION] App "${appName}" not currently running, attempting to launch...`);
+        }
         
-        event.reply('automation:focus-app:result', { success: true });
+        // Try to activate the app
+        const { stdout, stderr } = await execAsync(`osascript -e 'tell application "${appName}" to activate'`);
+        
+        if (stderr) {
+          logger.error(`❌ [IPC:AUTOMATION] AppleScript stderr:`, stderr);
+          event.reply('automation:focus-app:result', { 
+            success: false, 
+            error: `Failed to focus "${appName}": ${stderr}` 
+          });
+          return;
+        }
+        
+        logger.debug(`✅ [IPC:AUTOMATION] Successfully activated "${appName}"`);
+        
+        // Wait for app focus to settle and prevent keyboard event leakage
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        // Verify the app is actually focused
+        const { stdout: frontmostApp } = await execAsync(
+          `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`
+        );
+        const actualApp = frontmostApp.trim();
+        logger.debug(`🎯 [IPC:AUTOMATION] Frontmost app after focus: "${actualApp}"`);
+        
+        if (!actualApp.toLowerCase().includes(appName.toLowerCase())) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] Expected "${appName}" but got "${actualApp}"`);
+        }
+        
+        event.reply('automation:focus-app:result', { success: true, actualApp });
       } else {
         // For other platforms, we'd need platform-specific logic
         event.reply('automation:focus-app:result', { 
@@ -53,6 +99,84 @@ function registerAutomationHandlers(client, overlay = null) {
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION] Focus app error:', error.message);
       event.reply('automation:focus-app:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  // Check if app is in fullscreen mode
+  ipcMain.on('automation:check-fullscreen', async (event, { appName }) => {
+    logger.debug('🔍 [IPC:AUTOMATION] Check fullscreen for:', appName);
+    
+    try {
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // AppleScript to check if frontmost window is fullscreen
+        const script = `
+          tell application "System Events"
+            tell process "${appName}"
+              if exists (window 1) then
+                get value of attribute "AXFullScreen" of window 1
+              else
+                return false
+              end if
+            end tell
+          end tell
+        `;
+        
+        const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+        const isFullscreen = stdout.trim() === 'true';
+        
+        logger.debug(`✅ [IPC:AUTOMATION] ${appName} fullscreen status: ${isFullscreen}`);
+        event.reply('automation:check-fullscreen:result', { 
+          success: true, 
+          isFullscreen 
+        });
+      } else {
+        event.reply('automation:check-fullscreen:result', { 
+          success: false, 
+          error: 'Fullscreen check not implemented for this platform' 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Check fullscreen error:', error.message);
+      event.reply('automation:check-fullscreen:result', { 
+        success: false, 
+        error: error.message,
+        isFullscreen: false
+      });
+    }
+  });
+
+  // Quit app handler
+  ipcMain.on('automation:quit-app', async (event, { appName }) => {
+    logger.debug('🚪 [IPC:AUTOMATION] Quit app:', appName);
+    
+    try {
+      // For macOS, use AppleScript to quit app
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        await execAsync(`osascript -e 'tell application "${appName}" to quit'`);
+        
+        logger.debug(`✅ [IPC:AUTOMATION] Successfully quit ${appName}`);
+        event.reply('automation:quit-app:result', { success: true });
+      } else {
+        // For other platforms, we'd need platform-specific logic
+        event.reply('automation:quit-app:result', { 
+          success: false, 
+          error: 'Quit app not implemented for this platform' 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Quit app error:', error.message);
+      event.reply('automation:quit-app:result', { 
         success: false, 
         error: error.message 
       });
@@ -186,46 +310,35 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
-   * Fullscreen the active application
+   * Fullscreen the active application using native libnut
    */
   ipcMain.on('automation:fullscreen', async (event) => {
     logger.info('🖥️ [IPC:AUTOMATION] Fullscreen requested');
     
+    if (!libnut) {
+      event.reply('automation:fullscreen:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
+    
     try {
       const platform = process.platform;
       
-      // Windows/Linux: Use F11 for browser fullscreen
-      if (!mcpClient) {
-        logger.error('❌ [IPC:AUTOMATION] MCP client not available');
-        throw new Error('MCP client not available');
-      }
-        
-      // Use keyboard hotkey to fullscreen/presentation mode
-      // Ctrl+Cmd+F on macOS for presentation mode (fullscreen without menubar)
-      // F11 on Windows/Linux for browser fullscreen
-      const keys = platform === 'darwin' ? ['Control', 'Command', 'F'] : ['F11'];
-      
-      logger.info(`📤 [IPC:AUTOMATION] Calling MCP command service: keyboard.hotkey`, { keys });
-      
-      const result = await mcpClient.callService(
-        'command',
-        'keyboard.hotkey',
-        { keys },
-        { timeout: 5000 }
-      );
-
-      logger.info(`📥 [IPC:AUTOMATION] MCP keyboard.hotkey result:`, result);
-
-      if (result.success) {
-        logger.info(`✅ [IPC:AUTOMATION] Fullscreen successful`);
-        event.reply('automation:fullscreen:result', { success: true });
+      // macOS: Ctrl+Cmd+F for presentation mode (fullscreen without menubar)
+      // Windows/Linux: F11 for fullscreen
+      if (platform === 'darwin') {
+        logger.debug('🖥️ [IPC:AUTOMATION] Pressing Ctrl+Cmd+F for macOS presentation mode');
+        // Use keyTap with modifiers array (same format as native-hotkey handler)
+        libnut.keyTap('f', ['control', 'command']);
       } else {
-        logger.error(`❌ [IPC:AUTOMATION] Fullscreen failed:`, result.error);
-        event.reply('automation:fullscreen:result', { 
-          success: false, 
-          error: result.error || 'Failed to fullscreen' 
-        });
+        logger.debug('🖥️ [IPC:AUTOMATION] Pressing F11 for Windows/Linux fullscreen');
+        libnut.keyTap('f11');
       }
+      
+      logger.info('✅ [IPC:AUTOMATION] Fullscreen hotkey sent successfully');
+      event.reply('automation:fullscreen:result', { success: true });
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION] Fullscreen error:', error.message);
       event.reply('automation:fullscreen:result', { 
@@ -236,41 +349,49 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
-   * Click at specific coordinates
+   * Click at specific coordinates using native libnut
    */
   ipcMain.on('automation:click', async (event, { x, y }) => {
-    logger.info(`🖱️ [IPC:AUTOMATION] Click requested at (${x}, ${y})`);
+    logger.info(`🖱️ [IPC:AUTOMATION:NATIVE] Click requested at (${x}, ${y})`);
+    
+    if (!libnut) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] libnut not available');
+      event.reply('automation:click:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
     
     try {
-      if (!mcpClient) {
-        logger.error('❌ [IPC:AUTOMATION] MCP client not available');
-        throw new Error('MCP client not available');
-      }
-
-      logger.info(`📤 [IPC:AUTOMATION] Calling MCP command service: mouse.click at (${x}, ${y})`);
+      // CRITICAL: Blur all Electron windows to prevent focus stealing
+      logger.debug(`🔍 [IPC:AUTOMATION:NATIVE] Blurring all Electron windows before click`);
+      const { BrowserWindow } = require('electron');
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach(win => {
+        if (win && !win.isDestroyed()) {
+          win.blur();
+        }
+      });
       
-      // Call command service to execute mouse click
-      const result = await mcpClient.callService(
-        'command',
-        'mouse.click',
-        { x, y },
-        { timeout: 5000 }
-      );
-
-      logger.info(`📥 [IPC:AUTOMATION] MCP mouse.click result:`, result);
-
-      if (result.success) {
-        logger.info(`✅ [IPC:AUTOMATION] Click successful at (${x}, ${y})`);
-        event.reply('automation:click:result', { success: true });
-      } else {
-        logger.error(`❌ [IPC:AUTOMATION] Click failed:`, result.error);
-        event.reply('automation:click:result', { 
-          success: false, 
-          error: result.error || 'Failed to click' 
-        });
-      }
+      // Small delay to ensure focus transfer completes
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      // Move mouse to target position
+      logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Moving mouse to (${x}, ${y})`);
+      libnut.moveMouse(x, y);
+      
+      // Small delay to ensure mouse movement completes
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Click at the position
+      logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Clicking at (${x}, ${y})`);
+      libnut.mouseClick();
+      
+      logger.info(`✅ [IPC:AUTOMATION:NATIVE] Click successful at (${x}, ${y})`);
+      event.reply('automation:click:result', { success: true });
     } catch (error) {
-      logger.error('❌ [IPC:AUTOMATION] Click error:', error.message);
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Click error:', error.message);
       event.reply('automation:click:result', { 
         success: false, 
         error: error.message 
@@ -498,19 +619,11 @@ function registerAutomationHandlers(client, overlay = null) {
     logger.debug('📸 [IPC:AUTOMATION] Capture screenshot');
     
     try {
-      // Hide overlay before screenshot
-      if (overlayManager && overlayManager.intentWindow) {
-        overlayManager.intentWindow.webContents.send('automation:hide-overlay');
-        logger.debug('🙈 [IPC:AUTOMATION] Hiding overlay for screenshot');
-        // Wait for overlay to hide
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-      
       const { desktopCapturer, screen } = require('electron');
       const displays = screen.getAllDisplays();
       const primaryDisplay = displays[0];
       
-      // Capture screenshot using Electron's native API
+      // Capture full screen
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: {
@@ -521,26 +634,17 @@ function registerAutomationHandlers(client, overlay = null) {
       
       if (sources.length > 0) {
         const screenshot = sources[0].thumbnail.toDataURL();
-        logger.debug('✅ [IPC:AUTOMATION] Screenshot captured successfully');
+        logger.debug('✅ [IPC:AUTOMATION] Screenshot captured successfully', {
+          size: screenshot.length
+        });
         event.reply('screenshot:captured', screenshot);
       } else {
         logger.error('❌ [IPC:AUTOMATION] No screen sources found');
         event.reply('screenshot:error', 'No screen sources found');
       }
-      
-      // Show overlay after screenshot
-      if (overlayManager && overlayManager.intentWindow) {
-        overlayManager.intentWindow.webContents.send('automation:show-overlay');
-        logger.debug('👁️  [IPC:AUTOMATION] Showing overlay after screenshot');
-      }
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION] Screenshot error:', error.message);
       event.reply('screenshot:error', error.message);
-      
-      // Make sure to show overlay even on error
-      if (overlayManager && overlayManager.intentWindow) {
-        overlayManager.intentWindow.webContents.send('automation:show-overlay');
-      }
     }
   });
 
@@ -695,7 +799,9 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('prompt-bar:request-clarification', async (event, context) => {
     logger.info('❓ [IPC:AUTOMATION] Clarification requested:', {
       question: context.question,
-      stepIndex: context.stepIndex
+      stepIndex: context.stepIndex,
+      senderWindowTitle: event.sender.getTitle ? event.sender.getTitle() : 'unknown',
+      allWindowTitles: BrowserWindow.getAllWindows().map(w => w.getTitle())
     });
     
     // Forward to prompt window
@@ -703,10 +809,15 @@ function registerAutomationHandlers(client, overlay = null) {
     const promptWindow = BrowserWindow.getAllWindows().find(w => w.getTitle().includes('Prompt'));
     
     if (promptWindow) {
+      logger.info('✅ [IPC:AUTOMATION] Found prompt window, forwarding clarification request');
       promptWindow.webContents.send('prompt-bar:request-clarification', context);
       logger.info('✅ [IPC:AUTOMATION] Clarification request forwarded to prompt window');
     } else {
       logger.error('❌ [IPC:AUTOMATION] Prompt window not found');
+      logger.error('❌ [IPC:AUTOMATION] Available windows:', BrowserWindow.getAllWindows().map(w => ({
+        title: w.getTitle(),
+        id: w.id
+      })));
     }
   });
 
@@ -869,6 +980,243 @@ function registerAutomationHandlers(client, overlay = null) {
       failedStepId: context.stepId,
       failedStepIndex: context.stepIndex
     });
+  });
+
+  /**
+   * Native libnut automation handlers (fast, local)
+   */
+  
+  // Native mouse click
+  ipcMain.on('automation:native-click', async (event, { x, y }) => {
+    logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Click at (${x}, ${y})`);
+    
+    if (!libnut) {
+      event.reply('automation:native-click:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
+    
+    try {
+      libnut.moveMouse(x, y);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      libnut.mouseClick();
+      
+      logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Click successful at (${x}, ${y})`);
+      event.reply('automation:native-click:result', { success: true });
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Click error:', error.message);
+      event.reply('automation:native-click:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+  
+  // Native keyboard typing
+  ipcMain.on('automation:native-type', async (event, { text }) => {
+    logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Type text: "${text.substring(0, 50)}..."`);
+    
+    if (!libnut) {
+      event.reply('automation:native-type:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
+    
+    try {
+      // CRITICAL: Blur all Electron windows to ensure target app has focus
+      logger.debug(`🔍 [IPC:AUTOMATION:NATIVE] Blurring all Electron windows before typing`);
+      const { BrowserWindow } = require('electron');
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach(win => {
+        if (win && !win.isDestroyed()) {
+          win.blur();
+        }
+      });
+      
+      // Longer delay to ensure focus transfer completes and input field is ready
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      // Click at current mouse position to ensure focus (in case input field lost focus)
+      logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Clicking at current position to ensure focus`);
+      const mousePos = libnut.getMousePos();
+      libnut.mouseClick();
+      
+      // Small delay after click
+      await new Promise(resolve => setTimeout(resolve, 100));
+      
+      libnut.typeString(text);
+      
+      logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Text typed successfully`);
+      event.reply('automation:native-type:result', { success: true });
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Type error:', error.message);
+      event.reply('automation:native-type:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+  
+  // Native keyboard shortcut
+  ipcMain.on('automation:native-hotkey', async (event, { key, modifiers }) => {
+    logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Hotkey: ${modifiers?.join('+')}+${key}`);
+    
+    if (!libnut) {
+      event.reply('automation:native-hotkey:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
+    
+    try {
+      // Ensure modifiers is an array
+      const mods = Array.isArray(modifiers) ? modifiers : [];
+      
+      // CRITICAL: Do NOT blur Electron windows if this is Cmd+Q
+      // We want to quit the target app, not Electron
+      // const isCmdQ = mods.includes('command') && key.toLowerCase() === 'q';
+      
+      // if (!isCmdQ) {
+      //   // Blur all Electron windows to ensure target app has focus
+      //   logger.debug(`🔍 [IPC:AUTOMATION:NATIVE] Blurring all Electron windows before hotkey`);
+      //   const { BrowserWindow } = require('electron');
+      //   const windows = BrowserWindow.getAllWindows();
+      //   windows.forEach(win => {
+      //     if (win && !win.isDestroyed()) {
+      //       win.blur();
+      //     }
+      //   });
+        
+      //   // Small delay to ensure focus transfer completes
+      //   await new Promise(resolve => setTimeout(resolve, 100));
+      // } else {
+      //   logger.debug(`⚠️ [IPC:AUTOMATION:NATIVE] Cmd+Q detected - NOT blurring Electron windows to avoid quitting Electron`);
+      // }
+      
+      // Map common key names to libnut key codes (only keys that need translation)
+      // libnut uses different key names on different platforms
+      const isMac = process.platform === 'darwin';
+      
+      const keyMap = {
+        // Enter key: 'return' on macOS, 'enter' on Windows/Linux
+        'enter': isMac ? 'return' : 'enter',
+        
+        // Escape shorthand
+        'esc': 'escape'
+      };
+      
+      const normalizedKey = key.toLowerCase();
+      const libnutKey = keyMap[normalizedKey] || normalizedKey;
+      
+      // Log for debugging
+      logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Key: "${key}" -> "${libnutKey}", Modifiers: [${mods.join(', ')}]`);
+      
+      // Press the key with modifiers
+      if (mods.length > 0) {
+        libnut.keyTap(libnutKey, mods);
+      } else {
+        libnut.keyTap(libnutKey);
+      }
+      
+      logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Hotkey pressed successfully`);
+      event.reply('automation:native-hotkey:result', { success: true });
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Hotkey error:', error.message);
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Key:', key, 'Modifiers:', modifiers);
+      event.reply('automation:native-hotkey:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+  
+  // Test native automation
+  ipcMain.on('automation:native-test', async (event) => {
+    logger.info('🧪 [IPC:AUTOMATION:NATIVE] Running native automation test');
+    
+    if (!libnut) {
+      event.reply('automation:native-test:result', { 
+        success: false, 
+        error: 'libnut not available' 
+      });
+      return;
+    }
+    
+    try {
+      const screenSize = libnut.getScreenSize();
+      const currentPos = libnut.getMousePos();
+      
+      logger.info('📐 [IPC:AUTOMATION:NATIVE] Screen size:', screenSize);
+      logger.info('🖱️ [IPC:AUTOMATION:NATIVE] Current mouse:', currentPos);
+      
+      event.reply('automation:native-test:result', { 
+        success: true,
+        screenSize,
+        currentPos
+      });
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Test error:', error.message);
+      event.reply('automation:native-test:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+  
+  // Capture screen for OCR
+  ipcMain.on('automation:capture-screen', async (event) => {
+    logger.debug('📸 [IPC:AUTOMATION:NATIVE] Capturing screen for OCR');
+    
+    try {
+      // CRITICAL: Blur all Electron windows before capture to prevent focus stealing
+      logger.debug('🔍 [IPC:AUTOMATION:NATIVE] Blurring all Electron windows before screenshot');
+      const { BrowserWindow } = require('electron');
+      const windows = BrowserWindow.getAllWindows();
+      windows.forEach(win => {
+        if (win && !win.isDestroyed()) {
+          win.blur();
+        }
+      });
+      
+      // Small delay to ensure focus transfer completes
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      const { screen, desktopCapturer } = require('electron');
+      
+      // Get primary display
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.size;
+      
+      // Capture screen using Electron's desktopCapturer
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width, height }
+      });
+      
+      if (!sources || sources.length === 0) {
+        throw new Error('No screen sources available');
+      }
+      
+      // Get the first screen source (primary display)
+      const screenshot = sources[0].thumbnail.toDataURL();
+      
+      logger.debug('✅ [IPC:AUTOMATION:NATIVE] Screen captured successfully');
+      event.reply('automation:capture-screen:result', { 
+        success: true,
+        screenshot: screenshot
+      });
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Screen capture error:', error.message);
+      event.reply('automation:capture-screen:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
   });
 
   logger.debug('✅ [IPC:AUTOMATION] Automation IPC handlers registered');

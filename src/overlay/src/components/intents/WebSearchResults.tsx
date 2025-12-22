@@ -145,7 +145,7 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
   return (
     <div 
       ref={cardRef}
-      className="w-full h-[calc(50vh-W180px)] max-h-[600px] bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
+      className="w-full bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col 
         animate-in fade-in slide-in-from-bottom-4 overflow-hidden"
     >
         {/* Header with Close Button */}
@@ -160,7 +160,7 @@ export default function WebSearchResults({ payload, onEvent }: WebSearchResultsP
               </h3>
             </div>
             {answer && (
-              <p className="text-sm text-white/80 leading-relaxed">
+              <p className="text-sm text-white/80">
                 {answer}
               </p>
             )}

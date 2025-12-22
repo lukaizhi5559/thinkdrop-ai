@@ -6,7 +6,7 @@
  */
 
 import { OverlayPayload } from '../../../../types/overlay-intents';
-import { Play, Pause, X, CheckCircle, Loader2, AlertCircle, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, Pause, X, CheckCircle, Loader2, AlertCircle, Clock, ChevronDown, ChevronUp, Camera } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { PlanInterpreter } from '../../automation/interpreter';
 import { ComputerUseClient, ClarificationQuestion } from '../../automation/ComputerUseClient';
@@ -28,6 +28,15 @@ interface AutomationStep {
   status?: 'pending' | 'running' | 'completed' | 'failed';
 }
 
+interface ActionHistoryItem {
+  iteration: number;
+  type: string;
+  reasoning: string;
+  timestamp: number;
+  status: 'completed' | 'failed';
+  error?: string;
+}
+
 export default function CommandAutomateProgress({ payload, onEvent }: CommandAutomateProgressProps) {
   const { slots } = payload;
   
@@ -43,7 +52,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [status, setStatus] = useState<'running' | 'paused' | 'completed' | 'error'>('running');
   const [error, setError] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(false); // Hidden by default in Computer Use mode
+  const [isVisible, setIsVisible] = useState(true); // Visible by default to show automation progress
   const [showAllSteps, setShowAllSteps] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const interpreterRef = useRef<PlanInterpreter | null>(null);
@@ -64,9 +73,18 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const [currentReasoning, setCurrentReasoning] = useState<string | null>(null);
   const [currentActionType, setCurrentActionType] = useState<string | null>(null);
   
+  // Action history for review after completion
+  const [actionHistory, setActionHistory] = useState<ActionHistoryItem[]>([]);
+  
   // Clarification state
   const [clarificationQuestions, setClarificationQuestions] = useState<ClarificationQuestion[]>([]);
   const clarificationResolveRef = useRef<((answers: Record<string, string>) => void) | null>(null);
+  
+  // Screenshot indicator state
+  const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
+  
+  // Completion result state (for comparison tasks and final summaries)
+  const [completionResult, setCompletionResult] = useState<any>(null);
 
   // Get data from slots
   const steps: AutomationStep[] = slots.steps || [];
@@ -187,20 +205,25 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     const handleClarificationAnswer = (_event: any, data: { answer: string; questionId?: string; stepIndex: number }) => {
       console.log('✅ [AUTOMATE] Received clarification answer:', data);
       
-      setIsReplanning(true);
-      setStatus('error');
-      setError(`Replanning with your answer: "${data.answer}"...`);
-      
-      // Send replan request with clarification answer
-      if (ipcRenderer) {
-        ipcRenderer.send('automation:replan-with-clarification', {
-          planId,
-          failedStepIndex: data.stepIndex,
-          clarificationAnswer: data.answer,
-          questionId: data.questionId,
-          previousPlan: automationPlan
-        });
+      // CRITICAL: Only handle replan for static plan mode
+      // Computer Use mode has its own handler in a separate useEffect (line 945)
+      if (!isComputerUseMode) {
+        setIsReplanning(true);
+        setStatus('error');
+        setError(`Replanning with your answer: "${data.answer}"...`);
+        
+        // Send replan request with clarification answer
+        if (ipcRenderer) {
+          ipcRenderer.send('automation:replan-with-clarification', {
+            planId,
+            failedStepIndex: data.stepIndex,
+            clarificationAnswer: data.answer,
+            questionId: data.questionId,
+            previousPlan: automationPlan
+          });
+        }
       }
+      // For Computer Use mode, do nothing - let the other handler (line 945) process it
     };
 
     ipcRenderer.on('automation:step-started', handleStepStarted);
@@ -231,6 +254,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       
       if (ipcRenderer) {
         console.log('📤 [AUTOMATE] Sending automation:started to main process');
+        // Main process will forward automation:state to PromptBar with isRunning=true
         ipcRenderer.send('automation:started');
       }
       return;
@@ -286,6 +310,18 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         }
         setCurrentActionType(action.type);
         
+        // Record action in history
+        setActionHistory(prev => [
+          ...prev,
+          {
+            iteration,
+            type: action.type,
+            reasoning: action.reasoning || 'No reasoning provided',
+            timestamp: Date.now(),
+            status: 'completed'
+          }
+        ]);
+        
         // Show action in UI
         if (ipcRenderer) {
           ipcRenderer.send('automation:step-started', {
@@ -305,25 +341,41 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           
           // Send first question to prompt bar for user input
           if (ipcRenderer && questions.length > 0) {
+            console.log('📤 [AUTOMATE] Sending IPC event: prompt-bar:request-clarification');
+            console.log('📤 [AUTOMATE] IPC data:', {
+              question: questions.map((q, idx) => `Q${idx + 1}: ${q.question}`).join('\n\n'),
+              stepDescription: 'Computer Use Automation',
+              stepIndex: iteration,
+              questionId: questions[0].id
+            });
             ipcRenderer.send('prompt-bar:request-clarification', {
               question: questions.map((q, idx) => `Q${idx + 1}: ${q.question}`).join('\n\n'),
               stepDescription: 'Computer Use Automation',
               stepIndex: iteration,
               questionId: questions[0].id
             });
+            console.log('✅ [AUTOMATE] IPC event sent successfully');
+          } else {
+            console.error('❌ [AUTOMATE] Cannot send IPC event:', {
+              hasIpcRenderer: !!ipcRenderer,
+              questionsLength: questions.length
+            });
           }
-          
-          // Keep status as running but show clarification UI
-          setStatus('running');
         });
       },
       onComplete: (result) => {
-        console.log('✅ [AUTOMATE] Computer Use complete:', result);
+        console.log('✅ [AUTOMATE] Computer Use completed:', result);
         setStatus('completed');
-        setIsVisible(true); // Show panel on completion
+        setIsVisible(true); // Show on completion for review
+        setCompletionResult(result); // Store result for display (comparison verdicts, etc.)
         
         if (ipcRenderer) {
-          ipcRenderer.send('automation:completed', { planId: `computer-use-${Date.now()}` });
+          ipcRenderer.send('automation:completed', {
+            planId: `computer-use-${Date.now()}`,
+            success: true,
+            result
+          });
+          // Main process will forward automation:state to PromptBar with isRunning=false
           ipcRenderer.send('automation:ended');
         }
       },
@@ -331,10 +383,27 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         console.error('❌ [AUTOMATE] Computer Use error:', error);
         setStatus('error');
         setError(error);
-        // Show panel only on error so user can see what went wrong
-        setIsVisible(true);
+        setIsVisible(true); // Show on error
+        
+        // Mark last action as failed
+        setActionHistory(prev => {
+          if (prev.length === 0) return prev;
+          const updated = [...prev];
+          updated[updated.length - 1] = {
+            ...updated[updated.length - 1],
+            status: 'failed',
+            error
+          };
+          return updated;
+        });
         
         if (ipcRenderer) {
+          ipcRenderer.send('automation:completed', {
+            planId: `computer-use-${Date.now()}`,
+            success: false,
+            error
+          });
+          // Main process will forward automation:state to PromptBar with isRunning=false
           ipcRenderer.send('automation:ended');
         }
       },
@@ -894,33 +963,30 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     };
   }, [clarificationQuestions]);
 
-  // Hide overlay during screenshots to prevent it from appearing in vision API calls
+  // Show camera indicator during screenshots
   useEffect(() => {
     if (!ipcRenderer) return;
 
-    const handleHideForScreenshot = () => {
-      console.log('🙈 [AUTOMATE] Hiding overlay for screenshot');
-      setIsVisible(false);
+    const handleStartIndicator = () => {
+      console.log('📸 [AUTOMATE] Screenshot starting - showing camera indicator');
+      setIsCapturingScreenshot(true);
     };
 
-    const handleShowAfterScreenshot = () => {
-      console.log('👁️  [AUTOMATE] Showing overlay after screenshot');
-      // Only show if we're in paused/debug mode, not during active automation
-      if (status === 'paused' || status === 'error' || status === 'completed') {
-        setIsVisible(true);
-      }
+    const handleEndIndicator = () => {
+      console.log('📸 [AUTOMATE] Screenshot complete - hiding camera indicator');
+      setIsCapturingScreenshot(false);
     };
 
-    ipcRenderer.on('automation:hide-overlay', handleHideForScreenshot);
-    ipcRenderer.on('automation:show-overlay', handleShowAfterScreenshot);
+    ipcRenderer.on('screenshot:start-indicator', handleStartIndicator);
+    ipcRenderer.on('screenshot:end-indicator', handleEndIndicator);
 
     return () => {
       if (ipcRenderer.removeListener) {
-        ipcRenderer.removeListener('automation:hide-overlay', handleHideForScreenshot);
-        ipcRenderer.removeListener('automation:show-overlay', handleShowAfterScreenshot);
+        ipcRenderer.removeListener('screenshot:start-indicator', handleStartIndicator);
+        ipcRenderer.removeListener('screenshot:end-indicator', handleEndIndicator);
       }
     };
-  }, [status]);
+  }, []);
 
   // Position window based on screen dimensions
   // useEffect(() => {
@@ -1066,13 +1132,17 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl pointer-events-none">
         <div 
           ref={cardRef}
-          className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300"
+          className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300 max-h-[60vh]"
         >
           {/* Compact Header with AI Reasoning */}
           <div className="px-4 py-3">
             <div className="flex items-start gap-3">
               <div className="flex-shrink-0 mt-0.5">
-                <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                {isCapturingScreenshot ? (
+                  <Camera className="w-5 h-5 text-green-400 animate-pulse" />
+                ) : (
+                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                )}
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
@@ -1080,7 +1150,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
                     {goal}
                   </p> */}
                   <span className="text-xs text-gray-400">
-                    Step {currentStepIndex + 1}/{totalSteps}
+                    {isCapturingScreenshot ? '📸 Capturing screenshot...' : `Actions ${currentStepIndex + 1}`}
                   </span>
                 </div>
                 {/* Show clarification questions if present, otherwise show reasoning */}
@@ -1171,23 +1241,30 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         <div className="px-6 py-4 border-b border-gray-700/50 flex-shrink-0">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-gray-300">
-              Step {currentStepIndex + 1} of {totalSteps}
+              {isComputerUseMode 
+                ? `Action ${currentStepIndex + 1}` 
+                : `Step ${currentStepIndex + 1} of ${totalSteps}`
+              }
             </span>
-            <span className="text-sm text-gray-400">
-              {Math.round(progress)}%
-            </span>
+            {!isComputerUseMode && (
+              <span className="text-sm text-gray-400">
+                {Math.round(progress)}%
+              </span>
+            )}
           </div>
-          <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
-            <div
-              className={`h-full transition-all duration-300 ${
-                status === 'error' ? 'bg-red-500' :
-                status === 'completed' ? 'bg-green-500' :
-                status === 'paused' ? 'bg-yellow-500' :
-                'bg-blue-500'
-              }`}
-              style={{ width: `${progress}%` }}
-            />
-          </div>
+          {!isComputerUseMode && (
+            <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-300 ${
+                  status === 'error' ? 'bg-red-500' :
+                  status === 'completed' ? 'bg-green-500' :
+                  status === 'paused' ? 'bg-yellow-500' :
+                  'bg-blue-500'
+                }`}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          )}
           
           {/* AI Reasoning Display (Computer Use mode) */}
           {isComputerUseMode && currentReasoning && status === 'running' && (
@@ -1209,7 +1286,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           )}
         </div>
 
-        {/* Steps Stepper */}
+        {/* Action History or Steps */}
         <div className="border-b border-gray-700/50 flex-1 overflow-y-auto">
           {/* Toggle Button */}
           <div className="flex items-center gap-2 px-6 py-3 border-b border-gray-700/50">
@@ -1218,7 +1295,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
               className="flex-1 flex items-center justify-between hover:bg-gray-800/50 transition-colors rounded px-2 py-1"
             >
               <span className="text-sm text-gray-300">
-                {showAllSteps ? 'Hide' : 'Show'} all steps ({totalSteps})
+                {showAllSteps ? 'Hide' : 'Show'} all {isComputerUseMode ? `actions (${actionHistory.length})` : `steps (${totalSteps})`}
               </span>
               {showAllSteps ? (
                 <ChevronUp className="w-4 h-4 text-gray-400" />
@@ -1238,11 +1315,70 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
             </button>
           </div>
 
-          {/* All Steps List */}
+          {/* Action History (Computer Use Mode) or Steps List (Static Plan Mode) */}
           {showAllSteps && (
             <div className="px-6 pb-4">
-              <div className="space-y-2">
-                {steps.map((step, index) => {
+              {isComputerUseMode ? (
+                /* Action History Display */
+                <div className="space-y-2">
+                  {actionHistory.map((action) => (
+                    <div
+                      key={`action-${action.iteration}-${action.timestamp}`}
+                      className={`rounded-lg transition-colors ${
+                        action.status === 'failed' ? 'bg-red-500/5 border border-red-500/20' :
+                        'bg-gray-800/30 border border-gray-700/30'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3 p-3">
+                        {/* Status Icon */}
+                        <div className="flex-shrink-0 w-6 h-6 flex items-center justify-center">
+                          {action.status === 'completed' ? (
+                            <CheckCircle className="w-5 h-5 text-green-400" />
+                          ) : (
+                            <AlertCircle className="w-5 h-5 text-red-400" />
+                          )}
+                        </div>
+
+                        {/* Action Details */}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-xs font-medium text-gray-500">
+                              Action {action.iteration}
+                            </span>
+                            <span className={`text-xs font-mono px-2 py-0.5 rounded ${
+                              action.status === 'failed' ? 'bg-red-500/20 text-red-300' :
+                              'bg-blue-500/20 text-blue-300'
+                            }`}>
+                              {action.type}
+                            </span>
+                          </div>
+                          <p className={`text-sm leading-relaxed ${
+                            action.status === 'failed' ? 'text-red-300' : 'text-gray-300'
+                          }`}>
+                            {action.reasoning}
+                          </p>
+                          {action.error && (
+                            <div className="mt-2 bg-red-900/20 border border-red-500/30 rounded p-2">
+                              <p className="text-xs font-medium text-red-300 mb-1">Error:</p>
+                              <p className="text-xs text-red-400 font-mono">
+                                {action.error}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {actionHistory.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      <p className="text-sm">No actions recorded yet</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Steps List Display */
+                <div className="space-y-2">
+                  {steps.map((step, index) => {
                   const stepStatus = stepStatuses[index] || 'pending';
                   const isCurrent = index === currentStepIndex;
                   const stepError = stepErrors[index];
@@ -1365,7 +1501,8 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
                     </div>
                   );
                 })}
-              </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1415,11 +1552,42 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         {/* Completed State */}
         {status === 'completed' && (
           <div className="px-6 py-4 bg-green-500/10 border-b border-green-500/20">
-            <div className="flex items-center gap-3">
-              <CheckCircle className="w-5 h-5 text-green-400" />
-              <p className="text-green-300 text-sm font-medium">
-                Automation completed successfully!
-              </p>
+            <div className="flex items-start gap-3">
+              <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-green-300 text-sm font-medium mb-2">
+                  Automation completed successfully!
+                </p>
+                
+                {/* Display completion result (comparison verdicts, summaries, etc.) */}
+                {completionResult && completionResult.reason && (
+                  <div className="mt-3 p-3 bg-gray-800/50 border border-gray-700/50 rounded-lg">
+                    <p className="text-xs font-medium text-gray-400 mb-2">Result Summary:</p>
+                    <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-wrap">
+                      {completionResult.reason}
+                    </p>
+                  </div>
+                )}
+                
+                {/* Display tagged screenshots if available */}
+                {completionResult && completionResult.screenshots && Object.keys(completionResult.screenshots).length > 0 && (
+                  <div className="mt-3">
+                    <p className="text-xs font-medium text-gray-400 mb-2">Captured Screenshots:</p>
+                    <div className="space-y-2">
+                      {Object.entries(completionResult.screenshots).map(([tag, screenshot]: [string, any]) => (
+                        <div key={tag} className="p-2 bg-gray-800/50 border border-gray-700/50 rounded">
+                          <p className="text-xs text-gray-400 mb-1">{tag}</p>
+                          <img 
+                            src={typeof screenshot === 'string' ? screenshot : screenshot.base64} 
+                            alt={tag}
+                            className="w-full rounded border border-gray-600/30"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

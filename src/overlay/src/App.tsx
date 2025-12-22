@@ -227,8 +227,13 @@ function App() {
 
   if (isIntentMode) {
     // INTENT WINDOW: Interactive intent UIs (web search results, command guides, etc.)
+    // Click-through enabled only for automation mode in Computer Use
+    const isAutomationProgress = overlayPayload?.intent === 'command_automate' && 
+                                  overlayPayload?.uiVariant === 'automation_progress' &&
+                                  overlayPayload?.slots?.mode === 'computer-use-streaming';
+    
     return (
-      <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-center">
+      <div ref={containerRef} className={`relative w-full h-full overflow-hidden flex items-center ${isAutomationProgress ? 'pointer-events-none' : ''}`}>
         {overlayPayload && (
           <OverlayRenderer 
             payload={overlayPayload} 

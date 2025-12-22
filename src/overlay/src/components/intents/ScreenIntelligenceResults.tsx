@@ -124,26 +124,26 @@ export default function ScreenIntelligenceResults({ payload }: ScreenIntelligenc
     const ipcRenderer = (window as any).electron?.ipcRenderer;
     if (!ipcRenderer) return;
 
-    // const timer = setTimeout(() => {
-    //   const screenWidth = window.screen.availWidth;
-    //   const screenHeight = window.screen.availHeight;
+    const timer = setTimeout(() => {
+      const screenWidth = window.screen.availWidth;
+      const screenHeight = window.screen.availHeight;
       
-    //   // Match PromptBar sizing: 60% width, centered
-    //   const cardWidth = Math.floor(screenWidth * 0.6);
-    //   const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
-    //   const x = Math.floor((screenWidth - cardWidth) / 2);
-    //   const y = Math.floor((screenHeight - cardHeight) / 2);
+      // Match PromptBar sizing: 60% width, centered
+      const cardWidth = Math.floor(screenWidth * 0.6);
+      const cardHeight = Math.floor(screenHeight * 0.8); // 80% height
+      const x = Math.floor((screenWidth - cardWidth) / 2);
+      const y = Math.floor(screenHeight - 620); // Small margin from top
       
-    //   ipcRenderer.send('overlay:position-intent', {
-    //     x,
-    //     y,
-    //     width: cardWidth,
-    //     height: cardHeight,
-    //     animate: false
-    //   });
-    // }, 100);
+      ipcRenderer.send('overlay:position-intent', {
+        x,
+        y,
+        width: cardWidth,
+        height: cardHeight,
+        animate: false
+      });
+    }, 100);
 
-    // return () => clearTimeout(timer);
+    return () => clearTimeout(timer);
   }, []);
 
   const handleClose = () => {
@@ -221,7 +221,7 @@ export default function ScreenIntelligenceResults({ payload }: ScreenIntelligenc
   return (
     <div 
       ref={cardRef}
-      className="w-full bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col
+      className="w-full h-[calc(50vh-W180px)] max-h-[600px] bg-gray-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-white/10 flex flex-col
         animate-in fade-in slide-in-from-top-4"
     >
         {/* Header */}
@@ -246,10 +246,13 @@ export default function ScreenIntelligenceResults({ payload }: ScreenIntelligenc
         </div>
 
         {/* Analysis Content - Scrollable */}
-        <div className="px-6 pb-4 flex-1 overflow-y-auto min-h-0">
+        <div className="max-h-[200px] px-6 pb-4 flex-1 overflow-y-auto min-h-0">
           <div className="prose prose-invert max-w-none">
             <p className="text-sm text-white/80 leading-relaxed whitespace-pre-wrap">
               {analysis}
+               {analysis}
+                {analysis}
+                 {analysis}
             </p>
           </div>
         </div>

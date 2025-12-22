@@ -27,7 +27,6 @@ export default function PromptBar({
   const [message, setMessage] = useState('');
   const [isConnected, setIsConnected] = useState(false);
   const [isExpanded, setIsExpanded] = useState(true);
-  const [isInputHovered, setIsInputHovered] = useState(false);
   const [textareaHeight, setTextareaHeight] = useState<number | null>(null);
   const [hasResults, setHasResults] = useState(false);
   const [isResultsVisible, setIsResultsVisible] = useState(false);
@@ -37,6 +36,7 @@ export default function PromptBar({
   const [hasAutomation, setHasAutomation] = useState(false);
   const [isAutomationVisible, setIsAutomationVisible] = useState(false);
   const [isAutomationRunning, setIsAutomationRunning] = useState(false);
+  const [wasExpandedBeforeAutomation, setWasExpandedBeforeAutomation] = useState(true);
   const [clarificationMode, setClarificationMode] = useState<{
     active: boolean;
     question: string;
@@ -70,6 +70,34 @@ export default function PromptBar({
       setIsAutomationVisible(state.isVisible);
       if (state.isRunning !== undefined) {
         console.log(`🔴 [PROMPT_BAR] Setting isAutomationRunning to: ${state.isRunning}`);
+        
+        // Auto-collapse prompt bar when automation starts
+        if (state.isRunning && !isAutomationRunning) {
+          console.log('📦 [PROMPT_BAR] Automation started - collapsing prompt bar');
+          setWasExpandedBeforeAutomation(isExpanded);
+          setIsExpanded(false);
+          
+          // CRITICAL: Activate clarification mode for Computer Use automation
+          // This ensures any user input bypasses intent classification and goes directly to the automation
+          console.log('🔒 [PROMPT_BAR] Activating clarification mode for Computer Use automation');
+          setClarificationMode({
+            active: true,
+            question: 'Computer Use automation is running. Type your response if clarification is needed.',
+            stepDescription: 'Computer Use Automation',
+            stepIndex: 0,
+            questionId: 'computer-use-active'
+          });
+        }
+        // Auto-restore prompt bar when automation completes
+        else if (!state.isRunning && isAutomationRunning) {
+          console.log('📤 [PROMPT_BAR] Automation completed - restoring prompt bar');
+          setIsExpanded(wasExpandedBeforeAutomation);
+          
+          // CRITICAL: Clear clarification mode when automation ends
+          console.log('🔓 [PROMPT_BAR] Clearing clarification mode - automation ended');
+          setClarificationMode(null);
+        }
+        
         setIsAutomationRunning(state.isRunning);
       }
     };
@@ -80,7 +108,13 @@ export default function PromptBar({
       stepIndex: number;
       questionId?: string;
     }) => {
-      console.log('❓ [PROMPT_BAR] Clarification requested:', data);
+      console.log('❓ [PROMPT_BAR] ===== CLARIFICATION REQUEST RECEIVED =====');
+      console.log('❓ [PROMPT_BAR] Question:', data.question);
+      console.log('❓ [PROMPT_BAR] Step:', data.stepDescription);
+      console.log('❓ [PROMPT_BAR] Step Index:', data.stepIndex);
+      console.log('❓ [PROMPT_BAR] Question ID:', data.questionId);
+      console.log('❓ [PROMPT_BAR] Setting clarificationMode.active = true');
+      
       setClarificationMode({
         active: true,
         question: data.question,
@@ -91,8 +125,11 @@ export default function PromptBar({
       setIsExpanded(true);
       setMessage(''); // Clear any existing message
       
+      console.log('❓ [PROMPT_BAR] Clarification mode set, expanding prompt bar');
+      
       // Focus the textarea
       setTimeout(() => {
+        console.log('❓ [PROMPT_BAR] Focusing textarea for clarification input');
         textareaRef.current?.focus();
       }, 100);
     };
@@ -223,10 +260,17 @@ export default function PromptBar({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim()) {
-      // Check if we're in clarification mode
+      // CRITICAL: Check if we're in clarification mode FIRST before any processing
+      console.log('🔍 [PROMPT_BAR] handleSubmit called, clarificationMode:', clarificationMode);
+      
       if (clarificationMode?.active) {
-        console.log('✅ [PROMPT_BAR] Submitting clarification answer:', message.trim());
+        console.log('✅ [PROMPT_BAR] IN CLARIFICATION MODE - Submitting clarification answer:', message.trim());
         console.log('🔄 [PROMPT_BAR] BYPASSING state graph - sending directly to backend via IPC');
+        console.log('📋 [PROMPT_BAR] Clarification details:', {
+          questionId: clarificationMode.questionId,
+          stepIndex: clarificationMode.stepIndex,
+          answer: message.trim()
+        });
         
         // CRITICAL: Send clarification answer directly via IPC, bypassing state graph
         // We already know the intent (command_automate), so we send the response
@@ -239,8 +283,10 @@ export default function PromptBar({
           });
         }
         
-        // Clear clarification mode
-        setClarificationMode(null);
+        // CRITICAL: Do NOT clear clarification mode here!
+        // Clarification mode should stay active until automation ends (automation:state with isRunning=false)
+        // This ensures subsequent user inputs continue to bypass intent classification
+        console.log('✅ [PROMPT_BAR] Clarification answer sent - keeping clarification mode active');
         setMessage('');
         
         // Reset textarea height
@@ -265,10 +311,12 @@ export default function PromptBar({
         }
         
         // RETURN EARLY - do NOT call onSubmit() which would trigger state graph
+        console.log('🚫 [PROMPT_BAR] RETURNING EARLY - NOT calling onSubmit()');
         return;
       }
       
       // Normal message submission (goes through state graph)
+      console.log('📤 [PROMPT_BAR] Normal submission - calling onSubmit() which triggers state graph');
       onSubmit(message.trim());
       setMessage('');
       
@@ -413,8 +461,6 @@ export default function PromptBar({
   return (
     <div 
       className="w-full h-full flex justify-center pointer-events-none"
-      onMouseEnter={() => setIsInputHovered(true)}
-      onMouseLeave={() => setIsInputHovered(false)}
     >
         {/* Expand/Collapse Button (always visible when collapsed) */}
       {!isExpanded && (
@@ -497,6 +543,18 @@ export default function PromptBar({
           </div>
         )}
 
+        {/* Clarification Mode Indicator */}
+        {clarificationMode?.active && (
+          <div className="mb-2 px-3 py-2 bg-yellow-500/20 border border-yellow-500/50 rounded-lg">
+            <div className="flex items-center space-x-2">
+              <AlertCircle className="w-4 h-4 text-yellow-400" />
+              <span className="text-xs text-yellow-400 font-medium">
+                Answering clarification question - will bypass intent classification
+              </span>
+            </div>
+          </div>
+        )}
+
         {/* Input Area */}
         <div 
           className="flex items-center space-x-3 click-active"
@@ -511,18 +569,21 @@ export default function PromptBar({
             onKeyDown={handleKeyDown}
             placeholder={
               clarificationMode?.active 
-                ? "Type your answer..." 
+                ? "Type your answer to the clarification question and press Enter..." 
                 : (isReady ? "Ask anything..." : "Initializing...")
             }
             disabled={!isReady && !clarificationMode?.active}
-            className="
+            className={`
               flex-1 text-sm bg-transparent text-white placeholder-white/50 
               resize-none min-h-[24px] max-h-[400px] py-2 px-3 rounded-lg 
-              border border-white/10 focus:border-teal-400/50 
-              focus:outline-none transition-colors click-active
+              border transition-colors click-active
               disabled:opacity-50 disabled:cursor-not-allowed
               overflow-y-auto
-            "
+              ${clarificationMode?.active 
+                ? 'border-yellow-500/50 focus:border-yellow-400' 
+                : 'border-white/10 focus:border-teal-400/50'}
+              focus:outline-none
+            `}
             rows={1}
             style={{ border: 'none', outline: 'none', boxShadow: 'none', height: 'auto' }}
           />

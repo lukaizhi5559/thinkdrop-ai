@@ -6,10 +6,13 @@
  */
 
 import * as capabilities from './capabilities';
+import type { DetectionLocator } from './nutjs-detector';
 
 export interface ComputerUseAction {
   type: string;
   reasoning?: string;
+  locator?: DetectionLocator;  // NEW: Native detection locator (text/image/element strategies)
+  coordinates?: { x: number; y: number };  // LEGACY: Vision API coordinates
   [key: string]: any;
 }
 
@@ -52,6 +55,11 @@ export class ComputerUseClient {
   private initialScreenshot: string | null = null;
   private maxIterations: number = 20;
   private lastScreenshotHash: string | null = null;
+  private activeApp: string | null = null;  // Track active app from focusApp
+  
+  // Session persistence for conversation history
+  private static sessionId: string = `session-${Date.now()}`;
+  private static conversationHistory: Array<{ timestamp: number; goal: string; completed: boolean }> = [];
 
   constructor(private wsUrl: string) {}
 
@@ -120,6 +128,21 @@ export class ComputerUseClient {
   private sendInit(): void {
     console.log('📤 [COMPUTER-USE] Sending start message:', this.goal);
     
+    // Add current goal to conversation history
+    ComputerUseClient.conversationHistory.push({
+      timestamp: Date.now(),
+      goal: this.goal,
+      completed: false
+    });
+    
+    console.log(`📚 [COMPUTER-USE] Conversation history (${ComputerUseClient.conversationHistory.length} items):`, 
+      ComputerUseClient.conversationHistory.map(h => ({
+        goal: h.goal.substring(0, 50) + '...',
+        completed: h.completed,
+        age: `${Math.floor((Date.now() - h.timestamp) / 1000)}s ago`
+      }))
+    );
+    
     // Strip data URL prefix from initial screenshot if present
     let initialScreenshotBase64 = this.initialScreenshot;
     if (initialScreenshotBase64 && initialScreenshotBase64.startsWith('data:')) {
@@ -132,7 +155,11 @@ export class ComputerUseClient {
     const message: ComputerUseMessage = {
       type: 'start',
       goal: this.goal,
-      context: this.context,
+      context: {
+        ...this.context,
+        sessionId: ComputerUseClient.sessionId,
+        conversationHistory: ComputerUseClient.conversationHistory
+      },
       screenshot: initialScreenshotBase64 || undefined
     };
 
@@ -248,6 +275,16 @@ export class ComputerUseClient {
       // If action is 'end', we're done
       if (action.type === 'end') {
         console.log('✅ [COMPUTER-USE] End action received:', action.reasoning);
+        
+        // Mark current goal as completed in conversation history
+        const currentGoalIndex = ComputerUseClient.conversationHistory.findIndex(
+          h => h.goal === this.goal && !h.completed
+        );
+        if (currentGoalIndex !== -1) {
+          ComputerUseClient.conversationHistory[currentGoalIndex].completed = true;
+          console.log(`✅ [COMPUTER-USE] Marked goal as completed in history: "${this.goal.substring(0, 50)}..."`);
+        }
+        
         this.callbacks.onComplete?.({ reason: action.reasoning });
         this.close();
         return;
@@ -271,18 +308,31 @@ export class ComputerUseClient {
     const { type } = action;
 
     switch (type) {
-      case 'fullscreen':
-        console.log('🖥️ [COMPUTER-USE] Fullscreening active application');
-        await capabilities.fullscreen();
-        break;
-
       case 'focusApp':
+        this.activeApp = action.appName;  // Track active app
         console.log(`🎯 [COMPUTER-USE] Focusing app: ${action.appName}`);
         await capabilities.focusApp(action.appName);
         
-        // Automatically fullscreen after focusing app
-        console.log('🖥️ [COMPUTER-USE] Auto-fullscreening after focus');
-        await capabilities.wait(500); // Wait for app to focus
+        // Check if already in fullscreen before toggling
+        await capabilities.wait(500);
+        const isFullscreen = await capabilities.checkFullscreen(action.appName);
+        console.log(`🔍 [COMPUTER-USE] ${action.appName} fullscreen status: ${isFullscreen}`);
+        
+        if (!isFullscreen) {
+          console.log(`📺 [COMPUTER-USE] Entering fullscreen for ${action.appName}`);
+          await capabilities.fullscreen();
+          
+          // Re-focus the app after fullscreen to ensure it stays focused
+          await capabilities.wait(300);
+          await capabilities.focusApp(action.appName);
+          await capabilities.wait(300);
+        } else {
+          console.log(`✅ [COMPUTER-USE] ${action.appName} already in fullscreen, skipping toggle`);
+        }
+        break;
+
+      case 'fullscreen':
+        console.log('🖥️ [COMPUTER-USE] Fullscreening active application');
         await capabilities.fullscreen();
         break;
 
@@ -291,16 +341,32 @@ export class ComputerUseClient {
         break;
 
       case 'findAndClick':
-        // Backend should convert findAndClick to click action with coordinates
-        // If we receive findAndClick here, backend has already resolved coordinates
-        if (action.coordinates) {
-          console.log(`🎯 [COMPUTER-USE] Executing findAndClick at (${action.coordinates.x}, ${action.coordinates.y})`);
+        // NEW: Use nut.js native detection if locator is provided
+        if (action.locator) {
+          console.log(`🎯 [COMPUTER-USE] Using native detection with locator:`, action.locator);
+          const result = await capabilities.findAndClickElement(action.locator);
+          
+          if (!result.success) {
+            throw new Error(result.error || 'Failed to find and click element');
+          }
+          
+          // Show ghost cursor at detected position
+          if (result.coordinates) {
+            capabilities.sendGhostMouseMove(result.coordinates.x, result.coordinates.y);
+            await capabilities.wait(300);
+            capabilities.sendGhostMouseClick(result.coordinates.x, result.coordinates.y);
+          }
+        }
+        // LEGACY: Backend already resolved coordinates via Vision API
+        else if (action.coordinates) {
+          console.log(`🎯 [COMPUTER-USE] Using legacy coordinates from Vision API: (${action.coordinates.x}, ${action.coordinates.y})`);
           capabilities.sendGhostMouseMove(action.coordinates.x, action.coordinates.y);
           await capabilities.wait(800);
           capabilities.sendGhostMouseClick(action.coordinates.x, action.coordinates.y);
           await capabilities.clickAt(action.coordinates.x, action.coordinates.y);
         } else {
-          console.error('❌ [COMPUTER-USE] findAndClick action missing coordinates - backend should provide them');
+          console.error('❌ [COMPUTER-USE] findAndClick action missing both locator and coordinates');
+          throw new Error('findAndClick requires either locator or coordinates');
         }
         break;
 
@@ -314,12 +380,61 @@ export class ComputerUseClient {
         break;
 
       case 'typeText':
+        // Ensure activeApp is focused before typing
+        if (this.activeApp) {
+          console.log(`🎯 [COMPUTER-USE] Ensuring ${this.activeApp} is focused before typing`);
+          await capabilities.focusApp(this.activeApp);
+          await capabilities.wait(500); // Increased wait for focus to fully transfer
+        }
         await capabilities.typeText(action.text, action.submit);
         break;
 
       case 'pressKey':
+        // Ensure activeApp is focused before pressing keys (critical for Cmd+Q)
+        if (this.activeApp) {
+          console.log(`🎯 [COMPUTER-USE] Ensuring ${this.activeApp} is focused before pressKey`);
+          await capabilities.focusApp(this.activeApp);
+          await capabilities.wait(500); // Increased wait for focus to fully transfer
+        }
+        
+        // Special handling for selection operations (Cmd+A) - need extra time for UI to update
+        const isCmdA = action.modifiers?.includes('Cmd') && action.key?.toLowerCase() === 'a';
+        const isCmdQ = action.modifiers?.includes('Cmd') && action.key?.toLowerCase() === 'q';
+        
+        // Backend sends: { key: "q", modifiers: ["Cmd"] }
+        if (action.modifiers && action.modifiers.length > 0) {
+          await capabilities.pressHotkey([...action.modifiers, action.key]);
+        } else {
+          await capabilities.pressHotkey([action.key]);
+        }
+        
+        // Add extra wait for Cmd+A to ensure selection completes
+        if (isCmdA) {
+          console.log(`📝 [COMPUTER-USE] Cmd+A detected, adding extra wait for selection to complete`);
+          await capabilities.wait(400); // Extra wait for selection to visually complete
+        }
+        
+        // If this was Cmd+Q, clear activeApp
+        if (isCmdQ) {
+          console.log(`🚪 [COMPUTER-USE] Cmd+Q detected, clearing activeApp`);
+          this.activeApp = null;
+        }
+        break;
+        
       case 'hotkey':
+        // Ensure activeApp is focused before hotkey (critical for Cmd+Q)
+        if (this.activeApp) {
+          console.log(`🎯 [COMPUTER-USE] Ensuring ${this.activeApp} is focused before hotkey`);
+          await capabilities.focusApp(this.activeApp);
+          await capabilities.wait(500); // Increased wait for focus to fully transfer
+        }
         await capabilities.pressHotkey(action.keys || [action.key]);
+        // If this was Cmd+Q, clear activeApp
+        const keys = action.keys || [action.key];
+        if (keys.includes('Cmd') && keys.some((k: string) => k.toLowerCase() === 'q')) {
+          console.log(`🚪 [COMPUTER-USE] Cmd+Q detected, clearing activeApp`);
+          this.activeApp = null;
+        }
         break;
 
       case 'scroll':
@@ -332,6 +447,38 @@ export class ComputerUseClient {
 
       case 'screenshot':
         await capabilities.captureScreenshot();
+        break;
+
+      case 'waitForElement':
+        // Wait for element to appear using native detection
+        console.log(`⏳ [COMPUTER-USE] Waiting for element:`, action.locator);
+        
+        if (!action.locator) {
+          throw new Error('waitForElement requires a locator');
+        }
+        
+        const timeout = action.timeout || 10000; // Default 10s timeout
+        const startTime = Date.now();
+        let found = false;
+        
+        while (Date.now() - startTime < timeout) {
+          try {
+            const result = await capabilities.findElement(action.locator);
+            if (result.success) {
+              console.log(`✅ [COMPUTER-USE] Element found after ${Date.now() - startTime}ms`);
+              found = true;
+              break;
+            }
+          } catch (error) {
+            // Element not found yet, continue waiting
+          }
+          
+          await capabilities.wait(500); // Check every 500ms
+        }
+        
+        if (!found) {
+          throw new Error(`Element not found after ${timeout}ms: ${JSON.stringify(action.locator)}`);
+        }
         break;
 
       case 'log':
@@ -375,6 +522,10 @@ export class ComputerUseClient {
       }
     }
 
+    // Calculate hash for backend comparison
+    const screenshotHash = this.hashScreenshot(screenshot);
+    console.log(`🔍 [COMPUTER-USE] Screenshot hash: ${screenshotHash.substring(0, 16)}...`);
+
     const message: ComputerUseMessage = {
       type: 'screenshot',
       screenshot: {
@@ -383,7 +534,10 @@ export class ComputerUseClient {
       },
       iteration,
       goal: this.goal,
-      context: this.context
+      context: {
+        ...this.context,
+        screenshotHash  // Include hash for backend comparison
+      }
     };
 
     this.send(message);

@@ -469,6 +469,23 @@ export class PlanInterpreter {
       case 'focusApp':
         console.log(`🎯 [INTERPRETER] Focusing app: ${kind.appName}`);
         await capabilities.focusApp(kind.appName);
+        
+        // Check if already in fullscreen before toggling
+        await capabilities.wait(500);
+        const isFullscreen = await capabilities.checkFullscreen(kind.appName);
+        console.log(`🔍 [INTERPRETER] ${kind.appName} fullscreen status: ${isFullscreen}`);
+        
+        if (!isFullscreen) {
+          console.log(`📺 [INTERPRETER] Entering fullscreen for ${kind.appName}`);
+          await capabilities.fullscreen();
+          
+          // Re-focus the app after fullscreen to ensure it stays focused
+          await capabilities.wait(300);
+          await capabilities.focusApp(kind.appName);
+          await capabilities.wait(300);
+        } else {
+          console.log(`✅ [INTERPRETER] ${kind.appName} already in fullscreen, skipping toggle`);
+        }
         break;
 
       case 'openUrl':
