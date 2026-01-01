@@ -25,6 +25,9 @@ let overlayManager = null;
 // Guard to prevent concurrent replan requests
 let replanInProgress = false;
 
+// Track cursor visibility state
+let cursorHidden = false;
+
 /**
  * Register automation IPC handlers
  * @param {Object} client - MCP client instance
@@ -35,6 +38,92 @@ function registerAutomationHandlers(client, overlay = null) {
   overlayManager = overlay;
   
   logger.debug('🤖 [IPC:AUTOMATION] Registering automation IPC handlers');
+
+  /**
+   * Launch an application by name (opens if not running)
+   */
+  ipcMain.on('automation:launch-app', async (event, { appName }) => {
+    logger.debug('🚀 [IPC:AUTOMATION] Launch app:', appName);
+    
+    try {
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Use 'open -a' to launch or activate app
+        await execAsync(`open -a "${appName}"`);
+        
+        // Wait for app to launch and settle
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        logger.debug(`✅ [IPC:AUTOMATION] Successfully launched "${appName}"`);
+        event.reply('automation:launch-app:result', { success: true });
+      } else {
+        event.reply('automation:launch-app:result', { 
+          success: false, 
+          error: 'Launch app not implemented for this platform' 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Launch app error:', error.message);
+      event.reply('automation:launch-app:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  /**
+   * Find and focus a window by title pattern
+   */
+  ipcMain.on('automation:find-window', async (event, { titlePattern }) => {
+    logger.debug('🪟 [IPC:AUTOMATION] Find window:', titlePattern);
+    
+    try {
+      const windowManager = require('node-window-manager');
+      windowManager.requestAccessibility();
+      
+      const windows = windowManager.getWindows();
+      const regex = new RegExp(titlePattern, 'i');
+      
+      const found = windows.find(w => {
+        try {
+          const title = w.getTitle ? w.getTitle() : '';
+          return regex.test(title);
+        } catch (err) {
+          return false;
+        }
+      });
+      
+      if (found) {
+        found.bringToTop();
+        const title = found.getTitle ? found.getTitle() : 'Unknown';
+        
+        logger.debug(`✅ [IPC:AUTOMATION] Window found and focused: "${title}"`);
+        
+        // Wait for window to be focused
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        event.reply('automation:find-window:result', { 
+          success: true, 
+          title: title 
+        });
+      } else {
+        logger.warn(`⚠️ [IPC:AUTOMATION] Window not found matching: "${titlePattern}"`);
+        event.reply('automation:find-window:result', { 
+          success: false, 
+          error: `Window not found matching: ${titlePattern}` 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Find window error:', error.message);
+      event.reply('automation:find-window:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
 
   /**
    * Focus/activate an application by name
@@ -115,10 +204,31 @@ function registerAutomationHandlers(client, overlay = null) {
         const { promisify } = require('util');
         const execAsync = promisify(exec);
         
-        // AppleScript to check if frontmost window is fullscreen
+        // First, get the actual frontmost app process name to ensure we're checking the right app
+        const { stdout: frontmostApp } = await execAsync(
+          `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`
+        );
+        const actualProcessName = frontmostApp.trim();
+        
+        logger.debug(`🔍 [IPC:AUTOMATION] Frontmost app: "${actualProcessName}", requested: "${appName}"`);
+        
+        // Check if the requested app matches the frontmost app (case-insensitive partial match)
+        if (!actualProcessName.toLowerCase().includes(appName.toLowerCase()) && 
+            !appName.toLowerCase().includes(actualProcessName.toLowerCase())) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] Requested app "${appName}" is not frontmost (actual: "${actualProcessName}")`);
+          // Return false since the app isn't even focused
+          event.reply('automation:check-fullscreen:result', { 
+            success: true, 
+            isFullscreen: false,
+            actualApp: actualProcessName
+          });
+          return;
+        }
+        
+        // AppleScript to check if frontmost window is fullscreen using the actual process name
         const script = `
           tell application "System Events"
-            tell process "${appName}"
+            tell process "${actualProcessName}"
               if exists (window 1) then
                 get value of attribute "AXFullScreen" of window 1
               else
@@ -128,13 +238,19 @@ function registerAutomationHandlers(client, overlay = null) {
           end tell
         `;
         
-        const { stdout } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+        const { stdout, stderr } = await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+        
+        if (stderr) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] AppleScript stderr: ${stderr}`);
+        }
+        
         const isFullscreen = stdout.trim() === 'true';
         
-        logger.debug(`✅ [IPC:AUTOMATION] ${appName} fullscreen status: ${isFullscreen}`);
+        logger.info(`✅ [IPC:AUTOMATION] ${actualProcessName} fullscreen status: ${isFullscreen}`);
         event.reply('automation:check-fullscreen:result', { 
           success: true, 
-          isFullscreen 
+          isFullscreen,
+          actualApp: actualProcessName
         });
       } else {
         event.reply('automation:check-fullscreen:result', { 
@@ -144,6 +260,7 @@ function registerAutomationHandlers(client, overlay = null) {
       }
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION] Check fullscreen error:', error.message);
+      logger.error('❌ [IPC:AUTOMATION] Error details:', error);
       event.reply('automation:check-fullscreen:result', { 
         success: false, 
         error: error.message,
@@ -461,11 +578,65 @@ function registerAutomationHandlers(client, overlay = null) {
         scaleFactor: scaleFactor
       });
       
+      // Get active window bounds for coordinate offset
+      // IMPORTANT: Wait a moment for the browser to become active after overlay is hidden
+      // The screenshot capture already hides the overlay, so we wait then get the active window
+      let windowBounds = null;
+      try {
+        // Wait 200ms for window focus to shift from overlay to browser
+        await new Promise(resolve => setTimeout(resolve, 200));
+        
+        const windowManager = require('node-window-manager');
+        windowManager.requestAccessibility();
+        
+        // Get the currently active window (should be browser now)
+        const activeWindow = windowManager.getActiveWindow();
+        
+        if (activeWindow) {
+          const title = activeWindow.getTitle ? activeWindow.getTitle() : '';
+          const path = activeWindow.path || '';
+          
+          logger.info('🪟 [IPC:AUTOMATION] Active window:', { 
+            title: title.substring(0, 50), 
+            path: path.substring(0, 50) 
+          });
+          
+          // Check if it's an Electron/ThinkDrop window
+          const isElectron = path.toLowerCase().includes('electron') || 
+                            path.toLowerCase().includes('thinkdrop') ||
+                            title.toLowerCase().includes('thinkdrop');
+          
+          if (isElectron) {
+            logger.warn('⚠️ [IPC:AUTOMATION] Active window is still Electron overlay');
+            logger.warn('⚠️ [IPC:AUTOMATION] Browser may not be focused - using full screen coordinates');
+          } else {
+            // Get bounds of the active window
+            const bounds = activeWindow.getBounds();
+            windowBounds = {
+              x: bounds.x,
+              y: bounds.y,
+              width: bounds.width,
+              height: bounds.height
+            };
+            logger.info('🪟 [IPC:AUTOMATION] Active window bounds:', windowBounds);
+          }
+        } else {
+          logger.warn('⚠️ [IPC:AUTOMATION] No active window found');
+        }
+      } catch (error) {
+        logger.warn('⚠️ [IPC:AUTOMATION] Failed to get window bounds:', error.message || error);
+        logger.warn('⚠️ [IPC:AUTOMATION] Error details:', JSON.stringify(error, null, 2));
+        if (error.stack) {
+          logger.warn('⚠️ [IPC:AUTOMATION] Error stack:', error.stack);
+        }
+      }
+      
       // Call Vision API /api/vision/locate endpoint directly
       const axios = require('axios');
       const visionUrl = 'http://localhost:4000/api/vision/locate';
       
       logger.info(`📡 [IPC:AUTOMATION] Calling Vision API: ${visionUrl}`);
+      logger.info(`📡 [IPC:AUTOMATION] Sending windowBounds:`, windowBounds);
       
       const response = await axios.post(visionUrl, {
         screenshot: {
@@ -478,7 +649,8 @@ function registerAutomationHandlers(client, overlay = null) {
           width: screenWidth,
           height: screenHeight,
           scaleFactor: scaleFactor
-        }
+        },
+        windowBounds: windowBounds // Add window bounds for coordinate offset
       }, {
         headers: {
           'Content-Type': 'application/json',
@@ -613,6 +785,205 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
+   * Web scraping using Playwright (alternative to Vision API)
+   */
+  ipcMain.on('automation:web-scrape', async (event, { url, action, params }) => {
+    logger.debug('🌐 [IPC:AUTOMATION] Web scrape:', { url, action, params });
+    
+    let browser = null;
+    
+    try {
+      // Use playwright-extra with stealth plugin to bypass bot detection
+      const { chromium } = require('playwright-extra');
+      const stealth = require('puppeteer-extra-plugin-stealth')();
+      chromium.use(stealth);
+      
+      logger.debug('🚀 [IPC:AUTOMATION] Launching Chromium browser with stealth mode...');
+      
+      // Launch browser with stealth mode to bypass Cloudflare
+      browser = await chromium.launch({ 
+        headless: true,
+        timeout: 30000,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-web-security',
+          '--disable-features=IsolateOrigins,site-per-process'
+        ]
+      });
+      
+      logger.debug('✅ [IPC:AUTOMATION] Browser launched successfully with stealth mode');
+      
+      const page = await browser.newPage();
+      
+      // Set realistic user agent
+      await page.setExtraHTTPHeaders({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+      });
+      
+      // Set a reasonable viewport
+      await page.setViewportSize({ width: 1280, height: 720 });
+      
+      // Set default timeout for all operations
+      page.setDefaultTimeout(30000);
+      
+      let content = '';
+      
+      switch (action) {
+        case 'navigate':
+          logger.debug(`🌐 [IPC:AUTOMATION] Navigating to ${url}`);
+          await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+          await page.waitForTimeout(params.waitTime || 2000);
+          content = await page.content();
+          logger.debug(`✅ [IPC:AUTOMATION] Navigation complete, content length: ${content.length}`);
+          break;
+          
+        case 'search':
+          logger.debug(`🌐 [IPC:AUTOMATION] Searching on ${url}`);
+          
+          try {
+            logger.debug(`📍 [IPC:AUTOMATION] Step 1: Navigating to ${url}`);
+            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            
+            // Wait a bit for dynamic content to load
+            await page.waitForTimeout(2000);
+            logger.debug(`✅ [IPC:AUTOMATION] Navigation complete`);
+            
+            if (params.selector && params.text) {
+              logger.debug(`📍 [IPC:AUTOMATION] Step 2: Looking for input field`);
+              
+              // Try multiple common selectors for search inputs
+              const possibleSelectors = [
+                params.selector,
+                'textarea[placeholder*="Ask"]',
+                'textarea[placeholder*="Search"]',
+                'input[type="text"]',
+                'textarea',
+                '[contenteditable="true"]'
+              ];
+              
+              let foundSelector = null;
+              for (const selector of possibleSelectors) {
+                try {
+                  logger.debug(`🔍 [IPC:AUTOMATION] Trying selector: "${selector}"`);
+                  await page.waitForSelector(selector, { timeout: 3000, state: 'visible' });
+                  foundSelector = selector;
+                  logger.debug(`✅ [IPC:AUTOMATION] Found selector: "${selector}"`);
+                  break;
+                } catch (e) {
+                  logger.debug(`❌ [IPC:AUTOMATION] Selector "${selector}" not found, trying next...`);
+                }
+              }
+              
+              if (!foundSelector) {
+                // Log page content for debugging
+                const pageText = await page.textContent('body');
+                logger.error(`❌ [IPC:AUTOMATION] No input field found. Page content preview: ${pageText.substring(0, 200)}`);
+                throw new Error('Could not find search input field on page');
+              }
+              
+              logger.debug(`📍 [IPC:AUTOMATION] Step 3: Filling input with "${params.text}"`);
+              
+              // Click to focus first
+              await page.click(foundSelector);
+              await page.waitForTimeout(500);
+              
+              // Type the text
+              await page.fill(foundSelector, params.text);
+              logger.debug(`✅ [IPC:AUTOMATION] Text filled`);
+              
+              logger.debug(`📍 [IPC:AUTOMATION] Step 4: Pressing Enter`);
+              await page.press(foundSelector, 'Enter');
+              logger.debug(`✅ [IPC:AUTOMATION] Enter pressed`);
+              
+              logger.debug(`📍 [IPC:AUTOMATION] Step 5: Waiting ${params.waitTime || 5000}ms for results`);
+              await page.waitForTimeout(params.waitTime || 5000);
+              logger.debug(`✅ [IPC:AUTOMATION] Wait complete`);
+              
+              logger.debug(`📍 [IPC:AUTOMATION] Step 6: Extracting text content`);
+              // Get text content
+              content = await page.textContent('body');
+              logger.debug(`✅ [IPC:AUTOMATION] Search complete, content length: ${content.length}`);
+            } else {
+              throw new Error('Search action requires selector and text parameters');
+            }
+          } catch (searchError) {
+            logger.error(`❌ [IPC:AUTOMATION] Search failed:`, searchError.message);
+            throw searchError;
+          }
+          break;
+          
+        case 'extract':
+          logger.debug(`🌐 [IPC:AUTOMATION] Extracting from ${url}`);
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+          await page.waitForTimeout(params.waitTime || 2000);
+          
+          if (params.selector) {
+            logger.debug(`🔍 [IPC:AUTOMATION] Extracting selector "${params.selector}"`);
+            await page.waitForSelector(params.selector, { timeout: 10000 });
+            content = await page.textContent(params.selector);
+          } else {
+            content = await page.textContent('body');
+          }
+          logger.debug(`✅ [IPC:AUTOMATION] Extraction complete, content length: ${content.length}`);
+          break;
+          
+        case 'click':
+          logger.debug(`🌐 [IPC:AUTOMATION] Clicking on ${url}`);
+          await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+          await page.waitForTimeout(params.waitTime || 2000);
+          
+          if (params.selector) {
+            logger.debug(`🖱️ [IPC:AUTOMATION] Clicking selector "${params.selector}"`);
+            await page.waitForSelector(params.selector, { timeout: 10000 });
+            await page.click(params.selector);
+            await page.waitForTimeout(1000);
+            content = await page.textContent('body');
+            logger.debug(`✅ [IPC:AUTOMATION] Click complete, content length: ${content.length}`);
+          } else {
+            throw new Error('Click action requires selector parameter');
+          }
+          break;
+          
+        default:
+          throw new Error(`Unknown action: ${action}`);
+      }
+      
+      await browser.close();
+      logger.debug('🔒 [IPC:AUTOMATION] Browser closed');
+      
+      logger.debug('✅ [IPC:AUTOMATION] Web scrape successful');
+      event.reply('automation:web-scrape:result', { 
+        success: true, 
+        content: content || ''
+      });
+      
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Web scrape error:', error.message);
+      logger.error('❌ [IPC:AUTOMATION] Stack trace:', error.stack);
+      
+      // Ensure browser is closed even on error
+      if (browser) {
+        try {
+          await browser.close();
+          logger.debug('🔒 [IPC:AUTOMATION] Browser closed after error');
+        } catch (closeError) {
+          logger.error('❌ [IPC:AUTOMATION] Failed to close browser:', closeError.message);
+        }
+      }
+      
+      event.reply('automation:web-scrape:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  /**
    * Capture screenshot
    */
   ipcMain.on('screenshot:capture', async (event) => {
@@ -637,6 +1008,26 @@ function registerAutomationHandlers(client, overlay = null) {
         logger.debug('✅ [IPC:AUTOMATION] Screenshot captured successfully', {
           size: screenshot.length
         });
+        
+        // Save screenshot to disk for debugging
+        const fs = require('fs');
+        const path = require('path');
+        const os = require('os');
+        
+        const screenshotsDir = path.join(os.homedir(), '.thinkdrop', 'screenshots');
+        if (!fs.existsSync(screenshotsDir)) {
+          fs.mkdirSync(screenshotsDir, { recursive: true });
+        }
+        
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const screenshotPath = path.join(screenshotsDir, `screenshot-${timestamp}.png`);
+        
+        // Remove data URL prefix and save as PNG
+        const base64Data = screenshot.replace(/^data:image\/\w+;base64,/, '');
+        fs.writeFileSync(screenshotPath, base64Data, 'base64');
+        
+        logger.info('💾 [IPC:AUTOMATION] Screenshot saved to:', screenshotPath);
+        
         event.reply('screenshot:captured', screenshot);
       } else {
         logger.error('❌ [IPC:AUTOMATION] No screen sources found');
@@ -797,6 +1188,8 @@ function registerAutomationHandlers(client, overlay = null) {
    * Handle clarification request - forward to prompt window
    */
   ipcMain.on('prompt-bar:request-clarification', async (event, context) => {
+    const { BrowserWindow } = require('electron');
+    
     logger.info('❓ [IPC:AUTOMATION] Clarification requested:', {
       question: context.question,
       stepIndex: context.stepIndex,
@@ -805,7 +1198,6 @@ function registerAutomationHandlers(client, overlay = null) {
     });
     
     // Forward to prompt window
-    const { BrowserWindow } = require('electron');
     const promptWindow = BrowserWindow.getAllWindows().find(w => w.getTitle().includes('Prompt'));
     
     if (promptWindow) {
@@ -986,6 +1378,22 @@ function registerAutomationHandlers(client, overlay = null) {
    * Native libnut automation handlers (fast, local)
    */
   
+  // Get current mouse position
+  ipcMain.on('automation:get-mouse-pos', (event) => {
+    if (!libnut) {
+      event.reply('automation:get-mouse-pos:result', { x: 0, y: 0 });
+      return;
+    }
+    
+    try {
+      const pos = libnut.getMousePos();
+      event.reply('automation:get-mouse-pos:result', pos);
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Get mouse pos error:', error.message);
+      event.reply('automation:get-mouse-pos:result', { x: 0, y: 0 });
+    }
+  });
+
   // Native mouse click
   ipcMain.on('automation:native-click', async (event, { x, y }) => {
     logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Click at (${x}, ${y})`);
@@ -1219,7 +1627,190 @@ function registerAutomationHandlers(client, overlay = null) {
     }
   });
 
+  /**
+   * Save screenshot to file
+   */
+  ipcMain.on('automation:save-screenshot', async (event, { screenshot, filename }) => {
+    logger.info(`💾 [IPC:AUTOMATION] Saving screenshot: ${filename}`);
+    
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const os = require('os');
+      
+      // Create screenshots directory in ~/.thinkdrop/screenshots/
+      const screenshotsDir = path.join(os.homedir(), '.thinkdrop', 'screenshots');
+      if (!fs.existsSync(screenshotsDir)) {
+        fs.mkdirSync(screenshotsDir, { recursive: true });
+        logger.debug(`📁 [IPC:AUTOMATION] Created screenshots directory: ${screenshotsDir}`);
+      }
+      
+      // Remove data URL prefix if present
+      const base64Data = screenshot.replace(/^data:image\/png;base64,/, '');
+      
+      // Write file
+      const filePath = path.join(screenshotsDir, filename);
+      fs.writeFileSync(filePath, base64Data, 'base64');
+      
+      logger.info(`✅ [IPC:AUTOMATION] Screenshot saved: ${filePath}`);
+      
+      // Optionally open in Preview (macOS)
+      if (process.platform === 'darwin') {
+        const { shell } = require('electron');
+        shell.openPath(filePath);
+        logger.debug(`🖼️ [IPC:AUTOMATION] Opening screenshot in Preview`);
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to save screenshot:', error.message);
+    }
+  });
+
+  /**
+   * OCR Analysis for testing
+   */
+  ipcMain.on('ocr:analyze', async (event, { screenshot }) => {
+    logger.debug('🔍 [IPC:AUTOMATION] OCR analysis requested');
+    
+    try {
+      const axios = require('axios');
+      
+      // Call OCR API endpoint
+      const response = await axios.post('http://localhost:4000/api/vision/ocr', {
+        screenshot: {
+          base64: screenshot.replace(/^data:image\/\w+;base64,/, ''),
+          mimeType: 'image/png'
+        }
+      }, {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.THINKDROP_API_KEY || 'test-api-key-123'
+        },
+        timeout: 30000
+      });
+
+      if (response.data.success) {
+        logger.debug('✅ [IPC:AUTOMATION] OCR analysis complete', {
+          blockCount: response.data.blocks?.length || 0
+        });
+        event.reply('ocr:result', {
+          success: true,
+          data: {
+            text: response.data.text || '',
+            confidence: response.data.confidence || 0,
+            blocks: response.data.blocks || []
+          }
+        });
+      } else {
+        logger.error('❌ [IPC:AUTOMATION] OCR analysis failed:', response.data.error);
+        event.reply('ocr:result', {
+          success: false,
+          error: response.data.error || 'OCR analysis failed'
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] OCR error:', error.message);
+      event.reply('ocr:result', {
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  /**
+   * Hide system cursor during automation
+   */
+  ipcMain.on('automation:hide-cursor', async (event) => {
+    try {
+      logger.info('👻 [IPC:AUTOMATION] Hiding system cursor');
+      
+      if (!libnut) {
+        logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, cannot hide cursor');
+        return;
+      }
+      
+      if (cursorHidden) {
+        logger.debug('ℹ️ [IPC:AUTOMATION] Cursor already hidden, skipping');
+        return;
+      }
+      
+      // Move cursor off-screen (simple, cross-platform approach)
+      // Position (0, 0) is typically top-left corner
+      libnut.moveMouse(0, 0);
+      cursorHidden = true;
+      
+      logger.info('✅ [IPC:AUTOMATION] System cursor moved off-screen');
+      
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to hide cursor:', error.message);
+    }
+  });
+
+  /**
+   * Show system cursor after automation
+   */
+  ipcMain.on('automation:show-cursor', async (event) => {
+    restoreCursor('👁️ [IPC:AUTOMATION] Showing system cursor');
+  });
+
   logger.debug('✅ [IPC:AUTOMATION] Automation IPC handlers registered');
 }
+
+/**
+ * Restore cursor to center of screen
+ * Shared function used by both IPC handler and process exit handlers
+ * @param {string} logMessage - Custom log message for context
+ */
+function restoreCursor(logMessage = '🔄 [IPC:AUTOMATION] Restoring cursor') {
+  try {
+    logger.info(logMessage);
+    
+    if (!libnut) {
+      logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, cannot restore cursor');
+      return;
+    }
+    
+    if (!cursorHidden) {
+      logger.debug('ℹ️ [IPC:AUTOMATION] Cursor already visible, skipping');
+      return;
+    }
+    
+    // Move cursor to center of screen
+    const screenSize = libnut.getScreenSize();
+    const centerX = Math.floor(screenSize.width / 2);
+    const centerY = Math.floor(screenSize.height / 2);
+    
+    libnut.moveMouse(centerX, centerY);
+    cursorHidden = false;
+    
+    logger.info('✅ [IPC:AUTOMATION] System cursor moved to center');
+    
+  } catch (error) {
+    logger.error('❌ [IPC:AUTOMATION] Failed to restore cursor:', error.message);
+  }
+}
+
+/**
+ * Restore cursor on process exit
+ * Safety measure to ensure cursor is always visible
+ */
+function restoreCursorOnExit() {
+  restoreCursor('🔄 [IPC:AUTOMATION] Restoring cursor on process exit');
+}
+
+// Register process exit handlers
+process.on('exit', restoreCursorOnExit);
+process.on('SIGINT', () => {
+  restoreCursorOnExit();
+  process.exit(0);
+});
+process.on('SIGTERM', () => {
+  restoreCursorOnExit();
+  process.exit(0);
+});
+process.on('uncaughtException', (error) => {
+  logger.error('❌ [IPC:AUTOMATION] Uncaught exception, restoring cursor:', error.message);
+  restoreCursorOnExit();
+  process.exit(1);
+});
 
 module.exports = { registerAutomationHandlers };

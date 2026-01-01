@@ -286,7 +286,7 @@ module.exports = async function parseIntent(state) {
       general_knowledge: 0.6,
       memory_store: 0.65,
       memory_retrieve: 0.65,
-      command_automate: 0.6, // Lowered from 0.7 - model is accurate enough
+      command_automate: 0.45, // Lowered from 0.7 - model is accurate enough
       screen_intelligence: 0.65,
       question: 0.5,
       greeting: 0.6

@@ -370,8 +370,8 @@ function createIntentOverlay() {
   const { width, height } = primaryDisplay.workAreaSize;
 
   // Start with compact size for loading indicator, will resize dynamically for results
-  const initialWidth = Math.floor(width * 0.6); // 60% of screen width
-  // const initialWidth = 400; // Compact for loading message
+  // Start with compact size - will resize dynamically based on content
+  const initialWidth = 800; // Match plan preview width
   const initialHeight = 400; // Just enough for loading indicator
   const y = Math.floor(height - 420); // Small margin from top
   
@@ -413,7 +413,8 @@ function createIntentOverlay() {
     intentOverlayWindow.setAlwaysOnTop(true, 'floating', 3); // Highest layer
   }
 
-  // NO setIgnoreMouseEvents - this window is interactive!
+  // Window is interactive - do NOT ignore mouse events
+  // The renderer will send IPC messages to control mouse event handling
 
   // Load intent HTML
   const isDev = process.env.NODE_ENV === 'development';
@@ -766,6 +767,25 @@ app.whenReady().then(async () => {
       await global.promptedAnywhereService.handlePromptAnywhere();
     } else {
       logger.error('❌ [Prompted Anywhere] Service not initialized');
+    }
+  });
+
+  // 🧪 Cmd+Shift+T for Automation Tester - Debug automation actions
+  globalShortcut.register('Cmd+Shift+T', () => {
+    logger.debug('🧪 [TESTER] Cmd+Shift+T triggered - opening Automation Tester');
+    
+    // Show and focus the intent overlay window (where the tester will appear)
+    if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+      logger.debug('🧪 [TESTER] Showing intent overlay window');
+      intentOverlayWindow.show();
+      intentOverlayWindow.focus();
+      intentOverlayWindow.moveTop();
+      
+      // Send event to show the tester
+      logger.debug('🧪 [TESTER] Sending show-automation-tester event');
+      intentOverlayWindow.webContents.send('show-automation-tester');
+    } else {
+      logger.error('❌ [TESTER] Intent overlay window not available');
     }
   });
   
@@ -1216,6 +1236,93 @@ async function setupIPCHandlers() {
     logger.debug('📚 Setting up Insight History handlers...');
     setupInsightHistoryHandlers();
     logger.debug('✅ Insight History handlers setup complete');
+    
+    // Add IPC handler for intent overlay window resizing
+    ipcMain.on('intent-overlay:resize', (event, { width, height }) => {
+      if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+        logger.debug(`📐 [OVERLAY] Resizing intent window to ${width}x${height}`);
+        const { screen } = require('electron');
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const screenWidth = primaryDisplay.bounds.width;
+        const screenHeight = primaryDisplay.bounds.height;
+        
+        // Center the window horizontally, keep it near bottom
+        const x = Math.floor((screenWidth - width) / 2);
+        const y = Math.floor(screenHeight - height - 20); // 20px from bottom
+        
+        intentOverlayWindow.setBounds({
+          x,
+          y,
+          width,
+          height
+        }, true); // animate: true for smooth resize
+        
+        logger.debug(`📐 [OVERLAY] Window resized and repositioned to x:${x}, y:${y}, ${width}x${height}`);
+      }
+    });
+    
+    // Add IPC handler to control mouse event forwarding
+    ipcMain.on('intent-overlay:set-clickable', (event, clickable) => {
+      if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+        if (clickable) {
+          // Make window fully interactive
+          intentOverlayWindow.setIgnoreMouseEvents(false);
+          logger.debug('🖱️ [OVERLAY] Window set to clickable (interactive)');
+        } else {
+          // Make window click-through
+          intentOverlayWindow.setIgnoreMouseEvents(true, { forward: true });
+          logger.debug('🖱️ [OVERLAY] Window set to click-through');
+        }
+      }
+    });
+    
+    // Add IPC handler to focus intent overlay window
+    ipcMain.on('intent-overlay:focus', () => {
+      if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+        intentOverlayWindow.focus();
+        intentOverlayWindow.show();
+        intentOverlayWindow.moveTop();
+        logger.debug('🎯 [OVERLAY] Intent window focused and moved to top');
+      }
+    });
+    
+    // Add IPC handlers to hide/show intent overlay (for clean screenshots)
+    ipcMain.on('intent-overlay:hide', () => {
+      if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+        intentOverlayWindow.hide();
+        logger.debug('👻 [OVERLAY] Intent window hidden for screenshot');
+      }
+    });
+    
+    ipcMain.on('intent-overlay:show', () => {
+      if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
+        intentOverlayWindow.show();
+        logger.debug('👻 [OVERLAY] Intent window shown after screenshot');
+      }
+    });
+    
+    // Add IPC handlers to hide/show ghost overlay (for clean screenshots)
+    ipcMain.on('ghost-overlay:hide', () => {
+      if (ghostOverlayWindow && !ghostOverlayWindow.isDestroyed()) {
+        ghostOverlayWindow.hide();
+        logger.debug('👻 [OVERLAY] Ghost window hidden for screenshot');
+      }
+    });
+    
+    ipcMain.on('ghost-overlay:show', () => {
+      if (ghostOverlayWindow && !ghostOverlayWindow.isDestroyed()) {
+        ghostOverlayWindow.show();
+        logger.debug('👻 [OVERLAY] Ghost window shown after screenshot');
+      }
+    });
+    
+    // Move ghost mouse to specific coordinates (for visual feedback in testing)
+    ipcMain.on('ghost-overlay:move', (event, { x, y }) => {
+      if (ghostOverlayWindow && !ghostOverlayWindow.isDestroyed()) {
+        ghostOverlayWindow.webContents.send('ghost:move-to', { x, y });
+        logger.debug(`👻 [OVERLAY] Ghost mouse moved to (${x}, ${y})`);
+      }
+    });
     
     // Initialize Automation handlers
     logger.debug('🤖 Setting up Automation handlers...');

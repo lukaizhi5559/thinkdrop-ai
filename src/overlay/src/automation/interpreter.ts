@@ -54,6 +54,7 @@ type StepKind =
   | { type: 'waitForElement'; locator: { description: string; roleHint?: string; strategy?: string }; timeoutMs?: number }
   | { type: 'screenshot'; tag?: string; analyzeWithVision?: boolean; speedMode?: string }
   | { type: 'findAndClick'; locator: { description: string; strategy?: string }; timeoutMs?: number }
+  | { type: 'webScrape'; url: string; action: 'navigate' | 'search' | 'extract' | 'click'; params: { selector?: string; text?: string; waitTime?: number }; storeAs?: string }
   | { type: 'log'; level: string; message: string }
   | { type: 'pressKey'; key: string }
   | { type: 'end'; reason?: string };
@@ -455,7 +456,7 @@ export class PlanInterpreter {
     const validTypes = [
       'focusApp', 'openUrl', 'typeText', 'hotkey', 'click', 'scroll', 
       'pause', 'apiAction', 'waitForElement', 'screenshot', 'findAndClick', 
-      'log', 'pressKey', 'end'
+      'webScrape', 'log', 'pressKey', 'end'
     ];
     
     if (!validTypes.includes(kind.type)) {

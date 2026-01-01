@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Loader2, Sparkles, Eye, EyeOff, RefreshCw, Trash2, Plus, MessageSquare, X, Minimize2, Maximize2, Zap, Droplet, Paperclip, Check, Copy, RotateCcw, ThumbsUp, ThumbsDown, Edit3, Unplug, Monitor } from 'lucide-react';
+import { MessageSquare, Check, Copy, RotateCcw, ThumbsUp, ThumbsDown, Edit3 } from 'lucide-react';
 import { Button } from './ui/button';
 import {
   Tooltip,
@@ -36,9 +36,9 @@ interface ChatMessagesProps {
 export default function ChatMessages({ 
   onPendingConfirmation
 }: ChatMessagesProps = {}) {
-  // Enable Preact Signals reactivity
+  // Signals work automatically in React components - no useSignals() needed
   useSignals();
-  
+
   // Toast notifications - using global toast context
   const { showToast } = useGlobalToast();
   

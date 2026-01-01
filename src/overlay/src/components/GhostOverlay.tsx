@@ -46,6 +46,27 @@ export default function GhostOverlay() {
     return () => console.log('👋 [GHOST] GhostOverlay component unmounted');
   }, []);
 
+  // Listen for IPC command to move ghost mouse to specific coordinates (for testing)
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleMoveTo = (_event: any, { x, y }: { x: number; y: number }) => {
+      console.log(`👻 [GHOST] Moving to (${x}, ${y})`);
+      setTargetPos({ x, y });
+      setMousePos({ x, y });
+      setIsAutomating(true);
+      
+      // Reset automation state after a moment
+      setTimeout(() => setIsAutomating(false), 1000);
+    };
+
+    ipcRenderer.on('ghost:move-to', handleMoveTo);
+
+    return () => {
+      ipcRenderer.removeListener('ghost:move-to', handleMoveTo);
+    };
+  }, []);
+
   // Smooth animation to target position during automation
   useEffect(() => {
     if (!isAutomating) return;

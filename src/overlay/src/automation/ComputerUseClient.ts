@@ -13,6 +13,15 @@ export interface ComputerUseAction {
   reasoning?: string;
   locator?: DetectionLocator;  // NEW: Native detection locator (text/image/element strategies)
   coordinates?: { x: number; y: number };  // LEGACY: Vision API coordinates
+  
+  // clickAndDrag action fields
+  fromLocator?: DetectionLocator;
+  toLocator?: DetectionLocator;
+  
+  // zoom action fields
+  zoomDirection?: 'in' | 'out';
+  zoomLevel?: number;
+  
   [key: string]: any;
 }
 
@@ -64,6 +73,8 @@ export class ComputerUseClient {
   private maxIterations: number = 20;
   private lastScreenshotHash: string | null = null;
   private activeApp: string | null = null;  // Track active app from focusApp
+  private lastActionUsedVisionAPI: boolean = false;  // Track if last action used Vision API screenshot
+  private capturedScreenshot: string | null = null; // Store screenshot captured during action execution
   
   // Session persistence for conversation history
   private static sessionId: string = `session-${Date.now()}`;
@@ -93,7 +104,72 @@ export class ComputerUseClient {
 
         this.ws.onopen = () => {
           console.log('✅ [COMPUTER-USE] WebSocket connected');
+          
+          // Hide system cursor during automation
+          capabilities.hideSystemCursor();
+          
           this.sendInit();
+        };
+        
+        this.ws.onmessage = async (event) => {
+          try {
+            console.log('🔍 [COMPUTER-USE] Raw WebSocket message received:', event.data);
+            const message: ComputerUseMessage = JSON.parse(event.data);
+            console.log('📦 [COMPUTER-USE] Parsed message:', JSON.stringify(message, null, 2));
+            await this.handleMessage(message);
+
+            // Resolve on complete
+            if (message.type === 'complete') {
+              resolve();
+            }
+          } catch (error: any) {
+            console.error('❌ [COMPUTER-USE] Error handling message:', error);
+            this.callbacks.onError?.(error.message);
+            reject(error);
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          console.error('❌ [COMPUTER-USE] WebSocket error:', error);
+          this.callbacks.onError?.('WebSocket connection error');
+          reject(error);
+        };
+
+        this.ws.onclose = () => {
+          console.log('🔌 [COMPUTER-USE] WebSocket closed');
+        };
+      } catch (error: any) {
+        console.error('❌ [COMPUTER-USE] Failed to connect:', error);
+        this.callbacks.onError?.(error.message);
+        reject(error);
+      }
+    });
+  }
+  
+  /**
+   * Execute automation task with a pre-generated plan (hybrid approach)
+   */
+  async executeWithPlan(
+    plan: any,
+    initialScreenshot: string | null,
+    context: any,
+    callbacks: ComputerUseCallbacks
+  ): Promise<void> {
+    this.goal = plan.goal || 'Execute automation plan';
+    this.context = context;
+    this.callbacks = callbacks;
+    this.initialScreenshot = initialScreenshot;
+    this.iteration = 0;
+
+    return new Promise((resolve, reject) => {
+      try {
+        console.log('🌐 [COMPUTER-USE] Connecting to WebSocket with plan:', this.wsUrl);
+        console.log('📋 [COMPUTER-USE] Plan:', plan);
+        this.ws = new WebSocket(this.wsUrl);
+
+        this.ws.onopen = () => {
+          console.log('✅ [COMPUTER-USE] WebSocket connected');
+          this.sendInitWithPlan(plan);
         };
 
         this.ws.onmessage = async (event) => {
@@ -134,7 +210,7 @@ export class ComputerUseClient {
    * Send initialization message with goal
    */
   private sendInit(): void {
-    console.log('📤 [COMPUTER-USE] Sending start message:', this.goal);
+    console.log('📤 [COMPUTER-USE] Sending start message');
     
     // Add current goal to conversation history
     ComputerUseClient.conversationHistory.push({
@@ -169,6 +245,49 @@ export class ComputerUseClient {
         conversationHistory: ComputerUseClient.conversationHistory
       },
       screenshot: initialScreenshotBase64 || undefined
+    };
+
+    this.send(message);
+  }
+  
+  /**
+   * Send initial message with pre-generated plan (hybrid approach)
+   */
+  private sendInitWithPlan(plan: any): void {
+    console.log('📤 [COMPUTER-USE] Sending start_with_plan message');
+    console.log('📋 [COMPUTER-USE] Plan details:', {
+      planId: plan.planId,
+      goal: plan.goal,
+      stepsCount: plan.steps?.length || 0
+    });
+    
+    // Add current goal to conversation history
+    ComputerUseClient.conversationHistory.push({
+      timestamp: Date.now(),
+      goal: this.goal,
+      completed: false
+    });
+    
+    // Strip data URL prefix from initial screenshot if present
+    let initialScreenshotBase64 = this.initialScreenshot;
+    if (initialScreenshotBase64 && initialScreenshotBase64.startsWith('data:')) {
+      const base64Index = initialScreenshotBase64.indexOf('base64,');
+      if (base64Index !== -1) {
+        initialScreenshotBase64 = initialScreenshotBase64.substring(base64Index + 7);
+      }
+    }
+    
+    const message: any = {
+      type: 'start_with_plan',
+      plan: plan,
+      goal: this.goal,
+      context: {
+        ...this.context,
+        sessionId: ComputerUseClient.sessionId,
+        conversationHistory: ComputerUseClient.conversationHistory
+      },
+      screenshot: initialScreenshotBase64 || undefined,
+      maxIterations: 50
     };
 
     this.send(message);
@@ -308,8 +427,26 @@ export class ComputerUseClient {
         return;
       }
 
-      // Wait for UI to actually change after action
-      const screenshot = await this.waitForUIChange(action.type);
+      // Determine how to respond to backend based on action type
+      const shouldSkipScreenshot = this.shouldSkipScreenshot(action.type);
+      
+      if (shouldSkipScreenshot) {
+        // Actions that don't change UI - send acknowledgment without screenshot
+        console.log(`⏭️  [COMPUTER-USE] Action ${action.type} complete - no screenshot needed`);
+        this.sendActionComplete(iteration + 1);
+        return;
+      }
+
+      // If screenshot was already captured during action execution, use it
+      let screenshot: string;
+      if (this.capturedScreenshot) {
+        console.log(`📸 [COMPUTER-USE] Using screenshot captured during ${action.type} action`);
+        screenshot = this.capturedScreenshot;
+        this.capturedScreenshot = null; // Clear after use
+      } else {
+        // Wait for UI to actually change after action
+        screenshot = await this.waitForUIChange(action.type);
+      }
 
       this.sendScreenshot(screenshot, iteration + 1);
     } catch (error: any) {
@@ -320,33 +457,57 @@ export class ComputerUseClient {
   }
 
   /**
+   * Determine if we should skip screenshot capture after this action
+   */
+  private shouldSkipScreenshot(actionType: string): boolean {
+    // Actions that don't change UI state and don't need screenshots
+    const noUIChangeActions = ['pause', 'log'];
+    
+    // If this action used Vision API, we already have a screenshot
+    if (this.lastActionUsedVisionAPI) {
+      console.log(`📸 [COMPUTER-USE] Skipping duplicate screenshot - Vision API already captured one`);
+      this.lastActionUsedVisionAPI = false;  // Reset flag
+      return true;
+    }
+    
+    return noUIChangeActions.includes(actionType);
+  }
+
+  /**
    * Execute action using existing capabilities
    */
   private async executeAction(action: ComputerUseAction): Promise<void> {
     const { type } = action;
+    
+    // Reset flags at start of each action
+    this.lastActionUsedVisionAPI = false;
+    this.capturedScreenshot = null;
 
     switch (type) {
       case 'focusApp':
-        this.activeApp = action.appName;  // Track active app
         console.log(`🎯 [COMPUTER-USE] Focusing app: ${action.appName}`);
-        await capabilities.focusApp(action.appName);
+        const actualApp = await capabilities.focusApp(action.appName);
+        // Use the requested app name, not the actual process name, since backend LLM knows the requested name
+        // (e.g., Warp's process name is "stable" but LLM expects "Warp")
+        this.activeApp = action.appName;
+        console.log(`✅ [COMPUTER-USE] Actually focused: ${actualApp} (tracking as: ${action.appName})`);
         
-        // Check if already in fullscreen before toggling
+        // Wait for app focus to settle
         await capabilities.wait(500);
-        const isFullscreen = await capabilities.checkFullscreen(action.appName);
-        console.log(`🔍 [COMPUTER-USE] ${action.appName} fullscreen status: ${isFullscreen}`);
+        // const isFullscreen = await capabilities.checkFullscreen(action.appName);
+        // console.log(`🔍 [COMPUTER-USE] ${action.appName} fullscreen status: ${isFullscreen}`);
         
-        if (!isFullscreen) {
-          console.log(`📺 [COMPUTER-USE] Entering fullscreen for ${action.appName}`);
-          await capabilities.fullscreen();
+        // if (!isFullscreen) {
+        //   console.log(`📺 [COMPUTER-USE] Entering fullscreen for ${action.appName}`);
+        //   await capabilities.fullscreen();
           
-          // Re-focus the app after fullscreen to ensure it stays focused
-          await capabilities.wait(300);
-          await capabilities.focusApp(action.appName);
-          await capabilities.wait(300);
-        } else {
-          console.log(`✅ [COMPUTER-USE] ${action.appName} already in fullscreen, skipping toggle`);
-        }
+        //   // Re-focus the app after fullscreen to ensure it stays focused
+        //   await capabilities.wait(300);
+        //   await capabilities.focusApp(action.appName);
+        //   await capabilities.wait(300);
+        // } else {
+        //   console.log(`✅ [COMPUTER-USE] ${action.appName} already in fullscreen, skipping toggle`);
+        // }
         break;
 
       case 'fullscreen':
@@ -366,6 +527,13 @@ export class ComputerUseClient {
           
           if (!result.success) {
             throw new Error(result.error || 'Failed to find and click element');
+          }
+          
+          // Check if Vision API was used (fallback scenario)
+          // If so, mark that we already have a screenshot to avoid duplicate in waitForUIChange
+          if (result.usedVisionAPI) {
+            console.log(`📸 [COMPUTER-USE] Vision API was used - marking to skip duplicate screenshot`);
+            this.lastActionUsedVisionAPI = true;
           }
           
           // Show ghost cursor at detected position
@@ -464,7 +632,8 @@ export class ComputerUseClient {
         break;
 
       case 'screenshot':
-        await capabilities.captureScreenshot();
+        // Capture and store screenshot for sending to backend
+        this.capturedScreenshot = await capabilities.captureScreenshot();
         break;
 
       case 'waitForElement':
@@ -484,6 +653,13 @@ export class ComputerUseClient {
             const result = await capabilities.findElement(action.locator);
             if (result.success) {
               console.log(`✅ [COMPUTER-USE] Element found after ${Date.now() - startTime}ms`);
+              
+              // Check if Vision API was used during element detection
+              if (result.usedVisionAPI) {
+                console.log(`📸 [COMPUTER-USE] waitForElement used Vision API - marking to skip duplicate screenshot`);
+                this.lastActionUsedVisionAPI = true;
+              }
+              
               found = true;
               break;
             }
@@ -514,6 +690,48 @@ export class ComputerUseClient {
         
         // Notify UI callback if available
         this.callbacks.onStatus?.(logMessage);
+        break;
+
+      case 'clickAndDrag':
+        // Drag from one element to another
+        console.log(`🎯 [COMPUTER-USE] Executing clickAndDrag`);
+        
+        if (!action.fromLocator || !action.toLocator) {
+          throw new Error('clickAndDrag requires both fromLocator and toLocator');
+        }
+        
+        const dragResult = await capabilities.clickAndDrag(action.fromLocator, action.toLocator);
+        
+        if (!dragResult.success) {
+          throw new Error(dragResult.error || 'Failed to execute clickAndDrag');
+        }
+        
+        // Check if Vision API was used
+        if (dragResult.usedVisionAPI) {
+          console.log(`📸 [COMPUTER-USE] clickAndDrag used Vision API - marking to skip duplicate screenshot`);
+          this.lastActionUsedVisionAPI = true;
+        }
+        
+        // Show ghost cursor at destination
+        if (dragResult.coordinates) {
+          capabilities.sendGhostMouseMove(dragResult.coordinates.x, dragResult.coordinates.y);
+          await capabilities.wait(300);
+        }
+        break;
+
+      case 'zoom':
+        // Zoom in/out on content
+        console.log(`🔍 [COMPUTER-USE] Executing zoom ${action.zoomDirection}`);
+        
+        if (!action.zoomDirection) {
+          throw new Error('zoom requires zoomDirection (in/out)');
+        }
+        
+        await capabilities.zoom(
+          action.zoomDirection,
+          action.zoomLevel,
+          this.activeApp || undefined
+        );
         break;
 
       case 'end':
@@ -554,9 +772,16 @@ export class ComputerUseClient {
       goal: this.goal,
       context: {
         ...this.context,
-        screenshotHash  // Include hash for backend comparison
+        screenshotHash,  // Include hash for backend comparison
+        activeApp: this.activeApp || undefined  // Send current active app to backend
       }
     };
+
+    console.log(`📤 [COMPUTER-USE] Sending context to backend:`, {
+      activeApp: this.activeApp,
+      iteration,
+      hasScreenshot: true
+    });
 
     this.send(message);
   }
@@ -659,11 +884,32 @@ export class ComputerUseClient {
   }
 
   /**
+   * Send action complete acknowledgment to backend (no screenshot needed)
+   */
+  private sendActionComplete(iteration: number): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.error('❌ [COMPUTER-USE] Cannot send action complete - WebSocket not connected');
+      return;
+    }
+
+    console.log(`✅ [COMPUTER-USE] Sending action complete acknowledgment (iteration ${iteration})`);
+    
+    this.ws.send(JSON.stringify({
+      type: 'action_complete',
+      iteration
+    }));
+  }
+
+  /**
    * Close WebSocket connection
    */
   close(): void {
     if (this.ws) {
       console.log('🔌 [COMPUTER-USE] Closing WebSocket');
+      
+      // Show system cursor when automation ends
+      capabilities.showSystemCursor();
+      
       this.ws.close();
       this.ws = null;
     }

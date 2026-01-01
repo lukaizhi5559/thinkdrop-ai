@@ -80,6 +80,11 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     timeSinceLastActionMs?: number;
   } | null>(null);
   
+  // Plan generation state (for hybrid plan + computer-use)
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false);
+  const [generatedPlan, setGeneratedPlan] = useState<any | null>(null);
+  const [planError, setPlanError] = useState<string | null>(null);
+  
   // Action history for review after completion
   const [actionHistory, setActionHistory] = useState<ActionHistoryItem[]>([]);
   
@@ -250,25 +255,130 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     };
   }, [planId, totalSteps]);
 
+  // Generate plan for Computer Use mode
+  const generatePlan = async () => {
+    console.log('🎯 [AUTOMATE] Generating plan for:', goal);
+    setIsGeneratingPlan(true);
+    setPlanError(null);
+    
+    try {
+      // Get backend URL and API key from slots (passed from main process)
+      const backendUrl = slots.backendUrl || 'http://localhost:4000';
+      const apiKey = slots.apiKey || 'test-api-key-123';
+      
+      // Strip data URL prefix from screenshot if present
+      let screenshotBase64 = initialScreenshot;
+      if (screenshotBase64 && screenshotBase64.startsWith('data:')) {
+        const base64Index = screenshotBase64.indexOf('base64,');
+        if (base64Index !== -1) {
+          screenshotBase64 = screenshotBase64.substring(base64Index + 7);
+          console.log('🔧 [AUTOMATE] Stripped data URL prefix from screenshot');
+        }
+      }
+      
+      // Call /plan API
+      const response = await fetch(`${backendUrl}/api/nutjs/plan`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey
+        },
+        body: JSON.stringify({
+          command: goal,
+          intent: 'command_automate',
+          context: {
+            screenshot: screenshotBase64 ? { base64: screenshotBase64, mimeType: 'image/png' } : undefined,
+            activeApp: context?.activeApp,
+            activeUrl: context?.activeUrl,
+            os: 'darwin'
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Plan API failed: ${response.status} ${response.statusText}`);
+      }
+      
+      const result = await response.json();
+      console.log('✅ [AUTOMATE] Plan generated:', result);
+      
+      // Check if clarification is needed
+      if (result.needsClarification && result.clarificationQuestions) {
+        console.log('❓ [AUTOMATE] Plan needs clarification');
+        setClarificationQuestions(result.clarificationQuestions);
+        setIsGeneratingPlan(false);
+        return;
+      }
+      
+      // Store generated plan
+      if (result.success && result.plan) {
+        setGeneratedPlan(result.plan);
+        console.log('📋 [AUTOMATE] Plan ready with', result.plan.steps?.length || 0, 'steps');
+        
+        // Request window resize to fit plan content
+        if (ipcRenderer) {
+          // const stepCount = result.plan.steps?.length || 0;
+          // const estimatedHeight = Math.min(
+          //   200 + (stepCount * 100) + 150, // Header + steps + footer
+          //   800 // Max height
+          // );
+          // ipcRenderer.send('intent-overlay:resize', {
+          //   width: 800,
+          //   height: estimatedHeight
+          // });
+          // Ensure window is clickable for buttons
+          ipcRenderer.send('intent-overlay:set-clickable', true);
+        }
+      } else {
+        throw new Error('Plan API returned no plan');
+      }
+    } catch (error: any) {
+      console.error('❌ [AUTOMATE] Plan generation failed:', error);
+      setPlanError(error.message || 'Failed to generate plan');
+    } finally {
+      setIsGeneratingPlan(false);
+    }
+  };
+  
+  // Start execution with generated plan
+  const startPlanExecution = () => {
+    if (!generatedPlan) {
+      console.error('❌ [AUTOMATE] Cannot start - no plan available');
+      return;
+    }
+    
+    console.log('🚀 [AUTOMATE] Starting plan execution');
+    setIsVisible(false);
+    setAutomationStarted(true);
+    setCountdown(null);
+    
+    if (ipcRenderer) {
+      console.log('📤 [AUTOMATE] Sending automation:started to main process');
+      ipcRenderer.send('automation:started');
+    }
+  };
+  
   // Countdown timer before automation starts
   useEffect(() => {
-    // Computer Use mode: skip countdown and start immediately
-    if (isComputerUseMode && !automationStarted) {
-      console.log('🌐 [AUTOMATE] Computer Use mode - skipping countdown, starting immediately');
-      setIsVisible(false);
-      setAutomationStarted(true);
-      setCountdown(null);
-      
-      if (ipcRenderer) {
-        console.log('📤 [AUTOMATE] Sending automation:started to main process');
-        // Main process will forward automation:state to PromptBar with isRunning=true
-        ipcRenderer.send('automation:started');
-      }
+    // Debug: Log all conditions
+    console.log('🔍 [AUTOMATE] useEffect check:', {
+      isComputerUseMode,
+      automationStarted,
+      isGeneratingPlan,
+      generatedPlan: !!generatedPlan,
+      planError: !!planError,
+      shouldGeneratePlan: isComputerUseMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError
+    });
+    
+    // Computer Use mode: Generate plan first, then wait for user to start
+    if (isComputerUseMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError) {
+      console.log('🌐 [AUTOMATE] Computer Use mode - generating plan');
+      generatePlan();
       return;
     }
     
     // Static plan mode: use countdown
-    if (countdown === null || countdown <= 0 || automationStarted) return;
+    if (isComputerUseMode || countdown === null || countdown <= 0 || automationStarted) return;
 
     const timer = setTimeout(() => {
       const newCountdown = countdown - 1;
@@ -303,9 +413,10 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     const client = new ComputerUseClient(wsUrl);
     computerUseClientRef.current = client;
 
-    client.execute(goal, initialScreenshot, context, {
-      onAction: (action, iteration, timing) => {
-        console.log('🎬 [AUTOMATE] Executing action ' + currentStepIndex + ':', action.type);
+    // Define callbacks for both execute methods
+    const callbacks = {
+      onAction: (action: any, iteration: number, timing?: any) => {
+        console.log('🎬 [AUTOMATE] Executing action ' + iteration + ':', action.type);
         console.log('💭 [AUTOMATE] AI Reasoning:', action.reasoning);
         
         // Extract timing data if available
@@ -318,16 +429,11 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           setCurrentTiming(timing);
         }
         
+        // Update state with current action details
         setCurrentReasoning(action.reasoning || null);
         setCurrentActionType(action.type || null);
-        
-        // Capture reasoning and action type from backend
-        if (action.reasoning) {
-          setCurrentReasoning(action.reasoning);
-        }
         setCurrentStepIndex(iteration);
         setStatus('running');
-        setCurrentActionType(action.type);
         
         // Record action in history
         setActionHistory(prev => [
@@ -350,7 +456,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           });
         }
       },
-      onClarificationNeeded: async (questions, iteration) => {
+      onClarificationNeeded: async (questions: ClarificationQuestion[], iteration: number) => {
         console.log(`❓ [AUTOMATE] Clarification needed (iteration ${iteration}):`, questions);
         
         // Show clarification questions in compact card and wait for user input
@@ -382,7 +488,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           }
         });
       },
-      onComplete: (result) => {
+      onComplete: (result: any) => {
         console.log('✅ [AUTOMATE] Computer Use completed:', result);
         setStatus('completed');
         setIsVisible(true); // Show on completion for review
@@ -398,7 +504,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           ipcRenderer.send('automation:ended');
         }
       },
-      onError: (error) => {
+      onError: (error: string) => {
         console.error('❌ [AUTOMATE] Computer Use error:', error);
         setStatus('error');
         setError(error);
@@ -426,10 +532,17 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           ipcRenderer.send('automation:ended');
         }
       },
-      onStatus: (message) => {
+      onStatus: (message: string) => {
         console.log('ℹ️ [AUTOMATE] Status:', message);
       }
-    }).catch((err) => {
+    };
+    
+    // Use executeWithPlan if plan is available (hybrid approach), otherwise use regular execute
+    const executePromise = generatedPlan 
+      ? client.executeWithPlan(generatedPlan, initialScreenshot, context, callbacks)
+      : client.execute(goal, initialScreenshot, context, callbacks);
+    
+    executePromise.catch((err) => {
       console.error('❌ [AUTOMATE] Computer Use failed:', err);
       setStatus('error');
       setError(err.message);
@@ -947,7 +1060,37 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         ipcRenderer.removeListener('automation:play', handlePlay);
       }
     };
-  }, [countdown, automationStarted]);
+  }, [countdown, automationStarted, isComputerUseMode, isGeneratingPlan, generatedPlan, planError]);
+
+  // Ensure window is properly sized and clickable when plan is shown
+  useEffect(() => {
+    console.log('🔍 [AUTOMATE] Window resize useEffect triggered:', {
+      isComputerUseMode,
+      hasGeneratedPlan: !!generatedPlan,
+      automationStarted,
+      hasIpcRenderer: !!ipcRenderer
+    });
+    
+    if (isComputerUseMode && generatedPlan && !automationStarted && ipcRenderer) {
+      // const stepCount = generatedPlan.steps?.length || 0;
+      // const estimatedHeight = Math.min(
+      //   200 + (stepCount * 100) + 150, // Header + steps + footer
+      //   800 // Max height
+      // );
+      
+      // console.log(`📐 [AUTOMATE] Requesting window resize to 800x${estimatedHeight} and making clickable`);
+      
+      // // Force resize and make clickable
+      // ipcRenderer.send('intent-overlay:resize', {
+      //   width: 800,
+      //   height: estimatedHeight
+      // });
+      ipcRenderer.send('intent-overlay:set-clickable', true);
+      
+      // Also try to bring window to front
+      ipcRenderer.send('intent-overlay:focus');
+    }
+  }, [generatedPlan, automationStarted, isComputerUseMode, ipcRenderer]);
 
   // Listen for clarification answers from prompt bar
   useEffect(() => {
@@ -1144,6 +1287,116 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     return null;
   }
 
+  // Show plan generation loading state
+  if (isComputerUseMode && isGeneratingPlan) {
+    return (
+      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
+        <div className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-center gap-4">
+            <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
+            <div>
+              <p className="text-lg font-medium text-white mb-1">Generating Plan...</p>
+              <p className="text-sm text-gray-400">Analyzing your request and creating automation steps</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show plan preview with Start button
+  if (isComputerUseMode && generatedPlan && !automationStarted) {
+    return (
+      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
+        <div className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-gray-700/50">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold text-white">Automation Plan Ready</h3>
+              <p className="text-xs text-gray-400">
+                {generatedPlan.steps?.length || 0} steps • Estimated time: {Math.ceil((generatedPlan.steps?.length || 0) * 3)}s
+              </p>
+            </div>
+            <p className="text-sm text-gray-400">{generatedPlan.goal || goal}</p>
+          </div>
+
+          {/* Steps Preview */}
+          <div className="px-6 py-4 space-y-3">
+            {generatedPlan.steps?.map((step: any, idx: number) => (
+              <div key={step.id || idx} className="flex gap-3 p-3 bg-gray-900/50 rounded-lg border border-gray-700/30">
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 font-medium text-sm">
+                  {idx + 1}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-white mb-1">
+                    {step.intent ? `${step.intent.charAt(0).toUpperCase() + step.intent.slice(1)}` : 'Action'}
+                  </p>
+                  <p className="text-sm text-gray-300">{step.description}</p>
+                  {step.target && (
+                    <p className="text-xs text-gray-500 mt-1">→ {step.target}</p>
+                  )}
+                  {step.query && (
+                    <p className="text-xs text-gray-500 mt-1">Query: "{step.query}"</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Actions */}
+          <div className="px-6 py-4 border-t border-gray-700/50 flex items-center justify-end gap-3">
+            <button
+              onClick={() => {
+                setGeneratedPlan(null);
+                setPlanError(null);
+                setIsGeneratingPlan(false);
+                if (ipcRenderer) {
+                  ipcRenderer.send('automation:ended');
+                }
+              }}
+              className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={startPlanExecution}
+              className="px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2 whitespace-nowrap"
+            >
+              <Play className="w-4 h-4" />
+              Start Automation
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show plan generation error
+  if (isComputerUseMode && planError && !automationStarted) {
+    return (
+      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
+        <div className="bg-gray-800/95 backdrop-blur-xl border border-red-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <div className="flex items-start gap-4">
+            <AlertCircle className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-lg font-medium text-white mb-2">Plan Generation Failed</p>
+              <p className="text-sm text-gray-300 mb-4">{planError}</p>
+              <button
+                onClick={() => {
+                  setPlanError(null);
+                  generatePlan();
+                }}
+                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // In Computer Use mode, always show compact floating card during automation
   // Entire window is click-through for visibility only - doesn't block automation
   if (isComputerUseMode && status !== 'completed' && status !== 'error') {
@@ -1151,7 +1404,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl pointer-events-none">
         <div 
           ref={cardRef}
-          className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300 max-h-[60vh]"
+          className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300"
         >
           {/* Compact Header with AI Reasoning */}
           <div className="px-4 py-3">
@@ -1194,9 +1447,9 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
                     <p className="text-xs font-medium text-blue-300 mb-1">
                       AI Thinking {currentActionType && `• ${currentActionType}`}
                     </p>
-                    <p className="text-sm text-gray-200 leading-relaxed">
+                    {/* <p className="text-sm text-gray-200 leading-relaxed">
                       {currentReasoning}
-                    </p>
+                    </p> */}
                     {currentTiming && (
                       <div className="mt-2 flex gap-3 text-xs text-gray-400">
                         {currentTiming.llmDecisionMs && (

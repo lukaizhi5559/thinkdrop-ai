@@ -66,11 +66,12 @@ if (typeof window !== 'undefined') {
 }
 
 export interface DetectionLocator {
-  strategy: 'text' | 'image' | 'element' | 'vision';
+  strategy: 'text' | 'image' | 'element' | 'vision' | 'bbox';
   value?: string;
   context?: string;
   role?: string;
   description?: string;
+  bbox?: [number, number, number, number]; // [x, y, width, height] for bbox strategy
 }
 
 export interface DetectionResult {
@@ -78,6 +79,7 @@ export interface DetectionResult {
   coordinates?: { x: number; y: number };
   region?: any; // Region type from nut.js (not used currently)
   error?: string;
+  usedVisionAPI?: boolean; // Flag to indicate if Vision API was used as fallback
 }
 
 /**
@@ -131,8 +133,8 @@ export async function findAndClickText(text: string, context?: string): Promise<
     // Initialize OCR worker
     const worker = await initOCRWorker();
     
-    // Run OCR on screenshot with word-level output
-    console.log('🔍 [NUTJS] Running OCR to find text...');
+    // Run OCR on screenshot with word-level output (no preprocessing)
+    console.log('🔍 [NUTJS] Running OCR...');
     // CRITICAL: Pass { blocks: true } as third argument to get word-level bounding boxes
     const result = await worker.recognize(screenshot, {}, { blocks: true });
     
@@ -247,9 +249,17 @@ export async function findAndClickText(text: string, context?: string): Promise<
     if (!foundWord) {
       console.warn(`⚠️ [NUTJS] Text "${text}" not found in ${words.length} OCR words`);
       console.log('📝 [NUTJS] Available text:', words.map((w: any) => w.text).join(' ').substring(0, 200));
+      
+      // Provide helpful hint about OCR limitations
+      const looksLikePlaceholder = /ask|search|enter|type|input|message/i.test(text);
+      if (looksLikePlaceholder) {
+        console.warn('💡 [NUTJS] This looks like placeholder text - OCR cannot detect placeholders!');
+        console.warn('💡 [NUTJS] Vision API fallback will be triggered automatically');
+      }
+      
       return {
         success: false,
-        error: `Text "${text}" not found on screen`
+        error: `Text "${text}" not found on screen (OCR detected ${words.length} words)`
       };
     }
     

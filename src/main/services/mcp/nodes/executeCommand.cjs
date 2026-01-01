@@ -138,6 +138,7 @@ module.exports = async function executeCommand(state) {
             screenshot: screenshot,
             backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
             wsUrl: process.env.BACKEND_WS_URL || 'ws://localhost:4000/computer-use',
+            apiKey: process.env.BIBSCRIP_API_KEY || 'test-api-key-123',
             context: {
               os: process.platform,
               userId: context.userId,

@@ -14,6 +14,7 @@ import OverlayRenderer from './components/OverlayRenderer';
 import GhostOverlay from './components/GhostOverlay';
 import { useConversationSignals } from './hooks/useConversationSignals';
 import { initializeConversationSignals } from './signals/init';
+import AutomationTester from './components/testing/AutomationTester';
 
 // Lazy load ChatWindow to prevent dependency issues in other windows
 const ChatWindow = lazy(() => import('./components/ChatWindow'));
@@ -25,6 +26,7 @@ function App() {
   const [overlayPayload, setOverlayPayload] = useState<OverlayPayload | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isOnlineMode, setIsOnlineMode] = useState(false);
+  const [showTester, setShowTester] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
   // Get active session ID for conversation continuity
@@ -36,6 +38,37 @@ function App() {
   const isPromptMode = mode === 'prompt';
   const isIntentMode = mode === 'intent';
   const isChatMode = mode === 'chat';
+
+  // Listen for IPC event to open tester (triggered by Cmd+Shift+T global shortcut)
+  useEffect(() => {
+    console.log('🧪 [OVERLAY] Setting up automation tester listener, mode:', mode);
+    console.log('🧪 [OVERLAY] ipcRenderer available:', !!ipcRenderer);
+    
+    if (!ipcRenderer) {
+      console.warn('⚠️ [OVERLAY] IPC renderer not available for tester');
+      return;
+    }
+
+    const handleShowTester = () => {
+      console.log('🧪 [OVERLAY] Received show-automation-tester event!');
+      setShowTester(true);
+    };
+
+    const handleCloseTester = () => {
+      console.log('🧪 [OVERLAY] Closing Automation Tester');
+      setShowTester(false);
+    };
+
+    console.log('🧪 [OVERLAY] Registering show-automation-tester listener');
+    ipcRenderer.on('show-automation-tester', handleShowTester);
+    window.addEventListener('close-automation-tester', handleCloseTester);
+
+    return () => {
+      console.log('🧪 [OVERLAY] Cleaning up tester listeners');
+      ipcRenderer.removeListener('show-automation-tester', handleShowTester);
+      window.removeEventListener('close-automation-tester', handleCloseTester);
+    };
+  }, [mode]);
 
   useEffect(() => {
     const modeLabel = isPromptMode ? 'PROMPT' : isIntentMode ? 'INTENT' : isChatMode ? 'CHAT' : 'GHOST';
@@ -216,7 +249,7 @@ function App() {
 
   // Render different content based on window mode
   if (isPromptMode) {
-    // PROMPT WINDOW: Prompt bar for user input
+    // PROMPT WINDOW: Prompt bar for user input (no tester here)
     return (
       <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-end">
         <PromptBar 
@@ -230,18 +263,25 @@ function App() {
 
   if (isIntentMode) {
     // INTENT WINDOW: Interactive intent UIs (web search results, command guides, etc.)
-    // Click-through enabled only for automation mode in Computer Use
-    const isAutomationProgress = overlayPayload?.intent === 'command_automate' && 
-                                  overlayPayload?.uiVariant === 'automation_progress' &&
-                                  overlayPayload?.slots?.mode === 'computer-use-streaming';
+    // Note: pointer-events are controlled by the component itself, not at the container level
+    // This allows plan preview buttons to be clickable while automation is running
     
     return (
-      <div ref={containerRef} className={`relative w-full h-full overflow-hidden flex items-center ${isAutomationProgress ? 'pointer-events-none' : ''}`}>
+      <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-center">
         {overlayPayload && (
           <OverlayRenderer 
             payload={overlayPayload} 
             onEvent={handleOverlayEvent}
           />
+        )}
+        {showTester && (
+          <AutomationTester onClose={() => {
+            setShowTester(false);
+            // Hide the intent overlay window when tester closes
+            if (ipcRenderer) {
+              ipcRenderer.send('intent-overlay:hide');
+            }
+          }} />
         )}
       </div>
     );
@@ -259,6 +299,9 @@ function App() {
         }>
           <ChatWindow />
         </Suspense>
+        {showTester && (
+          <AutomationTester onClose={() => setShowTester(false)} />
+        )}
       </div>
     );
   }
@@ -270,6 +313,9 @@ function App() {
       className="relative w-full h-full overflow-hidden pointer-events-none"
     >
       <GhostOverlay />
+      {showTester && (
+        <AutomationTester onClose={() => setShowTester(false)} />
+      )}
     </div>
   );
 }

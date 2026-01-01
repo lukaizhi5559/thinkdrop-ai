@@ -98,7 +98,7 @@ export default function ChatWindow() {
             <ConversationSidebar />
 
             {/* Messages Area */}
-            <div className="flex-1 flex flex-col bg-indigo-900">
+            <div className="flex-1 flex flex-col">
               <div className="flex-1 overflow-hidden">
                 <ChatMessages />
               </div>

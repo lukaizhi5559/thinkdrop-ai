@@ -1,4 +1,3 @@
-import { useSignals } from '@preact/signals-react/runtime';
 import { 
   sessions,
   activeSessionId,
@@ -27,8 +26,7 @@ import {
 
 // Hook that provides both signals and traditional API for migration
 export const useConversationSignals = () => {
-  // Enable signals in this component
-  useSignals();
+  // Signals work automatically in React components - no useSignals() needed
 
   return {
     // Raw signals (for components that want direct access)
@@ -79,7 +77,6 @@ export const useConversationSignals = () => {
 
 // Simplified hook for components that just need the active session
 export const useActiveSession = () => {
-  useSignals();
   return {
     sessionId: activeSessionId.value,
     session: activeSession.value,

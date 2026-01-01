@@ -19,6 +19,14 @@ export async function captureScreenshot(): Promise<string> {
     throw new Error('IPC renderer not available');
   }
 
+  // Hide ALL overlays to prevent AI reasoning card from appearing in screenshot
+  // console.log('👻 [CAPABILITIES] Hiding all overlays for clean screenshot');
+  // ipcRenderer.send('intent-overlay:hide');
+  // ipcRenderer.send('ghost-overlay:hide');
+  
+  // Wait for overlays to fully hide (increased delay to ensure complete hiding)
+  await new Promise(resolve => setTimeout(resolve, 500));
+
   // Show camera icon indicator before screenshot
   console.log('📸 [CAPABILITIES] Showing camera indicator');
   ipcRenderer.send('screenshot:start-indicator');
@@ -37,6 +45,12 @@ export async function captureScreenshot(): Promise<string> {
       ipcRenderer.removeAllListeners('screenshot:error');
       console.log('📸 [CAPABILITIES] Screenshot captured');
       ipcRenderer.send('screenshot:end-indicator');
+      
+      // Show all overlays again after screenshot
+      // console.log('👻 [CAPABILITIES] Showing all overlays again');
+      // ipcRenderer.send('intent-overlay:show');
+      // ipcRenderer.send('ghost-overlay:show');
+      
       resolve(screenshot);
     };
 
@@ -45,6 +59,12 @@ export async function captureScreenshot(): Promise<string> {
       ipcRenderer.removeAllListeners('screenshot:captured');
       ipcRenderer.removeAllListeners('screenshot:error');
       ipcRenderer.send('screenshot:end-indicator');
+      
+      // Show all overlays again even on error
+      // console.log('👻 [CAPABILITIES] Showing all overlays again (after error)');
+      // ipcRenderer.send('intent-overlay:show');
+      // ipcRenderer.send('ghost-overlay:show');
+      
       reject(new Error(error));
     };
 
@@ -89,10 +109,36 @@ export async function fullscreen(): Promise<void> {
 }
 
 /**
+ * Launch an application by name (opens if not running)
+ * @param appName - Name of the application (e.g., "Chrome", "Safari", "Slack")
+ */
+export async function launchApp(appName: string): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`🚀 [CAPABILITIES] Launching app: ${appName}`);
+
+  return new Promise((resolve, reject) => {
+    ipcRenderer.once('automation:launch-app:result', (_event: any, result: any) => {
+      if (result.success) {
+        console.log(`✅ [CAPABILITIES] App launched: ${appName}`);
+        resolve();
+      } else {
+        reject(new Error(result.error || 'Failed to launch app'));
+      }
+    });
+
+    ipcRenderer.send('automation:launch-app', { appName });
+  });
+}
+
+/**
  * Focus/activate an application by name
  * @param appName - Name of the application (e.g., "Chrome", "Safari")
+ * @returns The actual app name that was focused (from macOS)
  */
-export async function focusApp(appName: string): Promise<void> {
+export async function focusApp(appName: string): Promise<string> {
   if (!ipcRenderer) {
     throw new Error('IPC renderer not available');
   }
@@ -100,7 +146,7 @@ export async function focusApp(appName: string): Promise<void> {
   return new Promise((resolve, reject) => {
     ipcRenderer.once('automation:focus-app:result', (_event: any, result: any) => {
       if (result.success) {
-        resolve();
+        resolve(result.actualApp || appName);
       } else {
         reject(new Error(result.error || 'Failed to focus app'));
       }
@@ -154,6 +200,31 @@ export async function quitApp(appName: string): Promise<void> {
     });
 
     ipcRenderer.send('automation:quit-app', { appName });
+  });
+}
+
+/**
+ * Find and focus a window by title pattern
+ * @param titlePattern - Regex pattern to match window title
+ */
+export async function focusWindow(titlePattern: string): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`🪟 [CAPABILITIES] Finding window: ${titlePattern}`);
+
+  return new Promise((resolve, reject) => {
+    ipcRenderer.once('automation:find-window:result', (_event: any, result: any) => {
+      if (result.success) {
+        console.log(`✅ [CAPABILITIES] Window focused: ${result.title}`);
+        resolve();
+      } else {
+        reject(new Error(result.error || 'Failed to find window'));
+      }
+    });
+
+    ipcRenderer.send('automation:find-window', { titlePattern });
   });
 }
 
@@ -404,7 +475,8 @@ export async function findElement(locator: DetectionLocator): Promise<DetectionR
       const coords = await findElementWithVision(fallbackDescription, 'vision');
       return {
         success: true,
-        coordinates: coords
+        coordinates: coords,
+        usedVisionAPI: true  // Mark that Vision API was used
       };
     } catch (error: any) {
       return {
@@ -435,10 +507,22 @@ export async function findAndClickElement(locator: DetectionLocator): Promise<De
     return result;
   }
   
-  // If native detection fails, fall back to Vision API
-  // Use description if available, otherwise use value as description
+  // If native detection fails, provide better error context
   const fallbackDescription = locator.description || locator.value;
   
+  // For simple tasks (app launching, window switching), don't use Vision API
+  const isSimpleTask = locator.strategy === 'element' && 
+    /open|launch|switch|focus|activate/i.test(fallbackDescription || '');
+  
+  if (isSimpleTask) {
+    console.warn(`⚠️ [CAPABILITIES] Simple task failed with native detection. Consider using focusApp() or launchApp() instead.`);
+    return {
+      success: false,
+      error: `Native detection failed. For app launching/switching, use focusApp() capability instead of findAndClickElement().`
+    };
+  }
+  
+  // For complex UI interactions, fall back to Vision API
   if (fallbackDescription) {
     console.warn(`⚠️ [CAPABILITIES] Native ${locator.strategy} detection failed, falling back to Vision API`);
     console.log(`🔍 [CAPABILITIES] Searching for: "${fallbackDescription}"`);
@@ -448,7 +532,8 @@ export async function findAndClickElement(locator: DetectionLocator): Promise<De
       await nutjsDetector.clickAtCoordinates(coords.x, coords.y);
       return {
         success: true,
-        coordinates: coords
+        coordinates: coords,
+        usedVisionAPI: true  // Mark that Vision API was used
       };
     } catch (error: any) {
       return {
@@ -465,18 +550,28 @@ export async function findAndClickElement(locator: DetectionLocator): Promise<De
  * Find element using Vision API and return coordinates (LEGACY FALLBACK)
  * @param description - Description of element to find
  * @param strategy - Vision strategy (optional)
+ * @param screenshot - Optional pre-captured screenshot (for performance optimization)
  * @returns Coordinates of the element
  */
-export async function findElementWithVision(description: string, strategy?: string): Promise<{ x: number; y: number }> {
+export async function findElementWithVision(
+  description: string, 
+  strategy?: string,
+  screenshot?: string
+): Promise<{ x: number; y: number }> {
   if (!ipcRenderer) {
     throw new Error('IPC renderer not available');
   }
 
   console.log(`🔍 [CAPABILITIES] Finding element with vision: "${description}"`);
   
-  // First, take a screenshot
-  const screenshot = await captureScreenshot();
-  console.log(`📸 [CAPABILITIES] Screenshot captured, size: ${screenshot.length} bytes`);
+  // Use provided screenshot or capture new one
+  const imageData = screenshot || await captureScreenshot();
+  
+  if (screenshot) {
+    console.log(`📸 [CAPABILITIES] Using pre-captured screenshot (${screenshot.length} bytes)`);
+  } else {
+    console.log(`📸 [CAPABILITIES] Screenshot captured, size: ${imageData.length} bytes`);
+  }
   
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -500,7 +595,7 @@ export async function findElementWithVision(description: string, strategy?: stri
 
     console.log(`📤 [CAPABILITIES] Sending find-element IPC request`);
     ipcRenderer.send('automation:find-element', { 
-      screenshot, 
+      screenshot: imageData, 
       description,
       strategy: strategy || 'vision'
     });
@@ -550,4 +645,200 @@ export async function verifyStepWithVision(
       verificationStrategy: 'vision_check'
     });
   });
+}
+
+/**
+ * Resolve a locator to screen coordinates
+ * Supports text, image, element, vision, and bbox strategies
+ * @param locator - Detection locator
+ * @param screenshot - Optional screenshot for Vision API (to resolve multiple locators from same screenshot)
+ * @returns Coordinates { x, y }
+ */
+export async function resolveLocator(
+  locator: DetectionLocator, 
+  screenshot?: string
+): Promise<{ x: number; y: number }> {
+  console.log(`🔍 [CAPABILITIES] Resolving locator:`, locator);
+  
+  switch (locator.strategy) {
+    case 'vision':
+      // Use Vision API for element detection
+      if (!locator.description) {
+        throw new Error('Vision strategy requires description');
+      }
+      
+      // Pass screenshot to Vision API for reuse optimization
+      return await findElementWithVision(locator.description, 'vision', screenshot);
+      
+    case 'text':
+    case 'image':
+    case 'element':
+      // Use native nut.js detection
+      const result = await nutjsDetector.detect(locator);
+      if (!result.success || !result.coordinates) {
+        throw new Error(`Failed to detect element: ${result.error || 'Not found'}`);
+      }
+      return result.coordinates;
+      
+    case 'bbox':
+      // Direct coordinates from bounding box
+      if (!locator.bbox || locator.bbox.length !== 4) {
+        throw new Error('bbox strategy requires [x, y, width, height] array');
+      }
+      const [x, y, width, height] = locator.bbox;
+      return { x: x + width / 2, y: y + height / 2 };
+      
+    default:
+      throw new Error(`Unsupported locator strategy: ${locator.strategy}`);
+  }
+}
+
+/**
+ * Execute click and drag action
+ * Drags from one element to another
+ * @param fromLocator - Starting element locator
+ * @param toLocator - Destination element locator
+ * @returns Detection result with usedVisionAPI flag
+ */
+export async function clickAndDrag(
+  fromLocator: DetectionLocator,
+  toLocator: DetectionLocator
+): Promise<DetectionResult> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`🎯 [CAPABILITIES] Executing clickAndDrag`);
+  console.log(`  From:`, fromLocator);
+  console.log(`  To:`, toLocator);
+  
+  // Determine if we need Vision API
+  const usesVisionAPI = 
+    fromLocator.strategy === 'vision' || 
+    toLocator.strategy === 'vision';
+  
+  try {
+    // Capture screenshot once if either locator uses Vision API
+    let screenshot: string | undefined;
+    if (usesVisionAPI) {
+      screenshot = await captureScreenshot();
+      console.log(`📸 [CAPABILITIES] Screenshot captured for Vision API resolution`);
+    }
+    
+    // Resolve both coordinates (from same screenshot if Vision API is used)
+    const fromCoords = await resolveLocator(fromLocator, screenshot);
+    const toCoords = await resolveLocator(toLocator, screenshot);
+    
+    console.log(`✅ [CAPABILITIES] Coordinates resolved:`, { fromCoords, toCoords });
+    
+    // Validate coordinates are within screen bounds
+    // TODO: Get actual screen dimensions
+    if (fromCoords.x < 0 || fromCoords.y < 0 || toCoords.x < 0 || toCoords.y < 0) {
+      throw new Error('Coordinates out of bounds (negative values)');
+    }
+    
+    // Send to main process for execution
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('Timeout executing clickAndDrag'));
+      }, 10000);
+
+      ipcRenderer.once('automation:click-and-drag:result', (_event: any, result: any) => {
+        clearTimeout(timeout);
+        
+        if (result.success) {
+          console.log('✅ [CAPABILITIES] clickAndDrag successful');
+          resolve({
+            success: true,
+            coordinates: toCoords,
+            usedVisionAPI: usesVisionAPI
+          });
+        } else {
+          console.error('❌ [CAPABILITIES] clickAndDrag failed:', result.error);
+          reject(new Error(result.error || 'Failed to execute clickAndDrag'));
+        }
+      });
+
+      ipcRenderer.send('automation:click-and-drag', { 
+        fromCoords, 
+        toCoords 
+      });
+    });
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] clickAndDrag error:', error.message);
+    return {
+      success: false,
+      error: error.message,
+      usedVisionAPI: usesVisionAPI
+    };
+  }
+}
+
+/**
+ * Execute zoom action
+ * @param direction - 'in' or 'out'
+ * @param level - Optional zoom level
+ * @param activeApp - Currently active application name for context-aware strategy
+ * @returns Success result
+ */
+export async function zoom(
+  direction: 'in' | 'out',
+  level?: number,
+  activeApp?: string
+): Promise<{ success: boolean; error?: string }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`🔍 [CAPABILITIES] Executing zoom ${direction}`, { level, activeApp });
+  
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Timeout executing zoom'));
+    }, 5000);
+
+    ipcRenderer.once('automation:zoom:result', (_event: any, result: any) => {
+      clearTimeout(timeout);
+      
+      if (result.success) {
+        console.log('✅ [CAPABILITIES] Zoom successful');
+        resolve({ success: true });
+      } else {
+        console.error('❌ [CAPABILITIES] Zoom failed:', result.error);
+        reject(new Error(result.error || 'Failed to execute zoom'));
+      }
+    });
+
+    ipcRenderer.send('automation:zoom', { 
+      direction, 
+      level,
+      activeApp 
+    });
+  });
+}
+
+/**
+ * Hide the system cursor during automation
+ */
+export function hideSystemCursor(): void {
+  if (!ipcRenderer) {
+    console.warn('⚠️ [CAPABILITIES] IPC renderer not available, cannot hide cursor');
+    return;
+  }
+  
+  console.log('👻 [CAPABILITIES] Hiding system cursor');
+  ipcRenderer.send('automation:hide-cursor');
+}
+
+/**
+ * Show the system cursor after automation
+ */
+export function showSystemCursor(): void {
+  if (!ipcRenderer) {
+    console.warn('⚠️ [CAPABILITIES] IPC renderer not available, cannot show cursor');
+    return;
+  }
+  
+  console.log('👁️ [CAPABILITIES] Showing system cursor');
+  ipcRenderer.send('automation:show-cursor');
 }
