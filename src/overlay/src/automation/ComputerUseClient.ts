@@ -492,8 +492,8 @@ export class ComputerUseClient {
         this.activeApp = action.appName;
         console.log(`✅ [COMPUTER-USE] Actually focused: ${actualApp} (tracking as: ${action.appName})`);
         
-        // Wait for app focus to settle
-        await capabilities.wait(500);
+        // Wait for app window to stabilize and be fully rendered
+        await capabilities.waitForAppStability(action.appName, 3000);
         // const isFullscreen = await capabilities.checkFullscreen(action.appName);
         // console.log(`🔍 [COMPUTER-USE] ${action.appName} fullscreen status: ${isFullscreen}`);
         
@@ -517,12 +517,25 @@ export class ComputerUseClient {
 
       case 'openUrl':
         await capabilities.openUrl(action.url);
+        // Wait for browser page to finish loading before taking screenshot
+        await capabilities.waitForPageLoad(10000);
         break;
 
       case 'findAndClick':
-        // NEW: Use nut.js native detection if locator is provided
-        if (action.locator) {
-          console.log(`🎯 [COMPUTER-USE] Using native detection with locator:`, action.locator);
+        // PRIORITY 1: Use backend-provided coordinates (backend already detected via OmniParser)
+        if (action.coordinates) {
+          console.log(`🎯 [COMPUTER-USE] Using backend-provided coordinates: (${action.coordinates.x}, ${action.coordinates.y})`);
+          console.log(`✅ [COMPUTER-USE] No Vision API call needed - backend already detected element`);
+          
+          // Show ghost cursor and click
+          capabilities.sendGhostMouseMove(action.coordinates.x, action.coordinates.y);
+          await capabilities.wait(500);
+          capabilities.sendGhostMouseClick(action.coordinates.x, action.coordinates.y);
+          await capabilities.clickAt(action.coordinates.x, action.coordinates.y);
+        }
+        // PRIORITY 2: Fallback to native detection if no coordinates provided
+        else if (action.locator) {
+          console.log(`⚠️ [COMPUTER-USE] No coordinates provided by backend, using native detection:`, action.locator);
           const result = await capabilities.findAndClickElement(action.locator);
           
           if (!result.success) {
@@ -530,9 +543,8 @@ export class ComputerUseClient {
           }
           
           // Check if Vision API was used (fallback scenario)
-          // If so, mark that we already have a screenshot to avoid duplicate in waitForUIChange
           if (result.usedVisionAPI) {
-            console.log(`📸 [COMPUTER-USE] Vision API was used - marking to skip duplicate screenshot`);
+            console.log(`📸 [COMPUTER-USE] Vision API was used as fallback - marking to skip duplicate screenshot`);
             this.lastActionUsedVisionAPI = true;
           }
           
@@ -542,14 +554,6 @@ export class ComputerUseClient {
             await capabilities.wait(300);
             capabilities.sendGhostMouseClick(result.coordinates.x, result.coordinates.y);
           }
-        }
-        // LEGACY: Backend already resolved coordinates via Vision API
-        else if (action.coordinates) {
-          console.log(`🎯 [COMPUTER-USE] Using legacy coordinates from Vision API: (${action.coordinates.x}, ${action.coordinates.y})`);
-          capabilities.sendGhostMouseMove(action.coordinates.x, action.coordinates.y);
-          await capabilities.wait(800);
-          capabilities.sendGhostMouseClick(action.coordinates.x, action.coordinates.y);
-          await capabilities.clickAt(action.coordinates.x, action.coordinates.y);
         } else {
           console.error('❌ [COMPUTER-USE] findAndClick action missing both locator and coordinates');
           throw new Error('findAndClick requires either locator or coordinates');
@@ -637,11 +641,11 @@ export class ComputerUseClient {
         break;
 
       case 'waitForElement':
-        // Wait for element to appear using native detection
+        // Wait for element to appear using Vision API verification
         console.log(`⏳ [COMPUTER-USE] Waiting for element:`, action.locator);
         
-        if (!action.locator) {
-          throw new Error('waitForElement requires a locator');
+        if (!action.locator || !action.locator.description) {
+          throw new Error('waitForElement requires a locator with description');
         }
         
         const timeout = action.timeout || 10000; // Default 10s timeout
@@ -650,28 +654,30 @@ export class ComputerUseClient {
         
         while (Date.now() - startTime < timeout) {
           try {
-            const result = await capabilities.findElement(action.locator);
-            if (result.success) {
-              console.log(`✅ [COMPUTER-USE] Element found after ${Date.now() - startTime}ms`);
-              
-              // Check if Vision API was used during element detection
-              if (result.usedVisionAPI) {
-                console.log(`📸 [COMPUTER-USE] waitForElement used Vision API - marking to skip duplicate screenshot`);
-                this.lastActionUsedVisionAPI = true;
-              }
-              
+            // Use verifyStepWithVision to check if element is visible
+            const result = await capabilities.verifyStepWithVision(
+              action.locator.description, // expectedState - what we're waiting for
+              `Waiting for element: ${action.locator.description}` // stepDescription
+            );
+            
+            if (result.verified && result.confidence > 0.7) {
+              console.log(`✅ [COMPUTER-USE] Element found after ${Date.now() - startTime}ms (confidence: ${result.confidence})`);
+              console.log(`📝 [COMPUTER-USE] Reasoning: ${result.reasoning}`);
               found = true;
               break;
+            } else {
+              console.log(`⏳ [COMPUTER-USE] Element not yet visible (confidence: ${result.confidence}) - ${result.reasoning}`);
             }
           } catch (error) {
             // Element not found yet, continue waiting
+            console.log(`⏳ [COMPUTER-USE] Verification failed, retrying...`);
           }
           
           await capabilities.wait(500); // Check every 500ms
         }
         
         if (!found) {
-          throw new Error(`Element not found after ${timeout}ms: ${JSON.stringify(action.locator)}`);
+          throw new Error(`Element not found after ${timeout}ms: ${action.locator.description}`);
         }
         break;
 

@@ -371,18 +371,20 @@ function createIntentOverlay() {
 
   // Start with compact size for loading indicator, will resize dynamically for results
   // Start with compact size - will resize dynamically based on content
-  const initialWidth = 800; // Match plan preview width
-  const initialHeight = 400; // Just enough for loading indicator
-  const y = Math.floor(height - 420); // Small margin from top
+  const initialWidth = Math.floor(width * 0.6); // 60% of screen width
+  const initialHeight = 100; // Compact initial height to avoid blocking PromptBar
+  const promptBarClearance = 160; // Space needed to clear PromptBar
+  const x = Math.floor((width - initialWidth) / 2); // Center horizontally
+  const y = Math.floor(height - initialHeight - promptBarClearance); // Position above PromptBar
   
   intentOverlayWindow = new BrowserWindow({
     width: initialWidth,
     height: initialHeight,
-    minWidth: 200, // Minimum for small UI cards
-    minHeight: 200,
-    maxWidth: Math.floor(width * 0.9), // Max 90% of screen
-    maxHeight: Math.floor(height * 0.9),
-    x: Math.floor((width - initialWidth) / 2), // Center horizontally
+    minHeight: 100,
+    maxHeight: Math.floor(height * 0.5), // Max 50% of screen height
+    // maxWidth: Math.floor(width * 0.9), // Max 90% of screen
+    // maxHeight: Math.floor(height * 0.9),
+    x,
     y, // Math.floor((height - initialHeight) / 2), // Center vertically - component will reposition as needed
     transparent: true,
     frame: false,
@@ -1245,15 +1247,23 @@ async function setupIPCHandlers() {
         const primaryDisplay = screen.getPrimaryDisplay();
         const screenWidth = primaryDisplay.bounds.width;
         const screenHeight = primaryDisplay.bounds.height;
+
+        const { width: intentWidthDisplay } = primaryDisplay.workAreaSize;
+
+        const intentWidth = Math.floor(intentWidthDisplay * 0.6); // 60% of screen width
         
-        // Center the window horizontally, keep it near bottom
+        // Center the window horizontally, position to fit within screen bounds
         const x = Math.floor((screenWidth - width) / 2);
-        const y = Math.floor(screenHeight - height - 20); // 20px from bottom
+        // Calculate Y to keep window visible: max of (top margin) or (bottom - height - promptbar height)
+        const topMargin = 40; // Minimum margin from top
+        const promptBarHeight = 160; // Height to clear PromptBar at bottom
+        const idealY = Math.floor(screenHeight - height - promptBarHeight);
+        const y = Math.max(topMargin, idealY); // Ensure window doesn't go above top margin
         
         intentOverlayWindow.setBounds({
           x,
           y,
-          width,
+          intentWidth,
           height
         }, true); // animate: true for smooth resize
         

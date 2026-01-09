@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Camera, Type, MousePointer, Eye, Play, X } from 'lucide-react';
+import { Camera, Type, MousePointer, Eye, Play, X, CheckCircle } from 'lucide-react';
 import * as capabilities from '../../automation/capabilities';
 import * as nutjs from '../../automation/nutjs-detector';
 
@@ -29,7 +29,7 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [testInput, setTestInput] = useState('');
-  const [selectedTest, setSelectedTest] = useState<'ocr' | 'click' | 'type' | 'find'>('ocr');
+  const [selectedTest, setSelectedTest] = useState<'ocr' | 'click' | 'type' | 'find' | 'verify'>('ocr');
 
   const captureAndAnalyze = async () => {
     setIsLoading(true);
@@ -345,6 +345,73 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
     }
   };
 
+  const testVerify = async () => {
+    if (!testInput.trim()) {
+      setTestResult({ success: false, message: 'Please enter what to verify' });
+      return;
+    }
+
+    setIsLoading(true);
+    setTestResult(null);
+
+    try {
+      const ipcRenderer = (window as any).electron?.ipcRenderer;
+      if (ipcRenderer) {
+        // CRITICAL: Hide the tester overlay to prevent interference
+        console.log('👻 [TESTER] Hiding overlay to prevent interference');
+        ipcRenderer.send('intent-overlay:hide');
+        
+        // Wait for overlay to hide
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      console.log('✅ [TESTER] Verifying with Vision:', testInput);
+      
+      // Capture screenshot first
+      const screenshot = await capabilities.captureScreenshot();
+      setScreenshot(screenshot);
+      
+      // Use verifyStepWithVision to check if the expected state is visible
+      const result = await capabilities.verifyStepWithVision(
+        testInput, // expectedState - what we want to verify
+        'Manual verification test' // stepDescription
+      );
+      
+      console.log('✅ [TESTER] Verification result:', result);
+      
+      setTestResult({
+        success: result.verified,
+        message: result.verified 
+          ? `Verified! Confidence: ${Math.round(result.confidence * 100)}%` 
+          : `Not verified. Confidence: ${Math.round(result.confidence * 100)}%`,
+        data: {
+          verified: result.verified,
+          confidence: result.confidence,
+          reasoning: result.reasoning
+        }
+      });
+      
+      // Show overlay again
+      if (ipcRenderer) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        ipcRenderer.send('intent-overlay:show');
+      }
+    } catch (error: any) {
+      // Show overlay again on error
+      const ipcRendererErr = (window as any).electron?.ipcRenderer;
+      if (ipcRendererErr) {
+        ipcRendererErr.send('intent-overlay:show');
+      }
+      
+      setTestResult({
+        success: false,
+        message: error.message
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const testClick = async () => {
     if (!testInput.trim()) {
       setTestResult({ success: false, message: 'Please enter element description' });
@@ -451,6 +518,9 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
       case 'click':
         await testClick();
         break;
+      case 'verify':
+        await testVerify();
+        break;
     }
   };
 
@@ -476,7 +546,7 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
           {/* Test Selection */}
           <div className="bg-gray-800 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-300 mb-3">Select Test</h3>
-            <div className="grid grid-cols-4 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               <button
                 onClick={() => setSelectedTest('ocr')}
                 className={`p-3 rounded-lg border transition-colors ${
@@ -521,6 +591,17 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
                 <MousePointer className="w-4 h-4 mx-auto mb-1" />
                 <span className="text-xs">Click Element</span>
               </button>
+              <button
+                onClick={() => setSelectedTest('verify')}
+                className={`p-3 rounded-lg border transition-colors ${
+                  selectedTest === 'verify'
+                    ? 'bg-teal-600 border-teal-500 text-white'
+                    : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                <CheckCircle className="w-4 h-4 mx-auto mb-1" />
+                <span className="text-xs">Verify Vision</span>
+              </button>
             </div>
           </div>
 
@@ -528,7 +609,7 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
           {selectedTest !== 'ocr' && (
             <div className="bg-gray-800 rounded-lg p-4">
               <label className="block text-sm font-medium text-gray-300 mb-2">
-                {selectedTest === 'type' ? 'Text to Type' : 'Element Description'}
+                {selectedTest === 'type' ? 'Text to Type' : selectedTest === 'verify' ? 'What to Verify' : 'Element Description'}
               </label>
               <input
                 type="text"
@@ -537,6 +618,8 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
                 placeholder={
                   selectedTest === 'type'
                     ? 'Enter text to type...'
+                    : selectedTest === 'verify'
+                    ? 'Describe what should be visible (e.g., "Google search page is displayed")'
                     : 'Describe the element (e.g., "search input field")'
                 }
                 className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500"

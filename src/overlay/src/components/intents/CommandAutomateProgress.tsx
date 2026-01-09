@@ -92,6 +92,9 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const [clarificationQuestions, setClarificationQuestions] = useState<ClarificationQuestion[]>([]);
   const clarificationResolveRef = useRef<((answers: Record<string, string>) => void) | null>(null);
   
+  // Accumulated clarification answers across all iterations
+  const [accumulatedClarificationAnswers, setAccumulatedClarificationAnswers] = useState<Record<string, string>>({});
+  
   // Screenshot indicator state
   const [isCapturingScreenshot, setIsCapturingScreenshot] = useState(false);
   
@@ -256,8 +259,8 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   }, [planId, totalSteps]);
 
   // Generate plan for Computer Use mode
-  const generatePlan = async () => {
-    console.log('🎯 [AUTOMATE] Generating plan for:', goal);
+  const generatePlan = async (clarificationAnswers?: Record<string, string>) => {
+    console.log('🎯 [AUTOMATE] Generating plan for:', goal, clarificationAnswers ? 'with clarification answers' : '');
     setIsGeneratingPlan(true);
     setPlanError(null);
     
@@ -276,6 +279,24 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         }
       }
       
+      // Build request body
+      const requestBody: any = {
+        command: goal,
+        intent: 'command_automate',
+        context: {
+          screenshot: screenshotBase64 ? { base64: screenshotBase64, mimeType: 'image/png' } : undefined,
+          activeApp: context?.activeApp,
+          activeUrl: context?.activeUrl,
+          os: 'darwin'
+        }
+      };
+      
+      // Add clarification answers if provided
+      if (clarificationAnswers) {
+        requestBody.clarificationAnswers = clarificationAnswers;
+        console.log('📋 [AUTOMATE] Including clarification answers:', clarificationAnswers);
+      }
+      
       // Call /plan API
       const response = await fetch(`${backendUrl}/api/nutjs/plan`, {
         method: 'POST',
@@ -283,16 +304,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           'Content-Type': 'application/json',
           'x-api-key': apiKey
         },
-        body: JSON.stringify({
-          command: goal,
-          intent: 'command_automate',
-          context: {
-            screenshot: screenshotBase64 ? { base64: screenshotBase64, mimeType: 'image/png' } : undefined,
-            activeApp: context?.activeApp,
-            activeUrl: context?.activeUrl,
-            os: 'darwin'
-          }
-        })
+        body: JSON.stringify(requestBody)
       });
       
       if (!response.ok) {
@@ -304,8 +316,37 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       
       // Check if clarification is needed
       if (result.needsClarification && result.clarificationQuestions) {
-        console.log('❓ [AUTOMATE] Plan needs clarification');
+        console.log('❓ [AUTOMATE] Plan needs clarification', result.clarificationQuestions);
         setClarificationQuestions(result.clarificationQuestions);
+        
+        // CRITICAL: Activate clarification mode in PromptBar so user's answer bypasses StateGraph
+        // Use shared state approach via main process for reliable cross-window communication
+        if (ipcRenderer && result.clarificationQuestions.length > 0) {
+          const questionsText = result.clarificationQuestions
+            .map((q: any, idx: number) => `Q${idx + 1}: ${q.question || q.text}`)
+            .join('\n\n');
+          
+          const clarificationData = {
+            question: questionsText,
+            stepDescription: 'Plan Generation',
+            stepIndex: 0,
+            questionId: result.clarificationQuestions[0].id,
+            intent: 'command_automate'
+          };
+          
+          console.log('📤 [AUTOMATE] ===== ACTIVATING CLARIFICATION MODE VIA SHARED STATE =====');
+          console.log('📤 [AUTOMATE] Data:', JSON.stringify(clarificationData, null, 2));
+          console.log('📤 [AUTOMATE] Sending to main process to update shared state');
+          console.log('📤 [AUTOMATE] Main process will broadcast to all windows including PromptBar');
+          console.log('📤 [AUTOMATE] This will activate clarificationMode.active = true in PromptBar');
+          console.log('📤 [AUTOMATE] Which will bypass StateGraph on next user input');
+          
+          // Use new shared state approach for reliable cross-window communication
+          ipcRenderer.send('clarification:activate', clarificationData);
+          
+          console.log('✅ [AUTOMATE] Clarification activation sent to main process');
+        }
+        
         setIsGeneratingPlan(false);
         return;
       }
@@ -315,17 +356,12 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         setGeneratedPlan(result.plan);
         console.log('📋 [AUTOMATE] Plan ready with', result.plan.steps?.length || 0, 'steps');
         
-        // Request window resize to fit plan content
+        // Reset accumulated clarification answers since we have a complete plan now
+        setAccumulatedClarificationAnswers({});
+        console.log('🔄 [AUTOMATE] Reset accumulated clarification answers');
+        
+        // Window will be resized after content renders via useEffect below
         if (ipcRenderer) {
-          // const stepCount = result.plan.steps?.length || 0;
-          // const estimatedHeight = Math.min(
-          //   200 + (stepCount * 100) + 150, // Header + steps + footer
-          //   800 // Max height
-          // );
-          // ipcRenderer.send('intent-overlay:resize', {
-          //   width: 800,
-          //   height: estimatedHeight
-          // });
           // Ensure window is clickable for buttons
           ipcRenderer.send('intent-overlay:set-clickable', true);
         }
@@ -1062,35 +1098,33 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     };
   }, [countdown, automationStarted, isComputerUseMode, isGeneratingPlan, generatedPlan, planError]);
 
-  // Ensure window is properly sized and clickable when plan is shown
+  // Dynamically resize window to match actual content bounds (similar to PromptBar pattern)
   useEffect(() => {
-    console.log('🔍 [AUTOMATE] Window resize useEffect triggered:', {
-      isComputerUseMode,
-      hasGeneratedPlan: !!generatedPlan,
-      automationStarted,
-      hasIpcRenderer: !!ipcRenderer
-    });
+    if (!ipcRenderer || !contentRef.current || !isComputerUseMode) return;
+
+    const resizeWindow = () => {
+      if (!contentRef.current) return;
+      
+      const rect = contentRef.current.getBoundingClientRect();
+      const width = Math.ceil(rect.width);
+      const height = Math.ceil(rect.height);
+      
+      // Add padding: bottom-4 (16px) + PromptBar clearance (160px)
+      const totalHeight = height + 160;
+      
+      console.log(`📐 [AUTOMATE] Resizing window to match content: ${width}x${totalHeight}px (content: ${width}x${height}px)`);
+      
+      ipcRenderer.send('overlay:resize-intent', {
+        height: totalHeight,
+        animate: true
+      });
+    };
+
+    // Delay to allow content to render and animations to complete
+    const timeoutId = setTimeout(resizeWindow, 150);
     
-    if (isComputerUseMode && generatedPlan && !automationStarted && ipcRenderer) {
-      // const stepCount = generatedPlan.steps?.length || 0;
-      // const estimatedHeight = Math.min(
-      //   200 + (stepCount * 100) + 150, // Header + steps + footer
-      //   800 // Max height
-      // );
-      
-      // console.log(`📐 [AUTOMATE] Requesting window resize to 800x${estimatedHeight} and making clickable`);
-      
-      // // Force resize and make clickable
-      // ipcRenderer.send('intent-overlay:resize', {
-      //   width: 800,
-      //   height: estimatedHeight
-      // });
-      ipcRenderer.send('intent-overlay:set-clickable', true);
-      
-      // Also try to bring window to front
-      ipcRenderer.send('intent-overlay:focus');
-    }
-  }, [generatedPlan, automationStarted, isComputerUseMode, ipcRenderer]);
+    return () => clearTimeout(timeoutId);
+  }, [isGeneratingPlan, generatedPlan, planError, automationStarted, isComputerUseMode, ipcRenderer]);
 
   // Listen for clarification answers from prompt bar
   useEffect(() => {
@@ -1099,6 +1133,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     const handleClarificationAnswer = (_event: any, data: { answer: string; questionId?: string }) => {
       console.log('✅ [AUTOMATE] Received clarification answer:', data);
       
+      // Check if we're in Computer Use execution mode (has resolve ref)
       if (clarificationResolveRef.current && clarificationQuestions.length > 0) {
         // Build answers object with all question IDs mapped to the single answer
         // (User provides one combined answer for all questions)
@@ -1114,6 +1149,40 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         // Clear clarification questions
         setClarificationQuestions([]);
       }
+      // Check if we're in plan generation mode (has questions but no resolve ref)
+      else if (!clarificationResolveRef.current && clarificationQuestions.length > 0) {
+        console.log('📋 [AUTOMATE] Plan generation clarification - regenerating plan with answers');
+        
+        // Build answers object for current questions
+        const currentAnswers: Record<string, string> = {};
+        clarificationQuestions.forEach((q) => {
+          currentAnswers[q.id] = data.answer;
+        });
+        
+        console.log('📋 [AUTOMATE] Current answers:', currentAnswers);
+        console.log('📋 [AUTOMATE] Previously accumulated answers:', accumulatedClarificationAnswers);
+        
+        // Merge with accumulated answers from previous iterations
+        const allAnswers = {
+          ...accumulatedClarificationAnswers,
+          ...currentAnswers
+        };
+        
+        console.log('📋 [AUTOMATE] All accumulated answers (will be sent to backend):', allAnswers);
+        
+        // Update accumulated answers state
+        setAccumulatedClarificationAnswers(allAnswers);
+        
+        // Clear clarification state in main process
+        if (ipcRenderer) {
+          console.log('🔕 [AUTOMATE] Clearing clarification state in main process');
+          ipcRenderer.send('clarification:clear');
+        }
+        
+        // Clear questions and regenerate plan with ALL accumulated answers
+        setClarificationQuestions([]);
+        generatePlan(allAnswers);
+      }
     };
 
     ipcRenderer.on('prompt-bar:clarification-answer', handleClarificationAnswer);
@@ -1123,7 +1192,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         ipcRenderer.removeListener('prompt-bar:clarification-answer', handleClarificationAnswer);
       }
     };
-  }, [clarificationQuestions]);
+  }, [clarificationQuestions, generatePlan, accumulatedClarificationAnswers]);
 
   // Show camera indicator during screenshots
   useEffect(() => {
@@ -1149,32 +1218,6 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       }
     };
   }, []);
-
-  // Position window based on screen dimensions
-  // useEffect(() => {
-  //   if (!ipcRenderer) return;
-
-  //   const timer = setTimeout(() => {
-  //     const screenWidth = window.screen.availWidth;
-  //     const screenHeight = window.screen.availHeight;
-      
-  //     // Use 50% width for automation progress (narrower than web search)
-  //     const cardWidth = Math.floor(screenWidth * 0.5);
-  //     const cardHeight = Math.floor(screenHeight * 0.7); // 70% height
-  //     const x = Math.floor((screenWidth - cardWidth) / 2);
-  //     const y = Math.floor((screenHeight - cardHeight) / 2);
-      
-  //     ipcRenderer.send('overlay:position-intent', {
-  //       x,
-  //       y,
-  //       width: cardWidth,
-  //       height: cardHeight,
-  //       animate: false
-  //     });
-  //   }, 100);
-
-  //   return () => clearTimeout(timer);
-  // }, []);
 
   // Handle mouse events for click-through
   useEffect(() => {
@@ -1282,6 +1325,9 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const currentStep = steps[currentStepIndex];
   const progress = totalSteps > 0 ? ((currentStepIndex + 1) / totalSteps) * 100 : 0;
 
+  // Ref for measuring content dimensions
+  const contentRef = useRef<HTMLDivElement>(null);
+
   // Hide when not visible
   if (!isVisible && !isComputerUseMode) {
     return null;
@@ -1290,8 +1336,8 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   // Show plan generation loading state
   if (isComputerUseMode && isGeneratingPlan) {
     return (
-      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
-        <div className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div className="fixed w-full h-full bottom-4">
+        <div ref={contentRef} className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex items-center gap-4">
             <Loader2 className="w-6 h-6 text-blue-400 animate-spin" />
             <div>
@@ -1307,13 +1353,14 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   // Show plan preview with Start button
   if (isComputerUseMode && generatedPlan && !automationStarted) {
     return (
-      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
-        <div className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div className="fixed w-full h-full">
+
+        <div ref={contentRef} className="bg-gray-800/95 border border-blue-500/30 rounded-xl animate-in fade-in slide-in-from-bottom-2 duration-300 max-h-[90vh] flex flex-col">
           {/* Header */}
-          <div className="px-6 py-4 border-b border-gray-700/50">
-            <div className="flex items-center justify-between mb-2">
+          <div className="px-8 pt-6 pb-5 border-b border-gray-700/50">
+            <div className="flex items-start justify-between gap-4 mb-3">
               <h3 className="text-lg font-semibold text-white">Automation Plan Ready</h3>
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-gray-400 whitespace-nowrap mt-1">
                 {generatedPlan.steps?.length || 0} steps • Estimated time: {Math.ceil((generatedPlan.steps?.length || 0) * 3)}s
               </p>
             </div>
@@ -1321,7 +1368,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           </div>
 
           {/* Steps Preview */}
-          <div className="px-6 py-4 space-y-3">
+          <div className="px-8 py-5 space-y-3 overflow-y-auto flex-1">
             {generatedPlan.steps?.map((step: any, idx: number) => (
               <div key={step.id || idx} className="flex gap-3 p-3 bg-gray-900/50 rounded-lg border border-gray-700/30">
                 <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 font-medium text-sm">
@@ -1344,7 +1391,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           </div>
 
           {/* Actions */}
-          <div className="px-6 py-4 border-t border-gray-700/50 flex items-center justify-end gap-3">
+          <div className="px-8 py-5 border-t border-gray-700/50 flex items-center justify-end gap-3">
             <button
               onClick={() => {
                 setGeneratedPlan(null);
@@ -1352,6 +1399,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
                 setIsGeneratingPlan(false);
                 if (ipcRenderer) {
                   ipcRenderer.send('automation:ended');
+                  ipcRenderer.send('intent-window:hide');
                 }
               }}
               className="px-4 py-2 text-sm font-medium text-gray-300 hover:text-white transition-colors"
@@ -1374,8 +1422,8 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   // Show plan generation error
   if (isComputerUseMode && planError && !automationStarted) {
     return (
-      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl">
-        <div className="bg-gray-800/95 backdrop-blur-xl border border-red-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
+      <div className="fixed bottom-4 w-full h-full">
+        <div ref={contentRef} className="bg-gray-800/95 backdrop-blur-xl border border-red-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
           <div className="flex items-start gap-4">
             <AlertCircle className="w-6 h-6 text-red-400 flex-shrink-0 mt-0.5" />
             <div className="flex-1">
@@ -1401,73 +1449,106 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   // Entire window is click-through for visibility only - doesn't block automation
   if (isComputerUseMode && status !== 'completed' && status !== 'error') {
     return (
-      <div className="fixed bottom-28 left-1/2 -translate-x-1/2 z-40 w-auto max-w-2xl pointer-events-none">
+      <div className="fixed bottom-4 w-full h-full pointer-events-none">
         <div 
           ref={cardRef}
           className="bg-gray-800/90 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl pointer-events-none animate-in fade-in slide-in-from-bottom-2 duration-300"
         >
           {/* Compact Header with AI Reasoning */}
-          <div className="px-4 py-3">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 mt-0.5">
-                {isCapturingScreenshot ? (
-                  <Camera className="w-5 h-5 text-green-400 animate-pulse" />
-                ) : (
-                  <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  {/* <p className="text-sm font-medium text-white">
-                    {goal}
-                  </p> */}
-                  <span className="text-xs text-gray-400">
-                    {isCapturingScreenshot ? '📸 Capturing screenshot...' : `Actions ${currentStepIndex + 1}`}
-                  </span>
+          {clarificationQuestions?.length === 0 && (
+            <div className="px-4 py-3">
+              <div className="w-full h-full bottom-4 flex items-start gap-3">
+                <div className="flex-shrink-0 mt-0.5">
+                  {isCapturingScreenshot ? (
+                    <Camera className="w-5 h-5 text-green-400 animate-pulse" />
+                  ) : (
+                    <Loader2 className="w-5 h-5 text-blue-400 animate-spin" />
+                  )}
                 </div>
-                {/* Show clarification questions if present, otherwise show reasoning */}
-                {clarificationQuestions.length > 0 ? (
-                  <div className="mt-3 space-y-3">
-                    <p className="text-xs font-medium text-yellow-300 mb-2">
-                      ⚠️ Clarification Needed
-                    </p>
-                    {clarificationQuestions.map((q, idx) => (
-                      <div key={q.id} className="bg-gray-900/50 rounded-lg p-3 border border-yellow-500/30">
-                        <p className="text-sm text-gray-200 mb-2">
-                          <span className="text-yellow-400 font-medium">Q{idx + 1}:</span> {q.question}
-                        </p>
-                        <p className="text-xs text-gray-400 italic">
-                          Type your answer in the prompt bar below and press Enter to continue
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                ) : currentReasoning ? (
-                  <div className="mt-2">
-                    <p className="text-xs font-medium text-blue-300 mb-1">
-                      AI Thinking {currentActionType && `• ${currentActionType}`}
-                    </p>
-                    {/* <p className="text-sm text-gray-200 leading-relaxed">
-                      {currentReasoning}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    {/* <p className="text-sm font-medium text-white">
+                      {goal}
                     </p> */}
-                    {currentTiming && (
-                      <div className="mt-2 flex gap-3 text-xs text-gray-400">
-                        {currentTiming.llmDecisionMs && (
-                          <span>🧠 LLM: {(currentTiming.llmDecisionMs / 1000).toFixed(2)}s</span>
-                        )}
-                        {currentTiming.totalProcessingMs && (
-                          <span>⚙️ Backend: {(currentTiming.totalProcessingMs / 1000).toFixed(2)}s</span>
-                        )}
-                        {currentTiming.timeSinceLastActionMs && (
-                          <span>⚡ Frontend: {(currentTiming.timeSinceLastActionMs / 1000).toFixed(2)}s</span>
-                        )}
-                      </div>
-                    )}
+                    
+                    <span className="text-xs text-gray-400">
+                      {isCapturingScreenshot ? '📸 Capturing screenshot...' : `Actions ${currentStepIndex + 1}`}
+                    </span>
                   </div>
-                ) : null}
+                  
+                  { currentReasoning ? (
+                    <div className="mt-2">
+                      <p className="text-xs font-medium text-blue-300 mb-1">
+                        AI Thinking {currentActionType && `• ${currentActionType}`}
+                      </p>
+                      {/* <p className="text-sm text-gray-200 leading-relaxed">
+                        {currentReasoning}
+                      </p> */}
+                      {currentTiming && (
+                        <div className="mt-2 flex gap-3 text-xs text-gray-400">
+                          {currentTiming.llmDecisionMs && (
+                            <span>🧠 LLM: {(currentTiming.llmDecisionMs / 1000).toFixed(2)}s</span>
+                          )}
+                          {currentTiming.totalProcessingMs && (
+                            <span>⚙️ Backend: {(currentTiming.totalProcessingMs / 1000).toFixed(2)}s</span>
+                          )}
+                          {currentTiming.timeSinceLastActionMs && (
+                            <span>⚡ Frontend: {(currentTiming.timeSinceLastActionMs / 1000).toFixed(2)}s</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
               </div>
             </div>
-          </div>
+          )}
+          {/* Show clarification questions if present */}
+          {clarificationQuestions?.length > 0 && (
+            <div className="border-t border-gray-700/50 max-h-[60vh] overflow-y-auto pointer-events-auto">
+              <div className="px-8 pt-6 pb-5 space-y-3">
+                <div className="flex justify-between items-center mb-4">
+                  <p className="text-xs font-medium text-yellow-300">
+                    ⚠️ Clarification Needed
+                  </p>
+                  <button
+                    onClick={() => {
+                      console.log('🚫 [AUTOMATE] User clicked Cancel button');
+                      
+                      // Clear clarification state in main process
+                      if (ipcRenderer) {
+                        ipcRenderer.send('clarification:clear');
+                      }
+                      
+                      // Clear local state
+                      setClarificationQuestions([]);
+                      setAccumulatedClarificationAnswers({});
+                      
+                      console.log('✅ [AUTOMATE] Clarification cancelled - state cleared');
+                    }}
+                    className="text-xs text-gray-400 hover:text-red-400 transition-colors px-2 py-1 rounded hover:bg-red-500/10"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {clarificationQuestions.map((q, idx) => (
+                  <div key={q.id} className="flex gap-3 p-4 bg-gray-900/50 rounded-lg border border-yellow-500/30">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center text-yellow-400 font-medium text-sm">
+                      Q{idx + 1}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-200 mb-2 leading-relaxed">
+                        {q.question}
+                      </p>
+                      <p className="text-xs text-gray-400 italic">
+                        Type your answer in the prompt bar below and press Enter to continue
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1480,7 +1561,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     }`}>
       <div
         ref={cardRef}
-        className={`bg-gray-900/95 backdrop-blur-xl border border-gray-700/50 rounded-2xl shadow-2xl w-full h-full max-h-[80vh] flex flex-col ${
+        className={`bg-gray-900/95 backdrop-blur-xl border border-gray-700/50 rounded-2xl w-[95%] max-w-[750px] max-h-[90vh] flex flex-col ${
           isVisible ? 'pointer-events-auto' : 'pointer-events-none'
         }`}
       >

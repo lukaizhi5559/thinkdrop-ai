@@ -260,7 +260,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   });
 
   // Handle prompt window resize (for textarea expansion)
-  ipcMain.on('overlay:resize-prompt', (event, { width, height, animate = false }) => {
+  ipcMain.on('overlay:resize-prompt', (_event, { width, height, animate = false }) => {
     if (!promptWindow || promptWindow.isDestroyed()) {
       logger.warn('⚠️  [OVERLAY:IPC] No prompt window to resize');
       return;
@@ -296,7 +296,25 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     }
 
     logger.debug('📏 [OVERLAY:IPC] Resizing intent window:', { width, height });
-    intentWindow.setSize(width, height, animate);
+    // intentWindow.setSize(width, height, animate);
+
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const screenHeight = primaryDisplay.workAreaSize.height;
+    
+    const currentBounds = intentWindow.getBounds();
+    const newWidth = width || currentBounds.width;
+    const newHeight = height;
+    
+    // Keep the bottom edge flush to the bottom of the screen
+    const newY = screenHeight - newHeight;
+    
+    intentWindow.setBounds({
+      x: currentBounds.x,
+      y: newY,
+      width: newWidth,
+      height: newHeight
+    }, animate);
   });
 
   // Handle ghost window hover data (highlighted items)

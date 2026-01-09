@@ -102,43 +102,46 @@ export default function PromptBar({
       }
     };
 
-    const handleClarificationRequest = (_event: any, data: {
-      question: string;
-      stepDescription: string;
-      stepIndex: number;
-      questionId?: string;
+    // Listen for shared clarification state changes from main process
+    const handleClarificationStateChanged = (_event: any, state: {
+      active: boolean;
+      question: string | null;
+      stepDescription: string | null;
+      stepIndex: number | null;
+      questionId: string | null;
+      intent: string | null;
     }) => {
-      console.log('❓ [PROMPT_BAR] ===== CLARIFICATION REQUEST RECEIVED =====');
-      console.log('❓ [PROMPT_BAR] Question:', data.question);
-      console.log('❓ [PROMPT_BAR] Step:', data.stepDescription);
-      console.log('❓ [PROMPT_BAR] Step Index:', data.stepIndex);
-      console.log('❓ [PROMPT_BAR] Question ID:', data.questionId);
-      console.log('❓ [PROMPT_BAR] Setting clarificationMode.active = true');
+      console.log('🔔 [PROMPT_BAR] ===== CLARIFICATION STATE CHANGED =====');
+      console.log('🔔 [PROMPT_BAR] New state from main process:', JSON.stringify(state, null, 2));
       
-      setClarificationMode({
-        active: true,
-        question: data.question,
-        stepDescription: data.stepDescription,
-        stepIndex: data.stepIndex,
-        questionId: data.questionId
-      });
-      setIsExpanded(true);
-      setMessage(''); // Clear any existing message
-      
-      console.log('❓ [PROMPT_BAR] Clarification mode set, expanding prompt bar');
-      
-      // Focus the textarea
-      setTimeout(() => {
-        console.log('❓ [PROMPT_BAR] Focusing textarea for clarification input');
-        textareaRef.current?.focus();
-      }, 100);
+      if (state.active) {
+        const newClarificationMode = {
+          active: true,
+          question: state.question || '',
+          stepDescription: state.stepDescription || '',
+          stepIndex: state.stepIndex || 0,
+          questionId: state.questionId ?? undefined
+        };
+        
+        console.log('✅ [PROMPT_BAR] Activating clarification mode:', newClarificationMode);
+        setClarificationMode(newClarificationMode);
+        setIsExpanded(true);
+        setMessage('');
+        
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 100);
+      } else {
+        console.log('🔕 [PROMPT_BAR] Deactivating clarification mode');
+        setClarificationMode(null);
+      }
     };
 
     ipcRenderer.on('web-search:state', handleWebSearchState);
     ipcRenderer.on('screen-intelligence:state', handleScreenIntelligenceState);
     ipcRenderer.on('chat-window:state', handleChatWindowState);
     ipcRenderer.on('automation:state', handleAutomationState);
-    ipcRenderer.on('prompt-bar:request-clarification', handleClarificationRequest);
+    ipcRenderer.on('clarification:state-changed', handleClarificationStateChanged);
     
     // Get initial chat window state
     ipcRenderer.invoke('chat-window:get-state').then((state: { isVisible: boolean }) => {
@@ -153,7 +156,7 @@ export default function PromptBar({
         ipcRenderer.removeListener('screen-intelligence:state', handleScreenIntelligenceState);
         ipcRenderer.removeListener('chat-window:state', handleChatWindowState);
         ipcRenderer.removeListener('automation:state', handleAutomationState);
-        ipcRenderer.removeListener('prompt-bar:request-clarification', handleClarificationRequest);
+        ipcRenderer.removeListener('clarification:state-changed', handleClarificationStateChanged);
       }
     };
   }, []);
@@ -261,10 +264,87 @@ export default function PromptBar({
     e.preventDefault();
     if (message.trim()) {
       // CRITICAL: Check if we're in clarification mode FIRST before any processing
-      console.log('🔍 [PROMPT_BAR] handleSubmit called, clarificationMode:', clarificationMode);
+      console.log('🔍 [PROMPT_BAR] ===== HANDLE SUBMIT CALLED =====');
+      console.log('🔍 [PROMPT_BAR] Message:', message.trim());
+      console.log('🔍 [PROMPT_BAR] Current clarificationMode:', JSON.stringify(clarificationMode, null, 2));
+      console.log('🔍 [PROMPT_BAR] clarificationMode?.active:', clarificationMode?.active);
       
       if (clarificationMode?.active) {
-        console.log('✅ [PROMPT_BAR] IN CLARIFICATION MODE - Submitting clarification answer:', message.trim());
+        console.log('✅ [PROMPT_BAR] ===== IN CLARIFICATION MODE =====');
+        
+        // Check if user wants to cancel/change context
+        const lowerMessage = message.trim().toLowerCase();
+        const cancelPhrases = [
+          // Core cancels
+          'cancel', 'cancel that', 'cancel this', 'cancel please', 'abort', 'stop', 'stop it', 'halt',
+          'never mind', 'nevermind', 'nvm', 'nm', 'forget it', 'forget about it', 'forget that',
+          'scratch that', 'disregard that', 'ignore that',
+
+          // Restart
+          'start over', 'start again', 'restart', 'reset', 'begin again', "let's start over",
+          'can we start over', 'start from scratch', 'new session', 'clear', 'clear this', 'clear chat',
+
+          // Change mind / no longer want
+          'changed my mind', 'change my mind', 'actually no', 'no thanks', 'no thank you',
+          'not anymore', "don't want", "i don't want", "don't need", "i don't need",
+          'not interested', 'no longer interested', 'on second thought', 'wait no', 'hold on',
+          'hold up', 'wait', 'actually...', 'nah', 'nope', 'belay that',
+
+          // Polite
+          'sorry cancel', 'sorry nevermind', 'my bad cancel', 'oops wrong', 'wrong thing',
+          'mistake', 'misclick', 'accident', 'sorry about that', 'thanks anyway', 'thanks but no',
+          'maybe later',
+
+          // Forceful
+          'quit', 'exit', 'end this', 'enough', 'done', "i'm done", 'cancel everything', 'stop everything',
+
+          // Short
+          'no', 'skip', 'skip this', "don't", 'dont', "don't do that", "don't continue"
+        ];
+        const wantsToCancel = cancelPhrases.some(phrase => lowerMessage.includes(phrase));
+        
+        if (wantsToCancel) {
+          console.log('🚫 [PROMPT_BAR] User wants to cancel clarification - detected cancel phrase');
+          console.log('🚫 [PROMPT_BAR] Message:', message.trim());
+          
+          // Clear clarification mode in main process
+          if (ipcRenderer) {
+            ipcRenderer.send('clarification:clear');
+          }
+          
+          // Clear local state
+          setClarificationMode(null);
+          
+          // Process as new request through StateGraph
+          console.log('🔄 [PROMPT_BAR] Processing as new request through StateGraph');
+          onSubmit(message.trim());
+          setMessage('');
+          
+          // Reset textarea height
+          if (textareaRef.current) {
+            setTimeout(() => {
+              if (textareaRef.current) {
+                textareaRef.current.style.height = 'auto';
+                const resetHeight = textareaRef.current.scrollHeight;
+                textareaRef.current.style.height = resetHeight + 'px';
+                setTextareaHeight(resetHeight);
+                
+                if (ipcRenderer) {
+                  const baseHeight = 66;
+                  const totalHeight = baseHeight + resetHeight;
+                  ipcRenderer.send('overlay:resize-prompt', {
+                    height: totalHeight,
+                    animate: true
+                  });
+                }
+              }
+            }, 0);
+          }
+          
+          return;
+        }
+        
+        console.log('✅ [PROMPT_BAR] Submitting clarification answer:', message.trim());
         console.log('🔄 [PROMPT_BAR] BYPASSING state graph - sending directly to backend via IPC');
         console.log('📋 [PROMPT_BAR] Clarification details:', {
           questionId: clarificationMode.questionId,

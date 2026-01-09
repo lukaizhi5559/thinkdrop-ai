@@ -267,7 +267,7 @@ function App() {
     // This allows plan preview buttons to be clickable while automation is running
     
     return (
-      <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-center">
+      <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-end">
         {overlayPayload && (
           <OverlayRenderer 
             payload={overlayPayload} 

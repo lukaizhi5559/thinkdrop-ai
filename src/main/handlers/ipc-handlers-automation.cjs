@@ -28,6 +28,16 @@ let replanInProgress = false;
 // Track cursor visibility state
 let cursorHidden = false;
 
+// Shared clarification state for cross-window communication
+let clarificationState = {
+  active: false,
+  question: null,
+  stepDescription: null,
+  stepIndex: null,
+  questionId: null,
+  intent: null
+};
+
 /**
  * Register automation IPC handlers
  * @param {Object} client - MCP client instance
@@ -571,7 +581,7 @@ function registerAutomationHandlers(client, overlay = null) {
       const primaryDisplay = screen.getPrimaryDisplay();
       const { width: screenWidth, height: screenHeight } = primaryDisplay.bounds;
       const scaleFactor = primaryDisplay.scaleFactor;
-      
+
       logger.info('📐 [IPC:AUTOMATION] Screen info:', {
         width: screenWidth,
         height: screenHeight,
@@ -1116,9 +1126,9 @@ function registerAutomationHandlers(client, overlay = null) {
         
         // Forward clarification questions to prompt window
         const { BrowserWindow } = require('electron');
-        const promptWindow = BrowserWindow.getAllWindows().find(w => w.getTitle().includes('Prompt'));
+        const promptWindow = overlayManager?.promptWindow || global.promptOverlayWindow;
         
-        if (promptWindow) {
+        if (promptWindow && !promptWindow.isDestroyed()) {
           // Send first question to prompt bar
           const firstQuestion = result.questions[0];
           promptWindow.webContents.send('prompt-bar:request-clarification', {
@@ -1140,7 +1150,7 @@ function registerAutomationHandlers(client, overlay = null) {
             questions: result.questions
           });
         } else {
-          logger.error('❌ [IPC:AUTOMATION] Prompt window not found for clarification');
+          logger.error('❌ [IPC:AUTOMATION] Prompt window not found or destroyed for clarification');
           event.reply('automation:replan-result', {
             success: false,
             error: 'Cannot show clarification questions - prompt window not found'
@@ -1185,27 +1195,110 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
-   * Handle clarification request - forward to prompt window
+   * Get clarification state (for PromptBar to check before submitting)
+   */
+  ipcMain.handle('clarification:get-state', async () => {
+    logger.debug('📥 [IPC:AUTOMATION] Clarification state requested:', clarificationState);
+    return clarificationState;
+  });
+
+  /**
+   * Set clarification state (for CommandAutomateProgress to activate clarification mode)
+   */
+  ipcMain.on('clarification:activate', async (event, context) => {
+    const { BrowserWindow } = require('electron');
+    
+    logger.info('🔔 [IPC:AUTOMATION] Activating clarification mode:', {
+      question: context.question,
+      stepIndex: context.stepIndex,
+      questionId: context.questionId,
+      intent: context.intent || 'command_automate'
+    });
+    
+    // Update shared state
+    clarificationState = {
+      active: true,
+      question: context.question,
+      stepDescription: context.stepDescription,
+      stepIndex: context.stepIndex,
+      questionId: context.questionId,
+      intent: context.intent || 'command_automate'
+    };
+    
+    logger.info('✅ [IPC:AUTOMATION] Clarification state updated:', clarificationState);
+    
+    // Broadcast to all windows so PromptBar can update its UI
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send('clarification:state-changed', clarificationState);
+    });
+    
+    logger.info('✅ [IPC:AUTOMATION] Clarification state broadcasted to all windows');
+  });
+
+  /**
+   * Clear clarification state (when clarification is answered or cancelled)
+   */
+  ipcMain.on('clarification:clear', async () => {
+    const { BrowserWindow } = require('electron');
+    
+    logger.info('🔕 [IPC:AUTOMATION] Clearing clarification mode');
+    
+    clarificationState = {
+      active: false,
+      question: null,
+      stepDescription: null,
+      stepIndex: null,
+      questionId: null,
+      intent: null
+    };
+    
+    // Broadcast to all windows
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send('clarification:state-changed', clarificationState);
+    });
+    
+    logger.info('✅ [IPC:AUTOMATION] Clarification state cleared and broadcasted');
+  });
+
+  /**
+   * Handle clarification request - forward to prompt window (LEGACY - keeping for backward compatibility)
    */
   ipcMain.on('prompt-bar:request-clarification', async (event, context) => {
     const { BrowserWindow } = require('electron');
     
-    logger.info('❓ [IPC:AUTOMATION] Clarification requested:', {
+    logger.info('❓ [IPC:AUTOMATION] Clarification requested (legacy handler):', {
       question: context.question,
       stepIndex: context.stepIndex,
       senderWindowTitle: event.sender.getTitle ? event.sender.getTitle() : 'unknown',
       allWindowTitles: BrowserWindow.getAllWindows().map(w => w.getTitle())
     });
     
-    // Forward to prompt window
-    const promptWindow = BrowserWindow.getAllWindows().find(w => w.getTitle().includes('Prompt'));
+    // Use new shared state approach
+    clarificationState = {
+      active: true,
+      question: context.question,
+      stepDescription: context.stepDescription,
+      stepIndex: context.stepIndex,
+      questionId: context.questionId,
+      intent: context.intent || 'command_automate'
+    };
     
-    if (promptWindow) {
+    logger.info('✅ [IPC:AUTOMATION] Clarification state updated via legacy handler');
+    
+    // Broadcast to all windows
+    BrowserWindow.getAllWindows().forEach(window => {
+      window.webContents.send('clarification:state-changed', clarificationState);
+    });
+    
+    // Also forward to prompt window for backward compatibility
+    const promptWindow = overlayManager?.promptWindow || global.promptOverlayWindow;
+    
+    if (promptWindow && !promptWindow.isDestroyed()) {
       logger.info('✅ [IPC:AUTOMATION] Found prompt window, forwarding clarification request');
       promptWindow.webContents.send('prompt-bar:request-clarification', context);
       logger.info('✅ [IPC:AUTOMATION] Clarification request forwarded to prompt window');
     } else {
-      logger.error('❌ [IPC:AUTOMATION] Prompt window not found');
+      logger.error('❌ [IPC:AUTOMATION] Prompt window not found or destroyed');
       logger.error('❌ [IPC:AUTOMATION] Available windows:', BrowserWindow.getAllWindows().map(w => ({
         title: w.getTitle(),
         id: w.id
@@ -1712,6 +1805,367 @@ function registerAutomationHandlers(client, overlay = null) {
       event.reply('ocr:result', {
         success: false,
         error: error.message
+      });
+    }
+  });
+
+  /**
+   * Wait for browser page to finish loading
+   * Polls the browser tab's loading state using AppleScript
+   */
+  ipcMain.on('automation:wait-page-load', async (event, { timeout }) => {
+    const startTime = Date.now();
+    const maxWait = timeout || 10000;
+    
+    logger.debug(`⏳ [IPC:AUTOMATION] Waiting for page to load (timeout: ${maxWait}ms)`);
+    
+    try {
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Check which browser is frontmost
+        const getFrontAppScript = `
+          tell application "System Events"
+            set frontApp to name of first application process whose frontmost is true
+          end tell
+          return frontApp
+        `;
+        
+        const { stdout: frontApp } = await execAsync(`osascript -e '${getFrontAppScript}'`);
+        const browserName = frontApp.trim();
+        
+        logger.debug(`🌐 [IPC:AUTOMATION] Detected browser: ${browserName}`);
+        
+        // Poll for page load completion
+        let loaded = false;
+        let attempts = 0;
+        const maxAttempts = Math.floor(maxWait / 200);
+        
+        while (!loaded && attempts < maxAttempts) {
+          try {
+            let checkScript = '';
+            
+            // Chrome/Arc - check if active tab is loading
+            if (browserName.includes('Chrome') || browserName.includes('Arc')) {
+              checkScript = `
+                tell application "${browserName}"
+                  if (count of windows) > 0 then
+                    tell active tab of front window
+                      return loading
+                    end tell
+                  else
+                    return false
+                  end if
+                end tell
+              `;
+            }
+            // Safari - check document readyState
+            else if (browserName.includes('Safari')) {
+              checkScript = `
+                tell application "Safari"
+                  if (count of windows) > 0 then
+                    tell front document
+                      return do JavaScript "document.readyState !== 'complete'"
+                    end tell
+                  else
+                    return false
+                  end if
+                end tell
+              `;
+            }
+            // Firefox or other browsers - use progressive delay
+            else {
+              logger.debug(`⚠️ [IPC:AUTOMATION] Unknown browser "${browserName}", using progressive delay`);
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              loaded = true;
+              break;
+            }
+            
+            if (checkScript) {
+              const { stdout: isLoading } = await execAsync(`osascript -e '${checkScript}'`);
+              
+              if (isLoading.trim() === 'false') {
+                loaded = true;
+                logger.debug(`✅ [IPC:AUTOMATION] Page loaded after ${Date.now() - startTime}ms`);
+              } else {
+                await new Promise(resolve => setTimeout(resolve, 200));
+                attempts++;
+              }
+            }
+          } catch (error) {
+            // If AppleScript fails, assume page is loaded and proceed
+            logger.debug(`⚠️ [IPC:AUTOMATION] AppleScript check failed, assuming loaded: ${error.message}`);
+            loaded = true;
+          }
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        if (!loaded) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] Page load timeout after ${duration}ms, proceeding anyway`);
+        }
+        
+        event.reply('automation:wait-page-load:result', { 
+          success: true, 
+          duration 
+        });
+        
+      } else if (process.platform === 'win32') {
+        // Windows: Use PowerShell to detect browser load state
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Poll for page load completion
+        let loaded = false;
+        let attempts = 0;
+        const maxAttempts = Math.floor(maxWait / 300);
+        
+        while (!loaded && attempts < maxAttempts) {
+          try {
+            // Get foreground window title (browsers show "Loading..." or similar in title)
+            const psScript = `
+              Add-Type @"
+                using System;
+                using System.Runtime.InteropServices;
+                using System.Text;
+                public class WindowHelper {
+                  [DllImport("user32.dll")]
+                  public static extern IntPtr GetForegroundWindow();
+                  [DllImport("user32.dll")]
+                  public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+                  public static string GetActiveWindowTitle() {
+                    IntPtr hWnd = GetForegroundWindow();
+                    StringBuilder sb = new StringBuilder(256);
+                    GetWindowText(hWnd, sb, 256);
+                    return sb.ToString();
+                  }
+                }
+"@
+              [WindowHelper]::GetActiveWindowTitle()
+            `;
+            
+            const { stdout: windowTitle } = await execAsync(`powershell -Command "${psScript}"`, { 
+              timeout: 2000 
+            });
+            
+            // Check if title contains loading indicators
+            const title = windowTitle.trim().toLowerCase();
+            const isLoading = title.includes('loading') || 
+                            title.includes('connecting') || 
+                            title.includes('waiting');
+            
+            if (!isLoading) {
+              loaded = true;
+              logger.debug(`✅ [IPC:AUTOMATION] Page loaded after ${Date.now() - startTime}ms (Windows)`);
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              attempts++;
+            }
+          } catch (error) {
+            // If PowerShell fails, assume loaded and proceed
+            logger.debug(`⚠️ [IPC:AUTOMATION] PowerShell check failed, assuming loaded: ${error.message}`);
+            loaded = true;
+          }
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        if (!loaded) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] Page load timeout after ${duration}ms, proceeding anyway (Windows)`);
+        }
+        
+        event.reply('automation:wait-page-load:result', { 
+          success: true, 
+          duration 
+        });
+        
+      } else {
+        // Other platforms: use simple delay
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        event.reply('automation:wait-page-load:result', { 
+          success: true, 
+          duration: 2000 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Wait page load error:', error.message);
+      event.reply('automation:wait-page-load:result', { 
+        success: false, 
+        error: error.message 
+      });
+    }
+  });
+
+  /**
+   * Wait for app window to stabilize after focus
+   * Ensures the app window is fully rendered and ready
+   */
+  ipcMain.on('automation:wait-app-stability', async (event, { appName, timeout }) => {
+    const startTime = Date.now();
+    const maxWait = timeout || 3000;
+    
+    logger.debug(`⏳ [IPC:AUTOMATION] Waiting for ${appName} to stabilize (timeout: ${maxWait}ms)`);
+    
+    try {
+      if (process.platform === 'darwin') {
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Poll for window stability
+        let stable = false;
+        let attempts = 0;
+        const maxAttempts = Math.floor(maxWait / 300);
+        
+        while (!stable && attempts < maxAttempts) {
+          try {
+            const checkStabilityScript = `
+              tell application "System Events"
+                tell process "${appName}"
+                  if (count of windows) > 0 then
+                    set frontWin to front window
+                    
+                    -- Get initial position and size
+                    set pos1 to position of frontWin
+                    set size1 to size of frontWin
+                    
+                    delay 0.2
+                    
+                    -- Check if position/size changed (window is animating)
+                    set pos2 to position of frontWin
+                    set size2 to size of frontWin
+                    
+                    if pos1 is equal to pos2 and size1 is equal to size2 then
+                      return "stable"
+                    else
+                      return "animating"
+                    end if
+                  else
+                    return "no_window"
+                  end if
+                end tell
+              end tell
+            `;
+            
+            const { stdout } = await execAsync(`osascript -e '${checkStabilityScript}'`);
+            
+            if (stdout.includes('stable') || stdout.includes('no_window')) {
+              stable = true;
+              logger.debug(`✅ [IPC:AUTOMATION] ${appName} stabilized after ${Date.now() - startTime}ms`);
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              attempts++;
+            }
+          } catch (error) {
+            // If AppleScript fails, assume stable and proceed
+            logger.debug(`⚠️ [IPC:AUTOMATION] Stability check failed, assuming stable: ${error.message}`);
+            stable = true;
+          }
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        if (!stable) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] App stability timeout after ${duration}ms, proceeding anyway`);
+        }
+        
+        event.reply('automation:wait-app-stability:result', { 
+          success: true, 
+          duration 
+        });
+        
+      } else if (process.platform === 'win32') {
+        // Windows: Use PowerShell to detect window stability
+        const { exec } = require('child_process');
+        const { promisify } = require('util');
+        const execAsync = promisify(exec);
+        
+        // Poll for window stability
+        let stable = false;
+        let attempts = 0;
+        const maxAttempts = Math.floor(maxWait / 300);
+        
+        while (!stable && attempts < maxAttempts) {
+          try {
+            // Get foreground window position and size, check twice for stability
+            const psScript = `
+              Add-Type @"
+                using System;
+                using System.Runtime.InteropServices;
+                public class WindowHelper {
+                  [DllImport("user32.dll")]
+                  public static extern IntPtr GetForegroundWindow();
+                  
+                  [DllImport("user32.dll")]
+                  public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+                  
+                  [StructLayout(LayoutKind.Sequential)]
+                  public struct RECT {
+                    public int Left;
+                    public int Top;
+                    public int Right;
+                    public int Bottom;
+                  }
+                  
+                  public static string GetWindowBounds() {
+                    IntPtr hWnd = GetForegroundWindow();
+                    RECT rect;
+                    GetWindowRect(hWnd, out rect);
+                    return rect.Left + "," + rect.Top + "," + rect.Right + "," + rect.Bottom;
+                  }
+                }
+"@
+              $bounds1 = [WindowHelper]::GetWindowBounds()
+              Start-Sleep -Milliseconds 200
+              $bounds2 = [WindowHelper]::GetWindowBounds()
+              if ($bounds1 -eq $bounds2) { "stable" } else { "animating" }
+            `;
+            
+            const { stdout } = await execAsync(`powershell -Command "${psScript}"`, { 
+              timeout: 2000 
+            });
+            
+            if (stdout.includes('stable')) {
+              stable = true;
+              logger.debug(`✅ [IPC:AUTOMATION] ${appName} stabilized after ${Date.now() - startTime}ms (Windows)`);
+            } else {
+              await new Promise(resolve => setTimeout(resolve, 300));
+              attempts++;
+            }
+          } catch (error) {
+            // If PowerShell fails, assume stable and proceed
+            logger.debug(`⚠️ [IPC:AUTOMATION] Stability check failed, assuming stable: ${error.message}`);
+            stable = true;
+          }
+        }
+        
+        const duration = Date.now() - startTime;
+        
+        if (!stable) {
+          logger.warn(`⚠️ [IPC:AUTOMATION] App stability timeout after ${duration}ms, proceeding anyway (Windows)`);
+        }
+        
+        event.reply('automation:wait-app-stability:result', { 
+          success: true, 
+          duration 
+        });
+        
+      } else {
+        // Other platforms: use simple delay
+        await new Promise(resolve => setTimeout(resolve, 800));
+        event.reply('automation:wait-app-stability:result', { 
+          success: true, 
+          duration: 800 
+        });
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Wait app stability error:', error.message);
+      event.reply('automation:wait-app-stability:result', { 
+        success: false, 
+        error: error.message 
       });
     }
   });

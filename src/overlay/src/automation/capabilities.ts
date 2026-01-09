@@ -229,6 +229,79 @@ export async function focusWindow(titlePattern: string): Promise<void> {
 }
 
 /**
+ * Wait for browser page to finish loading
+ * Polls the browser tab's loading state using AppleScript
+ * @param timeout - Maximum time to wait in milliseconds (default: 10000)
+ * @returns Promise that resolves when page is loaded
+ */
+export async function waitForPageLoad(timeout: number = 10000): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`⏳ [CAPABILITIES] Waiting for page to load (timeout: ${timeout}ms)`);
+
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      ipcRenderer.removeAllListeners('automation:wait-page-load:result');
+      console.warn(`⚠️ [CAPABILITIES] Page load timeout after ${timeout}ms, proceeding anyway`);
+      resolve(); // Don't reject, just proceed
+    }, timeout);
+
+    ipcRenderer.once('automation:wait-page-load:result', (_event: any, result: any) => {
+      clearTimeout(timeoutId);
+      
+      if (result.success) {
+        console.log(`✅ [CAPABILITIES] Page loaded after ${result.duration}ms`);
+        resolve();
+      } else {
+        console.warn(`⚠️ [CAPABILITIES] Page load check failed: ${result.error}, proceeding anyway`);
+        resolve(); // Don't reject, just proceed
+      }
+    });
+
+    ipcRenderer.send('automation:wait-page-load', { timeout });
+  });
+}
+
+/**
+ * Wait for app window to stabilize after focus
+ * Ensures the app window is fully rendered and ready
+ * @param appName - Name of the app to check
+ * @param timeout - Maximum time to wait in milliseconds (default: 3000)
+ * @returns Promise that resolves when app is stable
+ */
+export async function waitForAppStability(appName: string, timeout: number = 3000): Promise<void> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log(`⏳ [CAPABILITIES] Waiting for ${appName} to stabilize (timeout: ${timeout}ms)`);
+
+  return new Promise((resolve) => {
+    const timeoutId = setTimeout(() => {
+      ipcRenderer.removeAllListeners('automation:wait-app-stability:result');
+      console.warn(`⚠️ [CAPABILITIES] App stability timeout after ${timeout}ms, proceeding anyway`);
+      resolve(); // Don't reject, just proceed
+    }, timeout);
+
+    ipcRenderer.once('automation:wait-app-stability:result', (_event: any, result: any) => {
+      clearTimeout(timeoutId);
+      
+      if (result.success) {
+        console.log(`✅ [CAPABILITIES] ${appName} stabilized after ${result.duration}ms`);
+        resolve();
+      } else {
+        console.warn(`⚠️ [CAPABILITIES] App stability check failed: ${result.error}, proceeding anyway`);
+        resolve(); // Don't reject, just proceed
+      }
+    });
+
+    ipcRenderer.send('automation:wait-app-stability', { appName, timeout });
+  });
+}
+
+/**
  * Open a URL in the default browser
  * @param url - URL to open
  */
@@ -335,33 +408,15 @@ export async function pressHotkey(keys: string[]): Promise<void> {
  * @param y - Y coordinate
  */
 export async function clickAt(x: number, y: number): Promise<void> {
-  if (!ipcRenderer) {
-    throw new Error('IPC renderer not available');
+  console.log(`🖱️ [CAPABILITIES] Clicking at (${x}, ${y}) using native nut.js`);
+  
+  try {
+    await nutjsDetector.clickAtCoordinates(x, y);
+    console.log(`✅ [CAPABILITIES] Click successful at (${x}, ${y})`);
+  } catch (error: any) {
+    console.error(`❌ [CAPABILITIES] Click failed at (${x}, ${y}):`, error.message);
+    throw new Error(`Failed to click at (${x}, ${y}): ${error.message}`);
   }
-
-  console.log(`🖱️ [CAPABILITIES] Sending automation:click IPC to (${x}, ${y})`);
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      console.error(`⏱️ [CAPABILITIES] Timeout (5s) waiting for click result at (${x}, ${y})`);
-      reject(new Error(`Timeout clicking at (${x}, ${y})`));
-    }, 5000);
-
-    ipcRenderer.once('automation:click:result', (_event: any, result: any) => {
-      clearTimeout(timeout);
-      console.log(`📥 [CAPABILITIES] Received click result:`, result);
-      
-      if (result.success) {
-        console.log(`✅ [CAPABILITIES] Click successful at (${x}, ${y})`);
-        resolve();
-      } else {
-        console.error(`❌ [CAPABILITIES] Click failed:`, result.error);
-        reject(new Error(result.error || 'Failed to click'));
-      }
-    });
-
-    ipcRenderer.send('automation:click', { x, y });
-  });
 }
 
 /**
