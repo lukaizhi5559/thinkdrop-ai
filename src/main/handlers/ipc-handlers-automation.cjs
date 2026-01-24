@@ -142,54 +142,169 @@ function registerAutomationHandlers(client, overlay = null) {
     logger.debug('🎯 [IPC:AUTOMATION] Focus app:', appName);
     
     try {
-      // For macOS, use AppleScript to activate app
+      // For macOS, use Spotlight to launch/focus app (more reliable than AppleScript)
       if (process.platform === 'darwin') {
         const { exec } = require('child_process');
         const { promisify } = require('util');
         const execAsync = promisify(exec);
         
-        // First, check if the app is actually installed
-        try {
-          const { stdout: checkResult } = await execAsync(
-            `osascript -e 'tell application "System Events" to get name of every application process' | grep -i "${appName}"`
-          );
-          logger.debug(`🔍 [IPC:AUTOMATION] App check result:`, checkResult.trim());
-        } catch (checkError) {
-          // App might not be running, try to check if it exists at all
-          logger.warn(`⚠️ [IPC:AUTOMATION] App "${appName}" not currently running, attempting to launch...`);
+        logger.info(`� [IPC:AUTOMATION] Using Spotlight to focus "${appName}"`);
+        
+        // Retry logic to ensure app is actually focused
+        const maxRetries = 3;
+        let actualApp = '';
+        let focusSuccess = false;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          logger.debug(`🎯 [IPC:AUTOMATION] Focus attempt ${attempt}/${maxRetries} for "${appName}"`);
+          
+          try {
+           
+            
+            // Use Spotlight to launch/focus the app
+            // This is more reliable than AppleScript activate because:
+            // 1. It's system-level and can't be blocked
+            // 2. It handles fuzzy matching
+            // 3. It launches apps if not running
+            // 4. It works even with modal dialogs open
+            
+            if (!libnut) {
+              throw new Error('libnut not available for keyboard automation');
+            }
+            
+            // Open Spotlight (Cmd+Space)
+            libnut.keyTap('space', ['command']);
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Type app name
+            for (const char of appName) {
+              libnut.typeString(char);
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
+            // Press Enter to launch/focus
+            libnut.keyTap('enter');
+            
+            // CRITICAL: Close Spotlight explicitly to prevent interference with subsequent actions
+            // Spotlight can stay open briefly after Enter, causing next keypresses to go to Spotlight
+            await new Promise(resolve => setTimeout(resolve, 300));
+            libnut.keyTap('escape');
+            
+            // Wait for app to launch and focus
+            const waitTime = attempt === 1 ? 800 : 600;
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // Verify the app is actually focused
+            const { stdout: frontmostApp } = await execAsync(
+              `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`
+            );
+            actualApp = frontmostApp.trim();
+            logger.debug(`🔍 [IPC:AUTOMATION] Frontmost app after attempt ${attempt}: "${actualApp}"`);
+            
+            // Check if correct app is focused (case-insensitive partial match)
+            if (actualApp.toLowerCase().includes(appName.toLowerCase()) || 
+                appName.toLowerCase().includes(actualApp.toLowerCase())) {
+              logger.info(`✅ [IPC:AUTOMATION] Successfully focused "${appName}" via Spotlight (actual: "${actualApp}")`);
+              focusSuccess = true;
+              break;
+            }
+            
+            logger.warn(`⚠️ [IPC:AUTOMATION] Attempt ${attempt}: Expected "${appName}" but got "${actualApp}", retrying...`);
+            
+          } catch (error) {
+            logger.error(`❌ [IPC:AUTOMATION] Spotlight focus error (attempt ${attempt}):`, error.message);
+            if (attempt === maxRetries) {
+              event.reply('automation:focus-app:result', { 
+                success: false, 
+                error: `Failed to focus "${appName}": ${error.message}` 
+              });
+              return;
+            }
+          }
         }
         
-        // Try to activate the app
-        const { stdout, stderr } = await execAsync(`osascript -e 'tell application "${appName}" to activate'`);
-        
-        if (stderr) {
-          logger.error(`❌ [IPC:AUTOMATION] AppleScript stderr:`, stderr);
+        if (!focusSuccess) {
+          logger.error(`❌ [IPC:AUTOMATION] Failed to focus "${appName}" after ${maxRetries} attempts (got "${actualApp}")`);
           event.reply('automation:focus-app:result', { 
             success: false, 
-            error: `Failed to focus "${appName}": ${stderr}` 
+            error: `Failed to focus "${appName}": wrong app "${actualApp}" is frontmost` 
           });
           return;
         }
         
-        logger.debug(`✅ [IPC:AUTOMATION] Successfully activated "${appName}"`);
+        event.reply('automation:focus-app:result', { success: true, actualApp });
+      } else if (process.platform === 'win32') {
+        // For Windows, use Windows Search (Win key)
+        logger.info(`🔍 [IPC:AUTOMATION] Using Windows Search to focus "${appName}"`);
         
-        // Wait for app focus to settle and prevent keyboard event leakage
-        await new Promise(resolve => setTimeout(resolve, 200));
-        
-        // Verify the app is actually focused
-        const { stdout: frontmostApp } = await execAsync(
-          `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`
-        );
-        const actualApp = frontmostApp.trim();
-        logger.debug(`🎯 [IPC:AUTOMATION] Frontmost app after focus: "${actualApp}"`);
-        
-        if (!actualApp.toLowerCase().includes(appName.toLowerCase())) {
-          logger.warn(`⚠️ [IPC:AUTOMATION] Expected "${appName}" but got "${actualApp}"`);
+        if (!libnut) {
+          event.reply('automation:focus-app:result', { 
+            success: false, 
+            error: 'libnut not available for keyboard automation' 
+          });
+          return;
         }
         
-        event.reply('automation:focus-app:result', { success: true, actualApp });
+        const maxRetries = 3;
+        let focusSuccess = false;
+        
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+          logger.debug(`🎯 [IPC:AUTOMATION] Focus attempt ${attempt}/${maxRetries} for "${appName}"`);
+          
+          try {
+            // Press Win key to open Windows Search
+            libnut.keyTap('command'); // On Windows, 'command' maps to Win key
+            await new Promise(resolve => setTimeout(resolve, 400));
+            
+            // Type app name or file name
+            for (const char of appName) {
+              libnut.typeString(char);
+              await new Promise(resolve => setTimeout(resolve, 20));
+            }
+            await new Promise(resolve => setTimeout(resolve, 300));
+            
+            // Press Enter to launch/focus
+            libnut.keyTap('enter');
+            
+            // CRITICAL: Close Windows Search explicitly to prevent interference
+            // Windows Search can stay open briefly after Enter
+            await new Promise(resolve => setTimeout(resolve, 300));
+            libnut.keyTap('escape'); // Close Windows Search
+            
+            // Wait for app/file to launch and focus
+            const waitTime = attempt === 1 ? 1000 : 800;
+            await new Promise(resolve => setTimeout(resolve, waitTime));
+            
+            // On Windows, we assume success if no error occurred
+            // (Windows doesn't have easy way to verify frontmost app like macOS)
+            logger.info(`✅ [IPC:AUTOMATION] Launched "${appName}" via Windows Search`);
+            focusSuccess = true;
+            break;
+            
+          } catch (error) {
+            logger.error(`❌ [IPC:AUTOMATION] Windows Search error (attempt ${attempt}):`, error.message);
+            if (attempt === maxRetries) {
+              event.reply('automation:focus-app:result', { 
+                success: false, 
+                error: `Failed to focus "${appName}": ${error.message}` 
+              });
+              return;
+            }
+          }
+        }
+        
+        if (!focusSuccess) {
+          event.reply('automation:focus-app:result', { 
+            success: false, 
+            error: `Failed to focus "${appName}" after ${maxRetries} attempts` 
+          });
+          return;
+        }
+        
+        event.reply('automation:focus-app:result', { success: true, actualApp: appName });
       } else {
-        // For other platforms, we'd need platform-specific logic
+        // For other platforms (Linux), we'd need platform-specific logic
         event.reply('automation:focus-app:result', { 
           success: false, 
           error: 'Focus app not implemented for this platform' 
@@ -1500,9 +1615,17 @@ function registerAutomationHandlers(client, overlay = null) {
     }
     
     try {
+      // Move mouse to target position
       libnut.moveMouse(x, y);
-      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Wait longer to ensure mouse position is registered
+      await new Promise(resolve => setTimeout(resolve, 150));
+      
+      // Perform the click
       libnut.mouseClick();
+      
+      // Small delay after click to ensure it registers
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Click successful at (${x}, ${y})`);
       event.reply('automation:native-click:result', { success: true });
@@ -1517,9 +1640,12 @@ function registerAutomationHandlers(client, overlay = null) {
   
   // Native keyboard typing
   ipcMain.on('automation:native-type', async (event, { text }) => {
-    logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Type text: "${text.substring(0, 50)}..."`);
+    logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] ========== TYPE TEXT START ==========`);
+    logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text to type: "${text}"`);
+    logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text length: ${text.length} characters`);
     
     if (!libnut) {
+      logger.error(`❌ [IPC:AUTOMATION:NATIVE] libnut not available!`);
       event.reply('automation:native-type:result', { 
         success: false, 
         error: 'libnut not available' 
@@ -1527,34 +1653,33 @@ function registerAutomationHandlers(client, overlay = null) {
       return;
     }
     
+    logger.info(`✅ [IPC:AUTOMATION:NATIVE] libnut is available`);
+    
     try {
-      // CRITICAL: Blur all Electron windows to ensure target app has focus
-      logger.debug(`🔍 [IPC:AUTOMATION:NATIVE] Blurring all Electron windows before typing`);
-      const { BrowserWindow } = require('electron');
-      const windows = BrowserWindow.getAllWindows();
-      windows.forEach(win => {
-        if (win && !win.isDestroyed()) {
-          win.blur();
-        }
-      });
+      // CRITICAL: Do NOT blur Electron windows when typing into system UI like Spotlight
+      // Blurring windows causes Spotlight to lose focus and close/deactivate
+      // Spotlight is a system overlay that maintains its own focus independently
       
-      // Longer delay to ensure focus transfer completes and input field is ready
-      await new Promise(resolve => setTimeout(resolve, 300));
+      // Small delay to ensure the target application/UI is ready to receive input
+      logger.info(`⏳ [IPC:AUTOMATION:NATIVE] Waiting 200ms for UI to be ready...`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      logger.info(`✅ [IPC:AUTOMATION:NATIVE] Ready to type`);
       
-      // Click at current mouse position to ensure focus (in case input field lost focus)
-      logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Clicking at current position to ensure focus`);
-      const mousePos = libnut.getMousePos();
-      libnut.mouseClick();
+      // CRITICAL: Do NOT click before typing - this causes issues with system search bars
+      // like Spotlight on macOS. The search field is already focused after opening with Cmd+Space.
+      // Clicking at the current mouse position can close Spotlight or move focus away.
       
-      // Small delay after click
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
+      logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] About to call libnut.typeString("${text}")`);
       libnut.typeString(text);
+      logger.info(`✅ [IPC:AUTOMATION:NATIVE] libnut.typeString() call completed`);
       
-      logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Text typed successfully`);
+      logger.info(`✅ [IPC:AUTOMATION:NATIVE] ========== TYPE TEXT SUCCESS ==========`);
       event.reply('automation:native-type:result', { success: true });
     } catch (error) {
-      logger.error('❌ [IPC:AUTOMATION:NATIVE] Type error:', error.message);
+      logger.error(`❌ [IPC:AUTOMATION:NATIVE] ========== TYPE TEXT FAILED ==========`);
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Error details:', error);
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Error message:', error.message);
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] Error stack:', error.stack);
       event.reply('automation:native-type:result', { 
         success: false, 
         error: error.message 
@@ -1608,7 +1733,13 @@ function registerAutomationHandlers(client, overlay = null) {
         'enter': isMac ? 'return' : 'enter',
         
         // Escape shorthand
-        'esc': 'escape'
+        'esc': 'escape',
+        
+        // Arrow keys: libnut uses 'down', 'up', 'left', 'right'
+        'arrowdown': 'down',
+        'arrowup': 'up',
+        'arrowleft': 'left',
+        'arrowright': 'right'
       };
       
       const normalizedKey = key.toLowerCase();
@@ -2204,6 +2335,354 @@ function registerAutomationHandlers(client, overlay = null) {
    */
   ipcMain.on('automation:show-cursor', async (event) => {
     restoreCursor('👁️ [IPC:AUTOMATION] Showing system cursor');
+  });
+
+  /**
+   * Get active window bounds for coordinate offset (intent-driven mode)
+   * CRITICAL: Fixes Vision API coordinate mismatch bug
+   */
+  ipcMain.handle('automation:get-window-bounds', async (event, params = {}) => {
+    const { appName } = params;
+    logger.debug('🪟 [IPC:AUTOMATION] Get window bounds for:', appName);
+    
+    try {
+      const windowManager = require('node-window-manager');
+      
+      // Request accessibility permissions
+      try {
+        windowManager.requestAccessibility();
+      } catch (accessError) {
+        logger.warn('⚠️ [IPC:AUTOMATION] Accessibility request failed:', accessError.message);
+        // Continue anyway - might still work
+      }
+      
+      // Get the currently active window
+      let activeWindow;
+      try {
+        activeWindow = windowManager.getActiveWindow();
+      } catch (getWindowError) {
+        logger.warn('⚠️ [IPC:AUTOMATION] Failed to get active window, using default bounds:', getWindowError.message);
+        // Return default bounds (full screen) instead of failing
+        return { x: 0, y: 0, width: 1920, height: 1080 };
+      }
+      
+      if (!activeWindow) {
+        logger.warn('⚠️ [IPC:AUTOMATION] No active window found, using default bounds');
+        return { x: 0, y: 0, width: 1920, height: 1080 };
+      }
+      
+      // Safely get window properties
+      let title = '';
+      let path = '';
+      try {
+        title = activeWindow.getTitle ? activeWindow.getTitle() : '';
+        path = activeWindow.path || '';
+      } catch (propError) {
+        logger.warn('⚠️ [IPC:AUTOMATION] Failed to get window properties:', propError.message);
+      }
+      
+      logger.debug('🪟 [IPC:AUTOMATION] Active window:', { 
+        title: title.substring(0, 50), 
+        path: path.substring(0, 50) 
+      });
+      
+      // Check if it's an Electron/ThinkDrop window
+      const isElectron = path.toLowerCase().includes('electron') || 
+                        path.toLowerCase().includes('thinkdrop') ||
+                        title.toLowerCase().includes('thinkdrop');
+      
+      if (isElectron) {
+        logger.warn('⚠️ [IPC:AUTOMATION] Active window is Electron overlay - returning undefined');
+        return undefined;
+      }
+      
+      // Get bounds of the active window
+      let bounds;
+      try {
+        bounds = activeWindow.getBounds();
+      } catch (boundsError) {
+        logger.error('❌ [IPC:AUTOMATION] Failed to get window bounds:', boundsError.message);
+        return undefined;
+      }
+      
+      const windowBounds = {
+        x: bounds.x || 0,
+        y: bounds.y || 0,
+        width: bounds.width || 0,
+        height: bounds.height || 0
+      };
+      
+      logger.info('🪟 [IPC:AUTOMATION] Window bounds:', windowBounds);
+      return windowBounds;
+      
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to get window bounds:', error.message);
+      logger.error('❌ [IPC:AUTOMATION] Error stack:', error.stack);
+      return undefined;
+    }
+  });
+
+  // ============================================================================
+  // FILE SYSTEM OPERATIONS
+  // ============================================================================
+
+  const fs = require('fs').promises;
+  const path = require('path');
+  const os = require('os');
+
+  /**
+   * Validate file path to prevent directory traversal attacks
+   * @param {string} filePath - Path to validate
+   * @returns {Object} { isSafe: boolean, warning: string|null }
+   */
+  function validatePath(filePath) {
+    // Resolve to absolute path
+    const resolvedPath = path.resolve(filePath);
+    
+    // Get user's home directory
+    const homeDir = os.homedir();
+    
+    // Safe paths (no warning needed)
+    const safePaths = [
+      homeDir,
+      path.join(homeDir, 'Desktop'),
+      path.join(homeDir, 'Documents'),
+      path.join(homeDir, 'Downloads'),
+      '/tmp',
+      '/var/tmp',
+    ];
+    
+    // Check if path starts with any safe path
+    const isSafe = safePaths.some(safePath => resolvedPath.startsWith(safePath));
+    
+    if (!isSafe) {
+      // Path is outside safe directories - return warning but allow
+      const warning = `⚠️ Path is outside safe directories (${resolvedPath}). This could affect system files.`;
+      logger.warn(warning);
+      return { isSafe: false, warning, resolvedPath };
+    }
+    
+    return { isSafe: true, warning: null, resolvedPath };
+  }
+
+  /**
+   * Read file from disk
+   */
+  ipcMain.handle('automation:readFile', async (event, { path: filePath, encoding = 'utf8' }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Check file size before reading
+      const stats = await fs.stat(resolvedPath);
+      if (stats.size > 10 * 1024 * 1024) {
+        throw new Error('File too large (max 10 MB)');
+      }
+      
+      // Read file
+      const content = await fs.readFile(resolvedPath, encoding);
+      
+      logger.info('✅ [IPC:AUTOMATION] File read:', resolvedPath, `(${stats.size} bytes)`);
+      if (warning) logger.warn(warning);
+      
+      return {
+        content,
+        size: stats.size,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to read file:', error.message);
+      throw new Error(`Failed to read file: ${error.message}`);
+    }
+  });
+
+  /**
+   * Write file to disk
+   */
+  ipcMain.handle('automation:writeFile', async (event, { path: filePath, content, encoding = 'utf8' }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Check content size
+      if (content.length > 10 * 1024 * 1024) {
+        throw new Error('Content too large (max 10 MB)');
+      }
+      
+      // Ensure parent directory exists
+      const dir = path.dirname(resolvedPath);
+      await fs.mkdir(dir, { recursive: true });
+      
+      // Write file
+      await fs.writeFile(resolvedPath, content, encoding);
+      const stats = await fs.stat(resolvedPath);
+      
+      logger.info('✅ [IPC:AUTOMATION] File written:', resolvedPath, `(${stats.size} bytes)`);
+      if (warning) logger.warn(warning);
+      
+      return {
+        success: true,
+        bytesWritten: stats.size,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to write file:', error.message);
+      throw new Error(`Failed to write file: ${error.message}`);
+    }
+  });
+
+  /**
+   * Append to file
+   */
+  ipcMain.handle('automation:appendFile', async (event, { path: filePath, content }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Check content size
+      if (content.length > 1 * 1024 * 1024) {
+        throw new Error('Content too large for append (max 1 MB)');
+      }
+      
+      // Append to file
+      await fs.appendFile(resolvedPath, content, 'utf8');
+      
+      logger.info('✅ [IPC:AUTOMATION] Content appended:', resolvedPath);
+      if (warning) logger.warn(warning);
+      
+      return {
+        success: true,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to append to file:', error.message);
+      throw new Error(`Failed to append to file: ${error.message}`);
+    }
+  });
+
+  /**
+   * Check if file exists
+   */
+  ipcMain.handle('automation:fileExists', async (event, { path: filePath }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Check if file exists
+      try {
+        await fs.access(resolvedPath);
+        logger.info('✅ [IPC:AUTOMATION] File exists:', resolvedPath);
+        if (warning) logger.warn(warning);
+        return { exists: true, warning };
+      } catch {
+        logger.info('❌ [IPC:AUTOMATION] File not found:', resolvedPath);
+        return { exists: false, warning };
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to check file exists:', error.message);
+      throw new Error(`Failed to check file exists: ${error.message}`);
+    }
+  });
+
+  /**
+   * List directory contents
+   */
+  ipcMain.handle('automation:listDirectory', async (event, { path: dirPath }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(dirPath);
+      
+      // Read directory
+      const entries = await fs.readdir(resolvedPath, { withFileTypes: true });
+      
+      const files = entries
+        .filter(entry => entry.isFile())
+        .map(entry => entry.name);
+      
+      const directories = entries
+        .filter(entry => entry.isDirectory())
+        .map(entry => entry.name);
+      
+      logger.info('✅ [IPC:AUTOMATION] Directory listed:', resolvedPath, `(${files.length} files, ${directories.length} dirs)`);
+      if (warning) logger.warn(warning);
+      
+      return {
+        files,
+        directories,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to list directory:', error.message);
+      throw new Error(`Failed to list directory: ${error.message}`);
+    }
+  });
+
+  /**
+   * Create directory
+   */
+  ipcMain.handle('automation:createDirectory', async (event, { path: dirPath }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(dirPath);
+      
+      // Create directory (recursive)
+      await fs.mkdir(resolvedPath, { recursive: true });
+      
+      logger.info('✅ [IPC:AUTOMATION] Directory created:', resolvedPath);
+      if (warning) logger.warn(warning);
+      
+      return {
+        success: true,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to create directory:', error.message);
+      throw new Error(`Failed to create directory: ${error.message}`);
+    }
+  });
+
+  /**
+   * Delete file
+   */
+  ipcMain.handle('automation:deleteFile', async (event, { path: filePath }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Delete file
+      await fs.unlink(resolvedPath);
+      
+      logger.info('✅ [IPC:AUTOMATION] File deleted:', resolvedPath);
+      if (warning) logger.warn(warning);
+      
+      return {
+        success: true,
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to delete file:', error.message);
+      throw new Error(`Failed to delete file: ${error.message}`);
+    }
+  });
+
+  /**
+   * Get file stats
+   */
+  ipcMain.handle('automation:getFileStats', async (event, { path: filePath }) => {
+    try {
+      const { resolvedPath, warning } = validatePath(filePath);
+      
+      // Get file stats
+      const stats = await fs.stat(resolvedPath);
+      
+      logger.info('✅ [IPC:AUTOMATION] File stats retrieved:', resolvedPath);
+      if (warning) logger.warn(warning);
+      
+      return {
+        size: stats.size,
+        created: stats.birthtime,
+        modified: stats.mtime,
+        isFile: stats.isFile(),
+        isDirectory: stats.isDirectory(),
+        warning,
+      };
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Failed to get file stats:', error.message);
+      throw new Error(`Failed to get file stats: ${error.message}`);
+    }
   });
 
   logger.debug('✅ [IPC:AUTOMATION] Automation IPC handlers registered');

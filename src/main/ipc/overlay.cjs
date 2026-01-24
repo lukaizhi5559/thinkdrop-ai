@@ -296,7 +296,6 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     }
 
     logger.debug('📏 [OVERLAY:IPC] Resizing intent window:', { width, height });
-    // intentWindow.setSize(width, height, animate);
 
     const { screen } = require('electron');
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -304,7 +303,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     
     const currentBounds = intentWindow.getBounds();
     const newWidth = width || currentBounds.width;
-    const newHeight = height;
+    const newHeight = height || currentBounds.height;
     
     // Keep the bottom edge flush to the bottom of the screen
     const newY = screenHeight - newHeight;

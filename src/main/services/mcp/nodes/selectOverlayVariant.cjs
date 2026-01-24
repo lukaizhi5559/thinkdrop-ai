@@ -118,10 +118,10 @@ module.exports = async function selectOverlayVariant(state) {
         state.intentContext.uiVariant = 'results';
         logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → results (needs clarification)`);
       }
-      else if (slots.mode === 'computer-use-streaming') {
-        // Computer Use streaming mode - show progress UI
+      else if (slots.mode === 'intent-driven') {
+        // Intent-driven mode - show progress UI
         state.intentContext.uiVariant = 'automation_progress';
-        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (Computer Use streaming)`);
+        logger.debug(`🎨 [NODE:SELECT_OVERLAY_VARIANT] ${intent} → automation_progress (Intent-driven mode)`);
       }
       else if (slots.automationPlan && slots.steps) {
         // Static plan mode - show progress UI

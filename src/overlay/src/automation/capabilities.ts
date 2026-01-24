@@ -3,10 +3,17 @@
  * 
  * Wrapper functions for NutJS automation primitives
  * These are called by the PlanInterpreter to execute automation steps
+ * 
+ * Now includes multi-driver support:
+ * - Playwright for web automation (high reliability)
+ * - Accessibility APIs for desktop apps (AX/UIA)
+ * - Vision/nut.js as fallback
  */
 
 import * as nutjsDetector from './nutjs-detector';
 import type { DetectionLocator, DetectionResult } from './nutjs-detector';
+import { getDriverRouter } from './drivers/DriverRouter';
+import type { ElementSelector } from './drivers/types';
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
@@ -896,4 +903,474 @@ export function showSystemCursor(): void {
   
   console.log('👁️ [CAPABILITIES] Showing system cursor');
   ipcRenderer.send('automation:show-cursor');
+}
+
+// ============================================================================
+// FILE SYSTEM OPERATIONS
+// ============================================================================
+
+/**
+ * Read file from disk
+ * @param path - Absolute path to file
+ * @param encoding - File encoding (utf8 for text, base64 for binary)
+ * @returns File content and size
+ */
+export async function readFile(
+  path: string,
+  encoding: 'utf8' | 'base64' = 'utf8'
+): Promise<{ content: string; size: number }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('📖 [CAPABILITIES] Reading file', { path, encoding });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:readFile', {
+      path,
+      encoding,
+    });
+    
+    console.log('✅ [CAPABILITIES] File read successfully', {
+      path,
+      size: result.size,
+      encoding,
+    });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to read file', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to read file: ${error.message}`);
+  }
+}
+
+/**
+ * Write file to disk (overwrites existing file)
+ * @param path - Absolute path to file
+ * @param content - Content to write
+ * @param encoding - File encoding
+ * @returns Success status and bytes written
+ */
+export async function writeFile(
+  path: string,
+  content: string,
+  encoding: 'utf8' | 'base64' = 'utf8'
+): Promise<{ success: boolean; bytesWritten: number }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('✍️ [CAPABILITIES] Writing file', {
+    path,
+    encoding,
+    contentLength: content.length,
+  });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:writeFile', {
+      path,
+      content,
+      encoding,
+    });
+    
+    console.log('✅ [CAPABILITIES] File written successfully', {
+      path,
+      bytesWritten: result.bytesWritten,
+    });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to write file', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to write file: ${error.message}`);
+  }
+}
+
+/**
+ * Append content to existing file
+ * @param path - Absolute path to file
+ * @param content - Content to append
+ * @returns Success status
+ */
+export async function appendFile(
+  path: string,
+  content: string
+): Promise<{ success: boolean }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('➕ [CAPABILITIES] Appending to file', {
+    path,
+    contentLength: content.length,
+  });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:appendFile', {
+      path,
+      content,
+    });
+    
+    console.log('✅ [CAPABILITIES] Content appended successfully', { path });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to append to file', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to append to file: ${error.message}`);
+  }
+}
+
+/**
+ * Check if file exists
+ * @param path - Absolute path to file
+ * @returns Whether file exists
+ */
+export async function fileExists(path: string): Promise<{ exists: boolean }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('🔍 [CAPABILITIES] Checking file exists', { path });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:fileExists', {
+      path,
+    });
+    
+    console.log(result.exists ? '✅ [CAPABILITIES] File exists' : '❌ [CAPABILITIES] File not found', { path });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to check file exists', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to check file exists: ${error.message}`);
+  }
+}
+
+/**
+ * List directory contents
+ * @param path - Absolute path to directory
+ * @returns Files and subdirectories
+ */
+export async function listDirectory(
+  path: string
+): Promise<{ files: string[]; directories: string[] }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('📁 [CAPABILITIES] Listing directory', { path });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:listDirectory', {
+      path,
+    });
+    
+    console.log('✅ [CAPABILITIES] Directory listed', {
+      path,
+      fileCount: result.files.length,
+      directoryCount: result.directories.length,
+    });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to list directory', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to list directory: ${error.message}`);
+  }
+}
+
+/**
+ * Create directory (creates parent directories if needed)
+ * @param path - Absolute path to directory
+ * @returns Success status
+ */
+export async function createDirectory(path: string): Promise<{ success: boolean }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('📂 [CAPABILITIES] Creating directory', { path });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:createDirectory', {
+      path,
+    });
+    
+    console.log('✅ [CAPABILITIES] Directory created', { path });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to create directory', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to create directory: ${error.message}`);
+  }
+}
+
+/**
+ * Delete file
+ * @param path - Absolute path to file
+ * @returns Success status
+ */
+export async function deleteFile(path: string): Promise<{ success: boolean }> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('🗑️ [CAPABILITIES] Deleting file', { path });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:deleteFile', {
+      path,
+    });
+    
+    console.log('✅ [CAPABILITIES] File deleted', { path });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to delete file', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to delete file: ${error.message}`);
+  }
+}
+
+/**
+ * Get file metadata
+ * @param path - Absolute path to file
+ * @returns File stats (size, created, modified, etc.)
+ */
+export async function getFileStats(
+  path: string
+): Promise<{
+  size: number;
+  created: Date;
+  modified: Date;
+  isFile: boolean;
+  isDirectory: boolean;
+}> {
+  if (!ipcRenderer) {
+    throw new Error('IPC renderer not available');
+  }
+
+  console.log('📊 [CAPABILITIES] Getting file stats', { path });
+  
+  try {
+    const result = await ipcRenderer.invoke('automation:getFileStats', {
+      path,
+    });
+    
+    console.log('✅ [CAPABILITIES] File stats retrieved', {
+      path,
+      size: result.size,
+      isFile: result.isFile,
+      isDirectory: result.isDirectory,
+    });
+    
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Failed to get file stats', {
+      path,
+      error: error.message,
+    });
+    throw new Error(`Failed to get file stats: ${error.message}`);
+  }
+}
+
+// ============================================================================
+// MULTI-DRIVER AUTOMATION (Enhanced Reliability)
+// ============================================================================
+
+/**
+ * Initialize the multi-driver system
+ * Should be called once at startup
+ */
+export async function initializeDrivers(): Promise<void> {
+  console.log('🚀 [CAPABILITIES] Initializing multi-driver system');
+  const router = getDriverRouter();
+  await router.initialize();
+  console.log('✅ [CAPABILITIES] Multi-driver system ready');
+}
+
+/**
+ * Find and click element using intelligent driver selection
+ * Automatically chooses between Playwright (web), Accessibility (desktop), or Vision (fallback)
+ * 
+ * @param selector - Element selector (supports CSS, XPath, AX roles, or description)
+ * @returns Action result
+ */
+export async function smartFindAndClick(selector: ElementSelector): Promise<{ success: boolean; driver: string; error?: string }> {
+  console.log('🎯 [CAPABILITIES] Smart find and click:', selector);
+  
+  const router = getDriverRouter();
+  const driver = await router.selectDriver(selector);
+  
+  console.log(`📍 [CAPABILITIES] Using ${driver.name} driver`);
+  
+  try {
+    const element = await driver.findElement(selector);
+    
+    if (!element) {
+      return { 
+        success: false, 
+        driver: driver.name,
+        error: 'Element not found' 
+      };
+    }
+    
+    const result = await driver.click(element);
+    
+    return {
+      success: result.success,
+      driver: driver.name,
+      error: result.error,
+    };
+  } catch (error: any) {
+    console.error(`❌ [CAPABILITIES] ${driver.name} driver failed:`, error.message);
+    return {
+      success: false,
+      driver: driver.name,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Type text into element using intelligent driver selection
+ * 
+ * @param selector - Element selector
+ * @param text - Text to type
+ * @returns Action result
+ */
+export async function smartTypeText(
+  selector: ElementSelector, 
+  text: string
+): Promise<{ success: boolean; driver: string; error?: string }> {
+  console.log('⌨️ [CAPABILITIES] Smart type text:', { selector, text });
+  
+  const router = getDriverRouter();
+  const driver = await router.selectDriver(selector);
+  
+  console.log(`📍 [CAPABILITIES] Using ${driver.name} driver`);
+  
+  try {
+    const element = await driver.findElement(selector);
+    
+    if (!element) {
+      return { 
+        success: false, 
+        driver: driver.name,
+        error: 'Element not found' 
+      };
+    }
+    
+    const result = await driver.type(element, text);
+    
+    return {
+      success: result.success,
+      driver: driver.name,
+      error: result.error,
+    };
+  } catch (error: any) {
+    console.error(`❌ [CAPABILITIES] ${driver.name} driver failed:`, error.message);
+    return {
+      success: false,
+      driver: driver.name,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Wait for element to appear using intelligent driver selection
+ * 
+ * @param selector - Element selector
+ * @param timeout - Maximum wait time in milliseconds
+ * @returns Whether element was found
+ */
+export async function smartWaitForElement(
+  selector: ElementSelector,
+  timeout: number = 5000
+): Promise<{ found: boolean; driver: string; error?: string }> {
+  console.log('⏳ [CAPABILITIES] Smart wait for element:', selector);
+  
+  const router = getDriverRouter();
+  const driver = await router.selectDriver(selector);
+  
+  console.log(`📍 [CAPABILITIES] Using ${driver.name} driver`);
+  
+  try {
+    const element = await driver.waitForElement(selector, timeout);
+    
+    return {
+      found: element !== null,
+      driver: driver.name,
+    };
+  } catch (error: any) {
+    console.error(`❌ [CAPABILITIES] ${driver.name} driver failed:`, error.message);
+    return {
+      found: false,
+      driver: driver.name,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Navigate to URL (web driver only)
+ * 
+ * @param url - URL to navigate to
+ * @returns Action result
+ */
+export async function navigateToUrl(url: string): Promise<{ success: boolean; error?: string }> {
+  console.log('🌐 [CAPABILITIES] Navigating to URL:', url);
+  
+  const router = getDriverRouter();
+  const webDriver = router.getDriver('web');
+  
+  if (!webDriver.capabilities.canNavigate) {
+    return {
+      success: false,
+      error: 'Web driver does not support navigation',
+    };
+  }
+  
+  try {
+    const result = await webDriver.navigate!(url);
+    return result;
+  } catch (error: any) {
+    console.error('❌ [CAPABILITIES] Navigation failed:', error.message);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+}
+
+/**
+ * Get available drivers status
+ * Useful for debugging and determining which automation methods are available
+ */
+export async function getDriverStatus(): Promise<{
+  web: boolean;
+  desktop: boolean;
+  vision: boolean;
+}> {
+  const router = getDriverRouter();
+  return await router.getAvailableDrivers();
 }

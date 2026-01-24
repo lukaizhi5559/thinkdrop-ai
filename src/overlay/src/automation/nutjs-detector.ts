@@ -386,16 +386,19 @@ export async function pressKey(key: string, modifiers?: string[]): Promise<void>
   // Build modifier array for libnut
   const mods: string[] = [];
   
-  if (modifiers?.includes('Cmd') || modifiers?.includes('Command')) {
+  // Normalize modifiers to lowercase for case-insensitive comparison
+  const normalizedMods = modifiers?.map(m => m.toLowerCase()) || [];
+  
+  if (normalizedMods.includes('cmd') || normalizedMods.includes('command')) {
     mods.push('command');
   }
-  if (modifiers?.includes('Shift')) {
+  if (normalizedMods.includes('shift')) {
     mods.push('shift');
   }
-  if (modifiers?.includes('Alt') || modifiers?.includes('Option')) {
+  if (normalizedMods.includes('alt') || normalizedMods.includes('option')) {
     mods.push('alt');
   }
-  if (modifiers?.includes('Ctrl') || modifiers?.includes('Control')) {
+  if (normalizedMods.includes('ctrl') || normalizedMods.includes('control')) {
     mods.push('control');
   }
   

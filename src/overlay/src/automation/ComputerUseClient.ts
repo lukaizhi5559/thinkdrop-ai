@@ -11,8 +11,9 @@ import type { DetectionLocator } from './nutjs-detector';
 export interface ComputerUseAction {
   type: string;
   reasoning?: string;
-  locator?: DetectionLocator;  // NEW: Native detection locator (text/image/element strategies)
+  locator?: DetectionLocator;  // LEGACY: Native detection locator (text/image/element strategies)
   coordinates?: { x: number; y: number };  // LEGACY: Vision API coordinates
+  selector?: any;  // NEW: Multi-driver semantic selector (css, xpath, axRole, etc.)
   
   // clickAndDrag action fields
   fromLocator?: DetectionLocator;
@@ -41,7 +42,7 @@ export interface ComputerUseTiming {
 }
 
 export interface ComputerUseMessage {
-  type: 'start' | 'screenshot' | 'action' | 'complete' | 'error' | 'status' | 'clarification' | 'clarification_needed' | 'clarification_answer';
+  type: 'start' | 'screenshot' | 'action' | 'complete' | 'error' | 'status' | 'clarification' | 'clarification_needed' | 'clarification_answer' | 'execute_intent' | 'action_complete' | 'intent_complete' | 'intent_failed' | 'execute_action' | 'pause' | 'resume' | 'stop' | 'paused' | 'resumed' | 'stopped';
   goal?: string;
   screenshot?: string | { base64: string; mimeType: string };
   action?: ComputerUseAction;
@@ -53,6 +54,17 @@ export interface ComputerUseMessage {
   questions?: ClarificationQuestion[];
   answers?: Record<string, string>;
   timing?: ComputerUseTiming;
+  sessionId?: string;
+  requestId?: string;
+  data?: any;
+  stepId?: string; // For intent-driven mode: step ID from backend
+  actionResult?: { // For intent-driven mode: action result to send back to backend
+    actionType: string;
+    success: boolean;
+    timestamp?: number;
+    error?: string;
+    metadata?: any;
+  };
 }
 
 export interface ComputerUseCallbacks {
@@ -80,7 +92,23 @@ export class ComputerUseClient {
   private static sessionId: string = `session-${Date.now()}`;
   private static conversationHistory: Array<{ timestamp: number; goal: string; completed: boolean }> = [];
 
-  constructor(private wsUrl: string) {}
+  constructor(private wsUrl: string) {
+    // Initialize multi-driver system
+    this.initializeDrivers();
+  }
+  
+  /**
+   * Initialize multi-driver automation system
+   */
+  private async initializeDrivers(): Promise<void> {
+    try {
+      console.log('🚀 [COMPUTER-USE] Initializing multi-driver system');
+      await capabilities.initializeDrivers();
+      console.log('✅ [COMPUTER-USE] Multi-driver system ready');
+    } catch (error: any) {
+      console.warn('⚠️ [COMPUTER-USE] Multi-driver initialization failed, will use legacy mode:', error.message);
+    }
+  }
 
   /**
    * Execute automation task using Computer Use agentic loop
@@ -522,9 +550,21 @@ export class ComputerUseClient {
         break;
 
       case 'findAndClick':
-        // PRIORITY 1: Use backend-provided coordinates (backend already detected via OmniParser)
-        if (action.coordinates) {
-          console.log(`🎯 [COMPUTER-USE] Using backend-provided coordinates: (${action.coordinates.x}, ${action.coordinates.y})`);
+        // PRIORITY 1: Multi-driver semantic selector (NEW - high reliability)
+        if (action.selector && (action.selector.css || action.selector.xpath || action.selector.role || 
+            action.selector.axRole || action.selector.uiaType)) {
+          console.log(`🌐 [COMPUTER-USE] Using multi-driver system with selector:`, action.selector);
+          const smartResult = await capabilities.smartFindAndClick(action.selector);
+          
+          if (!smartResult.success) {
+            throw new Error(smartResult.error || 'Multi-driver click failed');
+          }
+          
+          console.log(`✅ [COMPUTER-USE] Clicked using ${smartResult.driver} driver`);
+        }
+        // PRIORITY 2: Legacy backend-provided coordinates (vision-based)
+        else if (action.coordinates) {
+          console.log(`🎯 [COMPUTER-USE] LEGACY: Using backend-provided coordinates: (${action.coordinates.x}, ${action.coordinates.y})`);
           console.log(`✅ [COMPUTER-USE] No Vision API call needed - backend already detected element`);
           
           // Show ghost cursor and click
@@ -533,9 +573,9 @@ export class ComputerUseClient {
           capabilities.sendGhostMouseClick(action.coordinates.x, action.coordinates.y);
           await capabilities.clickAt(action.coordinates.x, action.coordinates.y);
         }
-        // PRIORITY 2: Fallback to native detection if no coordinates provided
+        // PRIORITY 3: Legacy native detection fallback
         else if (action.locator) {
-          console.log(`⚠️ [COMPUTER-USE] No coordinates provided by backend, using native detection:`, action.locator);
+          console.log(`⚠️ [COMPUTER-USE] LEGACY: No coordinates provided by backend, using native detection:`, action.locator);
           const result = await capabilities.findAndClickElement(action.locator);
           
           if (!result.success) {
@@ -555,8 +595,8 @@ export class ComputerUseClient {
             capabilities.sendGhostMouseClick(result.coordinates.x, result.coordinates.y);
           }
         } else {
-          console.error('❌ [COMPUTER-USE] findAndClick action missing both locator and coordinates');
-          throw new Error('findAndClick requires either locator or coordinates');
+          console.error('❌ [COMPUTER-USE] findAndClick action missing selector, locator, and coordinates');
+          throw new Error('findAndClick requires either selector, locator, or coordinates');
         }
         break;
 
@@ -570,22 +610,64 @@ export class ComputerUseClient {
         break;
 
       case 'typeText':
-        // Ensure activeApp is focused before typing
-        if (this.activeApp) {
-          console.log(`🎯 [COMPUTER-USE] Ensuring ${this.activeApp} is focused before typing`);
-          await capabilities.focusApp(this.activeApp);
-          await capabilities.wait(500); // Increased wait for focus to fully transfer
+        console.log(`📝 [COMPUTER-USE] typeText action received:`, {
+          text: action.text,
+          submit: action.submit,
+          activeApp: this.activeApp,
+          hasSelector: !!action.selector,
+          fullAction: JSON.stringify(action, null, 2)
+        });
+        
+        // Check if this is generated content (from generate_and_type, compose, or generate_form intents)
+        const isGeneratedContent = action.metadata?.contentGenerated;
+        const contentLength = action.text?.length || 0;
+        
+        if (isGeneratedContent) {
+          console.log(`🎨 [COMPUTER-USE] Typing generated content (${contentLength} chars, provider: ${action.metadata.provider})`);
+        } else if (contentLength > 500) {
+          console.log(`📝 [COMPUTER-USE] Typing long content (${contentLength} chars)`);
         }
-        await capabilities.typeText(action.text, action.submit);
+        
+        // PRIORITY 1: Multi-driver semantic selector (NEW - high reliability)
+        if (action.selector && (action.selector.css || action.selector.xpath || action.selector.role || 
+            action.selector.axRole || action.selector.uiaType)) {
+          console.log(`🌐 [COMPUTER-USE] Using multi-driver system to type into selector:`, action.selector);
+          const smartResult = await capabilities.smartTypeText(action.selector, action.text);
+          
+          if (!smartResult.success) {
+            throw new Error(smartResult.error || 'Multi-driver type failed');
+          }
+          
+          console.log(`✅ [COMPUTER-USE] Typed using ${smartResult.driver} driver`);
+          
+          // Handle submit if requested
+          if (action.submit) {
+            console.log(`⏎ [COMPUTER-USE] Pressing Enter after typing`);
+            await capabilities.pressHotkey(['Return']);
+          }
+        }
+        // PRIORITY 2: Legacy direct typing (no element targeting)
+        else {
+          console.log(`⌨️ [COMPUTER-USE] LEGACY: Direct typing without element targeting`);
+          
+          // NOTE: Removed automatic re-focus before typeText
+          // Re-focusing opens Spotlight on macOS which interferes with typing
+          // The app should already be focused from the initial focusApp action
+          // If focus is lost, the backend should send an explicit focusApp action
+          
+          await capabilities.typeText(action.text, action.submit);
+        }
+        
+        if (isGeneratedContent) {
+          console.log(`✅ [COMPUTER-USE] Generated content typed successfully`);
+        }
         break;
 
       case 'pressKey':
-        // Ensure activeApp is focused before pressing keys (critical for Cmd+Q)
-        if (this.activeApp) {
-          console.log(`🎯 [COMPUTER-USE] Ensuring ${this.activeApp} is focused before pressKey`);
-          await capabilities.focusApp(this.activeApp);
-          await capabilities.wait(500); // Increased wait for focus to fully transfer
-        }
+        // NOTE: Removed automatic re-focus before pressKey
+        // Re-focusing opens Spotlight on macOS which interferes with keyboard actions
+        // The app should already be focused from the initial focusApp action
+        // If focus is lost, the backend should send an explicit focusApp action
         
         // Special handling for selection operations (Cmd+A) - need extra time for UI to update
         const isCmdA = action.modifiers?.includes('Cmd') && action.key?.toLowerCase() === 'a';
@@ -742,6 +824,47 @@ export class ComputerUseClient {
 
       case 'end':
         console.log('🏁 [COMPUTER-USE] End action - task complete');
+        break;
+
+      // File System Operations
+      case 'readFile':
+        console.log(`📖 [COMPUTER-USE] Reading file: ${action.path}`);
+        await capabilities.readFile(action.path, action.encoding);
+        break;
+
+      case 'writeFile':
+        console.log(`✍️ [COMPUTER-USE] Writing file: ${action.path}`);
+        await capabilities.writeFile(action.path, action.content, action.encoding);
+        break;
+
+      case 'appendFile':
+        console.log(`➕ [COMPUTER-USE] Appending to file: ${action.path}`);
+        await capabilities.appendFile(action.path, action.content);
+        break;
+
+      case 'fileExists':
+        console.log(`🔍 [COMPUTER-USE] Checking file exists: ${action.path}`);
+        await capabilities.fileExists(action.path);
+        break;
+
+      case 'listDirectory':
+        console.log(`📁 [COMPUTER-USE] Listing directory: ${action.path}`);
+        await capabilities.listDirectory(action.path);
+        break;
+
+      case 'createDirectory':
+        console.log(`📂 [COMPUTER-USE] Creating directory: ${action.path}`);
+        await capabilities.createDirectory(action.path);
+        break;
+
+      case 'deleteFile':
+        console.log(`🗑️ [COMPUTER-USE] Deleting file: ${action.path}`);
+        await capabilities.deleteFile(action.path);
+        break;
+
+      case 'getFileStats':
+        console.log(`📊 [COMPUTER-USE] Getting file stats: ${action.path}`);
+        await capabilities.getFileStats(action.path);
         break;
 
       default:
@@ -904,6 +1027,433 @@ export class ComputerUseClient {
       type: 'action_complete',
       iteration
     }));
+  }
+
+  /**
+   * Execute automation using intent-driven approach (NEW)
+   * Iterates through plan steps, sending each intent to backend
+   * Backend returns actions to execute, frontend executes and sends results back
+   */
+  async executeWithIntents(
+    plan: any,
+    initialScreenshot: string | null,
+    context: any,
+    callbacks: ComputerUseCallbacks
+  ): Promise<void> {
+    this.goal = plan.goal || 'Execute automation plan';
+    this.context = context;
+    this.callbacks = callbacks;
+    this.initialScreenshot = initialScreenshot;
+    this.iteration = 0;
+
+    // Generate unique session ID
+    const sessionId = `intent-session-${Date.now()}`;
+    
+    // Initialize stored data for context passing between intents
+    const storedData: Record<string, any> = {};
+    let currentStepIndex = 0;
+
+    return new Promise((resolve, reject) => {
+      try {
+        console.log('🌐 [INTENT-MODE] Connecting to Intent WebSocket:', this.wsUrl);
+        this.ws = new WebSocket(this.wsUrl);
+
+        this.ws.onopen = () => {
+          console.log('✅ [INTENT-MODE] WebSocket connected');
+          
+          // Hide system cursor during automation
+          capabilities.hideSystemCursor();
+          
+          // Start executing first intent
+          this.executeNextIntent(plan, currentStepIndex, storedData, sessionId);
+        };
+
+        this.ws.onmessage = async (event) => {
+          try {
+            const message = JSON.parse(event.data);
+            console.log('📥 [INTENT-MODE] Received message:', message.type);
+
+            switch (message.type) {
+              case 'execute_action':
+                // Backend sends action to execute
+                // Handle both message.action and message.actionData (backend inconsistency)
+                const action = message.action || message.actionData;
+                
+                if (!action) {
+                  console.error('❌ [INTENT-MODE] No action data in message:', message);
+                  throw new Error('No action data in execute_action message');
+                }
+                
+                console.log('📦 [INTENT-MODE] Action data:', JSON.stringify(action, null, 2));
+                
+                // Log deterministic decisions (backend skipped LLM call)
+                if (action?.metadata?.deterministic) {
+                  console.log('⚡ [INTENT-MODE] Fast decision (deterministic):', action.type);
+                  console.log('💡 [INTENT-MODE] Reasoning:', action.reasoning);
+                } else {
+                  console.log('🎬 [INTENT-MODE] Executing action:', action?.type, 'for stepId:', message.stepId);
+                }
+                
+                await this.executeAction(action);
+                
+                // Capture new screenshot after action
+                const screenshot = await capabilities.captureScreenshot();
+                
+                // Send action complete with new screenshot and preserve stepId from backend
+                this.sendActionCompleteIntent(sessionId, screenshot, action, message.stepId);
+                break;
+
+              case 'intent_complete':
+                // Current intent completed successfully
+                console.log('✅ [INTENT-MODE] Intent complete:', message.data);
+                
+                // Store any output data from this intent
+                if (message.data?.outputData) {
+                  Object.assign(storedData, message.data.outputData);
+                }
+                
+                // Notify callback
+                this.callbacks.onAction?.(
+                  { type: 'intent_complete', reasoning: message.data?.reasoning },
+                  currentStepIndex
+                );
+                
+                // Move to next step
+                currentStepIndex++;
+                if (currentStepIndex < plan.steps.length) {
+                  await this.executeNextIntent(plan, currentStepIndex, storedData, sessionId);
+                } else {
+                  // All steps completed
+                  console.log('✅ [INTENT-MODE] All intents completed');
+                  this.callbacks.onComplete?.({ success: true });
+                  this.close();
+                  resolve();
+                }
+                break;
+
+              case 'intent_failed':
+                // Intent failed after retries
+                console.error('❌ [INTENT-MODE] Intent failed:', message.error);
+                this.callbacks.onError?.(message.error || 'Intent execution failed');
+                this.close();
+                reject(new Error(message.error || 'Intent execution failed'));
+                break;
+
+              case 'clarification_needed':
+                // Backend needs clarification
+                console.log('❓ [INTENT-MODE] Clarification needed:', message.questions);
+                
+                if (!this.callbacks.onClarificationNeeded) {
+                  this.callbacks.onError?.('Clarification needed but no callback registered');
+                  this.close();
+                  reject(new Error('Clarification needed but no callback registered'));
+                  return;
+                }
+
+                // Ask user for clarification
+                const answers = await this.callbacks.onClarificationNeeded(
+                  message.questions,
+                  currentStepIndex
+                );
+
+                // Send answers back
+                this.send({
+                  type: 'clarification_answer',
+                  sessionId,
+                  answers
+                });
+                break;
+
+              case 'paused':
+                console.log('⏸️ [INTENT-MODE] Automation paused');
+                this.callbacks.onStatus?.('Automation paused');
+                break;
+
+              case 'resumed':
+                console.log('▶️ [INTENT-MODE] Automation resumed');
+                this.callbacks.onStatus?.('Automation resumed');
+                break;
+
+              case 'stopped':
+                console.log('⏹️ [INTENT-MODE] Automation stopped');
+                this.callbacks.onComplete?.({ stopped: true });
+                this.close();
+                resolve();
+                break;
+
+              case 'error':
+                console.error('❌ [INTENT-MODE] Backend error:', message.error);
+                this.callbacks.onError?.(message.error);
+                this.close();
+                reject(new Error(message.error));
+                break;
+
+              default:
+                console.warn('⚠️ [INTENT-MODE] Unknown message type:', message.type);
+            }
+          } catch (error: any) {
+            console.error('❌ [INTENT-MODE] Error handling message:', error);
+            this.callbacks.onError?.(error.message);
+            reject(error);
+          }
+        };
+
+        this.ws.onerror = (error) => {
+          console.error('❌ [INTENT-MODE] WebSocket error:', error);
+          this.callbacks.onError?.('WebSocket connection error');
+          reject(error);
+        };
+
+        this.ws.onclose = () => {
+          console.log('🔌 [INTENT-MODE] WebSocket closed');
+        };
+      } catch (error: any) {
+        console.error('❌ [INTENT-MODE] Failed to connect:', error);
+        reject(error);
+      }
+    });
+  }
+
+  /**
+   * Execute next intent in plan
+   */
+  private async executeNextIntent(
+    plan: any,
+    stepIndex: number,
+    storedData: Record<string, any>,
+    sessionId: string
+  ): Promise<void> {
+    if (stepIndex >= plan.steps.length) {
+      console.log('✅ [INTENT-MODE] All steps completed');
+      this.callbacks.onComplete?.({ success: true });
+      this.close();
+      return;
+    }
+
+    const step = plan.steps[stepIndex];
+    console.log(`🎯 [INTENT-MODE] Executing step ${stepIndex + 1}/${plan.steps.length}: ${step.intent}`);
+
+    // Capture current screenshot
+    const screenshot = await capabilities.captureScreenshot();
+    
+    // Strip data URL prefix
+    let screenshotBase64 = screenshot;
+    if (screenshot.startsWith('data:')) {
+      const base64Index = screenshot.indexOf('base64,');
+      if (base64Index !== -1) {
+        screenshotBase64 = screenshot.substring(base64Index + 7);
+      }
+    }
+
+    // Get active window bounds for coordinate offset (CRITICAL)
+    const windowBounds = await this.getActiveWindowBounds();
+
+    // Build intent execution request
+    const request = {
+      intentType: step.intent,
+      stepData: {
+        id: step.id,
+        description: step.description,
+        target: step.target,
+        query: step.query,
+        element: step.element,
+        successCriteria: step.successCriteria,
+        maxAttempts: step.maxAttempts || 3,
+        notes: step.notes
+      },
+      context: {
+        screenshot: {
+          base64: screenshotBase64,
+          mimeType: 'image/png'
+        },
+        storedData, // Pass accumulated data
+        os: this.context.os,
+        userId: this.context.userId,
+        sessionId,
+        activeApp: this.activeApp || undefined,
+        activeUrl: this.context.activeUrl,
+        screenWidth: this.context.screenWidth,
+        screenHeight: this.context.screenHeight,
+        windowBounds // CRITICAL: For coordinate offset fix
+      },
+      userId: this.context.userId
+    };
+
+    // Send to backend
+    this.send({
+      type: 'execute_intent',
+      sessionId,
+      requestId: `step-${stepIndex}`,
+      data: request
+    });
+  }
+
+  /**
+   * Get active window bounds for coordinate offset
+   * CRITICAL: Fixes Vision API coordinate mismatch bug
+   */
+  private async getActiveWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | undefined> {
+    const ipcRenderer = (window as any).electron?.ipcRenderer;
+    if (!ipcRenderer) return undefined;
+
+    // Skip if no active app is set yet (e.g., before first focusApp action)
+    if (!this.activeApp) {
+      console.log('⏭️ [INTENT-MODE] Skipping window bounds - no active app set yet');
+      return undefined;
+    }
+
+    try {
+      const bounds = await ipcRenderer.invoke('automation:get-window-bounds', {
+        appName: this.activeApp
+      });
+      return bounds;
+    } catch (error) {
+      console.warn('⚠️ [INTENT-MODE] Could not get window bounds:', error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Send action complete message with screenshot (intent-driven mode)
+   */
+  private sendActionCompleteIntent(sessionId: string, screenshot: string, action: any, stepId: string): void {
+    // Strip data URL prefix
+    let screenshotBase64 = screenshot;
+    if (screenshot.startsWith('data:')) {
+      const base64Index = screenshot.indexOf('base64,');
+      if (base64Index !== -1) {
+        screenshotBase64 = screenshot.substring(base64Index + 7);
+      }
+    }
+
+    // Build detailed metadata for deterministic execution
+    const metadata: any = {
+      reasoning: action.reasoning,
+      timestamp: Date.now(),
+    };
+
+    // Add action-specific metadata for deterministic checks
+    switch (action.type) {
+      case 'findAndClick':
+        // CRITICAL: targetDescription and targetType enable deterministic checks
+        metadata.targetDescription = action.locator?.description || action.description || 'unknown';
+        metadata.targetType = action.locator?.strategy || 'unknown';
+        metadata.coordinates = action.coordinates;
+        metadata.usedVisionAPI = this.lastActionUsedVisionAPI;
+        break;
+
+      case 'typeText':
+        metadata.text = action.text;
+        metadata.textLength = action.text?.length || 0;
+        metadata.submit = action.submit;
+        // Check if this was generated content
+        if (action.metadata?.contentGenerated) {
+          metadata.contentGenerated = true;
+          metadata.contentLength = action.metadata.contentLength;
+          metadata.provider = action.metadata.provider;
+        }
+        break;
+
+      case 'focusApp':
+        metadata.appName = action.appName;
+        metadata.actualAppName = this.activeApp;
+        break;
+
+      case 'openUrl':
+        metadata.url = action.url;
+        break;
+
+      case 'pressHotkey':
+        metadata.keys = action.keys;
+        break;
+
+      case 'clickAt':
+        metadata.coordinates = action.coordinates;
+        break;
+
+      case 'scroll':
+        metadata.direction = action.direction;
+        metadata.amount = action.amount;
+        break;
+
+      case 'readFile':
+      case 'writeFile':
+      case 'appendFile':
+      case 'deleteFile':
+      case 'fileExists':
+      case 'getFileStats':
+        metadata.path = action.path;
+        if (action.type === 'writeFile' || action.type === 'appendFile') {
+          metadata.contentLength = action.content?.length || 0;
+        }
+        break;
+
+      case 'listDirectory':
+      case 'createDirectory':
+        metadata.path = action.path;
+        break;
+
+      default:
+        // Include any other metadata from the action
+        if (action.metadata) {
+          Object.assign(metadata, action.metadata);
+        }
+    }
+
+    // Check if action was deterministic (set by backend)
+    if (action.metadata?.deterministic) {
+      metadata.deterministic = true;
+    }
+
+    this.send({
+      type: 'action_complete',
+      sessionId,
+      stepId, // CRITICAL: Must match the stepId from execute_action message
+      actionResult: {
+        actionType: action.type,
+        success: true,
+        timestamp: Date.now(),
+        metadata
+      },
+      screenshot: {
+        base64: screenshotBase64,
+        mimeType: 'image/png'
+      }
+    });
+  }
+
+  /**
+   * Pause automation (intent-driven mode)
+   */
+  pause(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.send({
+        type: 'pause'
+      });
+    }
+  }
+
+  /**
+   * Resume automation (intent-driven mode)
+   */
+  resume(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.send({
+        type: 'resume'
+      });
+    }
+  }
+
+  /**
+   * Stop automation (intent-driven mode)
+   */
+  stop(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.send({
+        type: 'stop'
+      });
+    }
+    this.close();
   }
 
   /**

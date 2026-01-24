@@ -133,11 +133,11 @@ module.exports = async function executeCommand(state) {
           const intentContext = state.intentContext || { intent: intent.type, slots: {}, uiVariant: null };
           intentContext.slots = {
             ...intentContext.slots,
-            mode: 'computer-use-streaming',
+            mode: 'intent-driven',
             goal: commandMessage,
             screenshot: screenshot,
             backendUrl: process.env.BACKEND_URL || 'http://localhost:4000',
-            wsUrl: process.env.BACKEND_WS_URL || 'ws://localhost:4000/computer-use',
+            wsUrl: process.env.BACKEND_WS_URL || 'ws://localhost:4000/intent-use',
             apiKey: process.env.BIBSCRIP_API_KEY || 'test-api-key-123',
             context: {
               os: process.platform,
@@ -154,7 +154,7 @@ module.exports = async function executeCommand(state) {
           };
           state.intentContext = intentContext;
           
-          logger.debug('📦 [NODE:EXECUTE_COMMAND] Populated intentContext for Computer Use streaming', {
+          logger.debug('📦 [NODE:EXECUTE_COMMAND] Populated intentContext for intent-driven mode', {
             screenDimensions: `${screenWidth}x${screenHeight}`
           });
           

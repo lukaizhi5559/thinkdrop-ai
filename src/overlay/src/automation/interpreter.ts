@@ -644,7 +644,7 @@ export class PlanInterpreter {
   /**
    * Determine if a step needs verification
    */
-  private shouldVerifyStep(step: AutomationStep): boolean {
+  private shouldVerifyStep(_step: AutomationStep): boolean {
     // TEMPORARILY DISABLED: Verification is causing database pool exhaustion
     // due to hundreds of concurrent Vision API calls when steps fail/retry.
     // TODO: Re-enable with proper throttling/queueing mechanism

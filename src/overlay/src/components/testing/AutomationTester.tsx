@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Camera, Type, MousePointer, Eye, Play, X, CheckCircle } from 'lucide-react';
 import * as capabilities from '../../automation/capabilities';
 import * as nutjs from '../../automation/nutjs-detector';
@@ -29,7 +29,9 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [testInput, setTestInput] = useState('');
-  const [selectedTest, setSelectedTest] = useState<'ocr' | 'click' | 'type' | 'find' | 'verify'>('ocr');
+  const [selectedTest, setSelectedTest] = useState<'ocr' | 'click' | 'type' | 'find' | 'verify' | 'action' | 'omniparser'>('ocr');
+  const [actionJson, setActionJson] = useState('{\n  "type": "pressKey",\n  "key": "A",\n  "modifiers": ["CMD"]\n}');
+  const [omniparserResult, setOmniparserResult] = useState<any>(null);
 
   const captureAndAnalyze = async () => {
     setIsLoading(true);
@@ -504,6 +506,268 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
     }
   };
 
+  // Helper function to execute actions directly using capabilities (bypasses ComputerUseClient)
+  const executeActionDirect = async (action: any) => {
+    const { type } = action;
+    
+    switch (type) {
+      case 'pressKey':
+        console.log(`⌨️ [TESTER] Pressing key: ${action.key}${action.modifiers ? ' with ' + action.modifiers.join('+') : ''}`);
+        await nutjs.pressKey(action.key, action.modifiers || []);
+        break;
+        
+      case 'typeText':
+        console.log(`⌨️ [TESTER] Typing text: ${action.text}`);
+        await nutjs.typeText(action.text);
+        break;
+        
+      case 'findAndClick':
+        if (action.coordinates) {
+          const x = Math.round(action.coordinates.x);
+          const y = Math.round(action.coordinates.y);
+          console.log(`🖱️ [TESTER] Clicking at coordinates: (${x}, ${y})`);
+          
+          // Send ghost mouse for visual feedback
+          capabilities.sendGhostMouseMove(x, y);
+          await capabilities.wait(300);
+          capabilities.sendGhostMouseClick(x, y);
+          
+          // Perform actual click
+          const result = await nutjs.clickAtCoordinates(x, y);
+          console.log(`🖱️ [TESTER] Click result:`, result);
+          
+          if (!result.success) {
+            throw new Error(result.error || 'Click failed');
+          }
+          
+          // Wait for UI to respond
+          await capabilities.wait(500);
+        } else if (action.locator) {
+          console.log(`🔍 [TESTER] Finding and clicking element: ${action.locator}`);
+          const result = await capabilities.findAndClickElement(action.locator);
+          if (!result.success) {
+            throw new Error(result.error || 'Failed to find and click element');
+          }
+        }
+        break;
+        
+      case 'scroll':
+        console.log(`📜 [TESTER] Scrolling ${action.direction} by ${action.amount || 3}`);
+        await capabilities.scroll(action.amount || 3, action.direction);
+        break;
+        
+      case 'wait':
+        console.log(`⏱️ [TESTER] Waiting ${action.duration}ms`);
+        await capabilities.wait(action.duration);
+        break;
+        
+      case 'focusApp':
+        console.log(`🎯 [TESTER] Focusing app: ${action.appName}`);
+        await capabilities.focusApp(action.appName);
+        break;
+        
+      case 'openUrl':
+        console.log(`🌐 [TESTER] Opening URL: ${action.url}`);
+        await capabilities.openUrl(action.url);
+        break;
+        
+      default:
+        throw new Error(`Unknown action type: ${type}`);
+    }
+  };
+
+  const testOmniparser = async () => {
+    setIsLoading(true);
+    setTestResult(null);
+    setOmniparserResult(null);
+
+    try {
+      const ipcRenderer = (window as any).electron?.ipcRenderer;
+      if (ipcRenderer) {
+        console.log('👻 [TESTER] Hiding overlay');
+        ipcRenderer.send('intent-overlay:hide');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      console.log('📸 [TESTER] Capturing screenshot for OmniParser...');
+      const screenshot = await capabilities.captureScreenshot();
+      setScreenshot(screenshot);
+
+      console.log('🔍 [TESTER] Calling OmniParser API...');
+      
+      // Get auth token from localStorage (try both locations)
+      let token = localStorage.getItem('token') || localStorage.getItem('authToken');
+      
+      // If no token, try to get from environment or skip auth for testing
+      if (!token) {
+        console.warn('⚠️ [TESTER] No auth token found, attempting request without authentication');
+      }
+
+      // Strip data URL prefix if present (e.g., "data:image/png;base64,")
+      // The backend expects just the base64 string, not the full data URL
+      const base64Data = screenshot.replace(/^data:image\/\w+;base64,/, '');
+      console.log('📊 [TESTER] Screenshot size:', base64Data.length, 'bytes');
+
+      // Call OmniParser parse endpoint
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json'
+      };
+      
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch('http://localhost:4000/api/omniparser/parse', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          screenshot: {
+            base64: base64Data,
+            mimeType: 'image/png'
+          },
+          context: {
+            url: window.location.href,
+            screenWidth: window.screen.width,
+            screenHeight: window.screen.height
+          }
+        })
+      });
+
+      if (!response.ok) {
+        let errorMessage = `API error: ${response.status}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.message || errorData.error || errorMessage;
+          
+          // Provide helpful message for auth errors
+          if (response.status === 401 || response.status === 403) {
+            errorMessage = `Authentication required. Please either:\n1. Remove auth from /api/omniparser/parse endpoint\n2. Add a test token to localStorage\n3. Configure SKIP_AUTH=true in backend .env`;
+          }
+        } catch (e) {
+          // Failed to parse error response
+        }
+        throw new Error(errorMessage);
+      }
+
+      const result = await response.json();
+      
+      console.log('✅ [TESTER] OmniParser result:', result);
+      setOmniparserResult(result);
+
+      // Show overlay again
+      if (ipcRenderer) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        ipcRenderer.send('intent-overlay:show');
+      }
+
+      setTestResult({
+        success: true,
+        message: `Found ${result.metadata.totalElements} elements (${result.metadata.interactiveElements} interactive)`,
+        data: result.metadata
+      });
+    } catch (error: any) {
+      console.error('❌ [TESTER] OmniParser failed:', error);
+      
+      const ipcRenderer = (window as any).electron?.ipcRenderer;
+      if (ipcRenderer) {
+        ipcRenderer.send('intent-overlay:show');
+      }
+      
+      setTestResult({
+        success: false,
+        message: error.message || 'OmniParser test failed'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const testCustomAction = async () => {
+    if (!actionJson.trim()) {
+      setTestResult({ success: false, message: 'Please enter a JSON action' });
+      return;
+    }
+
+    setIsLoading(true);
+    setTestResult(null);
+
+    try {
+      // Parse the JSON action(s)
+      let actions;
+      try {
+        const parsed = JSON.parse(actionJson);
+        // Support both single action object and array of actions
+        actions = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (parseError: any) {
+        setTestResult({
+          success: false,
+          message: `Invalid JSON: ${parseError.message}`
+        });
+        setIsLoading(false);
+        return;
+      }
+
+      console.log(`🎬 [TESTER] Executing ${actions.length} action(s):`, actions);
+
+      const ipcRenderer = (window as any).electron?.ipcRenderer;
+      if (ipcRenderer) {
+        // Hide overlay to prevent interference
+        console.log('👻 [TESTER] Hiding overlay');
+        ipcRenderer.send('intent-overlay:hide');
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      // Countdown timer - give user time to focus on target window
+      console.log('⏱️ [TESTER] Starting 5 second countdown...');
+      for (let i = 5; i > 0; i--) {
+        setTestResult({
+          success: false,
+          message: `Focus on target window... executing in ${i} seconds`
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      
+      setTestResult({
+        success: false,
+        message: `Executing ${actions.length} action(s) now...`
+      });
+
+      // Execute all actions sequentially
+      for (let i = 0; i < actions.length; i++) {
+        const action = actions[i];
+        console.log(`🎬 [TESTER] Executing action ${i + 1}/${actions.length}:`, action);
+        await executeActionDirect(action);
+      }
+
+      // Show overlay again
+      if (ipcRenderer) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+        ipcRenderer.send('intent-overlay:show');
+      }
+
+      setTestResult({
+        success: true,
+        message: `${actions.length} action(s) executed successfully`,
+        data: actions
+      });
+    } catch (error: any) {
+      console.error('❌ [TESTER] Action failed:', error);
+      
+      // Show overlay again on error
+      const ipcRenderer = (window as any).electron?.ipcRenderer;
+      if (ipcRenderer) {
+        ipcRenderer.send('intent-overlay:show');
+      }
+      
+      setTestResult({
+        success: false,
+        message: error.message || 'Action execution failed'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const runTest = async () => {
     switch (selectedTest) {
       case 'ocr':
@@ -521,12 +785,20 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
       case 'verify':
         await testVerify();
         break;
+      case 'action':
+        await testCustomAction();
+        break;
+      case 'omniparser':
+        await testOmniparser();
+        break;
     }
   };
 
   return (
     <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-      <div className="bg-gray-900 rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col border border-gray-700">
+      <div 
+        className="bg-gray-900 rounded-xl shadow-2xl w-full max-w-6xl h-[70vh] flex flex-col border border-gray-700"
+      >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <div className="flex items-center gap-3">
@@ -542,11 +814,11 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4">
           {/* Test Selection */}
           <div className="bg-gray-800 rounded-lg p-4">
             <h3 className="text-sm font-medium text-gray-300 mb-3">Select Test</h3>
-            <div className="grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-7 gap-2">
               <button
                 onClick={() => setSelectedTest('ocr')}
                 className={`p-3 rounded-lg border transition-colors ${
@@ -602,11 +874,58 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
                 <CheckCircle className="w-4 h-4 mx-auto mb-1" />
                 <span className="text-xs">Verify Vision</span>
               </button>
+              <button
+                onClick={() => setSelectedTest('action')}
+                className={`p-3 rounded-lg border transition-colors ${
+                  selectedTest === 'action'
+                    ? 'bg-teal-600 border-teal-500 text-white'
+                    : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                <Play className="w-4 h-4 mx-auto mb-1" />
+                <span className="text-xs">JSON Action</span>
+              </button>
+              <button
+                onClick={() => setSelectedTest('omniparser')}
+                className={`p-3 rounded-lg border transition-colors ${
+                  selectedTest === 'omniparser'
+                    ? 'bg-teal-600 border-teal-500 text-white'
+                    : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                <Camera className="w-4 h-4 mx-auto mb-1" />
+                <span className="text-xs">OmniParser</span>
+              </button>
             </div>
           </div>
 
           {/* Test Input */}
-          {selectedTest !== 'ocr' && (
+          {selectedTest === 'omniparser' ? (
+            <div className="bg-gray-800 rounded-lg p-4">
+              <p className="text-sm text-gray-300">
+                📸 Click "Run Test" to capture a screenshot and analyze it with OmniParser.
+              </p>
+              <p className="mt-2 text-xs text-gray-400">
+                💡 This will detect all UI elements on the screen including text and interactive elements.
+              </p>
+            </div>
+          ) : selectedTest === 'action' ? (
+            <div className="bg-gray-800 rounded-lg p-4">
+              <label className="block text-sm font-medium text-gray-300 mb-2">
+                JSON Action
+              </label>
+              <textarea
+                value={actionJson}
+                onChange={(e) => setActionJson(e.target.value)}
+                placeholder='Paste your action JSON here, e.g.:\n{\n  "type": "pressKey",\n  "key": "A",\n  "modifiers": ["CMD"]\n}'
+                rows={12}
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 font-mono text-sm"
+              />
+              <p className="mt-2 text-xs text-gray-400">
+                💡 Tip: Paste any action JSON to test Nut.js directly. Examples: pressKey, typeText, findAndClick, scroll, etc.
+              </p>
+            </div>
+          ) : selectedTest !== 'ocr' && (
             <div className="bg-gray-800 rounded-lg p-4">
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 {selectedTest === 'type' ? 'Text to Type' : selectedTest === 'verify' ? 'What to Verify' : 'Element Description'}
@@ -668,6 +987,23 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
                   {JSON.stringify(testResult.data, null, 2)}
                 </pre>
               )}
+            </div>
+          )}
+
+          {/* OmniParser Results */}
+          {omniparserResult && (
+            <div className="bg-gray-800 rounded-lg p-4">
+              <h3 className="text-sm font-medium text-gray-300 mb-3">
+                OmniParser: {omniparserResult.metadata.totalElements} elements ({omniparserResult.metadata.interactiveElements} interactive)
+              </h3>
+              <div className="space-y-2 max-h-96 overflow-auto">
+                {omniparserResult.elements.slice(0, 30).map((el: any, i: number) => (
+                  <div key={i} className={`rounded p-2 ${el.interactivity ? 'bg-teal-900/30' : 'bg-gray-700'}`}>
+                    <p className="text-sm text-white">{el.content || `Element ${el.id}`}</p>
+                    <p className="text-xs text-gray-400">Type: {el.type} | {el.interactivity ? '✅ Interactive' : '⚪ Static'}</p>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

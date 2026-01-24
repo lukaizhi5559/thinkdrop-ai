@@ -108,16 +108,16 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const planId = slots.planId;
   const automationPlan = slots.automationPlan;
   
-  // Check if this is Computer Use streaming mode
+  // Intent-driven mode is now the default (replaced computer-use-streaming)
   const mode = slots.mode;
-  const isComputerUseMode = mode === 'computer-use-streaming';
+  const isIntentDrivenMode = mode === 'intent-driven' || mode === 'computer-use-streaming'; // Support both for transition
   const wsUrl = slots.wsUrl;
   const initialScreenshot = slots.screenshot;
   const context = slots.context;
   
   console.log('🔍 [AUTOMATE] Mode detection:', {
     mode,
-    isComputerUseMode,
+    isIntentDrivenMode,
     wsUrl,
     hasScreenshot: !!initialScreenshot,
     hasContext: !!context
@@ -222,7 +222,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       
       // CRITICAL: Only handle replan for static plan mode
       // Computer Use mode has its own handler in a separate useEffect (line 945)
-      if (!isComputerUseMode) {
+      if (!isIntentDrivenMode) {
         setIsReplanning(true);
         setStatus('error');
         setError(`Replanning with your answer: "${data.answer}"...`);
@@ -298,6 +298,9 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       }
       
       // Call /plan API
+      console.log('📡 [AUTOMATE] Calling plan API:', `${backendUrl}/api/nutjs/plan`);
+      console.log('📡 [AUTOMATE] Request body:', JSON.stringify(requestBody, null, 2));
+      
       const response = await fetch(`${backendUrl}/api/nutjs/plan`, {
         method: 'POST',
         headers: {
@@ -307,8 +310,12 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         body: JSON.stringify(requestBody)
       });
       
+      console.log('📡 [AUTOMATE] Response status:', response.status, response.statusText);
+      
       if (!response.ok) {
-        throw new Error(`Plan API failed: ${response.status} ${response.statusText}`);
+        const errorText = await response.text();
+        console.error('❌ [AUTOMATE] Plan API error response:', errorText);
+        throw new Error(`Plan API failed: ${response.status} ${response.statusText} - ${errorText}`);
       }
       
       const result = await response.json();
@@ -398,23 +405,23 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   useEffect(() => {
     // Debug: Log all conditions
     console.log('🔍 [AUTOMATE] useEffect check:', {
-      isComputerUseMode,
+      isIntentDrivenMode,
       automationStarted,
       isGeneratingPlan,
       generatedPlan: !!generatedPlan,
       planError: !!planError,
-      shouldGeneratePlan: isComputerUseMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError
+      shouldGeneratePlan: isIntentDrivenMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError
     });
     
-    // Computer Use mode: Generate plan first, then wait for user to start
-    if (isComputerUseMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError) {
-      console.log('🌐 [AUTOMATE] Computer Use mode - generating plan');
+    // Intent-driven mode: Generate plan first via /api/nutjs/plan, then execute via WebSocket
+    if (isIntentDrivenMode && !automationStarted && !isGeneratingPlan && !generatedPlan && !planError) {
+      console.log('🌐 [AUTOMATE] Intent-driven mode - generating plan via /api/nutjs/plan');
       generatePlan();
       return;
     }
     
-    // Static plan mode: use countdown
-    if (isComputerUseMode || countdown === null || countdown <= 0 || automationStarted) return;
+    // Static plan mode: use countdown (deprecated, keeping for backward compatibility)
+    if (isIntentDrivenMode || countdown === null || countdown <= 0 || automationStarted) return;
 
     const timer = setTimeout(() => {
       const newCountdown = countdown - 1;
@@ -436,11 +443,11 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     }, 1000);
 
     return () => clearTimeout(timer);
-  }, [countdown, automationStarted, isComputerUseMode]);
+  }, [countdown, automationStarted, isIntentDrivenMode]);
 
   // Execute Computer Use streaming mode
   useEffect(() => {
-    if (!isComputerUseMode || !automationStarted || !wsUrl) {
+    if (!isIntentDrivenMode || !automationStarted || !wsUrl) {
       return;
     }
 
@@ -573,10 +580,17 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
       }
     };
     
-    // Use executeWithPlan if plan is available (hybrid approach), otherwise use regular execute
-    const executePromise = generatedPlan 
-      ? client.executeWithPlan(generatedPlan, initialScreenshot, context, callbacks)
-      : client.execute(goal, initialScreenshot, context, callbacks);
+    // Intent-driven mode: Use executeWithIntents with the generated plan from /api/nutjs/plan
+    // The plan should have been generated before automationStarted was set to true
+    if (!generatedPlan) {
+      console.error('❌ [AUTOMATE] No plan available for execution');
+      setStatus('error');
+      setError('No plan generated. Please try again.');
+      return;
+    }
+    
+    console.log('🚀 [AUTOMATE] Executing plan with', generatedPlan.steps?.length || 0, 'steps');
+    const executePromise = client.executeWithIntents(generatedPlan, initialScreenshot, context, callbacks);
     
     executePromise.catch((err) => {
       console.error('❌ [AUTOMATE] Computer Use failed:', err);
@@ -595,21 +609,21 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         ipcRenderer.send('automation:ended');
       }
     };
-  }, [isComputerUseMode, automationStarted, wsUrl, goal, initialScreenshot, context]);
+  }, [isIntentDrivenMode, automationStarted, wsUrl, goal, initialScreenshot, context]);
 
-  // Execute static automation plan
+  // Execute static automation plan (deprecated - keeping for backward compatibility)
   useEffect(() => {
     console.log('🔍 [AUTOMATE] Execution useEffect triggered:', {
       hasAutomationPlan: !!automationPlan,
       stepsLength: steps.length,
       automationStarted,
       countdown,
-      isComputerUseMode
+      isIntentDrivenMode
     });
     
-    // Skip if Computer Use mode
-    if (isComputerUseMode) {
-      console.log('⏸️  [AUTOMATE] Skipping static plan - using Computer Use mode');
+    // Skip if intent-driven mode
+    if (isIntentDrivenMode) {
+      console.log('⏸️  [AUTOMATE] Skipping static plan - using intent-driven mode');
       return;
     }
     
@@ -1096,11 +1110,11 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         ipcRenderer.removeListener('automation:play', handlePlay);
       }
     };
-  }, [countdown, automationStarted, isComputerUseMode, isGeneratingPlan, generatedPlan, planError]);
+  }, [countdown, automationStarted, isIntentDrivenMode, isGeneratingPlan, generatedPlan, planError]);
 
   // Dynamically resize window to match actual content bounds (similar to PromptBar pattern)
   useEffect(() => {
-    if (!ipcRenderer || !contentRef.current || !isComputerUseMode) return;
+    if (!ipcRenderer || !contentRef.current || !isIntentDrivenMode) return;
 
     const resizeWindow = () => {
       if (!contentRef.current) return;
@@ -1124,7 +1138,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
     const timeoutId = setTimeout(resizeWindow, 150);
     
     return () => clearTimeout(timeoutId);
-  }, [isGeneratingPlan, generatedPlan, planError, automationStarted, isComputerUseMode, ipcRenderer]);
+  }, [isGeneratingPlan, generatedPlan, planError, automationStarted, isIntentDrivenMode, ipcRenderer]);
 
   // Listen for clarification answers from prompt bar
   useEffect(() => {
@@ -1329,12 +1343,12 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Hide when not visible
-  if (!isVisible && !isComputerUseMode) {
+  if (!isVisible && !isIntentDrivenMode) {
     return null;
   }
 
   // Show plan generation loading state
-  if (isComputerUseMode && isGeneratingPlan) {
+  if (isIntentDrivenMode && isGeneratingPlan) {
     return (
       <div className="fixed w-full h-full bottom-4">
         <div ref={contentRef} className="bg-gray-800/95 backdrop-blur-xl border border-blue-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -1351,7 +1365,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   }
 
   // Show plan preview with Start button
-  if (isComputerUseMode && generatedPlan && !automationStarted) {
+  if (isIntentDrivenMode && generatedPlan && !automationStarted) {
     return (
       <div className="fixed w-full h-full">
 
@@ -1420,7 +1434,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
   }
 
   // Show plan generation error
-  if (isComputerUseMode && planError && !automationStarted) {
+  if (isIntentDrivenMode && planError && !automationStarted) {
     return (
       <div className="fixed bottom-4 w-full h-full">
         <div ref={contentRef} className="bg-gray-800/95 backdrop-blur-xl border border-red-500/30 rounded-xl shadow-2xl p-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
@@ -1447,7 +1461,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
 
   // In Computer Use mode, always show compact floating card during automation
   // Entire window is click-through for visibility only - doesn't block automation
-  if (isComputerUseMode && status !== 'completed' && status !== 'error') {
+  if (isIntentDrivenMode && status !== 'completed' && status !== 'error') {
     return (
       <div className="fixed bottom-4 w-full h-full pointer-events-none">
         <div 
@@ -1607,18 +1621,18 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
         <div className="px-6 py-4 border-b border-gray-700/50 flex-shrink-0">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-gray-300">
-              {isComputerUseMode 
+              {isIntentDrivenMode 
                 ? `Action ${currentStepIndex + 1}` 
                 : `Step ${currentStepIndex + 1} of ${totalSteps}`
               }
             </span>
-            {!isComputerUseMode && (
+            {!isIntentDrivenMode && (
               <span className="text-sm text-gray-400">
                 {Math.round(progress)}%
               </span>
             )}
           </div>
-          {!isComputerUseMode && (
+          {!isIntentDrivenMode && (
             <div className="w-full bg-gray-800 rounded-full h-2 overflow-hidden">
               <div
                 className={`h-full transition-all duration-300 ${
@@ -1633,7 +1647,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
           )}
           
           {/* AI Reasoning Display (Computer Use mode) */}
-          {isComputerUseMode && currentReasoning && status === 'running' && (
+          {isIntentDrivenMode && currentReasoning && status === 'running' && (
             <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg animate-in fade-in duration-200">
               <div className="flex items-start gap-2">
                 <div className="flex-shrink-0 mt-0.5">
@@ -1661,7 +1675,7 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
               className="flex-1 flex items-center justify-between hover:bg-gray-800/50 transition-colors rounded px-2 py-1"
             >
               <span className="text-sm text-gray-300">
-                {showAllSteps ? 'Hide' : 'Show'} all {isComputerUseMode ? `actions (${actionHistory.length})` : `steps (${totalSteps})`}
+                {showAllSteps ? 'Hide' : 'Show'} all {isIntentDrivenMode ? `actions (${actionHistory.length})` : `steps (${totalSteps})`}
               </span>
               {showAllSteps ? (
                 <ChevronUp className="w-4 h-4 text-gray-400" />
@@ -1681,10 +1695,10 @@ export default function CommandAutomateProgress({ payload, onEvent }: CommandAut
             </button>
           </div>
 
-          {/* Action History (Computer Use Mode) or Steps List (Static Plan Mode) */}
+          {/* Action History (Intent-Driven Mode) or Steps List (Static Plan Mode) */}
           {showAllSteps && (
             <div className="px-6 pb-4">
-              {isComputerUseMode ? (
+              {isIntentDrivenMode ? (
                 /* Action History Display */
                 <div className="space-y-2">
                   {actionHistory.map((action) => (

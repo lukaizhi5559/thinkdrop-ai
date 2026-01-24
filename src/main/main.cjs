@@ -74,6 +74,7 @@ const { registerScreenIntelligenceHandlers } = require('./handlers/ipc-handlers-
 const { registerInsightHandlers } = require('./handlers/ipc-handlers-insight.cjs');
 const { setupInsightHistoryHandlers } = require('./handlers/ipc-handlers-insight-history.cjs');
 const { registerAutomationHandlers } = require('./handlers/ipc-handlers-automation.cjs');
+const { registerMultiDriverHandlers } = require('./handlers/ipc-handlers-multi-driver.cjs');
 
 const logger = require('./logger.cjs');
 // CoreAgent (AgentOrchestrator) will be imported dynamically due to ES module
@@ -373,15 +374,15 @@ function createIntentOverlay() {
   // Start with compact size - will resize dynamically based on content
   const initialWidth = Math.floor(width * 0.6); // 60% of screen width
   const initialHeight = 100; // Compact initial height to avoid blocking PromptBar
-  const promptBarClearance = 160; // Space needed to clear PromptBar
+  const promptBarClearance = 260; // Space needed to clear PromptBar
   const x = Math.floor((width - initialWidth) / 2); // Center horizontally
   const y = Math.floor(height - initialHeight - promptBarClearance); // Position above PromptBar
   
   intentOverlayWindow = new BrowserWindow({
     width: initialWidth,
     height: initialHeight,
-    minHeight: 100,
-    maxHeight: Math.floor(height * 0.5), // Max 50% of screen height
+    minHeight: 300,
+    maxHeight: Math.floor(height * 0.85), // Max 85% of screen height (increased for Automation Tester)
     // maxWidth: Math.floor(width * 0.9), // Max 90% of screen
     // maxHeight: Math.floor(height * 0.9),
     x,
@@ -779,6 +780,22 @@ app.whenReady().then(async () => {
     // Show and focus the intent overlay window (where the tester will appear)
     if (intentOverlayWindow && !intentOverlayWindow.isDestroyed()) {
       logger.debug('🧪 [TESTER] Showing intent overlay window');
+      
+      // Resize window to accommodate the Automation Tester modal
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.workAreaSize;
+      const testerWidth = Math.floor(width * 0.7); // 90% of screen width
+      const testerHeight = Math.floor(height * 0.6); // 80% of screen height
+      const x = Math.floor((width - testerWidth) / 2); // Center horizontally
+      const y = Math.floor((height - testerHeight) / 2); // Center vertically
+      
+      intentOverlayWindow.setBounds({
+        x,
+        y,
+        width: testerWidth,
+        height: testerHeight
+      });
+      
       intentOverlayWindow.show();
       intentOverlayWindow.focus();
       intentOverlayWindow.moveTop();
@@ -1349,6 +1366,11 @@ async function setupIPCHandlers() {
     };
     registerAutomationHandlers(mcpClient, overlayManager);
     logger.debug('✅ Automation handlers setup complete');
+    
+    // Initialize Multi-Driver automation handlers
+    logger.debug('🔧 Setting up Multi-Driver automation handlers...');
+    registerMultiDriverHandlers();
+    logger.debug('✅ Multi-Driver automation handlers setup complete');
     
     // Initialize MCP Private Mode handlers (NEW orchestrator)
     logger.debug('🔧 Setting up MCP Private Mode handlers...');

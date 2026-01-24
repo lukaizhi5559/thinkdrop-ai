@@ -377,8 +377,8 @@ class AgentOrchestrator {
         }
         // If command_automate generated a plan OR Computer Use mode, route to overlay system
         if (state.intent?.type === 'command_automate' && 
-            (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'computer-use-streaming')) {
-          logger.debug('🤖 [STATEGRAPH:COMMAND] Automation plan/Computer Use mode detected, routing to overlay system');
+                                 (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'intent-driven')) {
+          logger.debug('🤖 [STATEGRAPH:COMMAND] Automation plan/Intent-driven mode detected, routing to overlay system');
           return 'selectOverlayVariant';
         }
         // If command service already interpreted output, skip answer node
@@ -429,8 +429,8 @@ class AgentOrchestrator {
         
         // If command_automate generated a plan OR Computer Use mode, route to overlay system
         if (state.intent?.type === 'command_automate' && 
-            (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'computer-use-streaming')) {
-          logger.debug('🤖 [STATEGRAPH:PARALLEL_COMMAND] Automation plan/Computer Use mode detected, routing to overlay system');
+            (state.intentContext?.slots?.automationPlan || state.intentContext?.slots?.mode === 'intent-driven')) {
+          logger.debug('🤖 [STATEGRAPH:PARALLEL_COMMAND] Automation plan/Intent-driven mode detected, routing to overlay system');
           return 'selectOverlayVariant';
         }
         // If command already has an answer, skip LLM
