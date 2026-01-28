@@ -5,4 +5,13 @@ node_modules
 /data
 .idea
 /models
-/mcp-services
+/logs
+.service-pids
+.cleanup-backup
+.cleanup-backup-renderer
+#/mcp-services
+/node-mac-permissions
+/libnut-core
+/nut.js
+/src/main/native-hooks/bin
+/dist-renderer
