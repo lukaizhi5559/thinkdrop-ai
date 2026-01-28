@@ -12,6 +12,8 @@
 import { useState, useEffect } from 'react';
 import { sendGhostHoverData } from '../utils/overlayPosition';
 import { AlertCircle, X } from 'lucide-react';
+import { OverlayPayload } from '../../../types/overlay-intents';
+import PromptCaptureBox from './PromptCaptureBox';
 
 interface HighlightedItem {
   id: string;
@@ -31,7 +33,15 @@ interface BannerNotification {
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
-export default function GhostOverlay() {
+interface GhostOverlayProps {
+  onPromptSubmit?: (text: string) => void;
+  overlayPayload?: OverlayPayload | null;
+  onEvent?: (event: any) => void;
+}
+
+export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }: GhostOverlayProps) {
+  console.log('🎭 [GHOST_OVERLAY] Component rendering');
+  
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [targetPos, setTargetPos] = useState({ x: 0, y: 0 });
   const [isAutomating, setIsAutomating] = useState(false);
@@ -39,12 +49,73 @@ export default function GhostOverlay() {
   const [highlightedItems] = useState<HighlightedItem[]>([]); // For future use
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
   const [banner, setBanner] = useState<BannerNotification | null>(null);
+  
+  // Debug logging for overlayPayload changes
+  useEffect(() => {
+    console.log('🔄 [GHOST] overlayPayload changed:', overlayPayload ? {
+      uiVariant: overlayPayload.uiVariant,
+      intent: overlayPayload.intent,
+      hasSlots: !!overlayPayload.slots
+    } : 'null');
+  }, [overlayPayload]);
+  
+  const [promptCaptureActive, setPromptCaptureActive] = useState(false);
+  const [promptCaptureText, setPromptCaptureText] = useState('');
+  const [initialPromptText, setInitialPromptText] = useState('');
+  const [promptCaptureCursor, setPromptCaptureCursor] = useState({ x: 0, y: 0 });
+  const [promptCaptureSelection, setPromptCaptureSelection] = useState({ start: 0, end: 0 });
 
   // Log component mount
   useEffect(() => {
     console.log('🎨 [GHOST] GhostOverlay component mounted!');
     return () => console.log('👋 [GHOST] GhostOverlay component unmounted');
   }, []);
+
+  // Listen for prompt capture cancellation via native IPC
+  useEffect(() => {
+    if (!ipcRenderer) return;
+    
+    const handleCancellation = () => {
+      console.log('🚫 [GHOST] Received prompt capture cancellation via IPC');
+      
+      // Deactivate prompt capture
+      setPromptCaptureActive(false);
+      setPromptCaptureText('');
+      setInitialPromptText('');
+      setPromptCaptureSelection({ start: 0, end: 0 });
+      
+      // Always clear overlay payload to hide prompt capture box
+      if (onEvent) {
+        console.log('🧹 [GHOST] Clearing overlay payload via onEvent');
+        onEvent('overlay:clear');
+      }
+      
+      // Re-enable click-through
+      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
+    };
+    
+    ipcRenderer.on('prompt-capture-cancelled', handleCancellation);
+    console.log('✅ [GHOST] Registered prompt-capture-cancelled listener');
+    
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('prompt-capture-cancelled', handleCancellation);
+      }
+    };
+  }, [onEvent]);
+
+  // Log when overlayPayload changes
+  useEffect(() => {
+    if (overlayPayload) {
+      console.log('📦 [GHOST] Received overlayPayload:', {
+        intent: overlayPayload.intent,
+        uiVariant: overlayPayload.uiVariant,
+        hasSlots: !!overlayPayload.slots
+      });
+    } else {
+      console.log('📦 [GHOST] overlayPayload is null/undefined');
+    }
+  }, [overlayPayload]);
 
   // Listen for IPC command to move ghost mouse to specific coordinates (for testing)
   useEffect(() => {
@@ -100,6 +171,11 @@ export default function GhostOverlay() {
         setTargetPos({ x: e.clientX, y: e.clientY });
       }
       
+      // Update prompt capture cursor position in real-time
+      if (promptCaptureActive) {
+        setPromptCaptureCursor({ x: e.clientX, y: e.clientY });
+      }
+      
       // Check if hovering over any highlighted item
       const item = highlightedItems.find(
         (item) =>
@@ -127,7 +203,7 @@ export default function GhostOverlay() {
 
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [highlightedItems, hoveredItem]);
+  }, [highlightedItems, hoveredItem, promptCaptureActive]);
 
   // Listen for automation events
   useEffect(() => {
@@ -201,6 +277,108 @@ export default function GhostOverlay() {
     };
   }, []);
 
+  // Listen for prompt capture events
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handlePromptCaptureStarted = (_event: any, data: { initialText: string; cursorPosition: { x: number; y: number } }) => {
+      console.log('📝 [GHOST] Prompt capture started', data);
+      setPromptCaptureActive(true);
+      setPromptCaptureText(data.initialText || '');
+      setInitialPromptText(data.initialText || ''); // Store initial captured text separately
+      setPromptCaptureCursor(data.cursorPosition);
+      
+      // Disable click-through during prompt capture
+      ipcRenderer.send('ghost-overlay:set-clickthrough', false);
+    };
+
+    const handlePromptCaptureUpdate = (_event: any, data: { text: string; selectionStart?: number; selectionEnd?: number }) => {
+      console.log('📝 [GHOST] Prompt capture update', data.text.substring(0, 50));
+      setPromptCaptureText(data.text);
+      if (data.selectionStart !== undefined && data.selectionEnd !== undefined) {
+        setPromptCaptureSelection({ start: data.selectionStart, end: data.selectionEnd });
+      }
+    };
+
+    const handlePromptCaptureSubmit = (_event: any, data: { text: string }) => {
+      console.log('✅ [GHOST] Prompt capture submit', data.text.substring(0, 50));
+      
+      // Call the prop function to submit the query
+      if (onPromptSubmit) {
+        console.log('📤 [GHOST] Calling onPromptSubmit prop with text:', data.text.substring(0, 50));
+        onPromptSubmit(data.text);
+      } else {
+        console.warn('⚠️  [GHOST] onPromptSubmit prop not provided!');
+      }
+      
+      // After submission, reset to fresh state but keep active
+      // This allows user to immediately type a new query while results are showing
+      console.log('🔄 [GHOST] Resetting prompt capture to fresh state (keeping active)');
+      setPromptCaptureText('');
+      setInitialPromptText('');
+      setPromptCaptureSelection({ start: 0, end: 0 });
+      // Keep promptCaptureActive true so box stays visible and editable
+      // Keep click-through disabled so user can type new queries
+    };
+
+    const handlePromptCaptureCancelled = () => {
+      console.log('❌ [GHOST] Prompt capture cancelled');
+      setPromptCaptureActive(false);
+      setPromptCaptureText('');
+      setInitialPromptText(''); // Clear initial text
+      setPromptCaptureSelection({ start: 0, end: 0 });
+      
+      // Always clear overlay payload to hide prompt capture box
+      if (onEvent) {
+        console.log('🧹 [GHOST] Clearing overlay payload via onEvent');
+        onEvent('overlay:clear');
+      }
+      
+      // Re-enable click-through
+      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
+    };
+
+    ipcRenderer.on('prompt-capture-started', handlePromptCaptureStarted);
+    ipcRenderer.on('prompt-capture-update', handlePromptCaptureUpdate);
+    ipcRenderer.on('prompt-capture-submit', handlePromptCaptureSubmit);
+    ipcRenderer.on('prompt-capture-cancelled', handlePromptCaptureCancelled);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('prompt-capture-started', handlePromptCaptureStarted);
+        ipcRenderer.removeListener('prompt-capture-update', handlePromptCaptureUpdate);
+        ipcRenderer.removeListener('prompt-capture-submit', handlePromptCaptureSubmit);
+        ipcRenderer.removeListener('prompt-capture-cancelled', handlePromptCaptureCancelled);
+      }
+    };
+  }, [onPromptSubmit, onEvent]);
+
+  // Listen for ESC key to close/dismiss the prompt capture box
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && promptCaptureActive) {
+        console.log('⌨️  [GHOST] ESC pressed - closing prompt capture box');
+        setPromptCaptureActive(false);
+        setPromptCaptureText('');
+        setInitialPromptText('');
+        setPromptCaptureSelection({ start: 0, end: 0 });
+        
+        // Clear overlay payload via onEvent to trigger click-through re-enable
+        if (onEvent) {
+          onEvent('overlay:clear');
+        }
+        
+        // Re-enable click-through
+        if (ipcRenderer) {
+          ipcRenderer.send('ghost-overlay:set-clickthrough', true);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [promptCaptureActive, onEvent]);
+
   const handleCloseBanner = () => {
     console.log('[GhostOverlay] Close banner clicked');
     setBanner(null);
@@ -228,6 +406,16 @@ export default function GhostOverlay() {
 
   return (
     <div className="w-full h-full pointer-events-none">
+      {/* Prompt Capture Box - now shows thinking state and results inline */}
+      <PromptCaptureBox
+        text={promptCaptureText}
+        cursorPosition={promptCaptureCursor}
+        isActive={promptCaptureActive}
+        initialText={initialPromptText}
+        selectionStart={promptCaptureSelection.start}
+        selectionEnd={promptCaptureSelection.end}
+      />
+
       {/* Banner Notification */}
       {banner && (
         <div 

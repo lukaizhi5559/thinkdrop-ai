@@ -12,6 +12,7 @@ const logger = require('../logger.cjs');
 let ghostWindow = null;   // Full-screen click-through window for ghost mouse & visual cues
 let promptWindow = null;  // Small interactive window for prompt bar
 let intentWindow = null;  // Dynamic interactive window for intent UIs
+let resultsWindow = null; // Clean results window styled like PromptCaptureBox
 let chatWindow = null;    // Main chat window (overlayWindow)
 let orchestrator = null;
 
@@ -45,6 +46,14 @@ let automationState = {
   isRunning: false
 };
 
+// General results state (for prompt capture results window)
+let resultsState = {
+  hasResults: false
+};
+
+// Online mode (Live Mode) state - source of truth in main process
+let onlineModeState = false;
+
 // Toggle lock to prevent rapid successive toggles
 let chatToggleLock = false;
 
@@ -60,6 +69,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   if (windows.ghost) ghostWindow = windows.ghost;
   if (windows.prompt) promptWindow = windows.prompt;
   if (windows.intent) intentWindow = windows.intent;
+  if (windows.results) resultsWindow = windows.results;
   if (windows.chat) chatWindow = windows.chat;
   
   // NOTE: Web search requests now handled by private-mode:process with overlayMode flag
@@ -151,6 +161,32 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
       logger.warn('⚠️  [OVERLAY:IPC] Prompt window not available to toggle connection');
     }
   });
+
+  // Online mode (Live Mode): set + broadcast to all overlay windows
+  ipcMain.on('online-mode:set', (_event, enabled) => {
+    onlineModeState = !!enabled;
+    logger.debug(`🌐 [OVERLAY:IPC] Online mode set to: ${onlineModeState}`);
+
+    const broadcast = (win) => {
+      if (win && !win.isDestroyed()) {
+        logger.debug(`🌐 [OVERLAY:IPC] Broadcasting online-mode:changed (${onlineModeState}) to window`);
+        win.webContents.send('online-mode:changed', onlineModeState);
+      } else {
+        logger.debug(`🌐 [OVERLAY:IPC] Skipping broadcast (window missing or destroyed)`);
+      }
+    };
+
+    broadcast(promptWindow);
+    broadcast(ghostWindow);
+    broadcast(intentWindow);
+    broadcast(chatWindow);
+  });
+
+  // Online mode (Live Mode): get current state
+  ipcMain.handle('online-mode:get', async () => {
+    logger.debug(`🌐 [OVERLAY:IPC] online-mode:get -> ${onlineModeState}`);
+    return { enabled: onlineModeState };
+  });
   
   // Handle mouse event forwarding control
   ipcMain.on('overlay:set-ignore-mouse-events', (event, ignore, options) => {
@@ -169,6 +205,42 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     
     logger.debug(`🖱️  [OVERLAY:IPC] Setting ghost window click-through: ${clickthrough}`);
     ghostWindow.setIgnoreMouseEvents(clickthrough, { forward: true });
+  });
+
+  // Handle positioning results window at prompt capture box location
+  ipcMain.on('prompt-capture:set-position', (event, { x, y, width, height }) => {
+    if (!resultsWindow || resultsWindow.isDestroyed()) {
+      logger.warn('⚠️  [OVERLAY:IPC] Results window not available for positioning');
+      return;
+    }
+    
+    logger.debug(`📍 [OVERLAY:IPC] Positioning results window at (${x}, ${y}) with size ${width}x${height}`);
+    
+    // Set position first, then show window to avoid flicker at (0,0)
+    resultsWindow.setBounds({ x, y, width, height });
+    
+    // Show window after positioning if it's not visible
+    if (!resultsWindow.isVisible()) {
+      resultsWindow.show();
+      logger.debug('👁️  [OVERLAY:IPC] Showing results window after positioning');
+    }
+  });
+
+  // Handle closing results window
+  ipcMain.on('results-window:close', () => {
+    if (resultsWindow && !resultsWindow.isDestroyed()) {
+      logger.debug('❌ [OVERLAY:IPC] Closing results window');
+      resultsWindow.hide();
+      
+      // Clear results state
+      resultsState.hasResults = false;
+      
+      // Clear overlay state in ghost window
+      if (ghostWindow && !ghostWindow.isDestroyed()) {
+        logger.debug('🧹 [OVERLAY:IPC] Clearing overlay state in ghost window');
+        ghostWindow.webContents.send('overlay:update', null);
+      }
+    }
   });
 
   // Forward automation events to ghost window for visual effects
@@ -330,48 +402,77 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
 }
 
 /**
- * Send overlay payload to intent window (for interactive results display)
+ * Send overlay payload to ghost window (new floating results) and intent window (legacy)
  * @param {object} payload - Overlay payload from graph
  */
 function sendOverlayUpdate(payload) {
-  if (!intentWindow || intentWindow.isDestroyed()) {
-    logger.warn('⚠️  [OVERLAY:IPC] No intent window available for update');
-    return;
-  }
-  
-  logger.debug('📤 [OVERLAY:IPC] Sending overlay update to intent window:', {
+  logger.debug('📤 [OVERLAY:IPC] Sending overlay update:', {
     intent: payload.intent,
     uiVariant: payload.uiVariant,
     conversationId: payload.conversationId
   });
   
-  // If this is a web search or question result, notify PromptBar
-  if ((payload.intent === 'web_search' || payload.intent === 'question') && payload.uiVariant === 'results') {
-    notifyWebSearchResults();
+  // NEW: Send to ghost window for floating results display
+  logger.debug('🔍 [OVERLAY:IPC] Ghost window check:', {
+    exists: !!ghostWindow,
+    isDestroyed: ghostWindow ? ghostWindow.isDestroyed() : 'N/A',
+    hasWebContents: ghostWindow ? !!ghostWindow.webContents : 'N/A'
+  });
+  
+  if (ghostWindow && !ghostWindow.isDestroyed()) {
+    logger.debug('📤 [OVERLAY:IPC] Sending to ghost window...');
+    
+    // SOLUTION: Temporarily disable click-through to allow IPC, then re-enable
+    try {
+      // 1. Disable click-through temporarily
+      ghostWindow.setIgnoreMouseEvents(false);
+      logger.debug('� [OVERLAY:IPC] Temporarily disabled click-through for IPC');
+      
+      // 2. Send IPC event normally (Electron's native, reliable IPC)
+      ghostWindow.webContents.send('overlay:update', payload);
+      logger.debug('✅ [OVERLAY:IPC] Sent overlay:update via native IPC');
+      
+      // 3. Re-enable click-through immediately (next tick to ensure IPC is sent)
+      setImmediate(() => {
+        if (ghostWindow && !ghostWindow.isDestroyed()) {
+          ghostWindow.setIgnoreMouseEvents(true, { forward: true });
+          logger.debug('🔒 [OVERLAY:IPC] Re-enabled click-through');
+        }
+      });
+    } catch (err) {
+      logger.error('❌ [OVERLAY:IPC] Failed to send to ghost window:', err);
+      // Ensure click-through is restored even on error
+      if (ghostWindow && !ghostWindow.isDestroyed()) {
+        ghostWindow.setIgnoreMouseEvents(true, { forward: true });
+      }
+    }
+  } else {
+    logger.warn('⚠️  [OVERLAY:IPC] Ghost window not available for update');
   }
   
-  // If this is a screen intelligence result, notify PromptBar
-  if (payload.intent === 'screen_intelligence' && payload.uiVariant === 'results') {
-    notifyScreenIntelligenceResults();
+  // Send results to results window (clean, styled like PromptCaptureBox)
+  if (resultsWindow && !resultsWindow.isDestroyed() && payload.uiVariant === 'results') {
+    logger.debug('📤 [OVERLAY:IPC] Sending results to results window');
+    
+    // Mark that we have results
+    resultsState.hasResults = true;
+    
+    // Position will be set by prompt-capture:set-position IPC event from ghost window
+    // Don't show window here - let the position handler show it after positioning
+    
+    resultsWindow.webContents.send('overlay:update', payload);
+    
+    // Send prompt text to results window for header display
+    // Extract from slots.subject or use a default
+    const promptText = payload.slots?.subject || payload.slots?.query || 'Results';
+    resultsWindow.webContents.send('results-window:set-prompt', promptText);
+    logger.debug('📝 [OVERLAY:IPC] Sent prompt text to results window:', promptText);
+    
+    // Notify PromptBar based on intent
+    if (payload.intent === 'screen_intelligence') {
+      notifyScreenIntelligenceResults();
+    }
   }
-  
-  // If this is a command execution result, notify PromptBar
-  if ((payload.intent === 'command_execute' || payload.intent === 'command_guide' || payload.intent === 'command_automate') && payload.uiVariant === 'results') {
-    notifyCommandExecuteResults();
-  }
-  
-  // If this is an automation progress, notify PromptBar
-  if (payload.intent === 'command_automate' && payload.uiVariant === 'automation_progress') {
-    notifyAutomationProgress();
-  }
-  
-  // Show the intent window when sending payload
-  if (!intentWindow.isVisible()) {
-    intentWindow.show();
-    logger.debug('👁️  [OVERLAY:IPC] Showing intent window');
-  }
-  
-  intentWindow.webContents.send('overlay:update', payload);
 }
 
 /**
@@ -763,6 +864,35 @@ function isChatWindowVisible() {
   return chatWindowState.isVisible;
 }
 
+function getResultsWindow() {
+  return resultsWindow;
+}
+
+function getGhostWindow() {
+  return ghostWindow;
+}
+
+function hasResults() {
+  return resultsState.hasResults;
+}
+
+function setOnlineMode(enabled) {
+  onlineModeState = !!enabled;
+  logger.debug(`🌐 [OVERLAY:IPC] Online mode programmatically set to: ${onlineModeState}`);
+
+  const broadcast = (win) => {
+    if (win && !win.isDestroyed()) {
+      logger.debug(`🌐 [OVERLAY:IPC] Broadcasting online-mode:changed (${onlineModeState}) to window`);
+      win.webContents.send('online-mode:changed', onlineModeState);
+    }
+  };
+
+  broadcast(promptWindow);
+  broadcast(ghostWindow);
+  broadcast(intentWindow);
+  broadcast(chatWindow);
+}
+
 module.exports = {
   initializeOverlayIPC,
   sendOverlayUpdate,
@@ -770,5 +900,9 @@ module.exports = {
   notifyScreenIntelligenceResults,
   notifyCommandExecuteResults,
   isOverlayReady,
-  isChatWindowVisible
+  isChatWindowVisible,
+  getResultsWindow,
+  getGhostWindow,
+  hasResults,
+  setOnlineMode
 };

@@ -527,14 +527,14 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
           const y = Math.round(action.coordinates.y);
           console.log(`🖱️ [TESTER] Clicking at coordinates: (${x}, ${y})`);
           
+          // Perform actual click
+          const result = await nutjs.clickAtCoordinates(x, y);
+          console.log(`🖱️ [TESTER] Click result:`, result);
+
           // Send ghost mouse for visual feedback
           capabilities.sendGhostMouseMove(x, y);
           await capabilities.wait(300);
           capabilities.sendGhostMouseClick(x, y);
-          
-          // Perform actual click
-          const result = await nutjs.clickAtCoordinates(x, y);
-          console.log(`🖱️ [TESTER] Click result:`, result);
           
           if (!result.success) {
             throw new Error(result.error || 'Click failed');
@@ -718,14 +718,14 @@ export default function AutomationTester({ onClose }: AutomationTesterProps) {
       }
 
       // Countdown timer - give user time to focus on target window
-      console.log('⏱️ [TESTER] Starting 5 second countdown...');
-      for (let i = 5; i > 0; i--) {
-        setTestResult({
-          success: false,
-          message: `Focus on target window... executing in ${i} seconds`
-        });
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+      // console.log('⏱️ [TESTER] Starting 5 second countdown...');
+      // for (let i = 5; i > 0; i--) {
+      //   setTestResult({
+      //     success: false,
+      //     message: `Focus on target window... executing in ${i} seconds`
+      //   });
+      //   await new Promise(resolve => setTimeout(resolve, 1000));
+      // }
       
       setTestResult({
         success: false,

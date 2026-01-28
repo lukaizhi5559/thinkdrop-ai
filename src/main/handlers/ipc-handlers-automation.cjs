@@ -8,13 +8,27 @@
 const { ipcMain, shell } = require('electron');
 const logger = require('../logger.cjs');
 
-// Try to load libnut for native automation (built from source)
-let libnut = null;
-try {
-  libnut = require('libnut');
-  logger.info('✅ [IPC:AUTOMATION] libnut loaded successfully - native automation enabled');
-} catch (error) {
-  logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, falling back to MCP:', error.message);
+// Load @nut-tree-fork/nut-js for native automation
+// We'll load it lazily when needed since it's an ESM module
+let nutjs = null;
+let nutjsLoading = null;
+
+async function getNutJs() {
+  if (nutjs) return nutjs;
+  if (nutjsLoading) return nutjsLoading;
+  
+  nutjsLoading = import('@nut-tree-fork/nut-js')
+    .then(module => {
+      nutjs = module;
+      logger.info('✅ [IPC:AUTOMATION] @nut-tree-fork/nut-js loaded successfully - native automation enabled');
+      return nutjs;
+    })
+    .catch(error => {
+      logger.warn('⚠️ [IPC:AUTOMATION] @nut-tree-fork/nut-js not available:', error.message);
+      throw error;
+    });
+  
+  return nutjsLoading;
 }
 
 // We'll use the command service via MCP for actual NutJS execution
@@ -168,28 +182,29 @@ function registerAutomationHandlers(client, overlay = null) {
             // 3. It launches apps if not running
             // 4. It works even with modal dialogs open
             
-            if (!libnut) {
-              throw new Error('libnut not available for keyboard automation');
-            }
+            // Load nutjs module
+            const nutjsModule = await getNutJs();
             
             // Open Spotlight (Cmd+Space)
-            libnut.keyTap('space', ['command']);
+            const { keyboard, Key } = nutjsModule;
+            await keyboard.pressKey(Key.LeftCmd);
+            await keyboard.type(Key.Space);
+            await keyboard.releaseKey(Key.LeftCmd);
             await new Promise(resolve => setTimeout(resolve, 300));
             
             // Type app name
-            for (const char of appName) {
-              libnut.typeString(char);
-              await new Promise(resolve => setTimeout(resolve, 20));
-            }
+            const { keyboard: kb } = nutjsModule;
+            await kb.type(appName);
             await new Promise(resolve => setTimeout(resolve, 200));
             
             // Press Enter to launch/focus
-            libnut.keyTap('enter');
+            const { keyboard: kbd, Key: K } = nutjsModule;
+            await kbd.type(K.Enter);
             
             // CRITICAL: Close Spotlight explicitly to prevent interference with subsequent actions
             // Spotlight can stay open briefly after Enter, causing next keypresses to go to Spotlight
             await new Promise(resolve => setTimeout(resolve, 300));
-            libnut.keyTap('escape');
+            await kbd.type(K.Escape);
             
             // Wait for app to launch and focus
             const waitTime = attempt === 1 ? 800 : 600;
@@ -238,10 +253,12 @@ function registerAutomationHandlers(client, overlay = null) {
         // For Windows, use Windows Search (Win key)
         logger.info(`🔍 [IPC:AUTOMATION] Using Windows Search to focus "${appName}"`);
         
-        if (!libnut) {
+        try {
+          await getNutJs();
+        } catch (error) {
           event.reply('automation:focus-app:result', { 
             success: false, 
-            error: 'libnut not available for keyboard automation' 
+            error: '@nut-tree-fork/nut-js not available for keyboard automation' 
           });
           return;
         }
@@ -254,23 +271,22 @@ function registerAutomationHandlers(client, overlay = null) {
           
           try {
             // Press Win key to open Windows Search
-            libnut.keyTap('command'); // On Windows, 'command' maps to Win key
+            const nutjsWin = await getNutJs();
+            const { keyboard: kbWin, Key: KeyWin } = nutjsWin;
+            await kbWin.type(KeyWin.LeftSuper); // Win key
             await new Promise(resolve => setTimeout(resolve, 400));
             
             // Type app name or file name
-            for (const char of appName) {
-              libnut.typeString(char);
-              await new Promise(resolve => setTimeout(resolve, 20));
-            }
+            await kbWin.type(appName);
             await new Promise(resolve => setTimeout(resolve, 300));
             
             // Press Enter to launch/focus
-            libnut.keyTap('enter');
+            await kbWin.type(KeyWin.Enter);
             
             // CRITICAL: Close Windows Search explicitly to prevent interference
             // Windows Search can stay open briefly after Enter
             await new Promise(resolve => setTimeout(resolve, 300));
-            libnut.keyTap('escape'); // Close Windows Search
+            await kbWin.type(KeyWin.Escape); // Close Windows Search
             
             // Wait for app/file to launch and focus
             const waitTime = attempt === 1 ? 1000 : 800;
@@ -557,10 +573,12 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('automation:fullscreen', async (event) => {
     logger.info('🖥️ [IPC:AUTOMATION] Fullscreen requested');
     
-    if (!libnut) {
+    try {
+      await getNutJs();
+    } catch (error) {
       event.reply('automation:fullscreen:result', { 
         success: false, 
-        error: 'libnut not available' 
+        error: '@nut-tree-fork/nut-js not available' 
       });
       return;
     }
@@ -570,13 +588,16 @@ function registerAutomationHandlers(client, overlay = null) {
       
       // macOS: Ctrl+Cmd+F for presentation mode (fullscreen without menubar)
       // Windows/Linux: F11 for fullscreen
+      const nutjsFS = await getNutJs();
+      const { keyboard: kbFS, Key: KeyFS } = nutjsFS;
       if (platform === 'darwin') {
         logger.debug('🖥️ [IPC:AUTOMATION] Pressing Ctrl+Cmd+F for macOS presentation mode');
-        // Use keyTap with modifiers array (same format as native-hotkey handler)
-        libnut.keyTap('f', ['control', 'command']);
+        await kbFS.pressKey(KeyFS.LeftControl, KeyFS.LeftCmd);
+        await kbFS.type(KeyFS.F);
+        await kbFS.releaseKey(KeyFS.LeftControl, KeyFS.LeftCmd);
       } else {
         logger.debug('🖥️ [IPC:AUTOMATION] Pressing F11 for Windows/Linux fullscreen');
-        libnut.keyTap('f11');
+        await kbFS.type(KeyFS.F11);
       }
       
       logger.info('✅ [IPC:AUTOMATION] Fullscreen hotkey sent successfully');
@@ -596,8 +617,10 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('automation:click', async (event, { x, y }) => {
     logger.info(`🖱️ [IPC:AUTOMATION:NATIVE] Click requested at (${x}, ${y})`);
     
-    if (!libnut) {
-      logger.error('❌ [IPC:AUTOMATION:NATIVE] libnut not available');
+    try {
+      await getNutJs();
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION:NATIVE] @nut-tree-fork/nut-js not available');
       event.reply('automation:click:result', { 
         success: false, 
         error: 'libnut not available' 
@@ -621,14 +644,16 @@ function registerAutomationHandlers(client, overlay = null) {
       
       // Move mouse to target position
       logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Moving mouse to (${x}, ${y})`);
-      libnut.moveMouse(x, y);
+      const nutjsClick = await getNutJs();
+      const { mouse } = nutjsClick;
+      await mouse.setPosition({ x, y });
       
       // Small delay to ensure mouse movement completes
       await new Promise(resolve => setTimeout(resolve, 50));
       
       // Click at the position
       logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Clicking at (${x}, ${y})`);
-      libnut.mouseClick();
+      await mouse.leftClick();
       
       logger.info(`✅ [IPC:AUTOMATION:NATIVE] Click successful at (${x}, ${y})`);
       event.reply('automation:click:result', { success: true });
@@ -1587,14 +1612,11 @@ function registerAutomationHandlers(client, overlay = null) {
    */
   
   // Get current mouse position
-  ipcMain.on('automation:get-mouse-pos', (event) => {
-    if (!libnut) {
-      event.reply('automation:get-mouse-pos:result', { x: 0, y: 0 });
-      return;
-    }
-    
+  ipcMain.on('automation:get-mouse-pos', async (event) => {
     try {
-      const pos = libnut.getMousePos();
+      const nutjsPos = await getNutJs();
+      const { mouse: mousePos } = nutjsPos;
+      const pos = await mousePos.getPosition();
       event.reply('automation:get-mouse-pos:result', pos);
     } catch (error) {
       logger.error('❌ [IPC:AUTOMATION:NATIVE] Get mouse pos error:', error.message);
@@ -1606,23 +1628,27 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('automation:native-click', async (event, { x, y }) => {
     logger.debug(`🖱️ [IPC:AUTOMATION:NATIVE] Click at (${x}, ${y})`);
     
-    if (!libnut) {
+    try {
+      await getNutJs();
+    } catch (error) {
       event.reply('automation:native-click:result', { 
         success: false, 
-        error: 'libnut not available' 
+        error: '@nut-tree-fork/nut-js not available' 
       });
       return;
     }
     
     try {
       // Move mouse to target position
-      libnut.moveMouse(x, y);
+      const nutjsMV = await getNutJs();
+      const { mouse: mouseMV } = nutjsMV;
+      await mouseMV.setPosition({ x, y });
       
       // Wait longer to ensure mouse position is registered
       await new Promise(resolve => setTimeout(resolve, 150));
       
       // Perform the click
-      libnut.mouseClick();
+      await mouseMV.leftClick();
       
       // Small delay after click to ensure it registers
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -1644,8 +1670,10 @@ function registerAutomationHandlers(client, overlay = null) {
     logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text to type: "${text}"`);
     logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text length: ${text.length} characters`);
     
-    if (!libnut) {
-      logger.error(`❌ [IPC:AUTOMATION:NATIVE] libnut not available!`);
+    try {
+      await getNutJs();
+    } catch (error) {
+      logger.error(`❌ [IPC:AUTOMATION:NATIVE] @nut-tree-fork/nut-js not available!`);
       event.reply('automation:native-type:result', { 
         success: false, 
         error: 'libnut not available' 
@@ -1669,9 +1697,11 @@ function registerAutomationHandlers(client, overlay = null) {
       // like Spotlight on macOS. The search field is already focused after opening with Cmd+Space.
       // Clicking at the current mouse position can close Spotlight or move focus away.
       
-      logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] About to call libnut.typeString("${text}")`);
-      libnut.typeString(text);
-      logger.info(`✅ [IPC:AUTOMATION:NATIVE] libnut.typeString() call completed`);
+      logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] About to type text: "${text}"`);
+      const nutjsType = await getNutJs();
+      const { keyboard: kbType } = nutjsType;
+      await kbType.type(text);
+      logger.info(`✅ [IPC:AUTOMATION:NATIVE] Text typing completed`);
       
       logger.info(`✅ [IPC:AUTOMATION:NATIVE] ========== TYPE TEXT SUCCESS ==========`);
       event.reply('automation:native-type:result', { success: true });
@@ -1691,10 +1721,12 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('automation:native-hotkey', async (event, { key, modifiers }) => {
     logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Hotkey: ${modifiers?.join('+')}+${key}`);
     
-    if (!libnut) {
+    try {
+      await getNutJs();
+    } catch (error) {
       event.reply('automation:native-hotkey:result', { 
         success: false, 
-        error: 'libnut not available' 
+        error: '@nut-tree-fork/nut-js not available' 
       });
       return;
     }
@@ -1749,10 +1781,27 @@ function registerAutomationHandlers(client, overlay = null) {
       logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Key: "${key}" -> "${libnutKey}", Modifiers: [${mods.join(', ')}]`);
       
       // Press the key with modifiers
+      const nutjsHK = await getNutJs();
+      const { keyboard: kbHK, Key: KeyHK } = nutjsHK;
       if (mods.length > 0) {
-        libnut.keyTap(libnutKey, mods);
+        // Map modifier strings to Key constants
+        const modKeys = mods.map(m => {
+          if (m === 'command' || m === 'cmd') return KeyHK.LeftCmd;
+          if (m === 'control' || m === 'ctrl') return KeyHK.LeftControl;
+          if (m === 'shift') return KeyHK.LeftShift;
+          if (m === 'alt' || m === 'option') return KeyHK.LeftAlt;
+          return null;
+        }).filter(k => k !== null);
+        
+        for (const modKey of modKeys) {
+          await kbHK.pressKey(modKey);
+        }
+        await kbHK.type(libnutKey);
+        for (const modKey of modKeys.reverse()) {
+          await kbHK.releaseKey(modKey);
+        }
       } else {
-        libnut.keyTap(libnutKey);
+        await kbHK.type(libnutKey);
       }
       
       logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Hotkey pressed successfully`);
@@ -1771,17 +1820,21 @@ function registerAutomationHandlers(client, overlay = null) {
   ipcMain.on('automation:native-test', async (event) => {
     logger.info('🧪 [IPC:AUTOMATION:NATIVE] Running native automation test');
     
-    if (!libnut) {
+    try {
+      await getNutJs();
+    } catch (error) {
       event.reply('automation:native-test:result', { 
         success: false, 
-        error: 'libnut not available' 
+        error: '@nut-tree-fork/nut-js not available' 
       });
       return;
     }
     
     try {
-      const screenSize = libnut.getScreenSize();
-      const currentPos = libnut.getMousePos();
+      const nutjsTest = await getNutJs();
+      const { screen: scr, mouse: mouseInfo } = nutjsTest;
+      const screenSize = { width: await scr.width(), height: await scr.height() };
+      const currentPos = await mouseInfo.getPosition();
       
       logger.info('📐 [IPC:AUTOMATION:NATIVE] Screen size:', screenSize);
       logger.info('🖱️ [IPC:AUTOMATION:NATIVE] Current mouse:', currentPos);
@@ -2308,8 +2361,10 @@ function registerAutomationHandlers(client, overlay = null) {
     try {
       logger.info('👻 [IPC:AUTOMATION] Hiding system cursor');
       
-      if (!libnut) {
-        logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, cannot hide cursor');
+      try {
+        await getNutJs();
+      } catch (error) {
+        logger.warn('⚠️ [IPC:AUTOMATION] @nut-tree-fork/nut-js not available, cannot hide cursor');
         return;
       }
       
@@ -2320,7 +2375,9 @@ function registerAutomationHandlers(client, overlay = null) {
       
       // Move cursor off-screen (simple, cross-platform approach)
       // Position (0, 0) is typically top-left corner
-      libnut.moveMouse(0, 0);
+      const nutjsHide = await getNutJs();
+      const { mouse: mouseHide } = nutjsHide;
+      await mouseHide.setPosition({ x: 0, y: 0 });
       cursorHidden = true;
       
       logger.info('✅ [IPC:AUTOMATION] System cursor moved off-screen');
@@ -2693,12 +2750,14 @@ function registerAutomationHandlers(client, overlay = null) {
  * Shared function used by both IPC handler and process exit handlers
  * @param {string} logMessage - Custom log message for context
  */
-function restoreCursor(logMessage = '🔄 [IPC:AUTOMATION] Restoring cursor') {
+async function restoreCursor(logMessage = '🔄 [IPC:AUTOMATION] Restoring cursor') {
   try {
     logger.info(logMessage);
     
-    if (!libnut) {
-      logger.warn('⚠️ [IPC:AUTOMATION] libnut not available, cannot restore cursor');
+    try {
+      await getNutJs();
+    } catch (error) {
+      logger.warn('⚠️ [IPC:AUTOMATION] @nut-tree-fork/nut-js not available, cannot restore cursor');
       return;
     }
     
@@ -2708,11 +2767,14 @@ function restoreCursor(logMessage = '🔄 [IPC:AUTOMATION] Restoring cursor') {
     }
     
     // Move cursor to center of screen
-    const screenSize = libnut.getScreenSize();
-    const centerX = Math.floor(screenSize.width / 2);
-    const centerY = Math.floor(screenSize.height / 2);
+    const nutjsShow = await getNutJs();
+    const { screen: scrShow, mouse: mouseShow } = nutjsShow;
+    const screenWidth = await scrShow.width();
+    const screenHeight = await scrShow.height();
+    const centerX = Math.floor(screenWidth / 2);
+    const centerY = Math.floor(screenHeight / 2);
     
-    libnut.moveMouse(centerX, centerY);
+    await mouseShow.setPosition({ x: centerX, y: centerY });
     cursorHidden = false;
     
     logger.info('✅ [IPC:AUTOMATION] System cursor moved to center');

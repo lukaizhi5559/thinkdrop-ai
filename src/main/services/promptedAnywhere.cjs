@@ -2,10 +2,10 @@
  * Prompted Anywhere Service
  * 
  * Handles the "Prompted Anywhere" feature - allows users to trigger AI assistance
- * from any application using Shift+Cmd+L shortcut.
+ * from any application using Cmd+Option+Space shortcut.
  * 
  * Flow:
- * 1. User presses Shift+Cmd+L in any app
+ * 1. User presses Cmd+Option+Space in any app
  * 2. Captures screenshot of current screen
  * 3. Captures highlighted text (if any) via clipboard
  * 4. Sends to MCP command service
@@ -54,7 +54,7 @@ class PromptedAnywhereService {
 
   /**
    * Main handler for Prompted Anywhere feature
-   * Called when user presses Shift+Cmd+L
+   * Called when user presses Cmd+Option+Space
    */
   async handlePromptAnywhere() {
     // Debounce: Prevent triggers too close together

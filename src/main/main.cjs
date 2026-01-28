@@ -211,10 +211,11 @@ function createOverlayWindow() {
 // REMOVED: createInsightWindow - now handled within unified overlayWindow
 // Insight functionality is now integrated into the main overlay interface
 
-// Three-window overlay system
+// Four-window overlay system
 let ghostOverlayWindow = null;      // Full-screen, click-through for ghost mouse & visual cues
 let promptOverlayWindow = null;     // Small, interactive for prompt bar
 let intentOverlayWindow = null;     // Dynamic, interactive for intent UIs (results, guides, etc.)
+let resultsOverlayWindow = null;    // Clean results window styled like PromptCaptureBox
 let chatOverlayWindow = null;       // Chat window for conversation history
 
 /**
@@ -240,7 +241,7 @@ function createGhostOverlay() {
     maximizable: false,
     closable: true,
     hasShadow: false,
-    focusable: false, // Ghost layer doesn't need focus
+    focusable: true, // CRITICAL: Must be focusable to receive IPC events (overlay:update)
     type: 'panel',
     webPreferences: {
       nodeIntegration: false,
@@ -267,17 +268,35 @@ function createGhostOverlay() {
     logger.warn('⚠️  [GHOST OVERLAY] Could not enable click-through (accessibility permission needed):', error.message);
   }
 
+  // Disable cache to ensure fresh code loads
+  ghostOverlayWindow.webContents.session.clearCache();
+  
   // Load ghost overlay HTML (for results, highlights, etc.)
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
-    ghostOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html');
+    // Add cache-busting timestamp to force reload
+    const cacheBuster = Date.now();
+    ghostOverlayWindow.loadURL(`http://localhost:5173/src/overlay/index.html?mode=ghost&_=${cacheBuster}`);
     ghostOverlayWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    ghostOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+    const overlayPath = path.join(__dirname, '../dist-renderer/overlay.html');
+    ghostOverlayWindow.loadURL(`file://${overlayPath}?mode=ghost`);
   }
 
   ghostOverlayWindow.webContents.on('did-finish-load', () => {
     logger.debug('✅ [GHOST OVERLAY] Ghost overlay loaded');
+    
+    // Force dev tools to open in development mode
+    if (isDev && !ghostOverlayWindow.webContents.isDevToolsOpened()) {
+      logger.debug('🔧 [GHOST OVERLAY] Opening dev tools (forced)');
+      ghostOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+    }
+    
+    // Log to verify fresh code is loaded
+    ghostOverlayWindow.webContents.executeJavaScript(`
+      console.log('🔍 [GHOST] Window loaded, checking for __handleOverlayUpdate...');
+      console.log('🔍 [GHOST] typeof window.__handleOverlayUpdate:', typeof window.__handleOverlayUpdate);
+    `);
   });
 
   ghostOverlayWindow.on('closed', () => {
@@ -344,6 +363,13 @@ function createPromptOverlay() {
   if (isDev) {
     promptOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=prompt');
     promptOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+    
+    // Force dev tools to open after load
+    promptOverlayWindow.webContents.on('did-finish-load', () => {
+      if (!promptOverlayWindow.webContents.isDevToolsOpened()) {
+        promptOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+      }
+    });
   } else {
     promptOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
   }
@@ -373,10 +399,10 @@ function createIntentOverlay() {
   // Start with compact size for loading indicator, will resize dynamically for results
   // Start with compact size - will resize dynamically based on content
   const initialWidth = Math.floor(width * 0.6); // 60% of screen width
-  const initialHeight = 100; // Compact initial height to avoid blocking PromptBar
+  const initialHeight = Math.floor(width * 0.5); // Compact initial height to avoid blocking PromptBar
   const promptBarClearance = 260; // Space needed to clear PromptBar
   const x = Math.floor((width - initialWidth) / 2); // Center horizontally
-  const y = Math.floor(height - initialHeight - promptBarClearance); // Position above PromptBar
+  const y = Math.floor((height - initialHeight) / 2); // Position above PromptBar
   
   intentOverlayWindow = new BrowserWindow({
     width: initialWidth,
@@ -424,6 +450,13 @@ function createIntentOverlay() {
   if (isDev) {
     intentOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=intent');
     intentOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+    
+    // Force dev tools to open after load
+    intentOverlayWindow.webContents.on('did-finish-load', () => {
+      if (!intentOverlayWindow.webContents.isDevToolsOpened()) {
+        intentOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+      }
+    });
   } else {
     intentOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
   }
@@ -498,6 +531,13 @@ function createChatOverlay() {
   if (isDev) {
     chatOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=chat');
     chatOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+    
+    // Force dev tools to open after load
+    chatOverlayWindow.webContents.on('did-finish-load', () => {
+      if (!chatOverlayWindow.webContents.isDevToolsOpened()) {
+        chatOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+      }
+    });
   } else {
     chatOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
   }
@@ -513,6 +553,59 @@ function createChatOverlay() {
   global.chatOverlayWindow = chatOverlayWindow;
   logger.debug('✅ Chat overlay window created (interactive, hidden)');
   return chatOverlayWindow;
+}
+
+/**
+ * Create results overlay window - clean, styled like PromptCaptureBox
+ * Used for: displaying AI results in a modern, scrollable window
+ */
+function createResultsOverlay() {
+  resultsOverlayWindow = new BrowserWindow({
+    width: 600,
+    height: 400,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: true,
+    show: false, // Start hidden
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  if (process.platform === 'darwin') {
+    resultsOverlayWindow.setWindowButtonVisibility(false);
+    resultsOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    resultsOverlayWindow.setAlwaysOnTop(true, 'floating', 2); // Higher than ghost window
+  }
+
+  // Load results window
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    resultsOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=results');
+  } else {
+    resultsOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  resultsOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [RESULTS OVERLAY] Results overlay loaded');
+  });
+
+  resultsOverlayWindow.on('closed', () => {
+    resultsOverlayWindow = null;
+  });
+
+  global.resultsOverlayWindow = resultsOverlayWindow;
+  logger.debug('✅ Results overlay window created (interactive, hidden)');
+  return resultsOverlayWindow;
 }
 
 function toggleOverlay() {
@@ -582,7 +675,7 @@ app.whenReady().then(async () => {
       handlersSetup = true;
       await setupIPCHandlers();
       
-      // Create three-window overlay system first
+      // Create four-window overlay system first
       logger.debug('🔧 Creating ghost overlay window (click-through)...');
       createGhostOverlay();
       
@@ -591,6 +684,9 @@ app.whenReady().then(async () => {
       
       logger.debug('🔧 Creating intent overlay window (interactive, hidden)...');
       createIntentOverlay();
+      
+      logger.debug('🔧 Creating results overlay window (interactive, hidden)...');
+      createResultsOverlay();
       
       logger.debug('🔧 Creating chat overlay window (interactive, hidden)...');
       createChatOverlay();
@@ -602,9 +698,16 @@ app.whenReady().then(async () => {
         ghost: ghostOverlayWindow,
         prompt: promptOverlayWindow,
         intent: intentOverlayWindow,
+        results: resultsOverlayWindow,
         chat: chatOverlayWindow
       });
       logger.debug('✅ Overlay IPC handlers initialized');
+      
+      // Wire ghost overlay to prompt capture service
+      if (global.promptCaptureService && ghostOverlayWindow) {
+        global.promptCaptureService.setOverlayWindow(ghostOverlayWindow);
+        logger.debug('✅ Prompt capture service connected to ghost overlay');
+      }
       
       // Show overlay windows by default (since we commented out old renderer)
       logger.debug('🔧 Showing overlay windows...');
@@ -722,20 +825,6 @@ app.whenReady().then(async () => {
   global.hideGuideWindow = hideGuideWindow;
   logger.debug('✅ Guide Window initialized');
   
-  // Register global shortcut to show/hide overlay (like Cluely's Cmd+Shift+Space)
-  // DISABLED: Overlay temporarily disabled in favor of "Prompted Anywhere" feature
-  // To re-enable: set ENABLE_OVERLAY=true in environment or uncomment below
-  const ENABLE_OVERLAY = process.env.ENABLE_OVERLAY === 'true';
-  if (ENABLE_OVERLAY) {
-    globalShortcut.register('Cmd+Shift+Space', () => {
-      toggleOverlay();
-      // hideAIViewingOverlay();
-    });
-    logger.debug('✅ Overlay shortcut (Cmd+Shift+Space) registered');
-  } else {
-    logger.debug('⏭️  Overlay shortcut disabled (use ENABLE_OVERLAY=true to re-enable)');
-  }
-  
   // 🎯 Cmd+Option+A to capture selection and show "Ask" interface
   globalShortcut.register('Cmd+Option+A', async () => {
     logger.debug('🎯 [ASK] Cmd+Option+A triggered - capturing selection');
@@ -762,16 +851,69 @@ app.whenReady().then(async () => {
     }
   });
   
-  // 🚀 Shift+Cmd+L for "Prompted Anywhere" - AI assistance in any app
-  globalShortcut.register('Shift+Cmd+L', async () => {
-    logger.debug('🚀 [Prompted Anywhere] Shift+Cmd+L triggered!');
+  // 🚀 Cmd+Option+Space for "Prompt Capture" - Interactive prompt anywhere with State Graph
+  // Changed from Shift+Cmd+L to avoid conflicts
+  // Note: Cmd+Shift+Space is taken by macOS for input source switching
+  
+  const promptHotkey = 'Cmd+Shift+Space'; // 'Option+Space';
+  const registered = globalShortcut.register(promptHotkey, async () => {
+    logger.debug(`🚀 [Prompt Capture] ${promptHotkey} triggered!`);
     
-    if (global.promptedAnywhereService) {
+    const { getResultsWindow, hasResults } = require('./ipc/overlay.cjs');
+    const resultsWindow = getResultsWindow();
+    
+    // PRIORITY 1: Check if results exist (hide results + cancel prompt capture)
+    if (hasResults() && resultsWindow && !resultsWindow.isDestroyed()) {
+      if (resultsWindow.isVisible()) {
+        logger.debug('📤 [Prompt Capture] Results window visible - canceling prompt capture first, then hiding results');
+        
+        // Cancel prompt capture FIRST to clear overlay payload
+        if (global.promptCaptureService) {
+          global.promptCaptureService.cancel();
+        }
+        
+        // Then hide results window after a small delay to ensure cancellation is processed
+        setTimeout(() => {
+          if (resultsWindow && !resultsWindow.isDestroyed()) {
+            resultsWindow.hide();
+          }
+        }, 150); // 150ms delay to ensure cancellation polling completes
+        return;
+      }
+      // If results window is hidden, fall through to activate prompt capture
+      // (don't just show results - let user start a new query)
+      logger.debug('📥 [Prompt Capture] Results exist but hidden - activating prompt capture for new query');
+    }
+    
+    // PRIORITY 2: Check if prompt capture is active (no results, just prompt box)
+    if (global.promptCaptureService && global.promptCaptureService.isActive) {
+      logger.debug('🔄 [Prompt Capture] Prompt capture active (no results) - toggling off');
+      global.promptCaptureService.cancel();
+      return;
+    }
+    
+    // PRIORITY 3: No prompt capture active and no results - activate prompt capture
+    // CRITICAL: Enable live mode first since prompt capture requires internet access
+    logger.debug('🌐 [Prompt Capture] Enabling live mode (required for prompt capture)');
+    const { setOnlineMode } = require('./ipc/overlay.cjs');
+    setOnlineMode(true);
+    
+    if (global.promptCaptureService) {
+      await global.promptCaptureService.activate();
+    } else if (global.promptedAnywhereService) {
+      // Fallback to legacy direct-to-MCP mode if prompt capture not available
+      logger.debug('⚠️  [Prompt Capture] Service not available, using legacy mode');
       await global.promptedAnywhereService.handlePromptAnywhere();
     } else {
-      logger.error('❌ [Prompted Anywhere] Service not initialized');
+      logger.error('❌ [Prompt Capture] No prompt service initialized');
     }
   });
+  
+  if (registered) {
+    logger.info(`✅ [Prompt Capture] Hotkey registered: ${promptHotkey}`);
+  } else {
+    logger.error(`❌ [Prompt Capture] Failed to register hotkey: ${promptHotkey} (may be taken by another app)`);
+  }
 
   // 🧪 Cmd+Shift+T for Automation Tester - Debug automation actions
   globalShortcut.register('Cmd+Shift+T', () => {
@@ -833,8 +975,30 @@ app.whenReady().then(async () => {
   // 🛑 Shift+Cmd+J to cancel running automation
   globalShortcut.register('Shift+Cmd+J', () => cancelAutomation('Shift+Cmd+J'));
   
-  // 🛑 ESC to cancel running automation (intuitive!)
-  globalShortcut.register('Escape', () => cancelAutomation('ESC'));
+  // 🛑 ESC to cancel prompt capture or running automation (intuitive!)
+  globalShortcut.register('Escape', () => {
+    // Check if prompt capture is active first
+    if (global.promptCaptureService && global.promptCaptureService.isActive) {
+      logger.debug('⌨️  [ESC] Prompt capture active - canceling prompt capture');
+      global.promptCaptureService.cancel();
+    } else {
+      // Otherwise cancel automation
+      cancelAutomation('ESC');
+    }
+  });
+  
+  // 🔍 Cmd+Shift+G to open ghost window dev tools for debugging
+  globalShortcut.register('Cmd+Shift+G', () => {
+    logger.debug('🔍 [DEBUG] Cmd+Shift+G triggered - opening ghost window dev tools');
+    const { getGhostWindow } = require('./ipc/overlay.cjs');
+    const ghostWindow = getGhostWindow();
+    if (ghostWindow && !ghostWindow.isDestroyed()) {
+      ghostWindow.webContents.openDevTools({ mode: 'detach' });
+      logger.debug('✅ [DEBUG] Ghost window dev tools opened');
+    } else {
+      logger.error('❌ [DEBUG] Ghost window not available');
+    }
+  });
   
   // Screen Intelligence shortcuts
   globalShortcut.register('Cmd+Option+I', async () => {
@@ -1230,7 +1394,24 @@ async function setupIPCHandlers() {
     const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
     const mcpClient = new MCPClient(MCPConfigManager);
     
-    // Initialize Prompted Anywhere service
+    // Initialize MacOS KeyHook Bridge (for prompt capture)
+    if (process.platform === 'darwin') {
+      logger.debug('⌨️  Initializing MacOS KeyHook Bridge...');
+      const MacOSKeyHookBridge = require('./native-hooks/macos-keyhook-bridge.cjs');
+      global.keyHookBridge = new MacOSKeyHookBridge(logger);
+      global.keyHookBridge.start();
+      logger.debug('✅ MacOS KeyHook Bridge initialized');
+      
+      // Initialize Prompt Capture Service (with mcpClient for direct MCP submission option)
+      logger.debug('📝 Initializing Prompt Capture Service...');
+      const { PromptCaptureService } = require('./services/promptCapture.cjs');
+      global.promptCaptureService = new PromptCaptureService(logger, global.keyHookBridge, mcpClient);
+      logger.debug('✅ Prompt Capture Service initialized');
+    } else {
+      logger.debug('⏭️  Skipping KeyHook Bridge - macOS only for now');
+    }
+    
+    // Initialize Prompted Anywhere service (legacy direct-to-MCP mode)
     logger.debug('🚀 Initializing Prompted Anywhere service...');
     const { PromptedAnywhereService } = require('./services/promptedAnywhere.cjs');
     global.promptedAnywhereService = new PromptedAnywhereService(mcpClient);

@@ -161,6 +161,43 @@ export default function PromptBar({
     };
   }, []);
 
+  // Initialize and sync Online Mode (Live Mode) from main process
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const init = async () => {
+      try {
+        const result = await ipcRenderer.invoke('online-mode:get');
+        console.log('🌐 [PROMPT_BAR] online-mode:get result:', result);
+        if (result && typeof result.enabled === 'boolean') {
+          setIsConnected(result.enabled);
+          if (onConnectionChange) {
+            onConnectionChange(result.enabled);
+          }
+        }
+      } catch (e) {
+        console.warn('⚠️ [PROMPT_BAR] online-mode:get failed:', e);
+        // Ignore - fallback to local state
+      }
+    };
+
+    const handleOnlineModeChanged = (_event: any, enabled: boolean) => {
+      console.log('🌐 [PROMPT_BAR] online-mode:changed received:', enabled);
+      setIsConnected(!!enabled);
+      if (onConnectionChange) {
+        onConnectionChange(!!enabled);
+      }
+    };
+
+    init();
+    ipcRenderer.on('online-mode:changed', handleOnlineModeChanged);
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('online-mode:changed', handleOnlineModeChanged);
+      }
+    };
+  }, [onConnectionChange]);
+
   // Listen for banner enable live mode event
   useEffect(() => {
     if (!ipcRenderer) return;
@@ -262,6 +299,7 @@ export default function PromptBar({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    console.log(`📤 [PROMPT_BAR] handleSubmit called, isConnected: ${isConnected}`);
     if (message.trim()) {
       // CRITICAL: Check if we're in clarification mode FIRST before any processing
       console.log('🔍 [PROMPT_BAR] ===== HANDLE SUBMIT CALLED =====');
@@ -396,7 +434,7 @@ export default function PromptBar({
       }
       
       // Normal message submission (goes through state graph)
-      console.log('📤 [PROMPT_BAR] Normal submission - calling onSubmit() which triggers state graph');
+      console.log(`📤 [PROMPT_BAR] Normal submission - calling onSubmit() which triggers state graph (Live Mode: ${isConnected})`);
       onSubmit(message.trim());
       setMessage('');
       
@@ -467,9 +505,16 @@ export default function PromptBar({
 
   const toggleConnection = () => {
     const newState = !isConnected;
+    console.log(`🔄 [PROMPT_BAR] Toggling Live Mode: ${isConnected} → ${newState}`);
     setIsConnected(newState);
+    if (ipcRenderer) {
+      ipcRenderer.send('online-mode:set', newState);
+    }
     if (onConnectionChange) {
+      console.log(`📤 [PROMPT_BAR] Calling onConnectionChange with: ${newState}`);
       onConnectionChange(newState);
+    } else {
+      console.warn('⚠️  [PROMPT_BAR] onConnectionChange callback not provided!');
     }
   };
 

@@ -75,10 +75,12 @@ function registerPrivateModeHandlers() {
       const chatIsVisible = isChatWindowVisible();
       logger.debug(`💬 [PRIVATE-MODE] Chat window visible: ${chatIsVisible}`);
       
-      // Overlay mode: Send initial "Thinking..." loading state ONLY if chat is NOT visible
-      if (isOverlayMode && !chatIsVisible) {
-        logger.debug('📤 [PRIVATE-MODE] Chat closed - sending loading state to intent window');
-        sendOverlayUpdate({
+      // Overlay mode: Send initial "Thinking..." loading state to show in prompt capture box
+      if (isOverlayMode) {
+        logger.debug('📤 [PRIVATE-MODE] Sending initial loading state to overlay (prompt capture box)');
+        logger.debug('📤 [PRIVATE-MODE] isOverlayMode:', isOverlayMode, 'chatIsVisible:', chatIsVisible);
+        
+        const initialPayload = {
           intent: 'web_search',
           uiVariant: 'loading',
           slots: {
@@ -87,9 +89,11 @@ function registerPrivateModeHandlers() {
           },
           conversationId: context.conversationId || `overlay_${Date.now()}`,
           correlationId: context.correlationId || `overlay_${Date.now()}`
-        });
-      } else if (isOverlayMode && chatIsVisible) {
-        logger.debug('💬 [PRIVATE-MODE] Chat open - skipping intent overlay, results will stay in chat');
+        };
+        
+        logger.debug('📤 [PRIVATE-MODE] Sending initial payload:', initialPayload);
+        sendOverlayUpdate(initialPayload);
+        logger.debug('✅ [PRIVATE-MODE] Initial loading state sent');
       }
       
       logger.debug(`\n🔒 [PRIVATE-MODE] Processing: "${augmentedMessage.substring(0, 200)}..."`);
@@ -100,12 +104,29 @@ function registerPrivateModeHandlers() {
       // Progress callback to stream updates to renderer
       const onProgress = async (nodeName, state, duration, status) => {
         try {
+          // Handle parseIntent completion - send loading state with correct intent
+          if (status === 'completed' && nodeName === 'parseIntent' && isOverlayMode) {
+            const detectedIntent = state.intent?.type || state.intent || 'question';
+            logger.debug(`🎯 [PRIVATE-MODE] parseIntent completed - sending loading state with intent: ${detectedIntent}`);
+            
+            sendOverlayUpdate({
+              intent: detectedIntent,
+              uiVariant: 'loading',
+              slots: {
+                subject: message,
+                loadingMessage: 'Thinking...'
+              },
+              conversationId: context.conversationId || `overlay_${Date.now()}`,
+              correlationId: context.correlationId || `overlay_${Date.now()}`
+            });
+          }
+          
           // Handle early intent response (Phase 1 optimization)
           if (status === 'early' && nodeName === 'earlyResponse') {
             logger.debug('💬 [PRIVATE-MODE] Sending early intent response to renderer:', state.earlyMessage);
             
-            // Overlay mode: Send updated loading message to intent window ONLY if chat is NOT visible
-            if (isOverlayMode && !chatIsVisible) {
+            // Overlay mode: Send updated loading message to intent window
+            if (isOverlayMode) {
               sendOverlayUpdate({
                 intent: state.intentType || 'web_search',
                 uiVariant: 'loading',

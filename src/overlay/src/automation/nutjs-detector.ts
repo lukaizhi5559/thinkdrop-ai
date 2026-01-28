@@ -339,6 +339,7 @@ export async function clickAtCoordinates(x: number, y: number): Promise<Detectio
       });
       
       ipcRenderer.send('automation:native-click', { x, y });
+      ipcRenderer.send('automation:native-click', { x, y });
     });
   } catch (error: any) {
     console.error(`❌ [NUTJS] Click failed at (${x}, ${y}):`, error.message);

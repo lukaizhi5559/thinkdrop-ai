@@ -12,9 +12,11 @@ import { OverlayPayload } from '../../types/overlay-intents';
 import PromptBar from './components/PromptBar';
 import OverlayRenderer from './components/OverlayRenderer';
 import GhostOverlay from './components/GhostOverlay';
+import ResultsWindow from './components/ResultsWindow';
 import { useConversationSignals } from './hooks/useConversationSignals';
 import { initializeConversationSignals } from './signals/init';
 import AutomationTester from './components/testing/AutomationTester';
+import { overlayPayloadSignal } from './signals/overlaySignals';
 
 // Lazy load ChatWindow to prevent dependency issues in other windows
 const ChatWindow = lazy(() => import('./components/ChatWindow'));
@@ -23,21 +25,57 @@ const ChatWindow = lazy(() => import('./components/ChatWindow'));
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
 function App() {
-  const [overlayPayload, setOverlayPayload] = useState<OverlayPayload | null>(null);
   const [isReady, setIsReady] = useState(false);
   const [isOnlineMode, setIsOnlineMode] = useState(false);
   const [showTester, setShowTester] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   
+  // Log when online mode changes
+  useEffect(() => {
+    console.log(`🌐 [OVERLAY] isOnlineMode state changed to: ${isOnlineMode}`);
+  }, [isOnlineMode]);
+
+  // Sync Online Mode (Live Mode) from main process so ghost/prompt-capture submissions use correct flag
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const init = async () => {
+      try {
+        const result = await ipcRenderer.invoke('online-mode:get');
+        console.log('🌐 [OVERLAY] online-mode:get result:', result);
+        if (result && typeof result.enabled === 'boolean') {
+          setIsOnlineMode(result.enabled);
+        }
+      } catch (e) {
+        console.warn('⚠️ [OVERLAY] online-mode:get failed:', e);
+        // Ignore - fallback to local state
+      }
+    };
+
+    const handleOnlineModeChanged = (_event: any, enabled: boolean) => {
+      console.log('🌐 [OVERLAY] online-mode:changed received:', enabled);
+      setIsOnlineMode(!!enabled);
+    };
+
+    init();
+    ipcRenderer.on('online-mode:changed', handleOnlineModeChanged);
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('online-mode:changed', handleOnlineModeChanged);
+      }
+    };
+  }, []);
+
   // Get active session ID for conversation continuity
   const { signals, createSession } = useConversationSignals();
   
   // Detect which window mode we're in
   const urlParams = new URLSearchParams(window.location.search);
-  const mode = urlParams.get('mode'); // 'prompt', 'intent', 'chat', or null (ghost)
+  const mode = urlParams.get('mode'); // 'prompt', 'intent', 'chat', 'results', or null (ghost)
   const isPromptMode = mode === 'prompt';
   const isIntentMode = mode === 'intent';
   const isChatMode = mode === 'chat';
+  const isResultsMode = mode === 'results';
 
   // Listen for IPC event to open tester (triggered by Cmd+Shift+T global shortcut)
   useEffect(() => {
@@ -71,8 +109,9 @@ function App() {
   }, [mode]);
 
   useEffect(() => {
-    const modeLabel = isPromptMode ? 'PROMPT' : isIntentMode ? 'INTENT' : isChatMode ? 'CHAT' : 'GHOST';
+    const modeLabel = isPromptMode ? 'PROMPT' : isIntentMode ? 'INTENT' : isChatMode ? 'CHAT' : isResultsMode ? 'RESULTS' : 'GHOST';
     console.log(`🚀 [OVERLAY] App mounted in ${modeLabel} mode`);
+    console.log(`🔍 [OVERLAY] Mode detection: isPromptMode=${isPromptMode}, isIntentMode=${isIntentMode}, isChatMode=${isChatMode}, isResultsMode=${isResultsMode}`);
     
     // Initialize conversation signals to load sessions
     initializeConversationSignals().catch(err => {
@@ -87,29 +126,69 @@ function App() {
     // Signal ready to main process
     ipcRenderer.send('overlay:ready');
     setIsReady(true);
-    console.log(`✅ [OVERLAY] ${isPromptMode ? 'Prompt' : 'Ghost'} window ready, IPC available`);
+    console.log(`✅ [OVERLAY] ${modeLabel} window ready, IPC available`);
 
     // Listen for overlay updates from main process
+    // Use signal to avoid re-render issues
     const handleOverlayUpdate = (_event: any, payload: OverlayPayload) => {
       console.log('📨 [OVERLAY] Received overlay update:', payload);
-      setOverlayPayload(payload);
+      console.log('📨 [OVERLAY] Payload details:', {
+        uiVariant: payload?.uiVariant,
+        intent: payload?.intent,
+        hasSlots: !!payload?.slots,
+        slots: payload?.slots
+      });
+      overlayPayloadSignal.value = payload;
+      console.log('✅ [OVERLAY] overlayPayload signal updated');
     };
 
+    // Register overlay:update listener for all modes
+    // Main process temporarily disables click-through for ghost mode when sending IPC
+    const isGhostMode = !isPromptMode && !isIntentMode && !isChatMode && !isResultsMode;
+    console.log(`🔍 [OVERLAY] Mode: ${isGhostMode ? 'ghost' : modeLabel}`);
+    console.log('� [OVERLAY] Registering overlay:update listener...');
+    
     ipcRenderer.on('overlay:update', handleOverlayUpdate);
-
-    // Cleanup
+    console.log('✅ [OVERLAY] overlay:update listener registered');
+    
+    // Cleanup function
     return () => {
+      console.log('🧹 [OVERLAY] Cleanup - removing overlay:update listener');
       if (ipcRenderer.removeListener) {
         ipcRenderer.removeListener('overlay:update', handleOverlayUpdate);
       }
     };
-  }, []);
+  }, [isPromptMode, isIntentMode, isChatMode, isResultsMode]);
+
+  // Prompt capture submission is now handled via props passed to GhostOverlay
 
   // No hit testing needed - CSS pointer-events handles everything!
 
   const handlePromptSubmit = async (message: string) => {
     console.log('📤 [OVERLAY] Prompt submitted:', message);
-    console.log('🌐 [OVERLAY] Online mode:', isOnlineMode);
+    console.log('🌐 [OVERLAY] Online mode (isOnlineMode state):', isOnlineMode);
+
+    // CRITICAL: Hide results window immediately to prevent it from appearing in screenshots
+    if (ipcRenderer) {
+      console.log('🙈 [OVERLAY] Hiding results window before processing new query');
+      ipcRenderer.send('results-window:close');
+    }
+
+    // Read the latest online mode from main process to avoid stale state across windows
+    let onlineModeForSubmit = isOnlineMode;
+    if (ipcRenderer) {
+      try {
+        const result = await ipcRenderer.invoke('online-mode:get');
+        if (result && typeof result.enabled === 'boolean') {
+          onlineModeForSubmit = result.enabled;
+        }
+      } catch (e) {
+        // Ignore - fall back to local state
+      }
+    }
+
+    console.log('🌐 [OVERLAY] Online mode (resolved for submit):', onlineModeForSubmit);
+    console.log('🌐 [OVERLAY] This will be passed as useOnlineMode to backend');
     
     if (ipcRenderer) {
       // Check if chat window is open - if so, use its active session
@@ -204,6 +283,29 @@ function App() {
       // The backend will handle sending the initial "Thinking..." and subsequent updates to the intent window
       // NOTE: Message has been added above, so retrieveMemory will fetch it correctly
       try {
+        // Type guard: sessionId should never be null at this point
+        if (!sessionId) {
+          console.error('❌ [OVERLAY] sessionId is null, cannot set loading state');
+          return;
+        }
+        
+        // Set loading state in signal to show "Thinking..." indicator
+        console.log('⏳ [OVERLAY] Setting overlay signal to loading state');
+        overlayPayloadSignal.value = {
+          intent: 'screen_intelligence',
+          uiVariant: 'loading',
+          slots: {},
+          conversationId: sessionId,
+          correlationId: `overlay_${Date.now()}`
+        };
+        
+        console.log('🚀 [OVERLAY] Calling private-mode:process with context:', {
+          overlayMode: true,
+          conversationId: sessionId,
+          sessionId: sessionId,
+          useOnlineMode: onlineModeForSubmit
+        });
+        
         const result = await (window as any).electronAPI.invoke('private-mode:process', {
           message,
           context: {
@@ -213,10 +315,20 @@ function App() {
             correlationId: `overlay_${Date.now()}`,
             userId: 'default_user',
             timestamp: new Date().toISOString(),
-            useOnlineMode: isOnlineMode
+            useOnlineMode: onlineModeForSubmit
           }
         });
         console.log('✅ [OVERLAY] Private mode processing complete:', result);
+        
+        // Set results state so PromptCaptureBox can send position to results window
+        console.log('📊 [OVERLAY] Setting overlay signal to results state');
+        overlayPayloadSignal.value = {
+          intent: 'screen_intelligence',
+          uiVariant: 'results',
+          slots: result.data || {},
+          conversationId: sessionId,
+          correlationId: `overlay_${Date.now()}`
+        };
         
         // Notify chat window that processing is complete
         if ((window as any).electron?.ipcRenderer) {
@@ -229,6 +341,10 @@ function App() {
       } catch (error) {
         console.error('❌ [OVERLAY] Private mode processing error:', error);
         
+        // Clear loading state on error
+        console.log('🧹 [OVERLAY] Clearing loading state from overlay signal (error case)');
+        overlayPayloadSignal.value = null;
+        
         // Notify chat window that processing failed
         if ((window as any).electron?.ipcRenderer) {
           console.log('📤 [OVERLAY] Notifying chat window that processing failed');
@@ -240,10 +356,19 @@ function App() {
     }
   };
 
-  const handleOverlayEvent = (event: any) => {
-    console.log('📤 [OVERLAY] Overlay event:', event);
+  const handleOverlayEvent = (eventName: string, data?: any) => {
+    console.log('📤 [OVERLAY] Overlay event:', eventName, data);
+    
+    // Handle overlay:clear locally to clear signal
+    if (eventName === 'overlay:clear') {
+      console.log('🧹 [OVERLAY] Clearing overlay payload signal');
+      overlayPayloadSignal.value = null;
+      return;
+    }
+    
+    // Forward other events to main process
     if (ipcRenderer) {
-      ipcRenderer.send('overlay:event', event);
+      ipcRenderer.send('overlay:event', { eventName, data });
     }
   };
 
@@ -255,7 +380,10 @@ function App() {
         <PromptBar 
           onSubmit={handlePromptSubmit}
           isReady={isReady}
-          onConnectionChange={setIsOnlineMode}
+          onConnectionChange={(newState) => {
+            console.log(`📥 [OVERLAY] onConnectionChange callback received: ${newState}`);
+            setIsOnlineMode(newState);
+          }}
         />
       </div>
     );
@@ -268,9 +396,9 @@ function App() {
     
     return (
       <div ref={containerRef} className="relative w-full h-full overflow-hidden flex items-end">
-        {overlayPayload && (
+        {overlayPayloadSignal.value && (
           <OverlayRenderer 
-            payload={overlayPayload} 
+            payload={overlayPayloadSignal.value} 
             onEvent={handleOverlayEvent}
           />
         )}
@@ -288,7 +416,6 @@ function App() {
   }
 
   if (isChatMode) {
-    // CHAT WINDOW: Conversation history and management
     console.log('🎯 [OVERLAY] Rendering ChatWindow in chat mode');
     return (
       <div ref={containerRef} className="relative w-full h-full overflow-hidden">
@@ -306,13 +433,26 @@ function App() {
     );
   }
 
+  if (isResultsMode) {
+    console.log('🎯 [OVERLAY] Rendering ResultsWindow in results mode');
+    return (
+      <div ref={containerRef} className="relative w-full h-full overflow-hidden">
+        <ResultsWindow />
+      </div>
+    );
+  }
+
   // GHOST WINDOW: Full-screen overlay for ghost mouse & visual cues, click-through
   return (
     <div 
       ref={containerRef} 
       className="relative w-full h-full overflow-hidden pointer-events-none"
     >
-      <GhostOverlay />
+      <GhostOverlay 
+        onPromptSubmit={handlePromptSubmit}
+        overlayPayload={overlayPayloadSignal.value}
+        onEvent={handleOverlayEvent}
+      />
       {showTester && (
         <AutomationTester onClose={() => setShowTester(false)} />
       )}
