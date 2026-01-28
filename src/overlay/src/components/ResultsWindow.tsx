@@ -5,7 +5,7 @@
  * Shows AI response results in a scrollable, interactive window
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { OverlayPayload } from '../../../types/overlay-intents';
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
@@ -13,6 +13,7 @@ const ipcRenderer = (window as any).electron?.ipcRenderer;
 export default function ResultsWindow() {
   const [overlayPayload, setOverlayPayload] = useState<OverlayPayload | null>(null);
   const [promptText, setPromptText] = useState<string>('');
+  const contentRef = useRef<HTMLDivElement>(null);
 
   // Listen for overlay updates
   useEffect(() => {
@@ -39,6 +40,40 @@ export default function ResultsWindow() {
     };
   }, []);
 
+  // Dynamically resize window based on content
+  useEffect(() => {
+    if (!contentRef.current || !ipcRenderer) return;
+
+    const resizeWindow = () => {
+      const headerHeight = 52; // Header height (py-3 + border)
+      const padding = 32; // Content padding (p-4 * 2)
+      const minHeight = 100; // Minimal height when empty
+      const maxHeight = 600;
+      
+      // Calculate width based on prompt text length (match PromptCaptureBox logic)
+      const minWidth = 400;
+      const maxWidth = 600;
+      const estimatedWidth = Math.min(Math.max(promptText.length * 8, minWidth), maxWidth);
+      
+      // Use minimal height during loading state (just showing "Thinking..." indicator)
+      let totalHeight;
+      if (overlayPayload?.uiVariant === 'loading') {
+        totalHeight = minHeight; // Minimal height for loading indicator
+      } else {
+        const contentHeight = contentRef.current?.scrollHeight || 0;
+        totalHeight = Math.min(Math.max(contentHeight + headerHeight + padding, minHeight), maxHeight);
+      }
+      
+      console.log('📏 [RESULTS_WINDOW] Resizing to:', { width: estimatedWidth, height: totalHeight, state: overlayPayload?.uiVariant });
+      ipcRenderer.send('results-window:resize', { width: estimatedWidth, height: totalHeight });
+    };
+
+    // Resize after content updates
+    const timeoutId = setTimeout(resizeWindow, 100);
+    
+    return () => clearTimeout(timeoutId);
+  }, [overlayPayload, promptText]);
+
   // ESC key to close results window
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -61,16 +96,30 @@ export default function ResultsWindow() {
     }
   };
 
-  if (!overlayPayload) {
-    return (
-      <div className="w-full h-full flex items-center justify-center">
-        <div className="text-gray-400 text-sm">No results</div>
-      </div>
-    );
-  }
-
   // Render results based on intent
   const renderResults = () => {
+    if (!overlayPayload) {
+      return (
+        <div className="text-gray-400 text-sm text-center">
+          Waiting for results...
+        </div>
+      );
+    }
+    
+    // Show thinking indicator during loading state
+    if (overlayPayload.uiVariant === 'loading') {
+      return (
+        <div className="flex items-center gap-3">
+          <div className="flex gap-1">
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" style={{ animationDelay: '0ms' }} />
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" style={{ animationDelay: '150ms' }} />
+            <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" style={{ animationDelay: '300ms' }} />
+          </div>
+          <span className="text-gray-400 text-sm">Thinking...</span>
+        </div>
+      );
+    }
+    
     const { slots, intent } = overlayPayload;
 
     if (intent === 'screen_intelligence' && slots?.answer) {
@@ -152,7 +201,7 @@ export default function ResultsWindow() {
       </div>
       
       {/* Scrollable content */}
-      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
+      <div ref={contentRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4">
         {renderResults()}
       </div>
     </div>

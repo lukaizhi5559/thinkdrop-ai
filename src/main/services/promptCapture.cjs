@@ -89,6 +89,10 @@ class PromptCaptureService {
         initialText: this.promptBuffer,
         cursorPosition: this.cursorPosition
       });
+      
+      // Show results window (fixed at bottom-right)
+      const { ipcMain } = require('electron');
+      ipcMain.emit('prompt-capture:show-results');
     }
 
     this.logger.info('[PromptCapture] Activated successfully');
@@ -319,6 +323,10 @@ class PromptCaptureService {
         this.overlayWindow.setIgnoreMouseEvents(false);
         this.overlayWindow.webContents.send('prompt-capture-cancelled');
         this.logger.debug('[PromptCapture] Sent cancellation via native IPC');
+        
+        // Hide results window
+        const { ipcMain } = require('electron');
+        ipcMain.emit('prompt-capture:hide-results');
         
         // Re-enable click-through
         setImmediate(() => {

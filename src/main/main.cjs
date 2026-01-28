@@ -560,20 +560,34 @@ function createChatOverlay() {
  * Used for: displaying AI results in a modern, scrollable window
  */
 function createResultsOverlay() {
+  // Position at bottom-right corner
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+  const windowMinWidth = 400; // Match PromptCaptureBox min width
+  const windowMinHeight = 100; // Minimal height when empty
+  const windowMaxHeight = 600; // Maximum height for dynamic content
+  const margin = 20; // Margin from screen edges
+  
   resultsOverlayWindow = new BrowserWindow({
-    width: 600,
-    height: 400,
+    x: screenWidth - windowMinWidth - margin,
+    y: screenHeight - windowMinHeight - margin, // Position based on min height initially
+    width: windowMinWidth, // Start with min width, will resize dynamically
+    height: windowMinHeight, // Start with min height, will resize dynamically
+    minWidth: windowMinWidth,
+    maxWidth: 600, // Match PromptCaptureBox max width
+    minHeight: windowMinHeight,
+    maxHeight: windowMaxHeight,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    resizable: false,
+    resizable: true, // Allow dynamic resizing
     movable: false,
     minimizable: false,
     maximizable: false,
     closable: true,
     hasShadow: true,
-    show: false, // Start hidden
+    show: false, // Start hidden, will show when prompt activates
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,

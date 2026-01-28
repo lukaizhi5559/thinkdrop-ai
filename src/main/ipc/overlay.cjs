@@ -207,23 +207,61 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     ghostWindow.setIgnoreMouseEvents(clickthrough, { forward: true });
   });
 
-  // Handle positioning results window at prompt capture box location
-  ipcMain.on('prompt-capture:set-position', (event, { x, y, width, height }) => {
+  // Show/hide results window when prompt capture starts/stops
+  ipcMain.on('prompt-capture:show-results', () => {
     if (!resultsWindow || resultsWindow.isDestroyed()) {
-      logger.warn('⚠️  [OVERLAY:IPC] Results window not available for positioning');
+      logger.warn('⚠️  [OVERLAY:IPC] Results window not available');
       return;
     }
     
-    logger.debug(`📍 [OVERLAY:IPC] Positioning results window at (${x}, ${y}) with size ${width}x${height}`);
-    
-    // Set position first, then show window to avoid flicker at (0,0)
-    resultsWindow.setBounds({ x, y, width, height });
-    
-    // Show window after positioning if it's not visible
+    logger.debug('�️  [OVERLAY:IPC] Showing results window (fixed at bottom-right)');
     if (!resultsWindow.isVisible()) {
       resultsWindow.show();
-      logger.debug('👁️  [OVERLAY:IPC] Showing results window after positioning');
     }
+  });
+  
+  ipcMain.on('prompt-capture:hide-results', () => {
+    if (!resultsWindow || resultsWindow.isDestroyed()) {
+      return;
+    }
+    
+    logger.debug('� [OVERLAY:IPC] Hiding results window');
+    if (resultsWindow.isVisible()) {
+      resultsWindow.hide();
+    }
+  });
+
+  // Handle resizing results window based on content
+  ipcMain.on('results-window:resize', (event, { width, height }) => {
+    if (!resultsWindow || resultsWindow.isDestroyed()) {
+      return;
+    }
+    
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+    const margin = 20;
+    
+    // Clamp width and height to min/max bounds
+    const minWidth = 400;
+    const maxWidth = 600;
+    const minHeight = 100;
+    const maxHeight = 600;
+    
+    const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
+    const newHeight = Math.min(Math.max(height, minHeight), maxHeight);
+    
+    // Reposition to keep window at bottom-right
+    const newX = screenWidth - newWidth - margin;
+    const newY = screenHeight - newHeight - margin;
+    
+    logger.debug(`📏 [OVERLAY:IPC] Resizing results window to: ${newWidth}x${newHeight}`);
+    resultsWindow.setBounds({
+      x: newX,
+      y: newY,
+      width: newWidth,
+      height: newHeight
+    });
   });
 
   // Handle closing results window
@@ -235,11 +273,8 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
       // Clear results state
       resultsState.hasResults = false;
       
-      // Clear overlay state in ghost window
-      if (ghostWindow && !ghostWindow.isDestroyed()) {
-        logger.debug('🧹 [OVERLAY:IPC] Clearing overlay state in ghost window');
-        ghostWindow.webContents.send('overlay:update', null);
-      }
+      // Don't clear overlay state - PromptCaptureBox may still be active
+      // Overlay state will be cleared when prompt capture is cancelled
     }
   });
 
@@ -450,27 +485,28 @@ function sendOverlayUpdate(payload) {
     logger.warn('⚠️  [OVERLAY:IPC] Ghost window not available for update');
   }
   
-  // Send results to results window (clean, styled like PromptCaptureBox)
-  if (resultsWindow && !resultsWindow.isDestroyed() && payload.uiVariant === 'results') {
-    logger.debug('📤 [OVERLAY:IPC] Sending results to results window');
-    
-    // Mark that we have results
-    resultsState.hasResults = true;
-    
-    // Position will be set by prompt-capture:set-position IPC event from ghost window
-    // Don't show window here - let the position handler show it after positioning
-    
-    resultsWindow.webContents.send('overlay:update', payload);
-    
-    // Send prompt text to results window for header display
-    // Extract from slots.subject or use a default
-    const promptText = payload.slots?.subject || payload.slots?.query || 'Results';
-    resultsWindow.webContents.send('results-window:set-prompt', promptText);
-    logger.debug('📝 [OVERLAY:IPC] Sent prompt text to results window:', promptText);
-    
-    // Notify PromptBar based on intent
-    if (payload.intent === 'screen_intelligence') {
-      notifyScreenIntelligenceResults();
+  // Send updates to results window (loading and results states)
+  if (resultsWindow && !resultsWindow.isDestroyed()) {
+    if (payload.uiVariant === 'loading' || payload.uiVariant === 'results') {
+      logger.debug(`📤 [OVERLAY:IPC] Sending ${payload.uiVariant} state to results window`);
+      
+      // Send the payload (loading or results)
+      resultsWindow.webContents.send('overlay:update', payload);
+      
+      if (payload.uiVariant === 'results') {
+        // Mark that we have results
+        resultsState.hasResults = true;
+        
+        // Send prompt text to results window for header display
+        const promptText = payload.slots?.subject || payload.slots?.query || 'Results';
+        resultsWindow.webContents.send('results-window:set-prompt', promptText);
+        logger.debug('📝 [OVERLAY:IPC] Sent prompt text to results window:', promptText);
+        
+        // Notify PromptBar based on intent
+        if (payload.intent === 'screen_intelligence') {
+          notifyScreenIntelligenceResults();
+        }
+      }
     }
   }
 }

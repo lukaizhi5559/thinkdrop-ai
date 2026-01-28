@@ -49,7 +49,7 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
   const baseHeight = Math.max(lines.length * lineHeight + padding * 2, 100);
   const estimatedWidth = Math.min(Math.max(text.length * 8, minWidth), maxWidth);
 
-  // Lock position when loading state appears, send position when results arrive
+  // Lock position when loading state appears, unlock when user types new query
   useEffect(() => {
     // Lock position on loading state
     if (overlayPayload && overlayPayload.uiVariant === 'loading' && !lockedPosition) {
@@ -83,59 +83,15 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
       console.log('📌 [PROMPT_CAPTURE] Locked display position:', { x: posX, y: posY });
     }
     
-    // Send position when results arrive (after position is locked)
-    if (overlayPayload && overlayPayload.uiVariant === 'results' && lockedPosition && lockedDisplayPosition) {
-      const ipcRenderer = (window as any).electron?.ipcRenderer;
-      if (ipcRenderer) {
-        const screenWidth = window.innerWidth;
-        const screenHeight = window.innerHeight;
-        const isLeftHalf = lockedPosition.x < screenWidth / 2;
-        const isTopHalf = lockedPosition.y < screenHeight / 2;
-        
-        // Use base dimensions (just the input area, no thinking/results)
-        const boxWidth = estimatedWidth;
-        const boxHeight = baseHeight; // Use baseHeight for consistent sizing
-        const resultsWidth = boxWidth; // Match prompt box width
-        const resultsMaxHeight = boxHeight * 2; // Max 2x prompt box height
-        const resultsHeight = Math.min(400, resultsMaxHeight); // Dynamic, capped at max
-        
-        // Position results window relative to prompt box DISPLAY position (not cursor)
-        // Always align horizontally with prompt box
-        let resultsX = lockedDisplayPosition.x;
-        let resultsY = lockedDisplayPosition.y;
-        
-        // Vertical positioning based on top/bottom quadrant
-        // Results always stack above or below, never to the side
-        if (isTopHalf) {
-          // Top half: place results BELOW prompt box
-          resultsY = lockedDisplayPosition.y + boxHeight + 50; // 20px gap for better spacing
-        } else {
-          // Bottom half: place results ABOVE prompt box
-          resultsY = lockedDisplayPosition.y - resultsHeight - 20; // 20px gap for consistency
-        }
-        
-        console.log('📍 [PROMPT_CAPTURE] Sending results window position:', {
-          promptBox: { x: lockedDisplayPosition.x, y: lockedDisplayPosition.y, width: boxWidth, height: boxHeight },
-          resultsWindow: { x: resultsX, y: resultsY, width: resultsWidth, height: resultsHeight },
-          quadrant: { isLeftHalf, isTopHalf }
-        });
-        
-        ipcRenderer.send('prompt-capture:set-position', {
-          x: resultsX,
-          y: resultsY,
-          width: resultsWidth,
-          height: resultsHeight
-        });
-      }
-    }
+    // Results window is now fixed at bottom-right, no need to send position
     
-    // Clear lock when overlay is cleared
-    if (!overlayPayload && lockedPosition) {
-      console.log('🔓 [PROMPT_CAPTURE] Clearing locked position');
+    // Clear lock when overlay is cleared OR when user starts typing (text changes while results are showing)
+    if (lockedPosition && (!overlayPayload || (overlayPayload.uiVariant === 'results' && text.length > 0))) {
+      console.log('🔓 [PROMPT_CAPTURE] Clearing locked position - user typing new query');
       setLockedPosition(null);
       setLockedDisplayPosition(null);
     }
-  }, [overlayPayload, position, lockedPosition, lockedDisplayPosition, estimatedWidth, baseHeight]);
+  }, [overlayPayload, position, lockedPosition, text, estimatedWidth, baseHeight]);
 
   // Only follow cursor if not locked
   useEffect(() => {

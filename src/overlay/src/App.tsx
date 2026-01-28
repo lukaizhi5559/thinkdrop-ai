@@ -168,11 +168,8 @@ function App() {
     console.log('📤 [OVERLAY] Prompt submitted:', message);
     console.log('🌐 [OVERLAY] Online mode (isOnlineMode state):', isOnlineMode);
 
-    // CRITICAL: Hide results window immediately to prevent it from appearing in screenshots
-    if (ipcRenderer) {
-      console.log('🙈 [OVERLAY] Hiding results window before processing new query');
-      ipcRenderer.send('results-window:close');
-    }
+    // ResultsWindow now stays visible and shows loading state during query processing
+    // No need to close it here - it will show "Thinking..." indicator
 
     // Read the latest online mode from main process to avoid stale state across windows
     let onlineModeForSubmit = isOnlineMode;
