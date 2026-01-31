@@ -179,6 +179,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     broadcast(promptWindow);
     broadcast(ghostWindow);
     broadcast(intentWindow);
+    broadcast(resultsWindow);
     broadcast(chatWindow);
   });
 
@@ -246,22 +247,88 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
     const minWidth = 400;
     const maxWidth = 600;
     const minHeight = 100;
-    const maxHeight = 600;
+    const maxHeight = 800; // Increased to match frontend
     
     const newWidth = Math.min(Math.max(width, minWidth), maxWidth);
     const newHeight = Math.min(Math.max(height, minHeight), maxHeight);
     
-    // Reposition to keep window at bottom-right
-    const newX = screenWidth - newWidth - margin;
-    const newY = screenHeight - newHeight - margin;
+    // Get current position or default to bottom-right
+    const currentBounds = resultsWindow.getBounds();
+    let newX = currentBounds.x !== undefined ? currentBounds.x : screenWidth - newWidth - margin;
+    let newY = currentBounds.y !== undefined ? currentBounds.y : screenHeight - newHeight - margin;
     
-    logger.debug(`📏 [OVERLAY:IPC] Resizing results window to: ${newWidth}x${newHeight}`);
+    // Ensure window stays fully on screen when resizing
+    // Clamp X position
+    if (newX + newWidth > screenWidth - margin) {
+      newX = screenWidth - newWidth - margin;
+    }
+    if (newX < margin) {
+      newX = margin;
+    }
+    
+    // Clamp Y position - keep window fully visible
+    if (newY + newHeight > screenHeight - margin) {
+      newY = screenHeight - newHeight - margin;
+    }
+    if (newY < margin) {
+      newY = margin;
+    }
+    
+    logger.debug(`📏 [OVERLAY:IPC] Resizing results window to: ${newWidth}x${newHeight} at (${newX}, ${newY})`);
     resultsWindow.setBounds({
       x: newX,
       y: newY,
       width: newWidth,
       height: newHeight
     });
+  });
+
+  // Handle moving results window (for dragging)
+  ipcMain.on('results-window:move', (event, { x, y }) => {
+    if (!resultsWindow || resultsWindow.isDestroyed()) {
+      return;
+    }
+    
+    const { screen } = require('electron');
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+    const currentBounds = resultsWindow.getBounds();
+    
+    // Clamp position to screen bounds
+    const newX = Math.max(0, Math.min(x, screenWidth - currentBounds.width));
+    const newY = Math.max(0, Math.min(y, screenHeight - currentBounds.height));
+    
+    resultsWindow.setPosition(newX, newY);
+  });
+
+  // Handle showing results window
+  ipcMain.on('show-results-window', (event, data) => {
+    logger.info('📨 [OVERLAY:IPC] Received show-results-window event', {
+      hasData: !!data,
+      dataType: typeof data,
+      prompt: data?.prompt
+    });
+    
+    if (!resultsWindow || resultsWindow.isDestroyed()) {
+      logger.error('❌ [OVERLAY:IPC] Results window not available');
+      return;
+    }
+    
+    const prompt = data?.prompt || data;
+    logger.info('📊 [OVERLAY:IPC] Showing results window for prompt:', prompt);
+    
+    // Send prompt text to results window
+    logger.info('📤 [OVERLAY:IPC] Sending results-window:set-prompt to ResultsWindow');
+    resultsWindow.webContents.send('results-window:set-prompt', prompt);
+    
+    // Show and focus the results window
+    logger.info('👁️ [OVERLAY:IPC] Showing and focusing ResultsWindow');
+    resultsWindow.show();
+    resultsWindow.focus();
+    
+    // Update results state
+    resultsState.hasResults = true;
+    logger.info('✅ [OVERLAY:IPC] ResultsWindow setup complete');
   });
 
   // Handle closing results window
@@ -926,7 +993,9 @@ function setOnlineMode(enabled) {
   broadcast(promptWindow);
   broadcast(ghostWindow);
   broadcast(intentWindow);
+  broadcast(resultsWindow);
   broadcast(chatWindow);
+
 }
 
 module.exports = {

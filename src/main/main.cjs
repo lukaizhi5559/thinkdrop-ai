@@ -605,6 +605,14 @@ function createResultsOverlay() {
   const isDev = process.env.NODE_ENV === 'development';
   if (isDev) {
     resultsOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=results');
+    resultsOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+
+    // Force dev tools to open after load
+    resultsOverlayWindow.webContents.on('did-finish-load', () => {
+      if (!resultsOverlayWindow.webContents.isDevToolsOpened()) {
+        resultsOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+      }
+    });
   } else {
     resultsOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
   }
@@ -694,16 +702,16 @@ app.whenReady().then(async () => {
       createGhostOverlay();
       
       logger.debug('🔧 Creating prompt overlay window (interactive)...');
-      createPromptOverlay();
+      // createPromptOverlay();
       
       logger.debug('🔧 Creating intent overlay window (interactive, hidden)...');
-      createIntentOverlay();
+      // createIntentOverlay();
       
       logger.debug('🔧 Creating results overlay window (interactive, hidden)...');
       createResultsOverlay();
       
       logger.debug('🔧 Creating chat overlay window (interactive, hidden)...');
-      createChatOverlay();
+      // createChatOverlay();
       
       // Initialize overlay IPC handlers with window references
       logger.debug('🔧 Initializing overlay IPC handlers...');
@@ -1430,6 +1438,12 @@ async function setupIPCHandlers() {
     const { PromptedAnywhereService } = require('./services/promptedAnywhere.cjs');
     global.promptedAnywhereService = new PromptedAnywhereService(mcpClient);
     logger.debug('✅ Prompted Anywhere service initialized');
+    
+    // Initialize Worker Agent Bridge (for StateGraph execution)
+    logger.debug('🔧 Initializing Worker Agent Bridge...');
+    const workerAgentBridge = require('./services/workerAgentBridge.cjs');
+    global.workerAgentBridge = workerAgentBridge;
+    logger.debug('✅ Worker Agent Bridge initialized');
     
     // Initialize MCP handlers (microservices)
     logger.debug('🔧 Setting up MCP handlers...');

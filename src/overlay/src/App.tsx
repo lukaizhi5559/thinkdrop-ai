@@ -28,6 +28,9 @@ function App() {
   const [isReady, setIsReady] = useState(false);
   const [isOnlineMode, setIsOnlineMode] = useState(false);
   const [showTester, setShowTester] = useState(false);
+  
+  // Request deduplication
+  const lastSubmittedPrompt = useRef<{ text: string; timestamp: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
   // Log when online mode changes
@@ -67,7 +70,7 @@ function App() {
   }, []);
 
   // Get active session ID for conversation continuity
-  const { signals, createSession } = useConversationSignals();
+  // const { signals, createSession } = useConversationSignals();
   
   // Detect which window mode we're in
   const urlParams = new URLSearchParams(window.location.search);
@@ -166,192 +169,221 @@ function App() {
 
   const handlePromptSubmit = async (message: string) => {
     console.log('📤 [OVERLAY] Prompt submitted:', message);
-    console.log('🌐 [OVERLAY] Online mode (isOnlineMode state):', isOnlineMode);
-
-    // ResultsWindow now stays visible and shows loading state during query processing
-    // No need to close it here - it will show "Thinking..." indicator
-
-    // Read the latest online mode from main process to avoid stale state across windows
-    let onlineModeForSubmit = isOnlineMode;
-    if (ipcRenderer) {
-      try {
-        const result = await ipcRenderer.invoke('online-mode:get');
-        if (result && typeof result.enabled === 'boolean') {
-          onlineModeForSubmit = result.enabled;
-        }
-      } catch (e) {
-        // Ignore - fall back to local state
+    
+    // Deduplication: Ignore duplicate submissions within 2 seconds
+    const now = Date.now();
+    if (lastSubmittedPrompt.current) {
+      const timeSinceLastSubmit = now - lastSubmittedPrompt.current.timestamp;
+      if (lastSubmittedPrompt.current.text === message && timeSinceLastSubmit < 2000) {
+        console.warn('🔄 [OVERLAY] Duplicate prompt submission ignored (submitted', timeSinceLastSubmit, 'ms ago)');
+        return;
       }
     }
-
-    console.log('🌐 [OVERLAY] Online mode (resolved for submit):', onlineModeForSubmit);
-    console.log('🌐 [OVERLAY] This will be passed as useOnlineMode to backend');
     
+    // Track this submission
+    lastSubmittedPrompt.current = { text: message, timestamp: now };
+    
+    console.log('🚀 [OVERLAY] Routing to new Communication Agent + ResultsWindow flow');
+
+    // Route to new Communication Agent + ResultsWindow flow
     if (ipcRenderer) {
-      // Check if chat window is open - if so, use its active session
-      // This prevents creating a new session when the user is already viewing a conversation
-      const chatWindowState = await ipcRenderer.invoke('chat-window:get-state');
-      const isChatOpen = chatWindowState?.isVisible;
-      
-      // 🔒 CRITICAL: Get the CURRENT active session from backend (source of truth)
-      // Don't rely on signals which might be stale due to async updates
-      let sessionId: string | null = null;
-      
-      try {
-        console.log('🔍 [OVERLAY] Calling session.getActive...');
-        const sessionResult = await (window as any).electronAPI.mcpCall({
-          serviceName: 'conversation',
-          action: 'session.getActive',
-          payload: {}
-        });
-        
-        console.log('📦 [OVERLAY] session.getActive response:', sessionResult);
-        
-        if (sessionResult.success && sessionResult.data?.data?.sessionId) {
-          sessionId = sessionResult.data.data.sessionId;
-          console.log('✅ [OVERLAY] Got active session from backend:', sessionId);
-        } else {
-          console.warn('⚠️  [OVERLAY] session.getActive returned no sessionId:', sessionResult);
-        }
-      } catch (error) {
-        console.error('❌ [OVERLAY] Failed to get active session from backend:', error);
-      }
-      
-      // Fallback to signals if backend call failed
-      if (!sessionId) {
-        sessionId = signals.activeSessionId.value;
-        console.log('🔍 [OVERLAY] Using activeSessionId from signals (fallback):', sessionId);
-      }
-      
-      console.log('� [OVERLAY] Chat window open:', isChatOpen);
-      
-      if (!sessionId) {
-        console.log('🆕 [OVERLAY] No active session, creating new one');
-        sessionId = await createSession('user-initiated', {
-          title: 'New Chat'
-        });
-        console.log('✅ [OVERLAY] Created new session:', sessionId);
-      }
-      
-      console.log('💬 [OVERLAY] Using session ID:', sessionId);
-      console.log('📤 [OVERLAY] Sending message to session:', sessionId);
-      
-      // 🚀 CRITICAL: Add user message to backend FIRST so chat window can load it
-      // This MUST complete before we start MCP processing to ensure conversation history includes the new message
-      try {
-        console.log('📝 [OVERLAY] Adding user message to backend via MCP...');
-        
-        const addResult = await (window as any).electronAPI.mcpCall({
-          serviceName: 'conversation',
-          action: 'message.add',
-          payload: {
-            sessionId: sessionId,
-            text: message,
-            sender: 'user',
-            metadata: {
-              isAutomationActive: false, // Will be overridden by context if automation is active
-              clarificationMode: false
-            }
-          }
-        });
-        
-        if (!addResult.success || !addResult.data?.success) {
-          console.error('❌ [OVERLAY] Failed to add user message:', addResult.error || addResult.data?.error);
-          return; // Don't proceed if message wasn't added
-        }
-        
-        console.log('✅ [OVERLAY] User message added to backend:', addResult.data.data?.messageId);
-        
-        // Notify chat window to reload messages immediately
-        if ((window as any).electron?.ipcRenderer) {
-          console.log('📤 [OVERLAY] Notifying chat window to reload messages (user message added)');
-          (window as any).electron.ipcRenderer.send('conversation:message-added', { sessionId: sessionId });
-          
-          // Notify chat window to show thinking indicator
-          console.log('📤 [OVERLAY] Notifying chat window to show thinking indicator');
-          (window as any).electron.ipcRenderer.send('conversation:processing-started', { sessionId: sessionId });
-        }
-      } catch (error) {
-        console.error('❌ [OVERLAY] Failed to add message to backend:', error);
-        return; // Don't proceed if there was an error
-      }
-      
-      // Use private-mode handler with overlay mode enabled
-      // The backend will handle sending the initial "Thinking..." and subsequent updates to the intent window
-      // NOTE: Message has been added above, so retrieveMemory will fetch it correctly
-      try {
-        // Type guard: sessionId should never be null at this point
-        if (!sessionId) {
-          console.error('❌ [OVERLAY] sessionId is null, cannot set loading state');
-          return;
-        }
-        
-        // Set loading state in signal to show "Thinking..." indicator
-        console.log('⏳ [OVERLAY] Setting overlay signal to loading state');
-        overlayPayloadSignal.value = {
-          intent: 'screen_intelligence',
-          uiVariant: 'loading',
-          slots: {},
-          conversationId: sessionId,
-          correlationId: `overlay_${Date.now()}`
-        };
-        
-        console.log('🚀 [OVERLAY] Calling private-mode:process with context:', {
-          overlayMode: true,
-          conversationId: sessionId,
-          sessionId: sessionId,
-          useOnlineMode: onlineModeForSubmit
-        });
-        
-        const result = await (window as any).electronAPI.invoke('private-mode:process', {
-          message,
-          context: {
-            overlayMode: true,
-            conversationId: sessionId, // For overlay payload
-            sessionId: sessionId, // For StateGraph conversation storage
-            correlationId: `overlay_${Date.now()}`,
-            userId: 'default_user',
-            timestamp: new Date().toISOString(),
-            useOnlineMode: onlineModeForSubmit
-          }
-        });
-        console.log('✅ [OVERLAY] Private mode processing complete:', result);
-        
-        // Set results state so PromptCaptureBox can send position to results window
-        console.log('📊 [OVERLAY] Setting overlay signal to results state');
-        overlayPayloadSignal.value = {
-          intent: 'screen_intelligence',
-          uiVariant: 'results',
-          slots: result.data || {},
-          conversationId: sessionId,
-          correlationId: `overlay_${Date.now()}`
-        };
-        
-        // Notify chat window that processing is complete
-        if ((window as any).electron?.ipcRenderer) {
-          console.log('📤 [OVERLAY] Notifying chat window that processing is complete');
-          (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId: sessionId });
-        }
-        
-        // Note: Chat window will be notified automatically by the backend's storeConversation node
-        // when the AI response is actually stored (no delay needed!)
-      } catch (error) {
-        console.error('❌ [OVERLAY] Private mode processing error:', error);
-        
-        // Clear loading state on error
-        console.log('🧹 [OVERLAY] Clearing loading state from overlay signal (error case)');
-        overlayPayloadSignal.value = null;
-        
-        // Notify chat window that processing failed
-        if ((window as any).electron?.ipcRenderer) {
-          console.log('📤 [OVERLAY] Notifying chat window that processing failed');
-          (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId });
-        }
-      }
+      console.log('📤 [OVERLAY] Sending show-results-window IPC event:', message);
+      ipcRenderer.send('show-results-window', { prompt: message });
+      console.log('✅ [OVERLAY] IPC event sent - ResultsWindow will handle the rest');
     } else {
-      console.error('❌ [OVERLAY] IPC not available');
+      console.error('❌ [OVERLAY] ipcRenderer not available!');
     }
   };
+
+  // OLD AUTOMATION SYSTEM HANDLER (DISABLED)
+  // const handlePromptSubmit_OLD = async (message: string) => {
+  //   console.log('📤 [OVERLAY] Prompt submitted:', message);
+  //   console.log('🌐 [OVERLAY] Online mode (isOnlineMode state):', isOnlineMode);
+
+  //   // ResultsWindow now stays visible and shows loading state during query processing
+  //   // No need to close it here - it will show "Thinking..." indicator
+
+  //   // Read the latest online mode from main process to avoid stale state across windows
+  //   let onlineModeForSubmit = isOnlineMode;
+  //   if (ipcRenderer) {
+  //     try {
+  //       const result = await ipcRenderer.invoke('online-mode:get');
+  //       if (result && typeof result.enabled === 'boolean') {
+  //         onlineModeForSubmit = result.enabled;
+  //       }
+  //     } catch (e) {
+  //       // Ignore - fall back to local state
+  //     }
+  //   }
+
+  //   console.log('🌐 [OVERLAY] Online mode (resolved for submit):', onlineModeForSubmit);
+  //   console.log('🌐 [OVERLAY] This will be passed as useOnlineMode to backend');
+    
+  //   if (ipcRenderer) {
+  //     // Check if chat window is open - if so, use its active session
+  //     // This prevents creating a new session when the user is already viewing a conversation
+  //     const chatWindowState = await ipcRenderer.invoke('chat-window:get-state');
+  //     const isChatOpen = chatWindowState?.isVisible;
+      
+  //     // 🔒 CRITICAL: Get the CURRENT active session from backend (source of truth)
+  //     // Don't rely on signals which might be stale due to async updates
+  //     let sessionId: string | null = null;
+      
+  //     try {
+  //       console.log('🔍 [OVERLAY] Calling session.getActive...');
+  //       const sessionResult = await (window as any).electronAPI.mcpCall({
+  //         serviceName: 'conversation',
+  //         action: 'session.getActive',
+  //         payload: {}
+  //       });
+        
+  //       console.log('📦 [OVERLAY] session.getActive response:', sessionResult);
+        
+  //       if (sessionResult.success && sessionResult.data?.data?.sessionId) {
+  //         sessionId = sessionResult.data.data.sessionId;
+  //         console.log('✅ [OVERLAY] Got active session from backend:', sessionId);
+  //       } else {
+  //         console.warn('⚠️  [OVERLAY] session.getActive returned no sessionId:', sessionResult);
+  //       }
+  //     } catch (error) {
+  //       console.error('❌ [OVERLAY] Failed to get active session from backend:', error);
+  //     }
+      
+  //     // Fallback to signals if backend call failed
+  //     if (!sessionId) {
+  //       sessionId = signals.activeSessionId.value;
+  //       console.log('🔍 [OVERLAY] Using activeSessionId from signals (fallback):', sessionId);
+  //     }
+      
+  //     console.log('� [OVERLAY] Chat window open:', isChatOpen);
+      
+  //     if (!sessionId) {
+  //       console.log('🆕 [OVERLAY] No active session, creating new one');
+  //       sessionId = await createSession('user-initiated', {
+  //         title: 'New Chat'
+  //       });
+  //       console.log('✅ [OVERLAY] Created new session:', sessionId);
+  //     }
+      
+  //     console.log('💬 [OVERLAY] Using session ID:', sessionId);
+  //     console.log('📤 [OVERLAY] Sending message to session:', sessionId);
+      
+  //     // 🚀 CRITICAL: Add user message to backend FIRST so chat window can load it
+  //     // This MUST complete before we start MCP processing to ensure conversation history includes the new message
+  //     try {
+  //       console.log('📝 [OVERLAY] Adding user message to backend via MCP...');
+        
+  //       const addResult = await (window as any).electronAPI.mcpCall({
+  //         serviceName: 'conversation',
+  //         action: 'message.add',
+  //         payload: {
+  //           sessionId: sessionId,
+  //           text: message,
+  //           sender: 'user',
+  //           metadata: {
+  //             isAutomationActive: false, // Will be overridden by context if automation is active
+  //             clarificationMode: false
+  //           }
+  //         }
+  //       });
+        
+  //       if (!addResult.success || !addResult.data?.success) {
+  //         console.error('❌ [OVERLAY] Failed to add user message:', addResult.error || addResult.data?.error);
+  //         return; // Don't proceed if message wasn't added
+  //       }
+        
+  //       console.log('✅ [OVERLAY] User message added to backend:', addResult.data.data?.messageId);
+        
+  //       // Notify chat window to reload messages immediately
+  //       if ((window as any).electron?.ipcRenderer) {
+  //         console.log('📤 [OVERLAY] Notifying chat window to reload messages (user message added)');
+  //         (window as any).electron.ipcRenderer.send('conversation:message-added', { sessionId: sessionId });
+          
+  //         // Notify chat window to show thinking indicator
+  //         console.log('📤 [OVERLAY] Notifying chat window to show thinking indicator');
+  //         (window as any).electron.ipcRenderer.send('conversation:processing-started', { sessionId: sessionId });
+  //       }
+  //     } catch (error) {
+  //       console.error('❌ [OVERLAY] Failed to add message to backend:', error);
+  //       return; // Don't proceed if there was an error
+  //     }
+      
+  //     // Use private-mode handler with overlay mode enabled
+  //     // The backend will handle sending the initial "Thinking..." and subsequent updates to the intent window
+  //     // NOTE: Message has been added above, so retrieveMemory will fetch it correctly
+  //     try {
+  //       // Type guard: sessionId should never be null at this point
+  //       if (!sessionId) {
+  //         console.error('❌ [OVERLAY] sessionId is null, cannot set loading state');
+  //         return;
+  //       }
+        
+  //       // Set loading state in signal to show "Thinking..." indicator
+  //       console.log('⏳ [OVERLAY] Setting overlay signal to loading state');
+  //       overlayPayloadSignal.value = {
+  //         intent: 'screen_intelligence',
+  //         uiVariant: 'loading',
+  //         slots: {},
+  //         conversationId: sessionId,
+  //         correlationId: `overlay_${Date.now()}`
+  //       };
+        
+  //       console.log('🚀 [OVERLAY] Calling private-mode:process with context:', {
+  //         overlayMode: true,
+  //         conversationId: sessionId,
+  //         sessionId: sessionId,
+  //         useOnlineMode: onlineModeForSubmit
+  //       });
+        
+  //       const result = await (window as any).electronAPI.invoke('private-mode:process', {
+  //         message,
+  //         context: {
+  //           overlayMode: true,
+  //           conversationId: sessionId, // For overlay payload
+  //           sessionId: sessionId, // For StateGraph conversation storage
+  //           correlationId: `overlay_${Date.now()}`,
+  //           userId: 'default_user',
+  //           timestamp: new Date().toISOString(),
+  //           useOnlineMode: onlineModeForSubmit
+  //         }
+  //       });
+  //       console.log('✅ [OVERLAY] Private mode processing complete:', result);
+        
+  //       // Set results state so PromptCaptureBox can send position to results window
+  //       console.log('📊 [OVERLAY] Setting overlay signal to results state');
+  //       overlayPayloadSignal.value = {
+  //         intent: 'screen_intelligence',
+  //         uiVariant: 'results',
+  //         slots: result.data || {},
+  //         conversationId: sessionId,
+  //         correlationId: `overlay_${Date.now()}`
+  //       };
+        
+  //       // Notify chat window that processing is complete
+  //       if ((window as any).electron?.ipcRenderer) {
+  //         console.log('📤 [OVERLAY] Notifying chat window that processing is complete');
+  //         (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId: sessionId });
+  //       }
+        
+  //       // Note: Chat window will be notified automatically by the backend's storeConversation node
+  //       // when the AI response is actually stored (no delay needed!)
+  //     } catch (error) {
+  //       console.error('❌ [OVERLAY] Private mode processing error:', error);
+        
+  //       // Clear loading state on error
+  //       console.log('🧹 [OVERLAY] Clearing loading state from overlay signal (error case)');
+  //       overlayPayloadSignal.value = null;
+        
+  //       // Notify chat window that processing failed
+  //       if ((window as any).electron?.ipcRenderer) {
+  //         console.log('📤 [OVERLAY] Notifying chat window that processing failed');
+  //         (window as any).electron.ipcRenderer.send('conversation:processing-complete', { sessionId });
+  //       }
+  //     }
+  //   } else {
+  //     console.error('❌ [OVERLAY] IPC not available');
+  //   }
+  // };
 
   const handleOverlayEvent = (eventName: string, data?: any) => {
     console.log('📤 [OVERLAY] Overlay event:', eventName, data);

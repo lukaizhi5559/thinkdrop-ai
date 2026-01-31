@@ -52,8 +52,21 @@ class WorkerAgentBridge {
       
       logger.info('🔧 [WORKER_BRIDGE] Received execution request', {
         sessionId,
-        messagePreview: message?.substring(0, 50)
+        messagePreview: message?.substring(0, 50),
+        hasMessage: !!message,
+        messageType: typeof message
       });
+
+      // Validate message
+      if (!message || typeof message !== 'string' || message.trim().length === 0) {
+        const error = 'Invalid or empty message provided to worker:execute';
+        logger.error('❌ [WORKER_BRIDGE] Validation failed', {
+          sessionId,
+          message,
+          messageType: typeof message
+        });
+        throw new Error(error);
+      }
 
       try {
         // Update session state to 'running'
@@ -63,12 +76,49 @@ class WorkerAgentBridge {
           startTime: Date.now()
         });
 
+        // 💾 CRITICAL: Store user message to conversation service BEFORE executing StateGraph
+        // This ensures the StateGraph's retrieveMemory node can fetch conversation history
+        // that includes the current user message for context-aware responses
+        try {
+          const { getMCPClient } = require('./mcp/mcpClient.cjs');
+          const mcpClient = getMCPClient();
+          
+          logger.debug('💾 [WORKER_BRIDGE] Storing user message to conversation service', {
+            sessionId,
+            messagePreview: message.substring(0, 50),
+            userId: context.userId || 'default_user'
+          });
+          
+          await mcpClient.callService('conversation', 'message.add', {
+            sessionId: sessionId,
+            text: message,
+            sender: 'user',
+            metadata: {
+              timestamp: new Date().toISOString(),
+              userId: context.userId || 'default_user'
+            }
+          });
+          
+          logger.debug('✅ [WORKER_BRIDGE] User message stored successfully');
+        } catch (storeError) {
+          // Don't fail execution if storage fails - log warning and continue
+          logger.warn('⚠️ [WORKER_BRIDGE] Failed to store user message (non-critical):', storeError.message);
+        }
+
         // Import orchestrator dynamically to avoid circular deps
         const AgentOrchestrator = require('./mcp/AgentOrchestrator.cjs');
         const orchestrator = new AgentOrchestrator();
 
         // Create progress callback that forwards to frontend
         const onProgress = async (nodeName, state, duration, status) => {
+          logger.debug('📊 [WORKER_BRIDGE] Progress callback invoked', {
+            sessionId,
+            nodeName,
+            status,
+            hasStepDescription: !!state.stepDescription,
+            hasActionDescription: !!state.actionDescription
+          });
+
           const progressUpdate = {
             sessionId,
             nodeName,
@@ -89,11 +139,19 @@ class WorkerAgentBridge {
           });
 
           // Send to all renderer windows
+          logger.debug('📡 [WORKER_BRIDGE] Broadcasting progress to renderers', {
+            channel: 'worker:progress',
+            windowCount: BrowserWindow.getAllWindows().length
+          });
           this.broadcastToRenderers('worker:progress', progressUpdate);
         };
 
         // Create stream callback for LLM tokens
         const onStreamToken = (token) => {
+          logger.debug('💬 [WORKER_BRIDGE] Stream token callback invoked', {
+            sessionId,
+            tokenLength: token?.length || 0
+          });
           this.broadcastToRenderers('worker:stream-token', {
             sessionId,
             token,
@@ -115,6 +173,17 @@ class WorkerAgentBridge {
           result,
           endTime: Date.now()
         });
+
+        // If StateGraph generated an overlay payload, broadcast it to ResultsWindow
+        if (result.overlayPayload) {
+          logger.debug('📤 [WORKER_BRIDGE] Broadcasting overlay payload to ResultsWindow', {
+            intent: result.overlayPayload.intent,
+            variant: result.overlayPayload.uiVariant
+          });
+          
+          // Send overlay:update to all renderer windows (including ResultsWindow)
+          this.broadcastToRenderers('overlay:update', result.overlayPayload);
+        }
 
         // Broadcast completion
         this.broadcastToRenderers('worker:completed', {
@@ -195,8 +264,14 @@ class WorkerAgentBridge {
    */
   broadcastToRenderers(channel, data) {
     const windows = BrowserWindow.getAllWindows();
+    logger.debug(`📡 [WORKER_BRIDGE] Broadcasting to ${windows.length} windows`, {
+      channel,
+      windowTitles: windows.map(w => w.getTitle())
+    });
+    
     windows.forEach(win => {
       if (win && !win.isDestroyed()) {
+        logger.debug(`  → Sending to: ${win.getTitle()}`);
         win.webContents.send(channel, data);
       }
     });

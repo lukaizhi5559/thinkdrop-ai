@@ -35,6 +35,9 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
     
     return unsubscribe;
   }, []);
+
+  // Note: Enter key is handled by main process → GhostOverlay IPC → App.tsx → show-results-window
+  // No need for local key handler here
   const [position, setPosition] = useState(cursorPosition);
   const [lockedPosition, setLockedPosition] = useState<{ x: number; y: number } | null>(null);
   const [lockedDisplayPosition, setLockedDisplayPosition] = useState<{ x: number; y: number } | null>(null);
@@ -117,15 +120,6 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
   // Keep box visible if active OR if we have loading/results state
   // When results are showing, box stays visible and editable for immediate new queries
   const shouldShow = isActive || (overlayPayload && (overlayPayload.uiVariant === 'loading' || overlayPayload.uiVariant === 'results'));
-  
-  // Debug logging
-  console.log('🔍 [PROMPT_CAPTURE_BOX] Render check:', {
-    isActive,
-    hasOverlayPayload: !!overlayPayload,
-    uiVariant: overlayPayload?.uiVariant,
-    shouldShow,
-    text
-  });
   
   if (!shouldShow) return null;
 

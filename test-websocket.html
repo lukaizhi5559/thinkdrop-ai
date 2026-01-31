@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Socket.IO Test</title>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        .log {
+            margin: 10px 0;
+            padding: 10px;
+            background: #2d2d2d;
+            border-left: 3px solid #007acc;
+        }
+        .error {
+            border-left-color: #f44747;
+        }
+        .success {
+            border-left-color: #4ec9b0;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background: #007acc;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #005a9e;
+        }
+        #response {
+            margin-top: 20px;
+            padding: 15px;
+            background: #2d2d2d;
+            border: 1px solid #3e3e3e;
+            min-height: 100px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    <p>Testing connection to: <strong>http://localhost:4000</strong></p>
+    
+    <div>
+        <button onclick="testConnection()">Test Connection</button>
+        <button onclick="sendMessage()">Send Test Message</button>
+        <button onclick="clearLogs()">Clear Logs</button>
+    </div>
+    
+    <div id="logs"></div>
+    <div id="response"></div>
+
+    <script>
+        let socket = null;
+        let messageCount = 0;
+
+        function log(message, type = 'info') {
+            const logsDiv = document.getElementById('logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log ${type}`;
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logsDiv.appendChild(logEntry);
+            logsDiv.scrollTop = logsDiv.scrollHeight;
+        }
+
+        function clearLogs() {
+            document.getElementById('logs').innerHTML = '';
+            document.getElementById('response').textContent = '';
+        }
+
+        function testConnection() {
+            log('🔌 Attempting to connect to Socket.IO...', 'info');
+            
+            try {
+                socket = io('http://localhost:4000', {
+                    path: '/socket.io',
+                    transports: ['polling'], // CRITICAL: Only use polling
+                    reconnection: true,
+                    reconnectionDelay: 1000,
+                    reconnectionAttempts: 5
+                });
+
+                socket.on('connect', () => {
+                    log('✅ Socket.IO connected successfully!', 'success');
+                    log(`Socket ID: ${socket.id}`, 'success');
+                    log(`Transport: ${socket.io.engine.transport.name}`, 'info');
+                });
+
+                socket.on('connection_status', (data) => {
+                    messageCount++;
+                    log(`📨 Connection status received (#${messageCount})`, 'success');
+                    document.getElementById('response').textContent = JSON.stringify(data, null, 2);
+                    log(`Session ID: ${data.payload?.sessionId}`, 'info');
+                });
+
+                socket.on('message', (data) => {
+                    messageCount++;
+                    log(`📨 Message received (#${messageCount})`, 'success');
+                    document.getElementById('response').textContent = JSON.stringify(data, null, 2);
+                    log(`Message type: ${data.type}`, 'info');
+                });
+
+                socket.on('heartbeat', (data) => {
+                    log('💓 Heartbeat received', 'info');
+                });
+
+                socket.on('error', (error) => {
+                    log('❌ Socket.IO error occurred', 'error');
+                    console.error('Socket.IO error:', error);
+                });
+
+                socket.on('disconnect', (reason) => {
+                    log(`🔌 Disconnected: ${reason}`, 'error');
+                });
+
+                socket.on('connect_error', (error) => {
+                    log(`❌ Connection error: ${error.message}`, 'error');
+                });
+
+            } catch (error) {
+                log(`❌ Failed to create Socket.IO connection: ${error.message}`, 'error');
+            }
+        }
+
+        function sendMessage() {
+            if (!socket || !socket.connected) {
+                log('❌ Socket.IO is not connected. Click "Test Connection" first.', 'error');
+                return;
+            }
+
+            const testMessage = {
+                type: 'llm_request',
+                id: `test_${Date.now()}`,
+                payload: {
+                    prompt: 'Hello, this is a test message from the Socket.IO test page',
+                    provider: 'claude',
+                    stream: true,
+                    context: {}
+                },
+                sessionId: `test_session_${Date.now()}`,
+                timestamp: Date.now(),
+                metadata: {
+                    source: 'test-page'
+                }
+            };
+
+            log('📤 Sending test message...', 'info');
+            log(`Message: ${JSON.stringify(testMessage)}`, 'info');
+            
+            try {
+                socket.emit('message', testMessage);
+                log('✅ Message sent successfully', 'success');
+            } catch (error) {
+                log(`❌ Failed to send message: ${error.message}`, 'error');
+            }
+        }
+
+        // Auto-connect on load
+        window.addEventListener('load', () => {
+            log('Page loaded. Click "Test Connection" to start.', 'info');
+        });
+    </script>
+</body>
+</html>

@@ -40,8 +40,6 @@ interface GhostOverlayProps {
 }
 
 export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }: GhostOverlayProps) {
-  console.log('🎭 [GHOST_OVERLAY] Component rendering');
-  
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [targetPos, setTargetPos] = useState({ x: 0, y: 0 });
   const [isAutomating, setIsAutomating] = useState(false);
