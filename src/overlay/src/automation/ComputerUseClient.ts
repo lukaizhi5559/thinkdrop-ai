@@ -73,6 +73,9 @@ export interface ComputerUseCallbacks {
   onError?: (error: string) => void;
   onStatus?: (message: string) => void;
   onClarificationNeeded?: (questions: ClarificationQuestion[], iteration: number) => Promise<Record<string, string>>;
+  onIntentStart?: (intent: any, index: number) => void;
+  onIntentComplete?: (intent: any, index: number) => void;
+  onIntentFailed?: (intent: any, index: number, error: string) => void;
 }
 
 export class ComputerUseClient {
@@ -1086,6 +1089,9 @@ export class ComputerUseClient {
                 
                 console.log('📦 [INTENT-MODE] Action data:', JSON.stringify(action, null, 2));
                 
+                // Notify UI of action with reasoning
+                this.callbacks.onAction?.(action, currentStepIndex);
+                
                 // Log deterministic decisions (backend skipped LLM call)
                 if (action?.metadata?.deterministic) {
                   console.log('⚡ [INTENT-MODE] Fast decision (deterministic):', action.type);
@@ -1095,6 +1101,9 @@ export class ComputerUseClient {
                 }
                 
                 await this.executeAction(action);
+                
+                // Wait for UI to update after action (critical for backend verification)
+                await capabilities.wait(300);
                 
                 // Capture new screenshot after action
                 const screenshot = await capabilities.captureScreenshot();
@@ -1112,7 +1121,11 @@ export class ComputerUseClient {
                   Object.assign(storedData, message.data.outputData);
                 }
                 
-                // Notify callback
+                // Notify intent completion callback
+                const completedIntent = plan.steps[currentStepIndex];
+                this.callbacks.onIntentComplete?.(completedIntent, currentStepIndex);
+                
+                // Also notify action callback for backward compatibility
                 this.callbacks.onAction?.(
                   { type: 'intent_complete', reasoning: message.data?.reasoning },
                   currentStepIndex
@@ -1134,6 +1147,11 @@ export class ComputerUseClient {
               case 'intent_failed':
                 // Intent failed after retries
                 console.error('❌ [INTENT-MODE] Intent failed:', message.error);
+                
+                // Notify intent failure callback
+                const failedIntent = plan.steps[currentStepIndex];
+                this.callbacks.onIntentFailed?.(failedIntent, currentStepIndex, message.error || 'Intent execution failed');
+                
                 this.callbacks.onError?.(message.error || 'Intent execution failed');
                 this.close();
                 reject(new Error(message.error || 'Intent execution failed'));
@@ -1233,6 +1251,9 @@ export class ComputerUseClient {
     const step = plan.steps[stepIndex];
     console.log(`🎯 [INTENT-MODE] Executing step ${stepIndex + 1}/${plan.steps.length}: ${step.intent}`);
 
+    // Notify intent start callback
+    this.callbacks.onIntentStart?.(step, stepIndex);
+
     // Capture current screenshot
     const screenshot = await capabilities.captureScreenshot();
     
@@ -1296,17 +1317,27 @@ export class ComputerUseClient {
     const ipcRenderer = (window as any).electron?.ipcRenderer;
     if (!ipcRenderer) return undefined;
 
-    // Skip if no active app is set yet (e.g., before first focusApp action)
-    if (!this.activeApp) {
-      console.log('⏭️ [INTENT-MODE] Skipping window bounds - no active app set yet');
-      return undefined;
-    }
-
     try {
-      const bounds = await ipcRenderer.invoke('automation:get-window-bounds', {
-        appName: this.activeApp
-      });
-      return bounds;
+      // Retry up to 3 times with delays to allow browser window to become active
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        const bounds = await ipcRenderer.invoke('automation:get-window-bounds', {
+          appName: this.activeApp || null // null = get frontmost window
+        });
+        
+        if (bounds) {
+          console.log(`✅ [INTENT-MODE] Got window bounds (attempt ${attempt}):`, bounds);
+          return bounds;
+        }
+        
+        // Wait before retry (overlay window might still be active)
+        if (attempt < 3) {
+          console.log(`⏳ [INTENT-MODE] Window bounds not available, retrying in 500ms (attempt ${attempt}/3)...`);
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      
+      console.warn('⚠️ [INTENT-MODE] No window bounds available after 3 attempts');
+      return undefined;
     } catch (error) {
       console.warn('⚠️ [INTENT-MODE] Could not get window bounds:', error);
       return undefined;

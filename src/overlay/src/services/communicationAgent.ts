@@ -8,6 +8,11 @@
 
 import { io, Socket } from 'socket.io-client';
 
+// 🎯 CONFIG: Choose automation execution method
+// 'WEBSOCKET' - Use WebSocket-based Computer Use execution (current flow)
+// 'COMMAND_MCP' - Use sequential MCP command.prompt-anywhere execution (new flow)
+export const AUTOMATION_MODE: 'WEBSOCKET' | 'COMMAND_MCP' = 'WEBSOCKET';
+
 // Electron IPC for worker coordination
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
@@ -106,12 +111,22 @@ export interface WorkerProgress {
   timestamp: number;
 }
 
+export interface OmniParserStatus {
+  isWarm: boolean;
+  enabled: boolean;
+  lastWarmupTime: number | null;
+  timeSinceLastWarmupSeconds: number | null;
+  warmupCount: number;
+  nextWarmupInSeconds: number;
+}
+
 export interface CommunicationAgentConfig {
   serverUrl: string;
   onMessage?: (message: any) => void;
   onProgress?: (progress: any) => void;
   onStreamToken?: (token: string) => void;
   onError?: (error: string) => void;
+  onOmniParserStatus?: (status: OmniParserStatus) => void;
 }
 
 export class CommunicationAgent {
@@ -193,6 +208,14 @@ export class CommunicationAgent {
           if (this.socket) {
             this.socket.emit('heartbeat_response');
             console.log('💓 [COMM_AGENT] Heartbeat response sent');
+          }
+        });
+
+        this.socket.on('omniparser_status', (status) => {
+          console.log('🔥 [COMM_AGENT] OmniParser status received:', status);
+          // Forward to callback if configured
+          if (this.config.onOmniParserStatus) {
+            this.config.onOmniParserStatus(status);
           }
         });
 
@@ -461,6 +484,95 @@ export class CommunicationAgent {
         useOnlineMode: true // Enable online mode for screen intelligence
       }
     });
+  }
+
+  /**
+   * Execute automation plan using sequential MCP command.prompt-anywhere calls
+   * Alternative to WebSocket-based execution
+   */
+  async executeWithMCP(
+    plan: any,
+    callbacks: {
+      onIntentStart?: (intent: any, index: number) => void;
+      onIntentComplete?: (intent: any, index: number, result: any) => void;
+      onIntentError?: (intent: any, index: number, error: string) => void;
+      onComplete?: (result: any) => void;
+      onError?: (error: string) => void;
+    }
+  ): Promise<void> {
+    console.log('🚀 [COMM_AGENT] Starting MCP-based automation execution');
+    console.log(`📋 [COMM_AGENT] Plan has ${plan.steps?.length || 0} intents`);
+
+    if (!ipcRenderer) {
+      const error = 'IPC renderer not available';
+      console.error('❌ [COMM_AGENT]', error);
+      callbacks.onError?.(error);
+      return;
+    }
+
+    try {
+      const steps = plan.steps || [];
+      
+      for (let i = 0; i < steps.length; i++) {
+        const intent = steps[i];
+        console.log(`\n🎯 [COMM_AGENT] Executing intent ${i + 1}/${steps.length}: ${intent.description || intent.action}`);
+        
+        callbacks.onIntentStart?.(intent, i);
+
+        // Take screenshot before executing intent
+        console.log('📸 [COMM_AGENT] Capturing screenshot for intent...');
+        const screenshot = await this.captureScreenshot();
+
+        // Build intent prompt
+        const intentPrompt = intent.description || intent.action || intent.intent || 'Execute automation step';
+        
+        console.log(`📤 [COMM_AGENT] Sending intent to MCP service: "${intentPrompt.substring(0, 100)}..."`);
+
+        // Execute intent via MCP service
+        const result = await ipcRenderer.invoke('automation:execute-mcp-intent', {
+          intentPrompt,
+          screenshot
+        });
+
+        if (!result.success) {
+          const error = result.error || 'Intent execution failed';
+          console.error(`❌ [COMM_AGENT] Intent ${i + 1} failed:`, error);
+          callbacks.onIntentError?.(intent, i, error);
+          callbacks.onError?.(error);
+          return;
+        }
+
+        console.log(`✅ [COMM_AGENT] Intent ${i + 1} completed successfully`);
+        callbacks.onIntentComplete?.(intent, i, result.response);
+
+        // Small delay between intents to allow UI to update
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
+      console.log('🎉 [COMM_AGENT] All intents completed successfully');
+      callbacks.onComplete?.({ success: true, totalIntents: steps.length });
+
+    } catch (error: any) {
+      console.error('❌ [COMM_AGENT] MCP automation execution failed:', error);
+      callbacks.onError?.(error.message || 'Unknown error');
+    }
+  }
+
+  /**
+   * Capture screenshot for automation
+   */
+  private async captureScreenshot(): Promise<string> {
+    if (!ipcRenderer) {
+      throw new Error('IPC renderer not available');
+    }
+
+    try {
+      const screenshot = await ipcRenderer.invoke('automation:capture-screenshot');
+      return screenshot;
+    } catch (error: any) {
+      console.error('❌ [COMM_AGENT] Screenshot capture failed:', error);
+      throw error;
+    }
   }
 
   /**

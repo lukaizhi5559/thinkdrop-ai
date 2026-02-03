@@ -1134,10 +1134,49 @@ function registerAutomationHandlers(client, overlay = null) {
   });
 
   /**
-   * Capture screenshot
+   * Capture screenshot (promise-based handler for ipcRenderer.invoke)
+   */
+  ipcMain.handle('automation:capture-screenshot', async () => {
+    logger.debug('📸 [IPC:AUTOMATION] Capture screenshot (handle)');
+    
+    try {
+      const { desktopCapturer, screen } = require('electron');
+      const displays = screen.getAllDisplays();
+      const primaryDisplay = displays[0];
+      
+      // Capture full screen
+      const sources = await desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: {
+          width: primaryDisplay.bounds.width,
+          height: primaryDisplay.bounds.height
+        }
+      });
+      
+      if (sources.length > 0) {
+        const screenshot = sources[0].thumbnail.toDataURL();
+        logger.debug('✅ [IPC:AUTOMATION] Screenshot captured successfully', {
+          size: screenshot.length
+        });
+        
+        // Extract base64 data (remove data URL prefix)
+        const base64Data = screenshot.replace(/^data:image\/\w+;base64,/, '');
+        
+        return base64Data;
+      } else {
+        throw new Error('No screen sources found');
+      }
+    } catch (error) {
+      logger.error('❌ [IPC:AUTOMATION] Screenshot error:', error.message);
+      throw error;
+    }
+  });
+
+  /**
+   * Capture screenshot (event-based for backward compatibility)
    */
   ipcMain.on('screenshot:capture', async (event) => {
-    logger.debug('📸 [IPC:AUTOMATION] Capture screenshot');
+    logger.debug('📸 [IPC:AUTOMATION] Capture screenshot (event)');
     
     try {
       const { desktopCapturer, screen } = require('electron');
@@ -1667,6 +1706,17 @@ function registerAutomationHandlers(client, overlay = null) {
   // Native keyboard typing
   ipcMain.on('automation:native-type', async (event, { text }) => {
     logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] ========== TYPE TEXT START ==========`);
+    
+    // Validate text parameter
+    if (text === undefined || text === null) {
+      logger.error(`❌ [IPC:AUTOMATION:NATIVE] Text parameter is undefined or null`);
+      event.reply('automation:native-type:result', { 
+        success: false, 
+        error: 'Text parameter is required' 
+      });
+      return;
+    }
+    
     logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text to type: "${text}"`);
     logger.info(`⌨️ [IPC:AUTOMATION:NATIVE] Text length: ${text.length} characters`);
     
@@ -1760,29 +1810,42 @@ function registerAutomationHandlers(client, overlay = null) {
       // libnut uses different key names on different platforms
       const isMac = process.platform === 'darwin';
       
-      const keyMap = {
-        // Enter key: 'return' on macOS, 'enter' on Windows/Linux
-        'enter': isMac ? 'return' : 'enter',
-        
-        // Escape shorthand
-        'esc': 'escape',
-        
-        // Arrow keys: libnut uses 'down', 'up', 'left', 'right'
-        'arrowdown': 'down',
-        'arrowup': 'up',
-        'arrowleft': 'left',
-        'arrowright': 'right'
-      };
-      
-      const normalizedKey = key.toLowerCase();
-      const libnutKey = keyMap[normalizedKey] || normalizedKey;
-      
-      // Log for debugging
-      logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Key: "${key}" -> "${libnutKey}", Modifiers: [${mods.join(', ')}]`);
-      
-      // Press the key with modifiers
+      // Get nutjs module first to access Key constants
       const nutjsHK = await getNutJs();
       const { keyboard: kbHK, Key: KeyHK } = nutjsHK;
+      
+      // Map key names to Key constants (for special keys)
+      const normalizedKey = key.toLowerCase();
+      let keyToPress;
+      
+      // Special keys that need Key constants
+      if (normalizedKey === 'enter') {
+        keyToPress = KeyHK.Return;  // Use Key.Return constant
+      } else if (normalizedKey === 'esc' || normalizedKey === 'escape') {
+        keyToPress = KeyHK.Escape;
+      } else if (normalizedKey === 'arrowdown' || normalizedKey === 'down') {
+        keyToPress = KeyHK.Down;
+      } else if (normalizedKey === 'arrowup' || normalizedKey === 'up') {
+        keyToPress = KeyHK.Up;
+      } else if (normalizedKey === 'arrowleft' || normalizedKey === 'left') {
+        keyToPress = KeyHK.Left;
+      } else if (normalizedKey === 'arrowright' || normalizedKey === 'right') {
+        keyToPress = KeyHK.Right;
+      } else if (normalizedKey === 'tab') {
+        keyToPress = KeyHK.Tab;
+      } else if (normalizedKey === 'backspace') {
+        keyToPress = KeyHK.Backspace;
+      } else if (normalizedKey === 'delete') {
+        keyToPress = KeyHK.Delete;
+      } else {
+        // For regular characters, use string
+        keyToPress = normalizedKey;
+      }
+      
+      // Log for debugging
+      logger.debug(`⌨️ [IPC:AUTOMATION:NATIVE] Key: "${key}" -> ${typeof keyToPress === 'string' ? `"${keyToPress}"` : 'Key constant'}, Modifiers: [${mods.join(', ')}]`);
+      
+      // Press the key with modifiers
       if (mods.length > 0) {
         // Map modifier strings to Key constants
         const modKeys = mods.map(m => {
@@ -1796,12 +1859,26 @@ function registerAutomationHandlers(client, overlay = null) {
         for (const modKey of modKeys) {
           await kbHK.pressKey(modKey);
         }
-        await kbHK.type(libnutKey);
+        
+        // Use type() for strings, pressKey() for Key constants
+        if (typeof keyToPress === 'string') {
+          await kbHK.type(keyToPress);
+        } else {
+          await kbHK.pressKey(keyToPress);
+          await kbHK.releaseKey(keyToPress);
+        }
+        
         for (const modKey of modKeys.reverse()) {
           await kbHK.releaseKey(modKey);
         }
       } else {
-        await kbHK.type(libnutKey);
+        // Use type() for strings, pressKey()+releaseKey() for Key constants
+        if (typeof keyToPress === 'string') {
+          await kbHK.type(keyToPress);
+        } else {
+          await kbHK.pressKey(keyToPress);
+          await kbHK.releaseKey(keyToPress);
+        }
       }
       
       logger.debug(`✅ [IPC:AUTOMATION:NATIVE] Hotkey pressed successfully`);
@@ -2783,6 +2860,50 @@ async function restoreCursor(logMessage = '🔄 [IPC:AUTOMATION] Restoring curso
     logger.error('❌ [IPC:AUTOMATION] Failed to restore cursor:', error.message);
   }
 }
+
+/**
+ * Execute automation intent via MCP command.prompt-anywhere service
+ * Used for COMMAND_MCP mode - sequential intent execution
+ */
+ipcMain.handle('automation:execute-mcp-intent', async (event, { intentPrompt, screenshot }) => {
+  try {
+    logger.info('🚀 [IPC:AUTOMATION] Executing MCP intent');
+    logger.debug(`📝 [IPC:AUTOMATION] Intent prompt: ${intentPrompt.substring(0, 100)}...`);
+    
+    if (!mcpClient) {
+      throw new Error('MCP client not initialized');
+    }
+
+    // Call command.prompt-anywhere service with intent prompt and screenshot
+    const response = await mcpClient.callService(
+      'command',
+      'command.prompt-anywhere',
+      {
+        text: intentPrompt,
+        screenshot: screenshot,
+        context: {
+          os: process.platform,
+          timestamp: Date.now(),
+          mode: 'automation_intent'
+        }
+      },
+      { timeout: 120000 } // 120 second timeout for vision processing + execution
+    );
+
+    logger.info('✅ [IPC:AUTOMATION] MCP intent execution complete');
+    return {
+      success: true,
+      response: response
+    };
+
+  } catch (error) {
+    logger.error('❌ [IPC:AUTOMATION] MCP intent execution failed:', error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+});
 
 /**
  * Restore cursor on process exit

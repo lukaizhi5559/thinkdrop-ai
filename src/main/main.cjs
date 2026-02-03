@@ -565,7 +565,7 @@ function createResultsOverlay() {
   const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
   const windowMinWidth = 400; // Match PromptCaptureBox min width
   const windowMinHeight = 100; // Minimal height when empty
-  const windowMaxHeight = 600; // Maximum height for dynamic content
+  const windowMaxHeight = 800; // Maximum height for dynamic content (increased for reasoning display)
   const margin = 20; // Margin from screen edges
   
   resultsOverlayWindow = new BrowserWindow({
@@ -582,7 +582,7 @@ function createResultsOverlay() {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: true, // Allow dynamic resizing
-    movable: false,
+    movable: true, // Allow dragging
     minimizable: false,
     maximizable: false,
     closable: true,

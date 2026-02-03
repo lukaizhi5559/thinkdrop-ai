@@ -325,8 +325,8 @@ class PromptCaptureService {
         this.logger.debug('[PromptCapture] Sent cancellation via native IPC');
         
         // Hide results window
-        const { ipcMain } = require('electron');
-        ipcMain.emit('prompt-capture:hide-results');
+        // const { ipcMain } = require('electron');
+        // ipcMain.emit('prompt-capture:hide-results');
         
         // Re-enable click-through
         setImmediate(() => {

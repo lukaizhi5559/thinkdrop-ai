@@ -226,9 +226,45 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
       return;
     }
     
-    logger.debug('� [OVERLAY:IPC] Hiding results window');
+    logger.debug('👁️ [OVERLAY:IPC] Hiding results window');
     if (resultsWindow.isVisible()) {
       resultsWindow.hide();
+    }
+  });
+
+  // Hide/show PromptCaptureBox window during automation
+  // CRITICAL: Must stop KeyHook capture service, not just hide window
+  ipcMain.on('prompt-capture:hide', () => {
+    logger.debug('👻 [OVERLAY:IPC] Stopping PromptCapture service for automation');
+    
+    // Stop the KeyHook capture service to prevent keystroke interference
+    if (global.promptCaptureService) {
+      global.promptCaptureService.cancel();
+      logger.info('✅ [OVERLAY:IPC] PromptCapture service stopped - keystrokes will go to system');
+    } else {
+      logger.warn('⚠️ [OVERLAY:IPC] PromptCapture service not available');
+    }
+    
+    // Also hide the window
+    if (promptWindow && !promptWindow.isDestroyed() && promptWindow.isVisible()) {
+      promptWindow.hide();
+    }
+  });
+
+  ipcMain.on('prompt-capture:show', () => {
+    logger.debug('👁️ [OVERLAY:IPC] Reactivating PromptCapture service after automation');
+    
+    // Reactivate the KeyHook capture service
+    if (global.promptCaptureService) {
+      global.promptCaptureService.activate();
+      logger.info('✅ [OVERLAY:IPC] PromptCapture service reactivated');
+    } else {
+      logger.warn('⚠️ [OVERLAY:IPC] PromptCapture service not available');
+    }
+    
+    // Also show the window
+    if (promptWindow && !promptWindow.isDestroyed() && !promptWindow.isVisible()) {
+      promptWindow.show();
     }
   });
 

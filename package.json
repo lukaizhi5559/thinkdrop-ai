@@ -59,6 +59,7 @@
     "@mdx-js/react": "^3.0.0",
     "@mistralai/mistralai": "^0.1.0",
     "@nerimity/active-window-listener": "^2.0.6",
+    "@nut-tree-fork/nut-js": "^4.2.0",
     "@pinecone-database/pinecone": "^1.1.0",
     "@playwright/mcp": "^0.0.36",
     "@preact/signals-react": "^3.2.1",

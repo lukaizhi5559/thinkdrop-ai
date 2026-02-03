@@ -350,7 +350,7 @@ export async function typeText(text: string, submit: boolean = false): Promise<v
     console.log(`⌨️ [CAPABILITIES] Using native nut.js typing`);
     await nutjsDetector.typeText(text);
     if (submit) {
-      await nutjsDetector.pressKey('Return');
+      await nutjsDetector.pressKey('Enter');
     }
     return;
   } catch (error: any) {

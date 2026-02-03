@@ -8,6 +8,8 @@
 import { useEffect, useState } from 'react';
 import { overlayPayloadSignal } from '../signals/overlaySignals';
 
+const ipcRenderer = (window as any).electron?.ipcRenderer;
+
 interface PromptCaptureBoxProps {
   text: string;
   cursorPosition: { x: number; y: number };
@@ -26,6 +28,12 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
   // Subscribe to signal changes using state
   const [overlayPayload, setOverlayPayload] = useState(overlayPayloadSignal.value);
   
+  // Clarification mode state
+  const [clarificationMode, setClarificationMode] = useState(false);
+  const [clarificationQuestion, setClarificationQuestion] = useState('');
+  const [clarificationAnswer, setClarificationAnswer] = useState('');
+  const [clarificationStepIndex, setClarificationStepIndex] = useState(0);
+  
   useEffect(() => {
     // Subscribe to signal changes
     const unsubscribe = overlayPayloadSignal.subscribe((value) => {
@@ -35,6 +43,54 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
     
     return unsubscribe;
   }, []);
+  
+  // Listen for clarification requests from automation
+  useEffect(() => {
+    if (!ipcRenderer) return;
+    
+    const handleClarificationRequest = (_event: any, data: any) => {
+      console.log('❓ [PROMPT_CAPTURE_BOX] Clarification requested:', data);
+      setClarificationMode(true);
+      setClarificationQuestion(data.question || '');
+      setClarificationAnswer('');
+      setClarificationStepIndex(data.stepIndex || 0);
+    };
+    
+    ipcRenderer.on('prompt-bar:request-clarification', handleClarificationRequest);
+    
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('prompt-bar:request-clarification', handleClarificationRequest);
+      }
+    };
+  }, []);
+  
+  // Handle clarification answer submission
+  const handleClarificationSubmit = () => {
+    if (!clarificationAnswer.trim()) return;
+    
+    console.log('✅ [PROMPT_CAPTURE_BOX] Submitting clarification answer:', clarificationAnswer);
+    
+    if (ipcRenderer) {
+      ipcRenderer.send('prompt-bar:clarification-answer', {
+        answer: clarificationAnswer,
+        stepIndex: clarificationStepIndex
+      });
+    }
+    
+    // Reset clarification mode
+    setClarificationMode(false);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+  };
+  
+  // Handle clarification cancel
+  const handleClarificationCancel = () => {
+    console.log('❌ [PROMPT_CAPTURE_BOX] Clarification cancelled');
+    setClarificationMode(false);
+    setClarificationQuestion('');
+    setClarificationAnswer('');
+  };
 
   // Note: Enter key is handled by main process → GhostOverlay IPC → App.tsx → show-results-window
   // No need for local key handler here
@@ -117,9 +173,9 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
     }
   }, [overlayPayload]);
 
-  // Keep box visible if active OR if we have loading/results state
+  // Keep box visible if active OR if we have loading/results state OR if in clarification mode
   // When results are showing, box stays visible and editable for immediate new queries
-  const shouldShow = isActive || (overlayPayload && (overlayPayload.uiVariant === 'loading' || overlayPayload.uiVariant === 'results'));
+  const shouldShow = isActive || clarificationMode || (overlayPayload && (overlayPayload.uiVariant === 'loading' || overlayPayload.uiVariant === 'results'));
   
   if (!shouldShow) return null;
 
@@ -239,8 +295,76 @@ export default function PromptCaptureBox({ text, cursorPosition, isActive, initi
           flexDirection: 'column',
         }}
       >
-        {/* Thinking indicator - shows in ghost window */}
-        {overlayPayload && overlayPayload.uiVariant === 'loading' ? (
+        {/* Clarification mode - shows question and answer input */}
+        {clarificationMode ? (
+          <div className="p-4 space-y-3">
+            <div className="flex items-start gap-2">
+              <span style={{ fontSize: '20px' }}>❓</span>
+              <div className="flex-1">
+                <div className="text-sm font-medium mb-2" style={{ color: '#60a5fa' }}>
+                  Clarification Needed
+                </div>
+                <div className="text-sm whitespace-pre-wrap" style={{ color: '#e5e7eb' }}>
+                  {clarificationQuestion}
+                </div>
+              </div>
+            </div>
+            
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={clarificationAnswer}
+                onChange={(e) => setClarificationAnswer(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleClarificationSubmit();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleClarificationCancel();
+                  }
+                }}
+                placeholder="Type your answer..."
+                autoFocus
+                className="w-full px-3 py-2 rounded-lg text-sm"
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: '#e5e7eb',
+                  outline: 'none'
+                }}
+              />
+              
+              <div className="flex gap-2">
+                <button
+                  onClick={handleClarificationSubmit}
+                  disabled={!clarificationAnswer.trim()}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                  style={{
+                    backgroundColor: clarificationAnswer.trim() ? '#3b82f6' : 'rgba(59, 130, 246, 0.3)',
+                    color: '#ffffff',
+                    cursor: clarificationAnswer.trim() ? 'pointer' : 'not-allowed',
+                    opacity: clarificationAnswer.trim() ? 1 : 0.5
+                  }}
+                >
+                  Submit Answer
+                </button>
+                <button
+                  onClick={handleClarificationCancel}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+                  style={{
+                    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+                    color: '#fca5a5',
+                    border: '1px solid rgba(239, 68, 68, 0.3)'
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : /* Thinking indicator - shows in ghost window */
+        overlayPayload && overlayPayload.uiVariant === 'loading' ? (
           <div
             className="border-b"
             style={{

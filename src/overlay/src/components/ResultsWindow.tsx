@@ -8,7 +8,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { OverlayPayload } from '../../../types/overlay-intents';
 import { getCommunicationAgent, hasCommunicationAgent } from '../services/communicationAgentSingleton';
-import CommandAutomateProgress from './intents/CommandAutomateProgress';
+import { OmniParserStatus } from '../services/communicationAgent';
+import CompactAutomationProgress from './intents/CompactAutomationProgress';
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
@@ -61,6 +62,9 @@ export default function ResultsWindow() {
   } | null>(null);
   const [isRoutingExpanded, setIsRoutingExpanded] = useState(false);
   
+  // OmniParser warmup status
+  const [omniParserStatus, setOmniParserStatus] = useState<OmniParserStatus | null>(null);
+  
   // Request deduplication
   const lastSentMessage = useRef<{ text: string; timestamp: number } | null>(null);
   
@@ -75,6 +79,11 @@ export default function ResultsWindow() {
     const commAgent = getCommunicationAgent();
     commAgent.updateConfig({
       serverUrl: 'http://localhost:4000',
+      
+      onOmniParserStatus: (status: OmniParserStatus) => {
+        console.log('🔥 [RESULTS_WINDOW] OmniParser status update:', status);
+        setOmniParserStatus(status);
+      },
       
       onMessage: (message) => {
         console.log('📨 [RESULTS_WINDOW] Message received:', message);
@@ -186,7 +195,8 @@ export default function ResultsWindow() {
       
       setPromptText(text);
       
-      // Reset state for new request
+      // Reset state for new request - clear old automation UI
+      setOverlayPayload(null);
       setStreamingResponse('');
       setProgressSteps([]);
       setCurrentStep('');
@@ -247,16 +257,31 @@ export default function ResultsWindow() {
       } else {
         const contentHeight = contentRef.current?.scrollHeight || 0;
         totalHeight = Math.min(Math.max(contentHeight + headerHeight + padding, minHeight), maxHeight);
+        console.log('📏 [RESULTS_WINDOW] Resizing to:', { width: estimatedWidth, height: totalHeight, contentHeight, state: overlayPayload?.uiVariant });
       }
       
-      console.log('📏 [RESULTS_WINDOW] Resizing to:', { width: estimatedWidth, height: totalHeight, state: overlayPayload?.uiVariant });
       ipcRenderer.send('results-window:resize', { width: estimatedWidth, height: totalHeight });
     };
 
-    // Resize after content updates
+    // Initial resize
     const timeoutId = setTimeout(resizeWindow, 100);
     
-    return () => clearTimeout(timeoutId);
+    // Watch for content changes using MutationObserver
+    const observer = new MutationObserver(() => {
+      resizeWindow();
+    });
+    
+    observer.observe(contentRef.current, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: true
+    });
+    
+    return () => {
+      clearTimeout(timeoutId);
+      observer.disconnect();
+    };
   }, [overlayPayload, promptText, streamingResponse, progressSteps, routingDecision, isRoutingExpanded]);
 
   // ESC key to close results window
@@ -327,10 +352,11 @@ export default function ResultsWindow() {
   const renderResults = () => {
     // Check if we have an automation overlay payload
     if (overlayPayload?.uiVariant === 'automation_progress') {
-      console.log('🤖 [RESULTS_WINDOW] Rendering automation UI with payload:', overlayPayload);
+      console.log('🤖 [RESULTS_WINDOW] Rendering compact automation UI with payload:', overlayPayload);
       return (
-        <CommandAutomateProgress 
+        <CompactAutomationProgress 
           payload={overlayPayload}
+          omniParserStatus={omniParserStatus}
           onEvent={(event) => {
             console.log('🎯 [RESULTS_WINDOW] Automation event:', event);
             // Handle automation events (e.g., completion, errors, clarifications)
@@ -486,8 +512,10 @@ export default function ResultsWindow() {
       </div>
       
       {/* Scrollable content */}
-      <div ref={contentRef} className="flex-1 overflow-y-auto overflow-x-hidden p-4">
-        {renderResults()}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4">
+        <div ref={contentRef}>
+          {renderResults()}
+        </div>
       </div>
     </div>
   );
