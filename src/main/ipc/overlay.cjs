@@ -13,6 +13,7 @@ let ghostWindow = null;   // Full-screen click-through window for ghost mouse & 
 let promptWindow = null;  // Small interactive window for prompt bar
 let intentWindow = null;  // Dynamic interactive window for intent UIs
 let resultsWindow = null; // Clean results window styled like PromptCaptureBox
+let promptCaptureOverlayWindow = null; // Standalone prompt capture window
 let chatWindow = null;    // Main chat window (overlayWindow)
 let orchestrator = null;
 
@@ -70,6 +71,7 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   if (windows.prompt) promptWindow = windows.prompt;
   if (windows.intent) intentWindow = windows.intent;
   if (windows.results) resultsWindow = windows.results;
+  if (windows.promptCapture) promptCaptureOverlayWindow = windows.promptCapture;
   if (windows.chat) chatWindow = windows.chat;
   
   // NOTE: Web search requests now handled by private-mode:process with overlayMode flag
@@ -235,37 +237,30 @@ function initializeOverlayIPC(agentOrchestrator, windows = {}) {
   // Hide/show PromptCaptureBox window during automation
   // CRITICAL: Must stop KeyHook capture service, not just hide window
   ipcMain.on('prompt-capture:hide', () => {
-    logger.debug('👻 [OVERLAY:IPC] Stopping PromptCapture service for automation');
+    logger.debug('👻 [OVERLAY:IPC] Hiding prompt capture window for automation');
     
-    // Stop the KeyHook capture service to prevent keystroke interference
-    if (global.promptCaptureService) {
-      global.promptCaptureService.cancel();
-      logger.info('✅ [OVERLAY:IPC] PromptCapture service stopped - keystrokes will go to system');
-    } else {
-      logger.warn('⚠️ [OVERLAY:IPC] PromptCapture service not available');
-    }
-    
-    // Also hide the window
+    // Hide the window
     if (promptWindow && !promptWindow.isDestroyed() && promptWindow.isVisible()) {
       promptWindow.hide();
     }
   });
 
   ipcMain.on('prompt-capture:show', () => {
-    logger.debug('👁️ [OVERLAY:IPC] Reactivating PromptCapture service after automation');
+    logger.debug('👁️ [OVERLAY:IPC] Showing prompt capture window after automation');
     
-    // Reactivate the KeyHook capture service
-    if (global.promptCaptureService) {
-      global.promptCaptureService.activate();
-      logger.info('✅ [OVERLAY:IPC] PromptCapture service reactivated');
-    } else {
-      logger.warn('⚠️ [OVERLAY:IPC] PromptCapture service not available');
-    }
-    
-    // Also show the window
+    // Show the window
     if (promptWindow && !promptWindow.isDestroyed() && !promptWindow.isVisible()) {
       promptWindow.show();
     }
+  });
+
+  // Handle moving prompt capture window (absolute positioning)
+  ipcMain.on('prompt-capture:move', (event, { x, y }) => {
+    if (!promptCaptureOverlayWindow || promptCaptureOverlayWindow.isDestroyed()) {
+      return;
+    }
+    
+    promptCaptureOverlayWindow.setPosition(Math.round(x), Math.round(y));
   });
 
   // Handle resizing results window based on content

@@ -44,6 +44,9 @@ interface ElectronAPI {
   // System
   getSystemInfo?: () => Promise<any>;
   captureScreen?: () => Promise<any>;
+
+  // External links
+  openExternal?: (url: string) => Promise<void>;
 }
 
 interface Window {

@@ -122,6 +122,11 @@ export default function CompactAutomationProgress({ payload, omniParserStatus, o
 
     const handleClarificationAnswer = (_event: any, data: { answer: string; questionId?: string }) => {
       console.log('✅ [COMPACT_AUTOMATION] Received clarification answer:', data);
+      console.log('🔍 [COMPACT_AUTOMATION] Clarification state:', {
+        hasResolveRef: !!clarificationResolveRef.current,
+        questionCount: clarificationQuestions.length,
+        questions: clarificationQuestions
+      });
       
       if (clarificationResolveRef.current && clarificationQuestions.length > 0) {
         const answers: Record<string, string> = {};
@@ -137,6 +142,8 @@ export default function CompactAutomationProgress({ payload, omniParserStatus, o
         console.log('📋 [COMPACT_AUTOMATION] Plan generation clarification - regenerating plan');
         setClarificationQuestions([]);
         generatePlan({ [clarificationQuestions[0].id]: data.answer });
+      } else {
+        console.warn('⚠️ [COMPACT_AUTOMATION] Received clarification answer but no active clarification context');
       }
     };
 
@@ -377,6 +384,10 @@ export default function CompactAutomationProgress({ payload, omniParserStatus, o
           clarificationResolveRef.current = resolve;
           
           if (ipcRenderer && questions.length > 0) {
+            // Show the prompt bar so user can answer
+            console.log('👁️ [COMPACT_AUTOMATION] Showing PromptCaptureBox for clarification');
+            ipcRenderer.send('prompt-capture:show');
+            
             ipcRenderer.send('prompt-bar:request-clarification', {
               question: questions.map((q, idx) => `Q${idx + 1}: ${q.question}`).join('\n\n'),
               stepDescription: 'Computer Use Automation',
@@ -748,7 +759,7 @@ export default function CompactAutomationProgress({ payload, omniParserStatus, o
       )}
 
       {/* Current reasoning display with streaming effect */}
-      {currentReasoning && status === 'executing' && (
+      {currentReasoning && status === 'executing' && clarificationQuestions.length === 0 && (
         <div 
           className="p-3 rounded-lg text-sm"
           style={{
@@ -772,10 +783,10 @@ export default function CompactAutomationProgress({ payload, omniParserStatus, o
         </div>
       )}
 
-      {renderSteps()}
+      {clarificationQuestions.length === 0 && renderSteps()}
 
       {/* Goal/Task description */}
-      {payload.slots?.goal && (
+      {payload.slots?.goal && clarificationQuestions.length === 0 && (
         <div 
           className="mt-4 p-3 rounded-lg text-xs"
           style={{

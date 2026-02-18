@@ -76,6 +76,16 @@ class WorkerAgentBridge {
           startTime: Date.now()
         });
 
+        // Broadcast loading state to frontend immediately
+        logger.debug('📤 [WORKER_BRIDGE] Broadcasting loading state to frontend');
+        this.broadcastToRenderers('overlay:update', {
+          intent: 'processing',
+          uiVariant: 'loading',
+          slots: {},
+          conversationId: sessionId,
+          correlationId: `loading_${Date.now()}`
+        });
+
         // 💾 CRITICAL: Store user message to conversation service BEFORE executing StateGraph
         // This ensures the StateGraph's retrieveMemory node can fetch conversation history
         // that includes the current user message for context-aware responses
@@ -173,6 +183,15 @@ class WorkerAgentBridge {
           result,
           endTime: Date.now()
         });
+
+        // Signal stream completion if streaming was used
+        if (onStreamToken) {
+          logger.debug('✅ [WORKER_BRIDGE] Streaming complete - broadcasting worker:stream-end');
+          this.broadcastToRenderers('worker:stream-end', {
+            sessionId,
+            timestamp: Date.now()
+          });
+        }
 
         // If StateGraph generated an overlay payload, broadcast it to ResultsWindow
         if (result.overlayPayload) {

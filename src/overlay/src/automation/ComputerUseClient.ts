@@ -1078,29 +1078,34 @@ export class ComputerUseClient {
 
             switch (message.type) {
               case 'execute_action':
-                // Backend sends action to execute
-                // Handle both message.action and message.actionData (backend inconsistency)
-                const action = message.action || message.actionData;
-                
-                if (!action) {
-                  console.error('❌ [INTENT-MODE] No action data in message:', message);
-                  throw new Error('No action data in execute_action message');
-                }
-                
-                console.log('📦 [INTENT-MODE] Action data:', JSON.stringify(action, null, 2));
+                // Backend is asking us to execute a specific action
+                const executeAction = message.action;
+                console.log('📦 [INTENT-MODE] Action data:', JSON.stringify(executeAction, null, 2));
                 
                 // Notify UI of action with reasoning
-                this.callbacks.onAction?.(action, currentStepIndex);
+                this.callbacks.onAction?.(executeAction, currentStepIndex);
                 
                 // Log deterministic decisions (backend skipped LLM call)
-                if (action?.metadata?.deterministic) {
-                  console.log('⚡ [INTENT-MODE] Fast decision (deterministic):', action.type);
-                  console.log('💡 [INTENT-MODE] Reasoning:', action.reasoning);
+                if (executeAction?.metadata?.deterministic) {
+                  console.log('⚡ [INTENT-MODE] Fast decision (deterministic):', executeAction.type);
+                  console.log('💡 [INTENT-MODE] Reasoning:', executeAction.reasoning);
                 } else {
-                  console.log('🎬 [INTENT-MODE] Executing action:', action?.type, 'for stepId:', message.stepId);
+                  console.log('🎬 [INTENT-MODE] Executing action:', executeAction?.type, 'for stepId:', message.stepId);
                 }
                 
-                await this.executeAction(action);
+                // CRITICAL: Wrap in try-catch to ensure action_complete is ALWAYS sent
+                // This allows backend to track attempts and trigger clarification when max attempts reached
+                let actionSuccess = true;
+                let actionError: string | undefined;
+                
+                try {
+                  await this.executeAction(executeAction);
+                  console.log('✅ [INTENT-MODE] Action executed successfully:', executeAction.type);
+                } catch (error: any) {
+                  actionSuccess = false;
+                  actionError = error.message || 'Action execution failed';
+                  console.error('❌ [INTENT-MODE] Action failed:', executeAction.type, error.message);
+                }
                 
                 // Wait for UI to update after action (critical for backend verification)
                 await capabilities.wait(300);
@@ -1109,7 +1114,8 @@ export class ComputerUseClient {
                 const screenshot = await capabilities.captureScreenshot();
                 
                 // Send action complete with new screenshot and preserve stepId from backend
-                this.sendActionCompleteIntent(sessionId, screenshot, action, message.stepId);
+                // CRITICAL: Always send this, even if action failed, so backend can track attempts
+                this.sendActionCompleteIntent(sessionId, screenshot, executeAction, message.stepId, actionSuccess, actionError);
                 break;
 
               case 'intent_complete':
@@ -1160,6 +1166,7 @@ export class ComputerUseClient {
               case 'clarification_needed':
                 // Backend needs clarification
                 console.log('❓ [INTENT-MODE] Clarification needed:', message.questions);
+                console.log('📋 [INTENT-MODE] Clarification context:', { sessionId, stepId: message.stepId });
                 
                 if (!this.callbacks.onClarificationNeeded) {
                   this.callbacks.onError?.('Clarification needed but no callback registered');
@@ -1174,10 +1181,12 @@ export class ComputerUseClient {
                   currentStepIndex
                 );
 
-                // Send answers back
+                // Send answers back with stepId so backend can resume the correct step
+                console.log('📤 [INTENT-MODE] Sending clarification answer:', { sessionId, stepId: message.stepId, answers });
                 this.send({
                   type: 'clarification_answer',
                   sessionId,
+                  stepId: message.stepId,
                   answers
                 });
                 break;
@@ -1347,7 +1356,14 @@ export class ComputerUseClient {
   /**
    * Send action complete message with screenshot (intent-driven mode)
    */
-  private sendActionCompleteIntent(sessionId: string, screenshot: string, action: any, stepId: string): void {
+  private sendActionCompleteIntent(
+    sessionId: string, 
+    screenshot: string, 
+    action: any, 
+    stepId: string,
+    success: boolean = true,
+    error?: string
+  ): void {
     // Strip data URL prefix
     let screenshotBase64 = screenshot;
     if (screenshot.startsWith('data:')) {
@@ -1442,7 +1458,8 @@ export class ComputerUseClient {
       stepId, // CRITICAL: Must match the stepId from execute_action message
       actionResult: {
         actionType: action.type,
-        success: true,
+        success: success,
+        error: error,
         timestamp: Date.now(),
         metadata
       },

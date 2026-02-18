@@ -15,7 +15,7 @@
  * - retrieve/general: parseIntent → retrieveMemory → filterMemory → answer → validate → store → end
  */
 
-const MCPClient = require('./MCPClient.cjs');
+const MCPClient = require('./mcpClient.cjs');
 const MCPConfigManager = require('./MCPConfigManager.cjs');
 const StateGraph = require('./StateGraph.cjs');
 

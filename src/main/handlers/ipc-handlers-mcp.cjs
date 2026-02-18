@@ -8,7 +8,7 @@
 const { ipcMain } = require('electron');
 const { initializeMCP } = require('../services/mcp/initialize.cjs');
 const MCPConfigManager = require('../services/mcp/MCPConfigManager.cjs');
-const MCPClient = require('../services/mcp/MCPClient.cjs');
+const MCPClient = require('../services/mcp/mcpClient.cjs');
 
 const logger = require('./../logger.cjs');
 // MCP Client instance

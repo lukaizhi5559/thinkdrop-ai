@@ -1,5 +1,5 @@
 // Entry point for Thinkdrop AI Electron overlay app
-const { app, BrowserWindow, ipcMain, screen, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, screen, globalShortcut, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -212,11 +212,12 @@ function createOverlayWindow() {
 // Insight functionality is now integrated into the main overlay interface
 
 // Four-window overlay system
-let ghostOverlayWindow = null;      // Full-screen, click-through for ghost mouse & visual cues
-let promptOverlayWindow = null;     // Small, interactive for prompt bar
-let intentOverlayWindow = null;     // Dynamic, interactive for intent UIs (results, guides, etc.)
-let resultsOverlayWindow = null;    // Clean results window styled like PromptCaptureBox
-let chatOverlayWindow = null;       // Chat window for conversation history
+let ghostOverlayWindow = null;         // Full-screen, click-through for ghost mouse & visual cues
+let promptOverlayWindow = null;        // Small, interactive for prompt bar
+let intentOverlayWindow = null;        // Dynamic, interactive for intent UIs (results, guides, etc.)
+let resultsOverlayWindow = null;       // Clean results window styled like PromptCaptureBox
+let promptCaptureOverlayWindow = null; // Standalone PromptCaptureBox window (appears at mouse position)
+let chatOverlayWindow = null;          // Chat window for conversation history
 
 /**
  * Create ghost overlay window - full-screen, click-through
@@ -630,6 +631,76 @@ function createResultsOverlay() {
   return resultsOverlayWindow;
 }
 
+/**
+ * Create prompt capture overlay window - standalone PromptCaptureBox
+ * Used for: prompt input that appears at mouse position on Cmd+Shift+Space
+ */
+function createPromptCaptureOverlay() {
+  const windowWidth = 500;  // Fixed width for prompt capture
+  const windowHeight = 120; // Compact height for input + submit button
+  
+  promptCaptureOverlayWindow = new BrowserWindow({
+    width: windowWidth,
+    height: windowHeight,
+    minWidth: 400,
+    maxWidth: 600,
+    minHeight: 100,
+    maxHeight: 400, // Allow expansion for multi-line input
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true, // Allow height adjustment for multi-line
+    movable: true,   // Allow user to reposition if needed
+    minimizable: false,
+    maximizable: false,
+    closable: true,
+    hasShadow: true,
+    show: false, // Start hidden, show on Cmd+Shift+Space
+    focusable: true, // Needs focus for text input
+    acceptsFirstMouse: true, // macOS: accept mouse events without first activating
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+
+  if (process.platform === 'darwin') {
+    promptCaptureOverlayWindow.setWindowButtonVisibility(false);
+    promptCaptureOverlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    promptCaptureOverlayWindow.setAlwaysOnTop(true, 'floating', 4); // Higher than results window (level 2)
+  }
+
+  // Load prompt capture window
+  const isDev = process.env.NODE_ENV === 'development';
+  if (isDev) {
+    promptCaptureOverlayWindow.loadURL('http://localhost:5173/src/overlay/index.html?mode=promptcapture');
+    promptCaptureOverlayWindow.webContents.openDevTools({ mode: 'detach' });
+
+    // Force dev tools to open after load
+    promptCaptureOverlayWindow.webContents.on('did-finish-load', () => {
+      if (!promptCaptureOverlayWindow.webContents.isDevToolsOpened()) {
+        promptCaptureOverlayWindow.webContents.openDevTools({ mode: 'detach', activate: true });
+      }
+    });
+  } else {
+    promptCaptureOverlayWindow.loadFile(path.join(__dirname, '../dist-renderer/overlay.html'));
+  }
+
+  promptCaptureOverlayWindow.webContents.on('did-finish-load', () => {
+    logger.debug('✅ [PROMPT_CAPTURE OVERLAY] Prompt capture overlay loaded');
+  });
+
+  promptCaptureOverlayWindow.on('closed', () => {
+    promptCaptureOverlayWindow = null;
+  });
+
+  global.promptCaptureOverlayWindow = promptCaptureOverlayWindow;
+  logger.debug('✅ Prompt capture overlay window created (interactive, hidden)');
+  return promptCaptureOverlayWindow;
+}
+
 function toggleOverlay() {
   if (!overlayWindow) return;
   
@@ -698,8 +769,8 @@ app.whenReady().then(async () => {
       await setupIPCHandlers();
       
       // Create four-window overlay system first
-      logger.debug('🔧 Creating ghost overlay window (click-through)...');
-      createGhostOverlay();
+      // logger.debug('🔧 Creating ghost overlay window (click-through)...');
+      // createGhostOverlay();
       
       logger.debug('🔧 Creating prompt overlay window (interactive)...');
       // createPromptOverlay();
@@ -709,6 +780,9 @@ app.whenReady().then(async () => {
       
       logger.debug('🔧 Creating results overlay window (interactive, hidden)...');
       createResultsOverlay();
+      
+      logger.debug('🔧 Creating prompt capture overlay window (interactive, hidden)...');
+      createPromptCaptureOverlay();
       
       logger.debug('🔧 Creating chat overlay window (interactive, hidden)...');
       // createChatOverlay();
@@ -721,15 +795,10 @@ app.whenReady().then(async () => {
         prompt: promptOverlayWindow,
         intent: intentOverlayWindow,
         results: resultsOverlayWindow,
+        promptCapture: promptCaptureOverlayWindow,
         chat: chatOverlayWindow
       });
       logger.debug('✅ Overlay IPC handlers initialized');
-      
-      // Wire ghost overlay to prompt capture service
-      if (global.promptCaptureService && ghostOverlayWindow) {
-        global.promptCaptureService.setOverlayWindow(ghostOverlayWindow);
-        logger.debug('✅ Prompt capture service connected to ghost overlay');
-      }
       
       // Show overlay windows by default (since we commented out old renderer)
       logger.debug('🔧 Showing overlay windows...');
@@ -847,18 +916,86 @@ app.whenReady().then(async () => {
   global.hideGuideWindow = hideGuideWindow;
   logger.debug('✅ Guide Window initialized');
   
-  // 🎯 Cmd+Option+A to capture selection and show "Ask" interface
+  // Clipboard monitoring for auto-capture (event-driven, no lag)
+  let clipboardMonitorActive = false;
+  let lastClipboardContent = '';
+  let clipboardCheckInterval = null;
+  let sentHighlights = new Set(); // Track what we've already sent to avoid duplicates
+  
+  // Function to start clipboard monitoring when prompt capture window is visible
+  function startClipboardMonitoring(checkInitial = false) {
+    if (clipboardMonitorActive) return;
+    clipboardMonitorActive = true;
+    lastClipboardContent = clipboard.readText();
+    
+    // If checkInitial is true, send current clipboard content immediately (if it exists and hasn't been sent)
+    if (checkInitial && lastClipboardContent && lastClipboardContent.length > 0 && !sentHighlights.has(lastClipboardContent)) {
+      logger.debug(`📤 [Clipboard Monitor] Initial highlight detected: "${lastClipboardContent.substring(0, 50)}..."`);
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        promptCaptureOverlayWindow.webContents.send('prompt-capture:add-highlight', lastClipboardContent);
+        sentHighlights.add(lastClipboardContent);
+      }
+    }
+    
+    logger.debug('� [Clipboard Monitor] Started monitoring for auto-capture');
+    
+    // Check clipboard every 300ms (lightweight check)
+    clipboardCheckInterval = setInterval(() => {
+      if (!clipboardMonitorActive) {
+        clearInterval(clipboardCheckInterval);
+        return;
+      }
+      
+      // Check if prompt capture window is still visible
+      if (!promptCaptureOverlayWindow || !promptCaptureOverlayWindow.isVisible()) {
+        stopClipboardMonitoring();
+        return;
+      }
+      
+      const currentClipboard = clipboard.readText();
+      if (currentClipboard && currentClipboard !== lastClipboardContent && currentClipboard.length > 0) {
+        // New content copied - only send if we haven't sent it before
+        if (!sentHighlights.has(currentClipboard)) {
+          logger.debug(`📤 [Clipboard Monitor] New content detected: "${currentClipboard.substring(0, 50)}..."`);
+          promptCaptureOverlayWindow.webContents.send('prompt-capture:add-highlight', currentClipboard);
+          sentHighlights.add(currentClipboard);
+        }
+        lastClipboardContent = currentClipboard;
+      }
+    }, 300);
+  }
+  
+  function stopClipboardMonitoring() {
+    clipboardMonitorActive = false;
+    if (clipboardCheckInterval) {
+      clearInterval(clipboardCheckInterval);
+      clipboardCheckInterval = null;
+    }
+    // Clear sent highlights tracking when stopping
+    sentHighlights.clear();
+    logger.debug('� [Clipboard Monitor] Stopped monitoring');
+  }
+  
+  // 🎯 Cmd+Option+A to capture selection and show "Ask" interface (fallback)
   globalShortcut.register('Cmd+Option+A', async () => {
     logger.debug('🎯 [ASK] Cmd+Option+A triggered - capturing selection');
     
     // Capture selection from active window using nut.js
     if (global.selectionDetector) {
-      await global.selectionDetector.captureSelectionWithNutJS();
+      const capturedText = await global.selectionDetector.captureSelectionWithNutJS();
       
-      // Show Thinkdrop AI window
-      if (overlayWindow) {
-        overlayWindow.show();
-        overlayWindow.focus();
+      // If StandalonePromptCapture is visible, send highlight to it
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed() && promptCaptureOverlayWindow.isVisible()) {
+        if (capturedText) {
+          logger.debug(`📤 [Prompt Capture] Sending highlight to window: "${capturedText.substring(0, 50)}..."`);
+          promptCaptureOverlayWindow.webContents.send('prompt-capture:add-highlight', capturedText);
+        }
+      } else {
+        // Otherwise, show old Thinkdrop AI window
+        if (overlayWindow) {
+          overlayWindow.show();
+          overlayWindow.focus();
+        }
       }
     }
   });
@@ -875,59 +1012,132 @@ app.whenReady().then(async () => {
   
   // 🚀 Cmd+Option+Space for "Prompt Capture" - Interactive prompt anywhere with State Graph
   // Changed from Shift+Cmd+L to avoid conflicts
-  // Note: Cmd+Shift+Space is taken by macOS for input source switching
+  // Note: Highlight monitoring removed - it was causing severe lag
+  // Selection detector is not designed for continuous polling
   
-  const promptHotkey = 'Cmd+Shift+Space'; // 'Option+Space';
+  // Register global shortcut for prompt capture overlay
+  logger.debug('📝 [Prompt Capture] Registering global shortcut...');
+  
+  const promptHotkey = 'Cmd+Shift+Space';
   const registered = globalShortcut.register(promptHotkey, async () => {
     logger.debug(`🚀 [Prompt Capture] ${promptHotkey} triggered!`);
+    logger.debug(`🔍 [Prompt Capture] Window exists: ${!!promptCaptureOverlayWindow}`);
     
-    const { getResultsWindow, hasResults } = require('./ipc/overlay.cjs');
-    const resultsWindow = getResultsWindow();
-    
-    // PRIORITY 1: Check if results exist (hide results + cancel prompt capture)
-    if (hasResults() && resultsWindow && !resultsWindow.isDestroyed()) {
-      if (resultsWindow.isVisible()) {
-        logger.debug('📤 [Prompt Capture] Results window visible - canceling prompt capture first, then hiding results');
+    // Check if prompt capture window is already visible - toggle it off
+    if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+      logger.debug(`🔍 [Prompt Capture] Window is visible: ${promptCaptureOverlayWindow.isVisible()}`);
+      if (promptCaptureOverlayWindow.isVisible()) {
+        logger.debug('🔄 [Prompt Capture] Windows visible - hiding both');
         
-        // Cancel prompt capture FIRST to clear overlay payload
-        if (global.promptCaptureService) {
-          global.promptCaptureService.cancel();
-        }
-        
-        // Then hide results window after a small delay to ensure cancellation is processed
+        // Hide results window after a small delay
         setTimeout(() => {
-          if (resultsWindow && !resultsWindow.isDestroyed()) {
-            resultsWindow.hide();
+          promptCaptureOverlayWindow.hide();
+
+          // Also hide ResultsWindow
+          if (resultsOverlayWindow && !resultsOverlayWindow.isDestroyed()) {
+            resultsOverlayWindow.hide();
           }
         }, 150); // 150ms delay to ensure cancellation polling completes
+        
         return;
       }
-      // If results window is hidden, fall through to activate prompt capture
-      // (don't just show results - let user start a new query)
-      logger.debug('📥 [Prompt Capture] Results exist but hidden - activating prompt capture for new query');
-    }
-    
-    // PRIORITY 2: Check if prompt capture is active (no results, just prompt box)
-    if (global.promptCaptureService && global.promptCaptureService.isActive) {
-      logger.debug('🔄 [Prompt Capture] Prompt capture active (no results) - toggling off');
-      global.promptCaptureService.cancel();
+    } else {
+      logger.error('❌ [Prompt Capture] Window not available or destroyed!');
       return;
     }
     
-    // PRIORITY 3: No prompt capture active and no results - activate prompt capture
-    // CRITICAL: Enable live mode first since prompt capture requires internet access
-    logger.debug('🌐 [Prompt Capture] Enabling live mode (required for prompt capture)');
-    const { setOnlineMode } = require('./ipc/overlay.cjs');
-    setOnlineMode(true);
+    // Try to capture any highlighted text before showing window
+    // let capturedSelection = null;
+    // if (global.selectionDetector) {
+    //   try {
+    //     logger.debug('📋 [Prompt Capture] Attempting to capture highlighted text...');
+    //     capturedSelection = await global.selectionDetector.captureSelectionWithNutJS();
+    //     if (capturedSelection) {
+    //       logger.debug(`✅ [Prompt Capture] Captured selection: "${capturedSelection.substring(0, 50)}..."`);
+    //     } else {
+    //       logger.debug('ℹ️ [Prompt Capture] No text was highlighted');
+    //     }
+    //   } catch (error) {
+    //     logger.debug('⚠️ [Prompt Capture] Failed to capture selection:', error.message);
+    //   }
+    // }
     
-    if (global.promptCaptureService) {
-      await global.promptCaptureService.activate();
-    } else if (global.promptedAnywhereService) {
-      // Fallback to legacy direct-to-MCP mode if prompt capture not available
-      logger.debug('⚠️  [Prompt Capture] Service not available, using legacy mode');
-      await global.promptedAnywhereService.handlePromptAnywhere();
-    } else {
-      logger.error('❌ [Prompt Capture] No prompt service initialized');
+    // Get mouse position using nut.js fork
+    const { mouse, Button } = require('@nut-tree-fork/nut-js');
+    try {
+      const mousePos = await mouse.getPosition();
+      logger.debug(`🖱️  [Prompt Capture] Mouse position: ${mousePos.x}, ${mousePos.y}`);
+      
+      // Position window at mouse cursor
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        const windowBounds = promptCaptureOverlayWindow.getBounds();
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+        
+        // Calculate position to keep window on screen
+        let x = mousePos.x - windowBounds.width / 2; // Center horizontally on cursor
+        let y = mousePos.y + 20; // Slightly below cursor
+        
+        // Keep window within screen bounds
+        x = Math.max(0, Math.min(x, screenWidth - windowBounds.width));
+        y = Math.max(0, Math.min(y, screenHeight - windowBounds.height));
+        
+        promptCaptureOverlayWindow.setPosition(Math.floor(x), Math.floor(y));
+        
+        // Show prompt capture window and focus
+        promptCaptureOverlayWindow.setAlwaysOnTop(true, 'floating', 4); // Maintain level 4 (above results at level 2)
+        promptCaptureOverlayWindow.show();
+        promptCaptureOverlayWindow.moveTop();
+        promptCaptureOverlayWindow.focus();
+        
+        // Send initial data to window (no pre-captured highlights)
+        promptCaptureOverlayWindow.webContents.send('prompt-capture:show', {
+          position: { x: mousePos.x, y: mousePos.y }
+        });
+        
+        // Use nut.js to click the window to give it focus
+        setTimeout(async () => {
+          try {
+            const bounds = promptCaptureOverlayWindow.getBounds();
+            const centerX = bounds.x + Math.floor(bounds.width / 2);
+            // Click higher up (30% from top) to hit the textarea area
+            const clickY = bounds.y + Math.floor(bounds.height * 0.4);
+            
+            logger.debug(`🖱️  [Prompt Capture] Auto-clicking textarea at (${centerX}, ${clickY}) to give focus`);
+            await mouse.setPosition({ x: centerX, y: clickY });
+            await mouse.click(Button.LEFT);
+            
+            logger.debug('✅ [Prompt Capture] Window clicked, should have focus now');
+          } catch (error) {
+            logger.error('❌ [Prompt Capture] Failed to auto-click window:', error);
+          }
+        }, 100);
+        
+        // Show ResultsWindow alongside prompt capture
+        if (resultsOverlayWindow && !resultsOverlayWindow.isDestroyed()) {
+          resultsOverlayWindow.show();
+          logger.debug('✅ [Prompt Capture] ResultsWindow shown below prompt capture');
+        }
+        
+        // If we captured a selection, send it to the window after a brief delay
+        // if (capturedSelection && capturedSelection.trim().length > 0) {
+        //   setTimeout(() => {
+        //     if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        //       logger.debug(`📤 [Prompt Capture] Sending captured selection to window: "${capturedSelection.substring(0, 50)}..."`);
+        //       promptCaptureOverlayWindow.webContents.send('prompt-capture:add-highlight', capturedSelection);
+        //     }
+        //   }, 200); // Wait for window to be ready
+        // }
+        
+        // Start clipboard monitoring for auto-capture (no initial check to avoid stale content)
+        // Users can highlight and copy text AFTER opening the window
+        startClipboardMonitoring(false);
+        
+        logger.debug('✅ [Prompt Capture] Windows shown at mouse position');
+        logger.debug('💡 [Prompt Capture] Highlight text and copy (Cmd+C) to add as @mention');
+      }
+    } catch (error) {
+      logger.error('❌ [Prompt Capture] Failed to get mouse position:', error);
     }
   });
   
@@ -997,16 +1207,10 @@ app.whenReady().then(async () => {
   // 🛑 Shift+Cmd+J to cancel running automation
   globalShortcut.register('Shift+Cmd+J', () => cancelAutomation('Shift+Cmd+J'));
   
-  // 🛑 ESC to cancel prompt capture or running automation (intuitive!)
+  // 🛑 ESC to cancel running automation
   globalShortcut.register('Escape', () => {
-    // Check if prompt capture is active first
-    if (global.promptCaptureService && global.promptCaptureService.isActive) {
-      logger.debug('⌨️  [ESC] Prompt capture active - canceling prompt capture');
-      global.promptCaptureService.cancel();
-    } else {
-      // Otherwise cancel automation
-      cancelAutomation('ESC');
-    }
+    // Cancel automation
+    cancelAutomation('ESC');
   });
   
   // 🔍 Cmd+Shift+G to open ghost window dev tools for debugging
@@ -1412,26 +1616,9 @@ async function setupIPCHandlers() {
     }
     
     // Initialize MCP client and config manager (used by multiple handlers)
-    const MCPClient = require('./services/mcp/MCPClient.cjs');
+    const MCPClient = require('./services/mcp/mcpClient.cjs');
     const MCPConfigManager = require('./services/mcp/MCPConfigManager.cjs');
     const mcpClient = new MCPClient(MCPConfigManager);
-    
-    // Initialize MacOS KeyHook Bridge (for prompt capture)
-    if (process.platform === 'darwin') {
-      logger.debug('⌨️  Initializing MacOS KeyHook Bridge...');
-      const MacOSKeyHookBridge = require('./native-hooks/macos-keyhook-bridge.cjs');
-      global.keyHookBridge = new MacOSKeyHookBridge(logger);
-      global.keyHookBridge.start();
-      logger.debug('✅ MacOS KeyHook Bridge initialized');
-      
-      // Initialize Prompt Capture Service (with mcpClient for direct MCP submission option)
-      logger.debug('📝 Initializing Prompt Capture Service...');
-      const { PromptCaptureService } = require('./services/promptCapture.cjs');
-      global.promptCaptureService = new PromptCaptureService(logger, global.keyHookBridge, mcpClient);
-      logger.debug('✅ Prompt Capture Service initialized');
-    } else {
-      logger.debug('⏭️  Skipping KeyHook Bridge - macOS only for now');
-    }
     
     // Initialize Prompted Anywhere service (legacy direct-to-MCP mode)
     logger.debug('🚀 Initializing Prompted Anywhere service...');
@@ -1464,6 +1651,83 @@ async function setupIPCHandlers() {
     logger.debug('📚 Setting up Insight History handlers...');
     setupInsightHistoryHandlers();
     logger.debug('✅ Insight History handlers setup complete');
+    
+    // Add IPC handlers for results window
+    ipcMain.on('results-window:show-error', (event, errorMessage) => {
+      if (resultsOverlayWindow && !resultsOverlayWindow.isDestroyed()) {
+        logger.debug('⚠️ [RESULTS_WINDOW] Sending error message to display');
+        resultsOverlayWindow.webContents.send('results-window:display-error', errorMessage);
+        resultsOverlayWindow.show();
+      }
+    });
+    
+    let resultsWindowInitialHeight = null;
+    ipcMain.on('results-window:resize', (event, { width, height }) => {
+      if (resultsOverlayWindow && !resultsOverlayWindow.isDestroyed()) {
+        const clampedWidth = Math.min(Math.max(width, 400), 600);
+        const clampedHeight = Math.min(Math.max(height, 100), 800);
+        
+        logger.debug(`📐 [RESULTS_WINDOW] Resizing window to ${clampedWidth}x${clampedHeight}`);
+        const currentBounds = resultsOverlayWindow.getBounds();
+        const primaryDisplay = screen.getPrimaryDisplay();
+        const { width: screenWidth, height: screenHeight } = primaryDisplay.workAreaSize;
+        const margin = 20;
+        
+        // If this is a minimal height (100-150px), it's likely a new search - reposition to bottom-right
+        if (clampedHeight <= 150 && (!resultsWindowInitialHeight || resultsWindowInitialHeight > 150)) {
+          logger.debug('📍 [RESULTS_WINDOW] New search detected - repositioning to bottom-right');
+          const newY = screenHeight - clampedHeight - margin;
+          const newX = screenWidth - clampedWidth - margin;
+          resultsOverlayWindow.setBounds({
+            x: newX,
+            y: newY,
+            width: clampedWidth,
+            height: clampedHeight
+          }, true);
+          resultsWindowInitialHeight = clampedHeight;
+        } else {
+          // Content is growing - resize from top down (keep Y fixed)
+          resultsOverlayWindow.setBounds({
+            x: currentBounds.x,
+            y: currentBounds.y, // Keep top position fixed
+            width: clampedWidth,
+            height: clampedHeight
+          }, true);
+          resultsWindowInitialHeight = clampedHeight;
+        }
+        
+        logger.debug(`📐 [RESULTS_WINDOW] Window resized to ${clampedWidth}x${clampedHeight}`);
+      }
+    });
+    
+    // Add IPC handlers for prompt capture window
+    ipcMain.on('prompt-capture:resize', (event, { width, height }) => {
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        logger.debug(`📐 [PROMPT_CAPTURE] Resizing window to ${width}x${height}`);
+        const currentBounds = promptCaptureOverlayWindow.getBounds();
+        promptCaptureOverlayWindow.setBounds({
+          x: currentBounds.x,
+          y: currentBounds.y,
+          width: Math.min(Math.max(width, 400), 600), // Clamp between 400-600
+          height: Math.min(Math.max(height, 100), 600) // Clamp between 100-600
+        }, true); // animate: true for smooth resize
+        logger.debug(`📐 [PROMPT_CAPTURE] Window resized to ${width}x${height}`);
+      }
+    });
+    
+    ipcMain.on('prompt-capture:move', (event, { x, y }) => {
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        promptCaptureOverlayWindow.setPosition(Math.floor(x), Math.floor(y));
+        logger.debug(`🖱️ [PROMPT_CAPTURE] Window moved to (${x}, ${y})`);
+      }
+    });
+    
+    ipcMain.on('prompt-capture:hide', () => {
+      if (promptCaptureOverlayWindow && !promptCaptureOverlayWindow.isDestroyed()) {
+        promptCaptureOverlayWindow.hide();
+        logger.debug('👻 [PROMPT_CAPTURE] Window hidden');
+      }
+    });
     
     // Add IPC handler for intent overlay window resizing
     ipcMain.on('intent-overlay:resize', (event, { width, height }) => {

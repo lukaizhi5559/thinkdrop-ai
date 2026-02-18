@@ -815,7 +815,7 @@ class VirtualScreenDOM {
       logger.debug('💡 [VIRTUAL_DOM] Generating Page Insight...');
       
       // Get MCP client and insight handlers
-      const MCPClient = require('./mcp/MCPClient.cjs');
+      const MCPClient = require('./mcp/mcpClient.cjs');
       const MCPConfigManager = require('./mcp/MCPConfigManager.cjs');
       const mcpClient = new MCPClient(MCPConfigManager);
       const { sendInsightLoading, sendInsightUpdate, sendInsightError } = require('../handlers/ipc-handlers-insight.cjs');

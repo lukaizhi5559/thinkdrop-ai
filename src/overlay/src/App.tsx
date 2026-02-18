@@ -13,6 +13,7 @@ import PromptBar from './components/PromptBar';
 import OverlayRenderer from './components/OverlayRenderer';
 import GhostOverlay from './components/GhostOverlay';
 import ResultsWindow from './components/ResultsWindow';
+import StandalonePromptCapture from './components/StandalonePromptCapture';
 import { useConversationSignals } from './hooks/useConversationSignals';
 import { initializeConversationSignals } from './signals/init';
 import AutomationTester from './components/testing/AutomationTester';
@@ -74,11 +75,12 @@ function App() {
   
   // Detect which window mode we're in
   const urlParams = new URLSearchParams(window.location.search);
-  const mode = urlParams.get('mode'); // 'prompt', 'intent', 'chat', 'results', or null (ghost)
+  const mode = urlParams.get('mode'); // 'prompt', 'intent', 'chat', 'results', 'promptcapture', or null (ghost)
   const isPromptMode = mode === 'prompt';
   const isIntentMode = mode === 'intent';
   const isChatMode = mode === 'chat';
   const isResultsMode = mode === 'results';
+  const isPromptCaptureMode = mode === 'promptcapture';
 
   // Listen for IPC event to open tester (triggered by Cmd+Shift+T global shortcut)
   useEffect(() => {
@@ -112,9 +114,9 @@ function App() {
   }, [mode]);
 
   useEffect(() => {
-    const modeLabel = isPromptMode ? 'PROMPT' : isIntentMode ? 'INTENT' : isChatMode ? 'CHAT' : isResultsMode ? 'RESULTS' : 'GHOST';
+    const modeLabel = isPromptMode ? 'PROMPT' : isIntentMode ? 'INTENT' : isChatMode ? 'CHAT' : isResultsMode ? 'RESULTS' : isPromptCaptureMode ? 'PROMPTCAPTURE' : 'GHOST';
     console.log(`🚀 [OVERLAY] App mounted in ${modeLabel} mode`);
-    console.log(`🔍 [OVERLAY] Mode detection: isPromptMode=${isPromptMode}, isIntentMode=${isIntentMode}, isChatMode=${isChatMode}, isResultsMode=${isResultsMode}`);
+    console.log(`🔍 [OVERLAY] Mode detection: isPromptMode=${isPromptMode}, isIntentMode=${isIntentMode}, isChatMode=${isChatMode}, isResultsMode=${isResultsMode}, isPromptCaptureMode=${isPromptCaptureMode}`);
     
     // Initialize conversation signals to load sessions
     initializeConversationSignals().catch(err => {
@@ -147,7 +149,7 @@ function App() {
 
     // Register overlay:update listener for all modes
     // Main process temporarily disables click-through for ghost mode when sending IPC
-    const isGhostMode = !isPromptMode && !isIntentMode && !isChatMode && !isResultsMode;
+    const isGhostMode = !isPromptMode && !isIntentMode && !isChatMode && !isResultsMode && !isPromptCaptureMode;
     console.log(`🔍 [OVERLAY] Mode: ${isGhostMode ? 'ghost' : modeLabel}`);
     console.log('� [OVERLAY] Registering overlay:update listener...');
     
@@ -161,7 +163,7 @@ function App() {
         ipcRenderer.removeListener('overlay:update', handleOverlayUpdate);
       }
     };
-  }, [isPromptMode, isIntentMode, isChatMode, isResultsMode]);
+  }, [isPromptMode, isIntentMode, isChatMode, isResultsMode, isPromptCaptureMode]);
 
   // Prompt capture submission is now handled via props passed to GhostOverlay
 
@@ -467,6 +469,15 @@ function App() {
     return (
       <div ref={containerRef} className="relative w-full h-full overflow-hidden">
         <ResultsWindow />
+      </div>
+    );
+  }
+
+  if (isPromptCaptureMode) {
+    console.log('🎯 [OVERLAY] Rendering StandalonePromptCapture in promptcapture mode');
+    return (
+      <div ref={containerRef} className="relative w-full h-full overflow-hidden">
+        <StandalonePromptCapture />
       </div>
     );
   }

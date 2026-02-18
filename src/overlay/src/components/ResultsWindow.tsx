@@ -10,6 +10,7 @@ import { OverlayPayload } from '../../../types/overlay-intents';
 import { getCommunicationAgent, hasCommunicationAgent } from '../services/communicationAgentSingleton';
 import { OmniParserStatus } from '../services/communicationAgent';
 import CompactAutomationProgress from './intents/CompactAutomationProgress';
+import { RichContentRenderer } from './rich-content';
 
 const ipcRenderer = (window as any).electron?.ipcRenderer;
 
@@ -54,6 +55,8 @@ export default function ResultsWindow() {
   const [progressSteps, setProgressSteps] = useState<string[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [currentStep, setCurrentStep] = useState<string>('');
+  const [displayedAnswer, setDisplayedAnswer] = useState<string>('');
+  const [isAnimating, setIsAnimating] = useState(false);
   const [isThinking, setIsThinking] = useState(false);
   const [routingDecision, setRoutingDecision] = useState<{
     route: string;
@@ -68,9 +71,18 @@ export default function ResultsWindow() {
   // Request deduplication
   const lastSentMessage = useRef<{ text: string; timestamp: number } | null>(null);
   
+  // Track if we're starting a new stream to reset response
+  const isNewStream = useRef<boolean>(false);
+  
+  // Track animation for non-streaming answers
+  const animationTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   // Draggable state
   const [isDragging, setIsDragging] = useState(false);
   const dragOffset = useRef({ x: 0, y: 0 });
+  
+  // Copy state
+  const [isCopied, setIsCopied] = useState(false);
 
   // Update Communication Agent callbacks when component mounts
   useEffect(() => {
@@ -113,6 +125,7 @@ export default function ResultsWindow() {
         // Handle completion messages
         if (message.type === 'llm_stream_end') {
           setIsStreaming(false);
+          isNewStream.current = false; // Ensure flag is reset
           console.log('✅ [RESULTS_WINDOW] Streaming complete');
         }
       },
@@ -130,19 +143,48 @@ export default function ResultsWindow() {
         if (progress.actionDescription) {
           setProgressSteps(prev => [...prev, `  → ${progress.actionDescription}`]);
         }
+        
+        // Fallback: Mark streaming as complete when answer node completes
+        if (progress.nodeName === 'answer' && progress.status === 'completed') {
+          console.log('✅ [RESULTS_WINDOW] Streaming complete (detected from answer node)');
+          setIsStreaming(false);
+          isNewStream.current = false;
+        }
       },
       
       onStreamToken: (token) => {
         console.log('💬 [RESULTS_WINDOW] Stream token:', token);
         setIsThinking(false); // Hide "Thinking..." when streaming starts
         setIsStreaming(true);
-        setStreamingResponse(prev => prev + token);
+        
+        // If this is the first token of a new stream, reset the response
+        if (isNewStream.current) {
+          console.log('🔄 [RESULTS_WINDOW] First token of new stream - resetting response');
+          setStreamingResponse(token);
+          isNewStream.current = false;
+        } else {
+          setStreamingResponse(prev => prev + token);
+        }
       },
       
       onError: (error) => {
         console.error('❌ [RESULTS_WINDOW] Error:', error);
-        setStreamingResponse(`Error: ${error}`);
+        setIsThinking(false);
         setIsStreaming(false);
+        
+        // Check if it's a character limit error
+        const errorStr = String(error);
+        if (errorStr.includes('exceeds maximum length') || errorStr.includes('50000 characters')) {
+          setStreamingResponse(
+            '⚠️ Message Too Long\n\n' +
+            'Your highlighted text exceeds the 50,000 character limit. Please try:\n\n' +
+            '• Highlighting a smaller section of code\n' +
+            '• Breaking your question into multiple parts\n' +
+            '• Removing some of the highlight tags before submitting'
+          );
+        } else {
+          setStreamingResponse(`❌ Error: ${error}`);
+        }
       }
     });
 
@@ -151,6 +193,26 @@ export default function ResultsWindow() {
     // Don't disconnect on unmount - singleton persists
     return () => {
       console.log('🔌 [RESULTS_WINDOW] Component unmounting (singleton persists)');
+    };
+  }, []);
+
+  // Listen for error messages from StandalonePromptCapture
+  useEffect(() => {
+    if (!ipcRenderer) return;
+
+    const handleDisplayError = (_event: any, errorMessage: string) => {
+      console.log('⚠️ [RESULTS_WINDOW] Displaying error message:', errorMessage);
+      setIsThinking(false);
+      setIsStreaming(false);
+      setStreamingResponse(errorMessage);
+    };
+
+    ipcRenderer.on('results-window:display-error', handleDisplayError);
+
+    return () => {
+      if (ipcRenderer.removeListener) {
+        ipcRenderer.removeListener('results-window:display-error', handleDisplayError);
+      }
     };
   }, []);
 
@@ -168,6 +230,12 @@ export default function ResultsWindow() {
         setProgressSteps([]);
         setCurrentStep('');
         setIsStreaming(false);
+        setIsThinking(true);
+      }
+      
+      // Stop thinking indicator when results arrive
+      if (payload.uiVariant === 'results') {
+        setIsThinking(false);
       }
     };
 
@@ -203,6 +271,17 @@ export default function ResultsWindow() {
       setIsStreaming(false);
       setIsThinking(true);
       setRoutingDecision(null);
+      setDisplayedAnswer('');
+      setIsAnimating(false);
+      
+      // Clear any ongoing animation
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+        animationTimeoutRef.current = null;
+      }
+      
+      // Mark that the next stream token should reset the response
+      isNewStream.current = true;
       
       // Send message to Communication Agent
       if (hasCommunicationAgent()) {
@@ -232,12 +311,81 @@ export default function ResultsWindow() {
         ipcRenderer.removeListener('overlay:update', handleOverlayUpdate);
         ipcRenderer.removeListener('results-window:set-prompt', handlePromptText);
       }
+      
+      // Clear animation timeout on unmount
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+      }
     };
   }, []);
 
-  // Dynamically resize window based on content
+  // Animate non-streaming answers with typewriter effect
+  useEffect(() => {
+    console.log('🔍 [RESULTS_WINDOW] Typewriter effect check:', {
+      hasOverlayPayload: !!overlayPayload,
+      hasAnswer: !!overlayPayload?.slots?.answer,
+      answerLength: overlayPayload?.slots?.answer?.length,
+      hasStreamingResponse: !!streamingResponse,
+      isStreaming,
+      displayedAnswer: displayedAnswer.substring(0, 50),
+      intent: overlayPayload?.intent
+    });
+
+    // Only animate if we have an answer in slots and no streaming response
+    const answer = overlayPayload?.slots?.answer;
+    if (!answer || streamingResponse || isStreaming) {
+      console.log('⏭️ [RESULTS_WINDOW] Skipping typewriter animation:', {
+        noAnswer: !answer,
+        hasStreamingResponse: !!streamingResponse,
+        isStreaming
+      });
+      return;
+    }
+
+    // If we already displayed this answer, don't re-animate
+    if (displayedAnswer === answer) {
+      console.log('⏭️ [RESULTS_WINDOW] Answer already displayed, skipping animation');
+      return;
+    }
+
+    console.log('🎬 [RESULTS_WINDOW] Starting typewriter animation for answer');
+    setIsAnimating(true);
+    setDisplayedAnswer('');
+
+    let currentIndex = 0;
+    const chunkSize = 3; // Characters per chunk
+    const delayMs = 20; // Delay between chunks
+
+    const animateChunk = () => {
+      if (currentIndex < answer.length) {
+        const nextChunk = answer.slice(currentIndex, currentIndex + chunkSize);
+        setDisplayedAnswer(prev => prev + nextChunk);
+        currentIndex += chunkSize;
+        animationTimeoutRef.current = setTimeout(animateChunk, delayMs);
+      } else {
+        setIsAnimating(false);
+        console.log('✅ [RESULTS_WINDOW] Typewriter animation complete');
+      }
+    };
+
+    animateChunk();
+
+    return () => {
+      if (animationTimeoutRef.current) {
+        clearTimeout(animationTimeoutRef.current);
+      }
+    };
+  }, [overlayPayload?.slots?.answer, streamingResponse, isStreaming]);
+
+  // Dynamically resize window based on content (skip during streaming - handled by streaming effect)
   useEffect(() => {
     if (!contentRef.current || !ipcRenderer) return;
+    
+    // Skip this resize effect during streaming - the streaming effect handles it
+    if (isStreaming || streamingResponse) {
+      console.log('⏭️ [RESULTS_WINDOW] Skipping general resize - streaming is active');
+      return;
+    }
 
     const resizeWindow = () => {
       const headerHeight = 52; // Header height (py-3 + border)
@@ -257,7 +405,7 @@ export default function ResultsWindow() {
       } else {
         const contentHeight = contentRef.current?.scrollHeight || 0;
         totalHeight = Math.min(Math.max(contentHeight + headerHeight + padding, minHeight), maxHeight);
-        console.log('📏 [RESULTS_WINDOW] Resizing to:', { width: estimatedWidth, height: totalHeight, contentHeight, state: overlayPayload?.uiVariant });
+        console.log('📏 [RESULTS_WINDOW] Non-streaming resize:', { width: estimatedWidth, height: totalHeight, contentHeight, state: overlayPayload?.uiVariant });
       }
       
       ipcRenderer.send('results-window:resize', { width: estimatedWidth, height: totalHeight });
@@ -266,9 +414,11 @@ export default function ResultsWindow() {
     // Initial resize
     const timeoutId = setTimeout(resizeWindow, 100);
     
-    // Watch for content changes using MutationObserver
+    // Watch for content changes using MutationObserver (only when not streaming)
     const observer = new MutationObserver(() => {
-      resizeWindow();
+      if (!isStreaming && !streamingResponse) {
+        resizeWindow();
+      }
     });
     
     observer.observe(contentRef.current, {
@@ -282,7 +432,34 @@ export default function ResultsWindow() {
       clearTimeout(timeoutId);
       observer.disconnect();
     };
-  }, [overlayPayload, promptText, streamingResponse, progressSteps, routingDecision, isRoutingExpanded]);
+  }, [overlayPayload, promptText, isStreaming, streamingResponse, progressSteps, routingDecision, isRoutingExpanded]);
+
+  // Immediate resize when streaming response changes (for real-time growth during streaming)
+  useEffect(() => {
+    if (!contentRef.current || !ipcRenderer || !isStreaming) return;
+    
+    // Trigger resize immediately when streaming content changes
+    const resizeForStreaming = () => {
+      const headerHeight = 52;
+      const padding = 32;
+      const minHeight = 100;
+      const maxHeight = 800;
+      const minWidth = 400;
+      const maxWidth = 600;
+      
+      const contentHeight = contentRef.current?.scrollHeight || 0;
+      const totalHeight = Math.min(Math.max(contentHeight + headerHeight + padding, minHeight), maxHeight);
+      const estimatedWidth = Math.min(Math.max(promptText.length * 8, minWidth), maxWidth);
+      
+      console.log('📏 [RESULTS_WINDOW] Streaming resize:', { width: estimatedWidth, height: totalHeight, contentHeight });
+      ipcRenderer.send('results-window:resize', { width: estimatedWidth, height: totalHeight });
+    };
+    
+    // Use requestAnimationFrame for smooth updates during streaming
+    const rafId = requestAnimationFrame(resizeForStreaming);
+    
+    return () => cancelAnimationFrame(rafId);
+  }, [streamingResponse, isStreaming, promptText]);
 
   // ESC key to close results window
   useEffect(() => {
@@ -303,6 +480,20 @@ export default function ResultsWindow() {
     console.log('❌ [RESULTS_WINDOW] Close button clicked');
     if (ipcRenderer) {
       ipcRenderer.send('results-window:close');
+    }
+  };
+
+  const handleCopy = async () => {
+    const contentToCopy = streamingResponse || displayedAnswer;
+    if (!contentToCopy) return;
+    
+    try {
+      await navigator.clipboard.writeText(contentToCopy);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+      console.log('✅ [RESULTS_WINDOW] Content copied to clipboard');
+    } catch (error) {
+      console.error('❌ [RESULTS_WINDOW] Failed to copy:', error);
     }
   };
 
@@ -448,20 +639,22 @@ export default function ResultsWindow() {
           </div>
         )}
 
-        {/* Show streaming LLM response (direct response) */}
-        {streamingResponse && (
-          <div className="prose prose-invert max-w-none">
-            <div className="text-white text-sm leading-relaxed whitespace-pre-wrap">
-              {streamingResponse}
-              {isStreaming && (
-                <span className="inline-block w-1.5 h-4 bg-blue-500 animate-pulse ml-1" />
-              )}
-            </div>
+        {/* Show streaming LLM response OR animated answer from overlay payload */}
+        {(streamingResponse || displayedAnswer) && (
+          <div className="relative">
+            <RichContentRenderer 
+              content={streamingResponse || displayedAnswer}
+              animated={!isStreaming && !isAnimating}
+              className="text-sm"
+            />
+            {(isStreaming || isAnimating) && (
+              <span className="inline-block w-1.5 h-4 bg-blue-500 animate-pulse ml-1" />
+            )}
           </div>
         )}
 
         {/* Fallback: waiting for results */}
-        {!isThinking && !routingDecision && !streamingResponse && progressSteps.length === 0 && (
+        {!isThinking && !routingDecision && !streamingResponse && !displayedAnswer && progressSteps.length === 0 && (
           <div className="text-gray-400 text-sm text-center">
             Waiting for response...
           </div>
@@ -495,20 +688,49 @@ export default function ResultsWindow() {
         >
           {promptText || 'Results'}
         </div>
-        <button
-          onClick={handleClose}
-          className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-gray-700 transition-colors flex-shrink-0"
-          style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.1)',
-            border: '1px solid rgba(255, 255, 255, 0.2)',
-            color: '#9ca3af',
-            fontSize: '14px',
-            cursor: 'pointer',
-          }}
-          title="Close (ESC)"
-        >
-          ×
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Copy button */}
+          {(streamingResponse || displayedAnswer) && (
+            <button
+              onClick={handleCopy}
+              className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700 transition-colors flex-shrink-0"
+              style={{
+                backgroundColor: isCopied ? 'rgba(34, 197, 94, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+                border: '1px solid rgba(255, 255, 255, 0.2)',
+                color: isCopied ? '#22c55e' : '#9ca3af',
+                fontSize: '12px',
+                cursor: 'pointer',
+              }}
+              title={isCopied ? 'Copied!' : 'Copy response'}
+            >
+              {isCopied ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+              )}
+            </button>
+          )}
+          {/* Close button */}
+          <button
+            onClick={handleClose}
+            className="w-6 h-6 flex items-center justify-center rounded-full hover:bg-gray-700 transition-colors flex-shrink-0"
+            style={{
+              backgroundColor: 'rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
+              color: '#9ca3af',
+              fontSize: '14px',
+              cursor: 'pointer',
+            }}
+            title="Close (ESC)"
+          >
+            ×
+          </button>
+        </div>
       </div>
       
       {/* Scrollable content */}

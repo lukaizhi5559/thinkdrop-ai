@@ -1,27 +1,62 @@
-import React, { useMemo } from 'react';
-import { MDXProvider } from '@mdx-js/react';
+import React, { useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { motion } from 'framer-motion';
 
-// Type-cast motion components to avoid TypeScript errors
-const MotionA = motion.a as any;
-const MotionH1 = motion.h1 as any;
-const MotionH2 = motion.h2 as any;
-const MotionH3 = motion.h3 as any;
-const MotionP = motion.p as any;
-const MotionUl = motion.ul as any;
-const MotionOl = motion.ol as any;
-const MotionBlockquote = motion.blockquote as any;
 const MotionDiv = motion.div as any;
-import VideoPlayer from './VideoPlayer';
-import InteractiveChart from './InteractiveChart';
-import SpreadsheetViewer from './SpreadsheetViewer';
-import CanvasDrawing from './CanvasDrawing';
-import CodeSandbox from './CodeSandbox';
-import ImageGallery from './ImageGallery';
-import MermaidDiagram from './MermaidDiagram';
-import AnimatedCodeBlock from './AnimatedCodeBlock';
-import LazyImage from './LazyImage';
-import ResponsiveTable from './ResponsiveTable';
+
+// Code block wrapper with copy button
+const CodeBlockWithCopy: React.FC<{ code: string; language: string }> = ({ code, language }) => {
+  const [isCopied, setIsCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(code);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      console.error('Failed to copy code:', error);
+    }
+  };
+
+  return (
+    <div className="relative group">
+      <button
+        onClick={handleCopy}
+        className="absolute top-2 right-2 p-1.5 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+        style={{
+          backgroundColor: isCopied ? 'rgba(34, 197, 94, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+          border: '1px solid rgba(255, 255, 255, 0.2)',
+          color: isCopied ? '#22c55e' : '#9ca3af',
+          cursor: 'pointer',
+        }}
+        title={isCopied ? 'Copied!' : 'Copy code'}
+      >
+        {isCopied ? (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        ) : (
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        )}
+      </button>
+      <SyntaxHighlighter
+        style={vscDarkPlus}
+        language={language}
+        PreTag="div"
+        className="rounded-lg my-4"
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  );
+};
 
 interface RichContentRendererProps {
   content: string;
@@ -29,230 +64,123 @@ interface RichContentRendererProps {
   className?: string;
 }
 
-// Rich component mapping for MDX
-const richComponents = {
-  // Rich media components
-  VideoPlayer,
-  InteractiveChart,
-  SpreadsheetViewer,
-  CanvasDrawing,
-  CodeSandbox,
-  ImageGallery,
-  MermaidDiagram,
-  
-  // Enhanced basic components
-  code: AnimatedCodeBlock,
-  img: LazyImage,
-  table: ResponsiveTable,
-  
-  // Enhanced links with animations and external link handling
-  a: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { children: React.ReactNode }) => (
-    <MotionA
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.3 }}
-      href={href}
-      onClick={(e: React.MouseEvent) => {
-        e.preventDefault();
-        if (href && window.electronAPI?.openExternal) {
-          window.electronAPI.openExternal(href);
-        }
-      }}
-      className="text-blue-400 hover:text-blue-300 underline cursor-pointer transition-colors"
-      {...props}
-    >
-      {children}
-    </MotionA>
-  ),
-  
-  // Enhanced typography with animations
-  h1: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement> & { children: React.ReactNode }) => (
-    <MotionH1
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
-      className="text-2xl font-bold mb-4 text-white"
-      {...props}
-    >
-      {children}
-    </MotionH1>
-  ),
-  
-  h2: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement> & { children: React.ReactNode }) => (
-    <MotionH2
-      initial={{ opacity: 0, y: 15 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.4, delay: 0.1 }}
-      className="text-xl font-semibold mb-3 text-white/90"
-      {...props}
-    >
-      {children}
-    </MotionH2>
-  ),
-  
-  h3: ({ children, ...props }: React.HTMLAttributes<HTMLHeadingElement> & { children: React.ReactNode }) => (
-    <MotionH3
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3, delay: 0.2 }}
-      className="text-lg font-medium mb-2 text-white/80"
-      {...props}
-    >
-      {children}
-    </MotionH3>
-  ),
-  
-  p: ({ children, ...props }: React.HTMLAttributes<HTMLParagraphElement> & { children: React.ReactNode }) => (
-    <MotionP
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.4, delay: 0.3 }}
-      className="mb-3 leading-relaxed text-white/70"
-      {...props}
-    >
-      {children}
-    </MotionP>
-  ),
-  
-  ul: ({ children, ...props }: React.HTMLAttributes<HTMLUListElement> & { children: React.ReactNode }) => (
-    <MotionUl
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.4, delay: 0.2 }}
-      className="list-disc list-inside mb-3 space-y-1 text-white/70"
-      {...props}
-    >
-      {children}
-    </MotionUl>
-  ),
-  
-  ol: ({ children, ...props }: React.HTMLAttributes<HTMLOListElement> & { children: React.ReactNode }) => (
-    <MotionOl
-      initial={{ opacity: 0, x: -20 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.4, delay: 0.2 }}
-      className="list-decimal list-inside mb-3 space-y-1 text-white/70"
-      {...props}
-    >
-      {children}
-    </MotionOl>
-  ),
-  
-  blockquote: ({ children, ...props }: React.HTMLAttributes<HTMLQuoteElement> & { children: React.ReactNode }) => (
-    <MotionBlockquote
-      initial={{ opacity: 0, x: -30 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.5, delay: 0.1 }}
-      className="border-l-4 border-blue-400 pl-4 italic mb-3 text-white/60 bg-blue-500/10 py-2 rounded-r-lg"
-      {...props}
-    >
-      {children}
-    </MotionBlockquote>
-  ),
-};
-
 const RichContentRenderer: React.FC<RichContentRendererProps> = ({
   content,
   animated = true,
   className = ''
 }) => {
-  const processedContent = useMemo(() => {
-    try {
-      // Handle both MDX and regular markdown content
-      if (content.includes('<') && (content.includes('VideoPlayer') || content.includes('InteractiveChart') || content.includes('SpreadsheetViewer'))) {
-        // This looks like MDX content with components
-        return { type: 'mdx', content };
-      } else {
-        // Regular markdown - convert to MDX-compatible format
-        return { type: 'markdown', content };
-      }
-    } catch (error) {
-      console.error('Error processing content:', error);
-      return { type: 'markdown', content };
-    }
-  }, [content]);
-
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: {
       opacity: 1,
       transition: {
-        staggerChildren: 0.1,
-        delayChildren: 0.1
+        duration: 0.3
       }
     }
   };
 
-  if (processedContent.type === 'mdx') {
-    return (
-      <MotionDiv
-        variants={animated ? containerVariants : undefined}
-        initial={animated ? "hidden" : undefined}
-        animate={animated ? "visible" : undefined}
-        className={`rich-content-container ${className}`}
-      >
-        <MDXProvider components={richComponents}>
-          <div className="prose prose-invert prose-sm max-w-none">
-            {/* MDX content will be rendered here */}
-            <div className="text-white/70">
-              {/* Note: dangerouslySetInnerHTML removed for security. */}
-              {/* In a real implementation, use a proper MDX compiler */}
-              <pre className="whitespace-pre-wrap">{processedContent.content}</pre>
-            </div>
-          </div>
-        </MDXProvider>
-      </MotionDiv>
-    );
-  }
-
-  // Enhanced content processing with URL detection
-  const processLine = (line: string, index: number) => {
-    if (line.trim() === '') return <br key={index} />;
-    
-    // URL detection regex
-    const urlRegex = /(https?:\/\/[^\s]+)/g;
-    
-    // Check for markdown headers
-    if (line.startsWith('# ')) {
-      const H1 = richComponents.h1;
-      return <H1 key={index}>{line.slice(2)}</H1>;
-    }
-    if (line.startsWith('## ')) {
-      const H2 = richComponents.h2;
-      return <H2 key={index}>{line.slice(3)}</H2>;
-    }
-    if (line.startsWith('### ')) {
-      const H3 = richComponents.h3;
-      return <H3 key={index}>{line.slice(4)}</H3>;
-    }
-    
-    // Process line with URL detection
-    const parts = line.split(urlRegex);
-    const processedParts = parts.map((part, partIndex) => {
-      if (urlRegex.test(part)) {
-        const Link = richComponents.a;
-        return <Link key={partIndex} href={part}>{part}</Link>;
-      }
-      return part;
-    });
-    
-    const P = richComponents.p;
-    return <P key={index}>{processedParts}</P>;
-  };
-
-  // Fallback to enhanced markdown rendering
   return (
     <MotionDiv
       variants={animated ? containerVariants : undefined}
       initial={animated ? "hidden" : undefined}
       animate={animated ? "visible" : undefined}
-      className={`rich-content-container ${className}`}
+      className={`rich-content-container prose prose-invert prose-sm max-w-none ${className}`}
     >
-      <MDXProvider components={richComponents}>
-        <div className="prose prose-invert prose-sm max-w-none">
-          {processedContent.content.split('\n').map(processLine)}
-        </div>
-      </MDXProvider>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkBreaks]}
+        components={{
+          // Code blocks with syntax highlighting
+          code({ node, inline, className, children, ...props }: any) {
+            const match = /language-(\w+)/.exec(className || '');
+            const codeString = String(children).replace(/\n$/, '');
+            
+            return !inline && match ? (
+              <CodeBlockWithCopy code={codeString} language={match[1]} />
+            ) : (
+              <code className="bg-gray-800 px-2 py-1 rounded text-sm font-mono text-blue-300" {...props}>
+                {children}
+              </code>
+            );
+          },
+          // Links that open externally
+          a({ node, children, href, ...props }: any) {
+            return (
+              <a
+                href={href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  if (href && window.electronAPI?.openExternal) {
+                    window.electronAPI.openExternal(href);
+                  }
+                }}
+                className="text-blue-400 hover:text-blue-300 underline cursor-pointer transition-colors"
+                {...props}
+              >
+                {children}
+              </a>
+            );
+          },
+          // Styled headings
+          h1({ node, children, ...props }: any) {
+            return <h1 className="text-2xl font-bold mb-4 mt-6 text-white" {...props}>{children}</h1>;
+          },
+          h2({ node, children, ...props }: any) {
+            return <h2 className="text-xl font-semibold mb-3 mt-5 text-white/90" {...props}>{children}</h2>;
+          },
+          h3({ node, children, ...props }: any) {
+            return <h3 className="text-lg font-medium mb-2 mt-4 text-white/80" {...props}>{children}</h3>;
+          },
+          // Styled paragraphs
+          p({ node, children, ...props }: any) {
+            return <p className="mb-3 leading-relaxed text-white/70" {...props}>{children}</p>;
+          },
+          // Styled lists
+          ul({ node, children, ...props }: any) {
+            return <ul className="list-disc list-inside mb-3 space-y-1 text-white/70 ml-4" {...props}>{children}</ul>;
+          },
+          ol({ node, children, ...props }: any) {
+            return <ol className="list-decimal list-inside mb-3 space-y-1 text-white/70 ml-4" {...props}>{children}</ol>;
+          },
+          li({ node, children, ...props }: any) {
+            return <li className="text-white/70" {...props}>{children}</li>;
+          },
+          // Styled blockquotes
+          blockquote({ node, children, ...props }: any) {
+            return (
+              <blockquote className="border-l-4 border-blue-400 pl-4 italic mb-3 text-white/60 bg-blue-500/10 py-2 rounded-r-lg" {...props}>
+                {children}
+              </blockquote>
+            );
+          },
+          // Styled tables
+          table({ node, children, ...props }: any) {
+            return <table className="min-w-full border border-gray-700 mb-4" {...props}>{children}</table>;
+          },
+          thead({ node, children, ...props }: any) {
+            return <thead className="bg-gray-800" {...props}>{children}</thead>;
+          },
+          th({ node, children, ...props }: any) {
+            return <th className="border border-gray-700 px-4 py-2 text-left text-white/90" {...props}>{children}</th>;
+          },
+          td({ node, children, ...props }: any) {
+            return <td className="border border-gray-700 px-4 py-2 text-white/70" {...props}>{children}</td>;
+          },
+          // Horizontal rule
+          hr({ node, ...props }: any) {
+            return <hr className="border-gray-700 my-4" {...props} />;
+          },
+          // Strong/bold text
+          strong({ node, children, ...props }: any) {
+            return <strong className="font-bold text-white" {...props}>{children}</strong>;
+          },
+          // Emphasis/italic text
+          em({ node, children, ...props }: any) {
+            return <em className="italic text-white/80" {...props}>{children}</em>;
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </MotionDiv>
   );
 };

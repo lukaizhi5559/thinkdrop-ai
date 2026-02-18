@@ -188,7 +188,8 @@ function registerAutomationHandlers(client, overlay = null) {
             // Open Spotlight (Cmd+Space)
             const { keyboard, Key } = nutjsModule;
             await keyboard.pressKey(Key.LeftCmd);
-            await keyboard.type(Key.Space);
+            await keyboard.pressKey(Key.Space);
+            await keyboard.releaseKey(Key.Space);
             await keyboard.releaseKey(Key.LeftCmd);
             await new Promise(resolve => setTimeout(resolve, 300));
             
@@ -1823,6 +1824,8 @@ function registerAutomationHandlers(client, overlay = null) {
         keyToPress = KeyHK.Return;  // Use Key.Return constant
       } else if (normalizedKey === 'esc' || normalizedKey === 'escape') {
         keyToPress = KeyHK.Escape;
+      } else if (normalizedKey === 'space') {
+        keyToPress = KeyHK.Space;
       } else if (normalizedKey === 'arrowdown' || normalizedKey === 'down') {
         keyToPress = KeyHK.Down;
       } else if (normalizedKey === 'arrowup' || normalizedKey === 'up') {

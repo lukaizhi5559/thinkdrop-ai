@@ -80,6 +80,20 @@ if (ipcRenderer) {
     }
   });
 
+  // Listen for Worker Agent stream end
+  ipcRenderer.on('worker:stream-end', (_event: any, data: any) => {
+    console.log('✅ [COMM_AGENT] Worker stream end received (global):', {
+      sessionId: data.sessionId,
+      hasInstance: !!globalInstance
+    });
+    
+    if (globalInstance) {
+      globalInstance.handleWorkerStreamEnd(data);
+    } else {
+      console.warn('⚠️ [COMM_AGENT] No instance available to handle stream end');
+    }
+  });
+
   console.log('✅ [COMM_AGENT] Global Worker Agent IPC listeners registered');
 }
 
@@ -266,6 +280,16 @@ export class CommunicationAgent {
   public handleWorkerCompleted(data: any) {
     console.log('✅ [COMM_AGENT] Handling worker completion');
     // Could forward to backend or handle locally
+  }
+
+  public handleWorkerStreamEnd(data: any) {
+    console.log('✅ [COMM_AGENT] Handling worker stream end');
+    // Trigger the onMessage callback with llm_stream_end type
+    this.config.onMessage?.({
+      type: 'llm_stream_end',
+      sessionId: data.sessionId,
+      timestamp: data.timestamp
+    });
   }
 
   public handleWorkerError(data: any) {

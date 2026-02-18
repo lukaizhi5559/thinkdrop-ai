@@ -13,7 +13,6 @@ import { useState, useEffect } from 'react';
 import { sendGhostHoverData } from '../utils/overlayPosition';
 import { AlertCircle, X } from 'lucide-react';
 import { OverlayPayload } from '../../../types/overlay-intents';
-import PromptCaptureBox from './PromptCaptureBox';
 
 interface HighlightedItem {
   id: string;
@@ -57,11 +56,7 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
     } : 'null');
   }, [overlayPayload]);
   
-  const [promptCaptureActive, setPromptCaptureActive] = useState(false);
-  const [promptCaptureText, setPromptCaptureText] = useState('');
-  const [initialPromptText, setInitialPromptText] = useState('');
-  const [promptCaptureCursor, setPromptCaptureCursor] = useState({ x: 0, y: 0 });
-  const [promptCaptureSelection, setPromptCaptureSelection] = useState({ start: 0, end: 0 });
+  // PromptCaptureBox state removed - now using StandalonePromptCapture in separate window
 
   // Log component mount
   useEffect(() => {
@@ -69,38 +64,7 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
     return () => console.log('👋 [GHOST] GhostOverlay component unmounted');
   }, []);
 
-  // Listen for prompt capture cancellation via native IPC
-  useEffect(() => {
-    if (!ipcRenderer) return;
-    
-    const handleCancellation = () => {
-      console.log('🚫 [GHOST] Received prompt capture cancellation via IPC');
-      
-      // Deactivate prompt capture
-      setPromptCaptureActive(false);
-      setPromptCaptureText('');
-      setInitialPromptText('');
-      setPromptCaptureSelection({ start: 0, end: 0 });
-      
-      // Always clear overlay payload to hide prompt capture box
-      if (onEvent) {
-        console.log('🧹 [GHOST] Clearing overlay payload via onEvent');
-        onEvent('overlay:clear');
-      }
-      
-      // Re-enable click-through
-      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
-    };
-    
-    ipcRenderer.on('prompt-capture-cancelled', handleCancellation);
-    console.log('✅ [GHOST] Registered prompt-capture-cancelled listener');
-    
-    return () => {
-      if (ipcRenderer.removeListener) {
-        ipcRenderer.removeListener('prompt-capture-cancelled', handleCancellation);
-      }
-    };
-  }, [onEvent]);
+  // Prompt capture cancellation handler removed - now handled by StandalonePromptCapture window
 
   // Log when overlayPayload changes
   useEffect(() => {
@@ -169,10 +133,7 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
         setTargetPos({ x: e.clientX, y: e.clientY });
       }
       
-      // Update prompt capture cursor position in real-time
-      if (promptCaptureActive) {
-        setPromptCaptureCursor({ x: e.clientX, y: e.clientY });
-      }
+      // Prompt capture cursor tracking removed - handled by StandalonePromptCapture
       
       // Check if hovering over any highlighted item
       const item = highlightedItems.find(
@@ -201,7 +162,7 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
 
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [highlightedItems, hoveredItem, promptCaptureActive]);
+  }, [highlightedItems, hoveredItem]);
 
   // Listen for automation events
   useEffect(() => {
@@ -275,107 +236,17 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
     };
   }, []);
 
-  // Listen for prompt capture events
-  useEffect(() => {
-    if (!ipcRenderer) return;
-
-    const handlePromptCaptureStarted = (_event: any, data: { initialText: string; cursorPosition: { x: number; y: number } }) => {
-      console.log('📝 [GHOST] Prompt capture started', data);
-      setPromptCaptureActive(true);
-      setPromptCaptureText(data.initialText || '');
-      setInitialPromptText(data.initialText || ''); // Store initial captured text separately
-      setPromptCaptureCursor(data.cursorPosition);
-      
-      // Disable click-through during prompt capture
-      ipcRenderer.send('ghost-overlay:set-clickthrough', false);
-    };
-
-    const handlePromptCaptureUpdate = (_event: any, data: { text: string; selectionStart?: number; selectionEnd?: number }) => {
-      console.log('📝 [GHOST] Prompt capture update', data.text.substring(0, 50));
-      setPromptCaptureText(data.text);
-      if (data.selectionStart !== undefined && data.selectionEnd !== undefined) {
-        setPromptCaptureSelection({ start: data.selectionStart, end: data.selectionEnd });
-      }
-    };
-
-    const handlePromptCaptureSubmit = (_event: any, data: { text: string }) => {
-      console.log('✅ [GHOST] Prompt capture submit', data.text.substring(0, 50));
-      
-      // Call the prop function to submit the query
-      if (onPromptSubmit) {
-        console.log('📤 [GHOST] Calling onPromptSubmit prop with text:', data.text.substring(0, 50));
-        onPromptSubmit(data.text);
-      } else {
-        console.warn('⚠️  [GHOST] onPromptSubmit prop not provided!');
-      }
-      
-      // After submission, reset to fresh state but keep active
-      // This allows user to immediately type a new query while results are showing
-      console.log('🔄 [GHOST] Resetting prompt capture to fresh state (keeping active)');
-      setPromptCaptureText('');
-      setInitialPromptText('');
-      setPromptCaptureSelection({ start: 0, end: 0 });
-      // Keep promptCaptureActive true so box stays visible and editable
-      // Keep click-through disabled so user can type new queries
-    };
-
-    const handlePromptCaptureCancelled = () => {
-      console.log('❌ [GHOST] Prompt capture cancelled');
-      setPromptCaptureActive(false);
-      setPromptCaptureText('');
-      setInitialPromptText(''); // Clear initial text
-      setPromptCaptureSelection({ start: 0, end: 0 });
-      
-      // Always clear overlay payload to hide prompt capture box
-      if (onEvent) {
-        console.log('🧹 [GHOST] Clearing overlay payload via onEvent');
-        onEvent('overlay:clear');
-      }
-      
-      // Re-enable click-through
-      ipcRenderer.send('ghost-overlay:set-clickthrough', true);
-    };
-
-    ipcRenderer.on('prompt-capture-started', handlePromptCaptureStarted);
-    ipcRenderer.on('prompt-capture-update', handlePromptCaptureUpdate);
-    ipcRenderer.on('prompt-capture-submit', handlePromptCaptureSubmit);
-    ipcRenderer.on('prompt-capture-cancelled', handlePromptCaptureCancelled);
-
-    return () => {
-      if (ipcRenderer.removeListener) {
-        ipcRenderer.removeListener('prompt-capture-started', handlePromptCaptureStarted);
-        ipcRenderer.removeListener('prompt-capture-update', handlePromptCaptureUpdate);
-        ipcRenderer.removeListener('prompt-capture-submit', handlePromptCaptureSubmit);
-        ipcRenderer.removeListener('prompt-capture-cancelled', handlePromptCaptureCancelled);
-      }
-    };
-  }, [onPromptSubmit, onEvent]);
-
   // Listen for ESC key to close/dismiss the prompt capture box
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && promptCaptureActive) {
-        console.log('⌨️  [GHOST] ESC pressed - closing prompt capture box');
-        setPromptCaptureActive(false);
-        setPromptCaptureText('');
-        setInitialPromptText('');
-        setPromptCaptureSelection({ start: 0, end: 0 });
-        
-        // Clear overlay payload via onEvent to trigger click-through re-enable
-        if (onEvent) {
-          onEvent('overlay:clear');
-        }
-        
-        // Re-enable click-through
-        if (ipcRenderer) {
-          ipcRenderer.send('ghost-overlay:set-clickthrough', true);
-        }
+      if (e.key === 'Escape') {
+        console.log('⌨️  [GHOST] ESC pressed');
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [promptCaptureActive, onEvent]);
+  }, []);
 
   const handleCloseBanner = () => {
     console.log('[GhostOverlay] Close banner clicked');
@@ -404,16 +275,8 @@ export default function GhostOverlay({ onPromptSubmit, overlayPayload, onEvent }
 
   return (
     <div className="w-full h-full pointer-events-none">
-      {/* Prompt Capture Box - now shows thinking state and results inline */}
-      <PromptCaptureBox
-        text={promptCaptureText}
-        cursorPosition={promptCaptureCursor}
-        isActive={promptCaptureActive}
-        initialText={initialPromptText}
-        selectionStart={promptCaptureSelection.start}
-        selectionEnd={promptCaptureSelection.end}
-      />
-
+      {/* PromptCaptureBox removed - now using StandalonePromptCapture in separate window */}
+      
       {/* Banner Notification */}
       {banner && (
         <div 
