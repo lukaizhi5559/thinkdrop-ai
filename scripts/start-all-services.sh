@@ -132,11 +132,7 @@ sleep 2
 start_python_service "coreference" "$PROJECT_ROOT/mcp-services/coreference-service"
 sleep 2
 
-# 5. Vision Service (Python - OCR/VLM)
-# start_python_service "vision" "$PROJECT_ROOT/mcp-services/vision-service"
-# sleep 2
-
-# 6. Phi4 Service (heavy - load last)
+# 5. Phi4 Service (heavy - load last)
 start_service "phi4" "$PROJECT_ROOT/mcp-services/thinkdrop-phi4-service" 768
 sleep 3
 
@@ -160,11 +156,7 @@ echo ""
 cd "$PROJECT_ROOT"
 sleep 2
 
-# 8. PaddleOCR Service (Python - fast OCR with bounding boxes)
-# start_python_service "paddleocr" "$PROJECT_ROOT/mcp-services/paddleocr-service"
-# sleep 2
-
-# 9. Screen Intelligence Service (lightweight - UI automation)
+# 8. Screen Intelligence Service (lightweight - UI automation)
 start_service "screen-intelligence" "$PROJECT_ROOT/mcp-services/screen-intelligence-service" 256
 sleep 2
 
@@ -177,10 +169,8 @@ echo "   • Web Search:          http://localhost:3002/service.health"
 echo "   • Phi4:                http://localhost:3003/service.health"
 echo "   • Conversation:        http://localhost:3004/service.health"
 echo "   • Coreference:         http://localhost:3005/health"
-# echo "   • Vision:              http://localhost:3006/health"
 echo "   • Command:             http://localhost:3007/health"
 echo "   • Screen Intelligence: http://localhost:3008/service.health"
-# echo "   • PaddleOCR:           http://localhost:3009/health"
 echo ""
 echo "🔌 Available API Endpoints:"
 echo ""
@@ -218,15 +208,6 @@ echo "   🔗 Coreference (Port 3005):"
 echo "      • POST /resolve               - Resolve references"
 echo "      • GET  /health                - Health check"
 echo ""
-# echo "   👁️  Vision (Port 3006):"
-# echo "      • POST /capture               - Capture screenshot"
-# echo "      • POST /ocr                   - Extract text"
-# echo "      • POST /describe              - Describe scene"
-# echo "      • POST /watch.start           - Start monitoring"
-# echo "      • POST /watch.stop            - Stop monitoring"
-# echo "      • GET  /watch.status          - Watch status"
-# echo "      • GET  /health                - Health check"
-# echo ""
 echo "   ⚡ Command (Port 3007):"
 echo "      • POST /command.execute       - Execute shell command"
 echo "      • POST /command.interpret     - Interpret natural language to command"
@@ -243,11 +224,6 @@ echo "      • POST /screen.action         - Perform action (click/type)"
 echo "      • POST /screen.overlay        - Show overlay (highlight/toast)"
 echo "      • GET  /service.health        - Health check"
 echo ""
-# echo "   🐼 PaddleOCR (Port 3009):"
-# echo "      • POST /ocr.analyze           - Extract text with bounding boxes"
-# echo "      • POST /ocr.batch             - Batch OCR processing"
-# echo "      • GET  /health                - Health check"
-echo ""
 echo "📝 Logs:"
 echo "   • View all:                 tail -f logs/*.log"
 echo "   • View user-memory:         tail -f logs/user-memory.log"
@@ -255,9 +231,7 @@ echo "   • View web-search:          tail -f logs/web-search.log"
 echo "   • View phi4:                tail -f logs/phi4.log"
 echo "   • View conversation:        tail -f logs/conversation.log"
 echo "   • View coreference:         tail -f logs/coreference.log"
-# echo "   • View vision:              tail -f logs/vision.log"
 echo "   • View command:             tail -f logs/command.log"
-# echo "   • View paddleocr:           tail -f logs/paddleocr.log"
 echo "   • View screen-intelligence: tail -f logs/screen-intelligence.log"
 echo ""
 echo "🛑 To stop all services:"
